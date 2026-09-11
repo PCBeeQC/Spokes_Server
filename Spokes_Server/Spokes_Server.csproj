@@ -1,0 +1,45 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UserSecretsId>c63dbdc3-b76e-4a41-9f26-417786143fa7</UserSecretsId>
+  </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="Spokes_Server.Tests" />
+  </ItemGroup>
+  <ItemGroup>
+    <Content Remove="appsettings.json" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="BCrypt.Net-Next" Version="4.1.0" />
+    <PackageReference Include="HtmlAgilityPack" Version="1.12.4" />
+    <PackageReference Include="HtmlSanitizer" Version="9.0.892" />
+    <PackageReference Include="Ical.Net" Version="5.2.1" />
+    <PackageReference Include="Livekit.Server.Sdk.Dotnet" Version="1.2.1" />
+    <PackageReference Include="MailKit" Version="4.16.0" />
+    <PackageReference Include="Markdig" Version="1.1.3" />
+    <PackageReference Include="Markdown.ColorCode" Version="3.0.1" />
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.OpenIdConnect" Version="9.0.2" />
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="9.0.2" />
+    <PackageReference Include="MimeKit" Version="4.16.0" />
+    <PackageReference Include="MudBlazor" Version="9.1.0" />
+    <PackageReference Include="PuppeteerSharp" Version="20.1.2" />
+    <PackageReference Include="SkiaSharp" Version="3.119.2" />
+    <PackageReference Include="SkiaSharp.NativeAssets.Linux.NoDependencies" Version="3.119.2" />
+    <PackageReference Include="WebPush" Version="1.0.12" />
+    <PackageReference Include="Yarp.ReverseProxy" Version="2.3.0" />
+  </ItemGroup>
+  <ItemGroup>
+    <Folder Include="Components\Pages\Reports\" />
+    <Folder Include="Core\PDF\" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="appsettings.json">
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="wwwroot\data\emoji.json" />
+  </ItemGroup>
+</Project>

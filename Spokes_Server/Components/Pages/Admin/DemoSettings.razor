@@ -1,0 +1,259 @@
+@page "/admin/demo-settings"
+@using Spokes_Server.Core.Services.Core
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Aggregate
+@using System.IO
+@inject IConfiguration Config
+@inject Database Db
+@inject BackupService BackupService
+@inject ISnackbar Snackbar
+@inject NavigationManager Nav
+@attribute [Authorize(Policy = Spokes_Server.Core.Constants.AppPermissions.Admin.ManageSettings)]
+
+<PageTitle>Demo Settings</PageTitle>
+
+<MudContainer MaxWidth="MaxWidth.Large" Class="mt-4">
+    <MudText Typo="Typo.h4" GutterBottom="true">Demo Mode Setup</MudText>
+
+    @if (!_isDemoSetup)
+    {
+        <MudAlert Severity="Severity.Error">
+            Demo Setup is not active. Please set Spokes_DemoSetup=true in your environment variables to use this page.
+        </MudAlert>
+    }
+    else
+    {
+        <MudGrid>
+            <MudItem xs="12" md="6">
+                <MudCard Elevation="2">
+                    <MudCardHeader>
+                        <CardHeaderContent>
+                            <MudText Typo="Typo.h6">Auto-Login User Pool</MudText>
+                            <MudText Typo="Typo.body2">Select which users random visitors will be logged in as during the public demo.</MudText>
+                        </CardHeaderContent>
+                    </MudCardHeader>
+                    <MudCardContent>
+                        @foreach (var emp in _activeEmployees)
+                        {
+                            <MudCheckBox @bind-Value="_selectedIds[emp.Id]" Label="@emp.FullName" Color="Color.Primary" />
+                        }
+                    </MudCardContent>
+                </MudCard>
+            </MudItem>
+
+            <MudItem xs="12" md="6">
+                <MudCard Elevation="2">
+                    <MudCardHeader>
+                        <CardHeaderContent>
+                            <MudText Typo="Typo.h6">Sample Media Library</MudText>
+                            <MudText Typo="Typo.body2">Upload sample images that users can pick from during the demo (since real uploads are blocked).</MudText>
+                        </CardHeaderContent>
+                    </MudCardHeader>
+                    <MudCardContent>
+                        <MudFileUpload T="IReadOnlyList<IBrowserFile>" Accept=".jpg,.jpeg,.png,.gif" FilesChanged="UploadSampleMedia" MaximumFileCount="10">
+                            <CustomContent>
+                                <MudButton Variant="Variant.Filled"
+                                           Color="Color.Primary"
+                                           OnClick="@context.OpenFilePickerAsync"
+                                           StartIcon="@Icons.Material.Filled.CloudUpload">
+                                    Upload Sample Media
+                                </MudButton>
+                            </CustomContent>
+                            <SelectedTemplate></SelectedTemplate>
+                        </MudFileUpload>
+
+                        @if (_sampleMedia.Any())
+                        {
+                            <MudList T="string" Class="mt-4">
+                                @foreach (var file in _sampleMedia)
+                                {
+                                    var f = file;
+                                    <MudListItem T="string" Icon="@Icons.Material.Filled.Image">
+                                        <div class="d-flex align-center justify-space-between w-100">
+                                            <span>@Path.GetFileName(f)</span>
+                                            <MudIconButton Icon="@Icons.Material.Filled.Delete" Color="Color.Error" Size="Size.Small" OnClick="@(() => DeleteMedia(f))" />
+                                        </div>
+                                    </MudListItem>
+                                }
+                            </MudList>
+                        }
+                    </MudCardContent>
+                </MudCard>
+            </MudItem>
+
+            <MudItem xs="12">
+                <MudCard Elevation="2" Class="mt-4">
+                    <MudCardHeader>
+                        <CardHeaderContent>
+                            <MudText Typo="Typo.h6">Golden Snapshot</MudText>
+                            <MudText Typo="Typo.body2">When you are finished setting up the demo environment, save the state. The Demo Reset Service will automatically restore this snapshot every hour.</MudText>
+                        </CardHeaderContent>
+                    </MudCardHeader>
+                    <MudCardContent>
+                        @if (_lastSnapshotTime.HasValue)
+                        {
+                            <MudAlert Severity="Severity.Success" Class="mb-4">
+                                Golden snapshot is ready! Created at: @_lastSnapshotTime.Value.ToLocalTime().ToString("g")
+                            </MudAlert>
+                        }
+                        
+                        <div class="d-flex gap-4">
+                            <MudButton Variant="Variant.Filled" Color="Color.Secondary" Size="Size.Large" OnClick="SaveSnapshot" Disabled="@_isSaving">
+                                @if (_isSaving)
+                                {
+                                    <MudProgressCircular Class="ms-n1" Size="Size.Small" Indeterminate="true"/>
+                                    <MudText Class="ms-2">Saving Snapshot...</MudText>
+                                }
+                                else
+                                {
+                                    <MudText>Save Current State as Golden Snapshot</MudText>
+                                }
+                            </MudButton>
+                            
+                            @if (_lastSnapshotTime.HasValue)
+                            {
+                                <MudButton Variant="Variant.Outlined" Color="Color.Warning" Size="Size.Large" OnClick="RestoreSnapshot">
+                                    Restore Golden State Now
+                                </MudButton>
+                            }
+                        </div>
+                    </MudCardContent>
+                </MudCard>
+            </MudItem>
+        </MudGrid>
+    }
+</MudContainer>
+
+@code {
+    private bool _isDemoSetup;
+    private List<Spokes_Server.Core.Models.HR.Employee> _activeEmployees = new();
+    private Dictionary<string, bool> _selectedIds = new();
+    private List<string> _sampleMedia = new();
+    private bool _isSaving;
+    private DateTime? _lastSnapshotTime;
+    private string _demoMediaPath = "";
+
+    protected override void OnInitialized()
+    {
+        _isDemoSetup = Config.GetValue<bool>("Spokes_DemoSetup");
+
+        if (_isDemoSetup)
+        {
+            _activeEmployees = Db.Employees.GetAll().Where(e => e.IsActive && !e.IsSuspended).ToList();
+            var config = Db.DemoConfigs.Get();
+            
+            foreach (var emp in _activeEmployees)
+            {
+                _selectedIds[emp.Id] = config.AutoLoginEmployeeIds.Contains(emp.Id);
+            }
+
+            var dataPath = Config["DataPath"] ?? "Data";
+            _demoMediaPath = Path.Combine(dataPath, "DemoMedia");
+            if (Directory.Exists(_demoMediaPath))
+            {
+                _sampleMedia = Directory.GetFiles(_demoMediaPath).ToList();
+            }
+            
+            var snapshotPath = Path.Combine(dataPath, "Backups", "demo_golden_snapshot.zip");
+            if (File.Exists(snapshotPath))
+            {
+                _lastSnapshotTime = File.GetCreationTimeUtc(snapshotPath);
+            }
+        }
+    }
+
+    private async Task UploadSampleMedia(IReadOnlyList<IBrowserFile> files)
+    {
+        try
+        {
+            if (!Directory.Exists(_demoMediaPath))
+            {
+                Directory.CreateDirectory(_demoMediaPath);
+            }
+
+            foreach (var file in files)
+            {
+                var path = Path.Combine(_demoMediaPath, file.Name);
+                await using var fs = new FileStream(path, FileMode.Create);
+                await file.OpenReadStream(1024 * 1024 * 10).CopyToAsync(fs);
+                _sampleMedia.Add(path);
+            }
+            Snackbar.Add("Media uploaded successfully.", Severity.Success);
+            _sampleMedia = Directory.GetFiles(_demoMediaPath).ToList();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Upload failed: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private async Task SaveSnapshot()
+    {
+        _isSaving = true;
+        StateHasChanged();
+
+        try
+        {
+            // 1. Save Config
+            var config = Db.DemoConfigs.Get();
+            config.AutoLoginEmployeeIds = _selectedIds.Where(kv => kv.Value).Select(kv => kv.Key).ToList();
+            Db.DemoConfigs.Save(config);
+
+            // 2. Run Backup
+            var zipPath = await BackupService.RunBackupNow();
+            if (zipPath.StartsWith("Error"))
+            {
+                Snackbar.Add(zipPath, Severity.Error);
+                return;
+            }
+
+            // 3. Rename to Golden Snapshot
+            var dataPath = Config["DataPath"] ?? "Data";
+            var goldenPath = Path.Combine(dataPath, "Backups", "demo_golden_snapshot.zip");
+            
+            if (File.Exists(goldenPath))
+            {
+                File.Delete(goldenPath);
+            }
+            File.Move(zipPath, goldenPath);
+
+            _lastSnapshotTime = File.GetCreationTimeUtc(goldenPath);
+            Snackbar.Add("Golden snapshot saved successfully!", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Error saving snapshot: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _isSaving = false;
+            StateHasChanged();
+        }
+    }
+
+    private void DeleteMedia(string filePath)
+    {
+        try
+        {
+            if (File.Exists(filePath)) File.Delete(filePath);
+            _sampleMedia.Remove(filePath);
+            Snackbar.Add("Media deleted", Severity.Success);
+            StateHasChanged();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add(ex.Message, Severity.Error);
+        }
+    }
+
+    private void RestoreSnapshot()
+    {
+        var dataPath = Config["DataPath"] ?? "Data";
+        var goldenPath = Path.Combine(dataPath, "Backups", "demo_golden_snapshot.zip");
+        if (File.Exists(goldenPath))
+        {
+            Db.RestoreBackup(goldenPath, null!);
+            Nav.NavigateTo("/", true);
+        }
+    }
+}

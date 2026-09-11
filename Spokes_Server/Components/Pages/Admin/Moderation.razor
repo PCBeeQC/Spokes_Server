@@ -1,0 +1,227 @@
+@page "/admin/moderation"
+@attribute [Microsoft.AspNetCore.Authorization.Authorize(Policy = Spokes_Server.Core.Constants.AppPermissions.Chat.Moderator)]
+@using MudBlazor
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Aggregate
+@using Spokes_Server.Core.Services.Communication
+@inject Database Db
+@inject ChatService ChatService
+@inject ISnackbar Snackbar
+@inject Spokes_Server.Core.Services.Core.UserService UserService
+
+<PageTitle>Moderation Dashboard</PageTitle>
+
+<MudContainer MaxWidth="MaxWidth.Large" Class="mt-8 pb-8">
+    <div class="d-flex flex-wrap justify-space-between align-center mb-6 gap-4">
+        <MudText Typo="Typo.h4">Moderation Dashboard</MudText>
+        <MudTextField @bind-Value="searchString" Placeholder="Search Reports..." Variant="Variant.Outlined" Margin="Margin.Dense" Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search" IconSize="Size.Medium" Style="max-width: 300px; background-color: var(--mud-palette-surface);" />
+    </div>
+
+    @if (_loading)
+    {
+        <MudProgressLinear Indeterminate="true" Color="Color.Info" Class="my-4" />
+    }
+    else if (!_reports.Any())
+    {
+        <div class="d-flex flex-column align-center justify-center pa-8 text-center" style="background: var(--mud-palette-background-grey); border-radius: 16px;">
+            <MudIcon Icon="@Icons.Material.Filled.CheckCircleOutline" Size="Size.Large" Color="Color.Success" Style="font-size: 64px; opacity: 0.8;" Class="mb-4" />
+            <MudText Typo="Typo.h5" Class="mb-2">All Clear!</MudText>
+            <MudText Typo="Typo.body1" Color="Color.Secondary">There are no reported messages to review.</MudText>
+        </div>
+    }
+    else
+    {
+        <MudGrid Spacing="3">
+            @foreach (var report in _reports.Where(FilterFunc))
+            {
+                <MudItem xs="12" sm="6" md="4">
+                    <MudCard Elevation="0" Outlined="true" Class="h-100 d-flex flex-column moderation-card" Style="border-radius: 16px;">
+                        <MudCardContent Class="pa-4 flex-grow-1">
+                            <div class="d-flex justify-space-between align-start mb-3">
+                                <MudChip T="string" Size="Size.Small" Color="@(report.Status == "Open" ? Color.Error : (report.Status == "Dismissed" ? Color.Default : Color.Success))" Class="ma-0">@report.Status</MudChip>
+                                <MudText Typo="Typo.caption" Color="Color.Secondary">@report.ReportedAt.ToLocalTime().ToString("MMM dd, h:mm tt")</MudText>
+                            </div>
+
+                            <MudText Typo="Typo.subtitle1" Style="font-weight: 700;" Class="mb-3">Reason: @report.Reason</MudText>
+                            
+                            <div class="d-flex align-center gap-2 mb-2">
+                                <MudIcon Icon="@Icons.Material.Filled.Report" Size="Size.Small" Color="Color.Error" />
+                                <MudText Typo="Typo.body2" Color="Color.Secondary">
+                                    Reported User: <strong style="color: var(--mud-palette-text-primary);">@GetUserName(report.ReportedUserId)</strong>
+                                </MudText>
+                            </div>
+
+                            <div class="d-flex align-center gap-2 mb-4">
+                                <MudIcon Icon="@Icons.Material.Filled.Person" Size="Size.Small" Color="Color.Secondary" />
+                                <MudText Typo="Typo.body2" Color="Color.Secondary">
+                                    Reported By: <strong style="color: var(--mud-palette-text-primary);">@GetUserName(report.ReporterId)</strong>
+                                </MudText>
+                            </div>
+
+                            <MudText Typo="Typo.subtitle2" Class="mb-1" Style="font-weight: 600; color: var(--mud-palette-text-secondary);">Message Snapshot</MudText>
+                            <div class="pa-3 rounded" style="background-color: var(--mud-palette-background-grey); max-height: 200px; overflow-y: auto; border: 1px solid var(--mud-palette-lines-default);">
+                                <MudText Typo="Typo.body2" Style="word-break: break-word;">
+                                    @report.SnapshotContent
+                                </MudText>
+                                @if (report.Attachments != null && report.Attachments.Any())
+                                {
+                                    <div class="mt-2 d-flex flex-wrap gap-2">
+                                        @foreach (var att in report.Attachments)
+                                        {
+                                            if (att.ContentType.StartsWith("image/"))
+                                            {
+                                                <img src="@att.FilePath" alt="@att.FileName" style="max-height: 100px; max-width: 100%; border-radius: 4px;" />
+                                            }
+                                            else if (att.ContentType.StartsWith("video/"))
+                                            {
+                                                <video playsinline webkit-playsinline src="@att.FilePath" controls style="max-height: 100px; max-width: 100%; border-radius: 4px;"></video>
+                                            }
+                                            else
+                                            {
+                                                <MudChip T="string" Size="Size.Small" Icon="@Icons.Material.Filled.AttachFile">@att.FileName</MudChip>
+                                            }
+                                        }
+                                    </div>
+                                }
+                            </div>
+                            @if (report.Status != "Open")
+                            {
+                                <div class="mt-4 pt-3" style="border-top: 1px solid var(--mud-palette-lines-default);">
+                                    <MudText Typo="Typo.caption" Color="Color.Secondary" Style="font-weight: 600;">RESOLUTION</MudText>
+                                    <div class="d-flex align-center justify-space-between mt-1">
+                                        <MudText Typo="Typo.body2">Action: <strong>@report.ResolutionAction</strong></MudText>
+                                        <MudText Typo="Typo.body2">By: <strong>@report.ResolvedBy</strong></MudText>
+                                    </div>
+                                </div>
+                            }
+                        </MudCardContent>
+                        <MudCardActions Class="px-4 pb-4 pt-0 justify-end gap-2 flex-wrap">
+                            @if (report.Status == "Open")
+                            {
+                                <MudButton Size="Size.Small" Variant="Variant.Text" Color="Color.Default" OnClick="@(() => DismissReport(report))">Dismiss</MudButton>
+                                <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Error" StartIcon="@Icons.Material.Filled.Delete" DisableElevation="true" Style="font-weight: 600;" OnClick="@(() => DeleteMessage(report))">Delete Message</MudButton>
+                                
+                                var reportedUser = Db.Employees.GetById(report.ReportedUserId);
+                                if (reportedUser != null && !(reportedUser.IsAdmin || reportedUser.HasPermission(Spokes_Server.Core.Constants.AppPermissions.Chat.Moderator)))
+                                {
+                                    <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="@(reportedUser.IsSuspended ? Color.Success : Color.Warning)" OnClick="@(() => ToggleSuspend(report.ReportedUserId))">
+                                        @(reportedUser.IsSuspended ? "Unsuspend User" : "Suspend User")
+                                    </MudButton>
+                                    <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="@(reportedUser.IsBanned ? Color.Success : Color.Error)" OnClick="@(() => ToggleBan(report.ReportedUserId))">
+                                        @(reportedUser.IsBanned ? "Unban User" : "Ban User")
+                                    </MudButton>
+                                }
+                            }
+                        </MudCardActions>
+                    </MudCard>
+                </MudItem>
+            }
+        </MudGrid>
+    }
+</MudContainer>
+
+<style>
+    .moderation-card {
+        transition: transform 0.2s ease, box-shadow 0.2s ease;
+        border: 1px solid var(--mud-palette-lines-default);
+    }
+    .moderation-card:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(0,0,0,0.08) !important;
+        border-color: var(--mud-palette-error);
+    }
+</style>
+
+@code {
+    private List<ReportedMessage> _reports = new();
+    private bool _loading = true;
+    private string searchString = "";
+    private Employee? _currentUser;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _currentUser = await UserService.GetEmployeeAsync();
+        LoadData();
+    }
+
+    private void LoadData()
+    {
+        _reports = Db.ReportedMessages.GetAll().OrderByDescending(r => r.ReportedAt).ToList();
+        _loading = false;
+    }
+
+    private string GetUserName(string employeeId)
+    {
+        var emp = Db.Employees.GetById(employeeId);
+        return emp != null ? emp.FullName : "Unknown";
+    }
+
+    private bool FilterFunc(ReportedMessage element)
+    {
+        if (string.IsNullOrWhiteSpace(searchString))
+            return true;
+        if (element.Reason.Contains(searchString, StringComparison.OrdinalIgnoreCase))
+            return true;
+        if (element.SnapshotContent.Contains(searchString, StringComparison.OrdinalIgnoreCase))
+            return true;
+        return false;
+    }
+
+    private void DismissReport(ReportedMessage report)
+    {
+        report.Status = "Dismissed";
+        report.ResolutionAction = "Dismissed";
+        report.ResolvedBy = _currentUser?.FullName ?? "Moderator";
+        Db.ReportedMessages.Save(report);
+        Snackbar.Add("Report dismissed.", Severity.Info);
+        LoadData();
+    }
+
+    private async Task DeleteMessage(ReportedMessage report)
+    {
+        await ChatService.AdminDeleteMessageAsync(report.MessageId);
+        Snackbar.Add("Message deleted globally.", Severity.Success);
+        
+        report.Status = "Resolved";
+        report.ResolutionAction = "Deleted Message";
+        report.ResolvedBy = _currentUser?.FullName ?? "Moderator";
+        report.SnapshotContent = "content deleted";
+        report.Attachments.Clear();
+        Db.ReportedMessages.Save(report);
+        LoadData();
+    }
+
+    private void ToggleSuspend(string employeeId)
+    {
+        var emp = Db.Employees.GetById(employeeId);
+        if (emp != null)
+        {
+            if (emp.IsAdmin || emp.HasPermission(Spokes_Server.Core.Constants.AppPermissions.Chat.Moderator))
+            {
+                Snackbar.Add("Cannot suspend another moderator or admin.", Severity.Error);
+                return;
+            }
+            emp.IsSuspended = !emp.IsSuspended;
+            Db.Employees.Save(emp);
+            Snackbar.Add(emp.IsSuspended ? "User suspended." : "User unsuspended.", Severity.Success);
+            StateHasChanged();
+        }
+    }
+
+    private void ToggleBan(string employeeId)
+    {
+        var emp = Db.Employees.GetById(employeeId);
+        if (emp != null)
+        {
+            if (emp.IsAdmin || emp.HasPermission(Spokes_Server.Core.Constants.AppPermissions.Chat.Moderator))
+            {
+                Snackbar.Add("Cannot ban another moderator or admin.", Severity.Error);
+                return;
+            }
+            emp.IsBanned = !emp.IsBanned;
+            Db.Employees.Save(emp);
+            Snackbar.Add(emp.IsBanned ? "User banned." : "User unbanned.", Severity.Success);
+            StateHasChanged();
+        }
+    }
+}

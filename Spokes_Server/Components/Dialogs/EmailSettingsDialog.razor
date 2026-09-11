@@ -1,0 +1,428 @@
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Data
+@using MudBlazor
+@using Spokes_Server.Components.Shared
+@implements IDisposable
+@inject Database Db
+@inject EncryptionService EncryptionService
+@inject EmailSyncStateService SyncStateService
+@inject EmailService EmailService
+@inject UserService UserService
+@inject ISnackbar Snackbar
+@inject IDialogService DialogService
+@inject IJSRuntime JS
+
+
+<MudDialog>
+    <DialogContent>
+        <MudTabs Elevation="0" Rounded="true" TabPanelsClass="pa-2" KeepPanelsAlive="true">
+            <MudTabPanel Text="Email Preferences">
+                <MudGrid>
+                    <MudItem xs="12">
+                <MudText Typo="Typo.h6">Email Preferences</MudText>
+            </MudItem>
+
+            <MudItem xs="12">
+                <MudText Typo="Typo.caption" Class="mb-1 d-block">Email Signature</MudText>
+                <SpokesRichTextEditor @bind-Value="_signatureHtml" Class="mb-3" />
+            </MudItem>
+            <MudItem xs="12">
+                <MudTextField @bind-Value="Employee.Email" Label="Business Email" Variant="Variant.Outlined"
+                    Margin="Margin.Dense" Class="mb-3" />
+
+                @if (!string.IsNullOrEmpty(Employee.EncryptedEmailPassword))
+                {
+                    <MudTextField Value="@("********")" Label="Email Password" ReadOnly="true" Adornment="Adornment.End"
+                        AdornmentIcon="@Icons.Material.Filled.Lock" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                    <MudButton Variant="Variant.Text" Color="Color.Primary" OnClick="@(() => _showPasswordInput = true)">
+                        Change Password
+                    </MudButton>
+                }
+
+                @if (string.IsNullOrEmpty(Employee.EncryptedEmailPassword) || _showPasswordInput)
+                {
+                    <div class="d-flex flex-column gap-2">
+                        <MudTextField @bind-Value="_newPassword"
+                            Label="@(string.IsNullOrEmpty(Employee.EncryptedEmailPassword) ? "Email Password" : "New Email Password")"
+                            InputType="InputType.Password" HelperText="Password is encrypted before storage"
+                            Variant="Variant.Outlined" Margin="Margin.Dense" />
+                    </div>
+                }
+            </MudItem>
+
+            <MudItem xs="12">
+                <MudDivider Class="my-4" />
+                <MudText Typo="Typo.h6">System Status</MudText>
+            </MudItem>
+
+            <MudItem xs="12" Class="d-flex flex-column gap-2 mb-2">
+                @if (!string.IsNullOrEmpty(_syncStatus) && (_syncStatus.Contains("Error") ||
+                _syncStatus.Contains("Missing")))
+                {
+                    <MudAlert Severity="Severity.Error" Variant="Variant.Filled" Class="mb-2">@_syncStatus</MudAlert>
+                }
+                else
+                {
+                    <MudText Typo="Typo.body2" Color="Color.Secondary">Status: @_syncStatus</MudText>
+                }
+                <MudText Typo="Typo.body2" Color="Color.Secondary">Downloaded: @_localCount / Server: @_serverCount
+                </MudText>
+
+                <div class="d-flex flex-column gap-2 mt-2">
+                    <div class="d-flex gap-2">
+                        <MudButton Variant="Variant.Outlined" Size="Size.Small" Color="Color.Secondary"
+                            OnClick="RepairAttachments" Disabled="IsRepairing">
+                            @(IsRepairing ? "Repairing..." : "Repair Emails")
+                        </MudButton>
+                        <MudButton Variant="Variant.Filled" Size="Size.Small" Color="Color.Primary"
+                            OnClick="TestConnectionAsync"
+                            Disabled="@(_isTestingConnection || (!string.IsNullOrEmpty(_newPassword)))">
+                            @(_isTestingConnection ? "Connecting..." : "Test Connection")
+                        </MudButton>
+                    </div>
+                </div>
+                </MudItem>
+                </MudGrid>
+            </MudTabPanel>
+            <MudTabPanel Text="Private Contacts">
+                <div class="d-flex justify-end gap-2 mb-2">
+                    <MudFileUpload T="IBrowserFile" Accept=".vcf" FilesChanged="ImportContacts" Class="mt-0">
+                        <CustomContent>
+                            <MudButton Variant="Variant.Outlined" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Upload" OnClick="@context.OpenFilePickerAsync">
+                                Import
+                            </MudButton>
+                        </CustomContent>
+                        <SelectedTemplate></SelectedTemplate>
+                    </MudFileUpload>
+                    <MudButton Variant="Variant.Outlined" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Download" OnClick="ExportContacts">
+                        Export
+                    </MudButton>
+                    <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Add"
+                               OnClick="AddPrivateContact">New Private Contact</MudButton>
+                </div>
+                <MudTable Items="@PrivateContacts" Dense="true" Hover="true" Striped="true" Filter="new Func<ContactPerson, bool>(FilterPrivateContacts)">
+                    <ToolBarContent>
+                        <MudText Typo="Typo.h6">Private Contacts</MudText>
+                        <MudSpacer />
+                        <MudTextField @bind-Value="searchStringPrivate" Placeholder="Search..." Adornment="Adornment.Start"
+                                      AdornmentIcon="@Icons.Material.Filled.Search" IconSize="Size.Medium" Class="mt-0"></MudTextField>
+                    </ToolBarContent>
+                    <HeaderContent>
+                        <MudTh>Name</MudTh>
+                        <MudTh>Title</MudTh>
+                        <MudTh>Email</MudTh>
+                        <MudTh>Phone</MudTh>
+                        <MudTh>Actions</MudTh>
+                    </HeaderContent>
+                    <RowTemplate>
+                        <MudTd DataLabel="Name">@($"{context.Prefix} {context.Name}".Trim())</MudTd>
+                        <MudTd DataLabel="Title">@context.Title</MudTd>
+                        <MudTd DataLabel="Email">@context.Email</MudTd>
+                        <MudTd DataLabel="Phone">@context.Phone</MudTd>
+                        <MudTd DataLabel="Actions">
+                            <MudIconButton Icon="@Icons.Material.Filled.Edit" Color="Color.Primary" Size="Size.Small"
+                                           OnClick="@(() => EditPrivateContact(context))" />
+                            <MudIconButton Icon="@Icons.Material.Filled.Delete" Color="Color.Error" Size="Size.Small"
+                                           OnClick="@(() => DeletePrivateContact(context))" />
+                        </MudTd>
+                    </RowTemplate>
+                    <PagerContent>
+                        <MudTablePager />
+                    </PagerContent>
+                </MudTable>
+            </MudTabPanel>
+        </MudTabs>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Close">Close</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="Submit">Save</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
+    [Parameter] public Employee Employee { get; set; } = default!;
+    [Parameter] public EventCallback OnRepairAttachments { get; set; }
+    [Parameter] public bool IsRepairing { get; set; }
+
+    private string _signatureHtml = "";
+    private string _newPassword = "";
+    private bool _showPasswordInput = false;
+    private string _syncStatus = "Idle";
+    private bool _isTestingConnection = false;
+    private int _localCount;
+    private int _serverCount;
+
+    private List<ContactPerson> PrivateContacts = new();
+    private string searchStringPrivate = "";
+
+    protected override async Task OnInitializedAsync()
+    {
+        _syncStatus = SyncStateService.GetState(Employee.Id);
+        RefreshCounts();
+        RefreshPrivateContacts();
+        SyncStateService.OnStateChanged += HandleStateChanged;
+        SyncStateService.OnUnreadCountChanged += HandleCountChanged;
+        
+        _signatureHtml = await EmailService.GetSignatureAsync(Employee.Id) ?? "";
+    }
+
+    private void RefreshPrivateContacts()
+    {
+        if (Employee != null)
+        {
+            PrivateContacts = Db.PrivateContacts.GetAllForEmployee(Employee.Id).OrderBy(c => c.Name).ToList();
+        }
+    }
+
+    private bool FilterPrivateContacts(ContactPerson element)
+    {
+        if (string.IsNullOrWhiteSpace(searchStringPrivate)) return true;
+        if (element.Name.Contains(searchStringPrivate, StringComparison.OrdinalIgnoreCase)) return true;
+        if (element.Email.Contains(searchStringPrivate, StringComparison.OrdinalIgnoreCase)) return true;
+        if (element.Phone.Contains(searchStringPrivate, StringComparison.OrdinalIgnoreCase)) return true;
+        return false;
+    }
+
+    private async Task AddPrivateContact()
+    {
+        var newContact = new ContactPerson();
+        var options = new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true };
+        
+        var dialog = await DialogService.ShowAsync<Spokes_Server.Components.Dialogs.ContactPersonDialog>("Create Private Contact", new DialogParameters
+        {
+            ["Contact"] = newContact
+        }, options);
+        var result = await dialog.Result;
+
+        if (!result.Canceled)
+        {
+            var created = (ContactPerson)result.Data;
+            Db.PrivateContacts.Save(Employee.Id, created);
+            RefreshPrivateContacts();
+            Snackbar.Add("Private contact created", Severity.Success);
+        }
+    }
+
+    private async Task EditPrivateContact(ContactPerson contact)
+    {
+        var options = new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true };
+        var dialog = await DialogService.ShowAsync<Spokes_Server.Components.Dialogs.ContactPersonDialog>("Edit Private Contact", new DialogParameters
+        {
+            ["Contact"] = contact
+        }, options);
+        var result = await dialog.Result;
+
+        if (!result.Canceled)
+        {
+            var updated = (ContactPerson)result.Data;
+            Db.PrivateContacts.Save(Employee.Id, updated);
+            RefreshPrivateContacts();
+            Snackbar.Add("Private contact updated", Severity.Success);
+        }
+    }
+
+    private async Task DeletePrivateContact(ContactPerson contact)
+    {
+        bool? result = await DialogService.ShowMessageBoxAsync(
+        "Warning",
+        $"Deleting a contact cannot be undone. Are you sure you want to delete '{contact.Name}'?",
+        yesText: "Delete!", cancelText: "Cancel");
+
+        if (result == true)
+        {
+            Db.PrivateContacts.Delete(Employee.Id, contact.Id);
+            RefreshPrivateContacts();
+            Snackbar.Add("Contact deleted", Severity.Success);
+        }
+    }
+
+    private async Task ImportContacts(IBrowserFile file)
+    {
+        try
+        {
+            if (file == null) return;
+            if (file.Size > 10 * 1024 * 1024)
+            {
+                Snackbar.Add("File too large. Max 10MB.", Severity.Error);
+                return;
+            }
+
+            using var stream = file.OpenReadStream(10 * 1024 * 1024);
+            using var reader = new System.IO.StreamReader(stream);
+            var content = await reader.ReadToEndAsync();
+            
+            var cards = content.Split(new[] { "BEGIN:VCARD" }, StringSplitOptions.RemoveEmptyEntries);
+            int importedCount = 0;
+            int skippedCount = 0;
+            
+            foreach (var card in cards)
+            {
+                if (!card.Contains("END:VCARD")) continue;
+                
+                var lines = card.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.RemoveEmptyEntries);
+                var contact = new ContactPerson();
+                
+                foreach (var line in lines)
+                {
+                    int colonIdx = line.IndexOf(':');
+                    if (colonIdx < 0) continue;
+                    
+                    var keyPart = line.Substring(0, colonIdx).ToUpperInvariant();
+                    var value = line.Substring(colonIdx + 1).Trim();
+                    
+                    if (keyPart.StartsWith("FN")) contact.Name = value;
+                    else if (keyPart.StartsWith("TITLE")) contact.Title = value;
+                    else if (keyPart.StartsWith("EMAIL")) contact.Email = value;
+                    else if (keyPart.StartsWith("TEL")) contact.Phone = value;
+                }
+                
+                if (!string.IsNullOrWhiteSpace(contact.Name) || !string.IsNullOrWhiteSpace(contact.Email))
+                {
+                    bool isDuplicate = PrivateContacts.Any(existing => 
+                        (!string.IsNullOrWhiteSpace(contact.Email) && string.Equals(existing.Email, contact.Email, StringComparison.OrdinalIgnoreCase)) ||
+                        (!string.IsNullOrWhiteSpace(contact.Name) && string.Equals(existing.Name, contact.Name, StringComparison.OrdinalIgnoreCase) && string.Equals(existing.Phone, contact.Phone, StringComparison.OrdinalIgnoreCase))
+                    );
+
+                    if (!isDuplicate)
+                    {
+                        Db.PrivateContacts.Save(Employee.Id, contact);
+                        importedCount++;
+                    }
+                    else
+                    {
+                        skippedCount++;
+                    }
+                }
+            }
+            
+            RefreshPrivateContacts();
+            
+            if (skippedCount > 0)
+            {
+                Snackbar.Add($"Imported {importedCount} private contacts from VCF. Skipped {skippedCount} duplicates.", Severity.Success);
+            }
+            else
+            {
+                Snackbar.Add($"Imported {importedCount} private contacts from VCF", Severity.Success);
+            }
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to import: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private async Task ExportContacts()
+    {
+        if (PrivateContacts == null || !PrivateContacts.Any())
+        {
+            Snackbar.Add("No private contacts to export.", Severity.Warning);
+            return;
+        }
+
+        var sb = new System.Text.StringBuilder();
+        foreach (var contact in PrivateContacts)
+        {
+            sb.AppendLine("BEGIN:VCARD");
+            sb.AppendLine("VERSION:3.0");
+            
+            var nameToExport = !string.IsNullOrWhiteSpace(contact.Name) ? contact.Name : "Unknown";
+            if (!string.IsNullOrWhiteSpace(contact.Prefix))
+            {
+                nameToExport = $"{contact.Prefix} {nameToExport}".Trim();
+            }
+            sb.AppendLine($"FN:{nameToExport}");
+            
+            if (!string.IsNullOrWhiteSpace(contact.Title))
+                sb.AppendLine($"TITLE:{contact.Title}");
+            if (!string.IsNullOrWhiteSpace(contact.Email))
+                sb.AppendLine($"EMAIL;TYPE=INTERNET:{contact.Email}");
+            if (!string.IsNullOrWhiteSpace(contact.Phone))
+                sb.AppendLine($"TEL;TYPE=CELL:{contact.Phone}");
+            sb.AppendLine("END:VCARD");
+        }
+
+        var fileName = $"private_contacts_{DateTime.Now:yyyyMMdd}.vcf";
+        await JS.InvokeVoidAsync("downloadFile", fileName, "text/vcard", sb.ToString());
+    }
+
+    private void RefreshCounts()
+    {
+        var folders = Db.EmailFolders.GetByEmployee(Employee.Id);
+        _localCount = folders.Sum(f => Db.EmailMessages.GetLocalMessageCount(Employee.Id, f.Path));
+        _serverCount = folders.Sum(f => f.TotalCount);
+    }
+
+    // Removed OnAfterRenderAsync doing SetHtml
+
+    private void HandleStateChanged(string employeeId)
+    {
+        if (employeeId == Employee.Id)
+        {
+            _syncStatus = SyncStateService.GetState(employeeId);
+            RefreshCounts();
+            InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private void HandleCountChanged(string employeeId)
+    {
+        if (employeeId == Employee.Id)
+        {
+            RefreshCounts();
+            InvokeAsync(StateHasChanged);
+        }
+    }
+
+    public void Dispose()
+    {
+        SyncStateService.OnStateChanged -= HandleStateChanged;
+        SyncStateService.OnUnreadCountChanged -= HandleCountChanged;
+    }
+
+    private async Task RepairAttachments()
+    {
+        await OnRepairAttachments.InvokeAsync();
+    }
+
+    private async Task TestConnectionAsync()
+    {
+        if (!string.IsNullOrWhiteSpace(_newPassword))
+        {
+            Employee.EncryptedEmailPassword = EncryptionService.Encrypt(_newPassword);
+        }
+
+        Db.Employees.Save(Employee);
+
+        _isTestingConnection = true;
+        StateHasChanged();
+
+        await EmailService.SyncEmployeeAsync(Employee.Id);
+
+        _isTestingConnection = false;
+        StateHasChanged();
+    }
+
+    private async Task Submit()
+    {
+        if (!string.IsNullOrWhiteSpace(_newPassword))
+        {
+            Employee.EncryptedEmailPassword = EncryptionService.Encrypt(_newPassword);
+        }
+
+        await EmailService.SaveSignatureAsync(Employee.Id, _signatureHtml);
+
+        Db.Employees.Save(Employee);
+        UserService.ClearCache();
+        MudDialog.Close(DialogResult.Ok(Employee));
+    }
+
+    private void Close() => MudDialog.Cancel();
+}
+
+

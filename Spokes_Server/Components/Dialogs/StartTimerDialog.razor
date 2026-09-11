@@ -1,0 +1,149 @@
+@using Spokes_Server.Core.Data
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Services
+@using Spokes_Server.Core.Helpers
+@inject Database Db
+@inject TimerService TimerService
+@inject UserService UserService
+@inject ISnackbar Snackbar
+
+<MudDialog>
+    <DialogContent>
+        <MudStack Spacing="3">
+            <MudAutocomplete T="string" Value="_selectedProjectId" ValueChanged="OnProjectChanged" Label="Project"
+                Variant="Variant.Outlined" Dense="true" Required="true" AnchorOrigin="Origin.BottomCenter"
+                SearchFunc="SearchProjects" ToStringFunc="GetProjectName" 
+                ResetValueOnEmptyText="true" CoerceText="false" MaxItems="null" />
+
+            <MudSelect T="string" @bind-Value="_selectedWorkTypeId" Label="Task" Variant="Variant.Outlined" Dense="true"
+                Required="true" Disabled="@(string.IsNullOrEmpty(_selectedProjectId))" AnchorOrigin="Origin.BottomCenter">
+                @foreach (var wt in _filteredWorkTypes)
+                {
+                        <MudSelectItem Value="@wt.Id">@wt.Name</MudSelectItem>
+                }
+            </MudSelect>
+
+            @if (_subTasks.Any())
+            {
+                    <MudSelect T="string" @bind-Value="_selectedSubTaskId" Label="Sub-Task" Variant="Variant.Outlined" Dense="true"
+                        Clearable="true" AnchorOrigin="Origin.BottomCenter">
+                    @foreach (var st in _subTasks)
+                    {
+                                <MudSelectItem Value="@st.Id">@st.Name</MudSelectItem>
+                    }
+                    </MudSelect>
+            }
+
+            <MudTextField T="string" @bind-Value="_note" Label="Note (optional)" Variant="Variant.Outlined" Dense="true"
+                Lines="2" Placeholder="What are you working on?" />
+        </MudStack>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Close">Close</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="Submit"
+            Disabled="@(string.IsNullOrEmpty(_selectedProjectId) || string.IsNullOrEmpty(_selectedWorkTypeId))">
+            Start
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
+
+    // We can pass the current user if we want, or fetch it. Fetching is safer.
+    private Employee? _currentUser;
+
+    private string _selectedProjectId = string.Empty;
+    private string _selectedWorkTypeId = string.Empty;
+    private string? _selectedSubTaskId;
+    private string _note = string.Empty;
+
+    private List<Project> _projects = new();
+    private List<WorkType> _allWorkTypes = new();
+    private List<WorkType> _filteredWorkTypes = new();
+    private List<SubTask> _subTasks => string.IsNullOrEmpty(_selectedWorkTypeId)
+        ? new()
+        : _filteredWorkTypes.FirstOrDefault(w => w.Id == _selectedWorkTypeId)?.SubTasks ?? new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        _currentUser = await UserService.GetEmployeeAsync();
+        if (_currentUser == null)
+        {
+            MudDialog.Cancel();
+            return;
+        }
+
+        LoadProjects();
+        _allWorkTypes = Db.WorkTypes.GetAll().Where(w => w.IsActive).OrderBy(w => w.Name).ToList();
+    }
+
+    private void LoadProjects()
+    {
+        if (_currentUser == null) return;
+
+        if (_currentUser.IsAdmin)
+        {
+            _projects = Db.Projects.GetAll()
+                .Where(p => p.IsActive || p.Status != ProjectStatus.Archived)
+                .OrderBy(p => p.DisplayName)
+                .ToList();
+            return;
+        }
+
+        _projects = Db.Projects.GetAll()
+            .Where(p => (p.IsActive || p.Status != ProjectStatus.Archived) &&
+            (p.AccessPolicy == "Public" ||
+            (p.AllowedUserIds != null && p.AllowedUserIds.Contains(_currentUser.Id)) ||
+            (!string.IsNullOrEmpty(_currentUser.TeamId) && p.AllowedTeamIds != null && p.AllowedTeamIds.Contains(_currentUser.TeamId))))
+            .OrderBy(p => p.DisplayName)
+            .ToList();
+    }
+
+    private Task<IEnumerable<string>> SearchProjects(string value, CancellationToken token)
+        => Task.FromResult(TimesheetSearchHelper.SearchProjects(value, _projects));
+
+    private string GetProjectName(string id)
+        => TimesheetSearchHelper.GetProjectName(id, _projects);
+
+    private void OnProjectChanged(string projectId)
+    {
+        _selectedProjectId = projectId;
+        _selectedWorkTypeId = string.Empty;
+        _selectedSubTaskId = null;
+
+        if (!string.IsNullOrEmpty(projectId))
+        {
+            var project = _projects.FirstOrDefault(p => p.Id == projectId);
+            if (project != null && project.ApprovedWorkTypeIds.Any())
+            {
+                _filteredWorkTypes = _allWorkTypes.Where(w => project.ApprovedWorkTypeIds.Contains(w.Id)).ToList();
+            }
+            else
+            {
+                _filteredWorkTypes = _allWorkTypes;
+            }
+        }
+        else
+        {
+            _filteredWorkTypes = _allWorkTypes;
+        }
+    }
+
+    private void Submit()
+    {
+        if (_currentUser == null || string.IsNullOrEmpty(_selectedProjectId) || string.IsNullOrEmpty(_selectedWorkTypeId))
+            return;
+
+        TimerService.Start(_currentUser.Id, _selectedProjectId, _selectedWorkTypeId, _selectedSubTaskId, _note);
+        MudDialog.Close(DialogResult.Ok(true));
+        Snackbar.Add("Timer started", Severity.Success);
+    }
+
+    private void Close() => MudDialog.Cancel();
+}
+

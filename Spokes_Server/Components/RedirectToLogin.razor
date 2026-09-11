@@ -1,0 +1,188 @@
+@inject NavigationManager Nav
+@using Microsoft.AspNetCore.Components.Authorization
+@inject AuthenticationStateProvider AuthStateProvider
+@inject IJSRuntime JSRuntime
+
+@code {
+    // We emit a native <script> tag so that on initial page load (when the user is unauthenticated
+    // and the Blazor circuit fails to connect due to 401 Unauthorized), the browser will immediately
+    // execute this script and redirect the user. Blazor ignores dynamically injected <script> tags 
+    // during SPA navigation, so we also retain the OnAfterRenderAsync logic as a fallback.
+}
+
+<AuthorizeView>
+    <Authorized>
+        <MudAlert Severity="Severity.Error" Variant="Variant.Filled" Class="m-4">
+            Access Denied. You do not have the required permissions to view this page.
+        </MudAlert>
+    </Authorized>
+    <NotAuthorized>
+        <script>
+            (async function() {
+                if (window._spokesRedirectingToLogin) return;
+                window._spokesRedirectingToLogin = true;
+
+
+
+                var uri = window.location.href;
+                if (uri.toLowerCase().includes("authentication/login")) return;
+                if (uri.includes("renderToken=")) {
+                    window.location.replace("/access-denied");
+                    return;
+                }
+
+                var isNative = false;
+                try {
+                    await new Promise(res => setTimeout(res, 100)); // Wait briefly for Capacitor
+                    isNative = window.checkIsCapacitorNative ? window.checkIsCapacitorNative() : false;
+                    console.log("[SSO] RedirectToLogin (Script) evaluated isNative:", isNative);
+                } catch (e) {
+                    console.error("[SSO] RedirectToLogin (Script) isNative eval threw exception:", e);
+                }
+
+                var rawReturnUrl = window.location.pathname + window.location.search + window.location.hash;
+                var safeUrl = (window.spokesAuth && window.spokesAuth.getSafeRedirectUrl)
+                    ? window.spokesAuth.getSafeRedirectUrl(rawReturnUrl, '/')
+                    : rawReturnUrl;
+                var returnUrl = encodeURIComponent(safeUrl);
+
+                var deviceId = '';
+                try {
+                    if (window.pushNotifications && window.pushNotifications.getDeviceId) {
+                        deviceId = await window.pushNotifications.getDeviceId();
+                    }
+                } catch(e) {}
+
+                if (isNative) {
+                    console.log("[SSO] RedirectToLogin (Script) isNative=true. Attempting silent session refresh...");
+                    if (window.spokesAuth && window.spokesAuth.refreshSessionAsync) {
+                        try {
+                            const refreshed = await window.spokesAuth.refreshSessionAsync();
+                            if (refreshed) {
+                                console.log("[SSO] Silent refresh succeeded. Waiting for native cookie sync...");
+                                
+                                // Force a native sync if the plugin is available
+                                if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.CapacitorCookies) {
+                                    try { await window.Capacitor.Plugins.CapacitorCookies.getCookies(); } catch(e) {}
+                                }
+                                
+                                // Poll the current-session endpoint to guarantee the cookie is attached
+                                const synced = (window.spokesAuth && window.spokesAuth.waitForCookieSyncAsync)
+                                    ? await window.spokesAuth.waitForCookieSyncAsync(20, 100)
+                                    : false;
+                                if (synced) {
+                                    console.log("[SSO] Cookie successfully synced to WebView. Reloading app.");
+                                    window.location.reload();
+                                    return;
+                                }
+                                console.warn("[SSO] Cookie sync timeout. Routing directly to /mobile-login.");
+                                window.location.replace('/mobile-login?returnUrl=' + returnUrl);
+                                return;
+                            }
+                        } catch (e) {
+                            console.error("[SSO] Silent refresh failed:", e);
+                        }
+                    }
+                    console.log("[SSO] Refresh not possible or failed. Routing directly to /mobile-login...");
+                    window.location.replace('/mobile-login?returnUrl=' + returnUrl);
+                    return;
+                } else {
+                    console.log("[SSO] RedirectToLogin (Script) routing to /sso/login/auto...");
+                    window.location.replace('/sso/login/auto?deviceId=' + encodeURIComponent(deviceId) + '&returnUrl=' + returnUrl);
+                }
+            })();
+        </script>
+    </NotAuthorized>
+</AuthorizeView>
+
+@code {
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            var isRedirecting = await JSRuntime.InvokeAsync<bool>("eval", "!!window._spokesRedirectingToLogin");
+            if (isRedirecting) return;
+
+            var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+            var user = authState.User;
+
+
+
+            if (user.Identity?.IsAuthenticated == true)
+            {
+                Nav.NavigateTo("/access-denied");
+                return;
+            }
+
+            var uri = Nav.ToAbsoluteUri(Nav.Uri);
+
+            // Check if we are already at the login page
+            if (uri.AbsolutePath.Contains("authentication/login", StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            // Prevent redirect loops for PDF generation (headless browser)
+            var query = System.Web.HttpUtility.ParseQueryString(uri.Query);
+            if (query["renderToken"] != null)
+            {
+                Nav.NavigateTo("/access-denied");
+                return;
+            }
+
+            bool isNative = false;
+            try 
+            {
+                // Wait briefly to allow Capacitor to inject itself if it's running in a cold WebView
+                await Task.Delay(100);
+                isNative = await JSRuntime.InvokeAsync<bool>("window.checkIsCapacitorNative");
+                await JSRuntime.InvokeVoidAsync("console.log", "[SSO] RedirectToLogin evaluated isNative:", isNative);
+            }
+            catch (Exception ex)
+            {
+                await JSRuntime.InvokeVoidAsync("console.error", "[SSO] RedirectToLogin isNative eval threw exception:", ex.Message);
+            }
+
+            if (isNative)
+            {
+                // Capacitor apps on iOS often instantiate a fresh WKWebView when reloading via the server switcher.
+                // It takes a brief moment for the WKHTTPCookieStore to sync persistent cookies into the new webview's memory.
+                // Let's poll for cookies for up to 2 seconds.
+                bool isRecoverable = await JSRuntime.InvokeAsync<bool>("window.checkIsAuthRecoverable");
+
+                string deviceId = "";
+                try {
+                    deviceId = await JSRuntime.InvokeAsync<string>("pushNotifications.getDeviceId");
+                } catch { }
+
+                if (isRecoverable)
+                {
+                    // The cookies synced (or we have a refresh token but Blazor didn't get the auth cookie).
+                    // In interactive Blazor Server mode, ensure the cookie is synced to WKWebView before navigating.
+                    try {
+                        await JSRuntime.InvokeAsync<bool>("spokesAuth.waitForCookieSyncAsync", 20, 100);
+                    } catch { }
+
+                    var returnUrl = Spokes_Server.Core.Security.RedirectHelper.GetSafeRedirectUrl(Nav.Uri, uri.Host, "/");
+                    Nav.NavigateTo($"/sso/login/auto?deviceId={Uri.EscapeDataString(deviceId)}&returnUrl={Uri.EscapeDataString(returnUrl)}", forceLoad: true);
+                    return;
+                }
+
+                await JSRuntime.InvokeVoidAsync("console.log", "[SSO] RedirectToLogin routing to /mobile-login...");
+                var mobileReturnUrl = Spokes_Server.Core.Security.RedirectHelper.GetSafeRedirectUrl(Nav.Uri, uri.Host, "/");
+                Nav.NavigateTo($"/mobile-login?returnUrl={Uri.EscapeDataString(mobileReturnUrl)}", forceLoad: true);
+            }
+            else
+            {
+                string deviceId = "";
+                try {
+                    deviceId = await JSRuntime.InvokeAsync<string>("pushNotifications.getDeviceId");
+                } catch { }
+
+                await JSRuntime.InvokeVoidAsync("console.log", "[SSO] RedirectToLogin routing to /sso/login/auto...");
+                var returnUrl = Spokes_Server.Core.Security.RedirectHelper.GetSafeRedirectUrl(Nav.Uri, uri.Host, "/");
+                Nav.NavigateTo($"/sso/login/auto?deviceId={Uri.EscapeDataString(deviceId)}&returnUrl={Uri.EscapeDataString(returnUrl)}", forceLoad: true);
+            }
+        }
+    }
+}

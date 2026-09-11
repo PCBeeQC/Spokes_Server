@@ -1,0 +1,41 @@
+@using Spokes_Server.Core.Models.Core
+@implements IDisposable
+
+<div class="d-flex align-center gap-3 py-1">
+    <MudProgressCircular Size="Size.Small" Indeterminate="@(UploadState.Progress < 0)" Value="@(UploadState.Progress < 0 ? 0 : UploadState.Progress)" Max="100" Color="Color.Primary" />
+    <MudText Typo="Typo.body2">
+        @if (UploadState.Progress < 0)
+        {
+            <span>@UploadState.StatusText</span>
+        }
+        else
+        {
+            <span>@UploadState.StatusText @(Math.Round(UploadState.Progress))%</span>
+        }
+    </MudText>
+</div>
+
+@code {
+    [Parameter] public UploadProgressState UploadState { get; set; } = default!;
+
+    protected override void OnInitialized()
+    {
+        if (UploadState != null)
+        {
+            UploadState.OnStateChanged += HandleStateChanged;
+        }
+    }
+
+    private void HandleStateChanged()
+    {
+        InvokeAsync(StateHasChanged);
+    }
+
+    public void Dispose()
+    {
+        if (UploadState != null)
+        {
+            UploadState.OnStateChanged -= HandleStateChanged;
+        }
+    }
+}

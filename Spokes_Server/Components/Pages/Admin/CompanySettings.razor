@@ -1,0 +1,2004 @@
+@page "/admin/settings"
+@implements IDisposable
+<PageTitle>Company Settings</PageTitle>
+@using Spokes_Server.Core.Models
+@using Spokes_Server.Core.Data
+@using MudBlazor
+@inject Database Db
+@inject ISnackbar Snackbar
+@inject IDialogService DialogService
+@inject IJSRuntime JS
+@inject AuthenticationStateProvider AuthStateProvider
+@inject NavigationManager Nav
+@inject Microsoft.Extensions.Hosting.IHostApplicationLifetime AppLifetime
+@inject ILogger<CompanySettings> Logger
+@inject Microsoft.Extensions.Configuration.IConfiguration Config
+@inject Spokes_Server.Core.Services.Licensing.LicenseValidationService LicenseValidationService
+@inject Spokes_Server.Core.Services.Core.AppLabelService AppLabels
+@inject Spokes_Server.Core.Services.Core.ServerUpdateService ServerUpdateService
+@inject Spokes_Server.Core.Services.Communication.Voice.LiveKitService LiveKitService
+@using Microsoft.AspNetCore.Components.Authorization
+@using System.Security.Claims
+@using Spokes_Server.Core.Constants
+@using Spokes_Server.Core.Models.Core
+
+
+
+    <MudContainer MaxWidth="MaxWidth.Large" Class="pa-2">
+    <MudText Typo="Typo.h4" GutterBottom="true">@AppLabels.Company Settings</MudText>
+    <div class="mb-6">
+        <MudMenu Label="@GetActiveTabName()" StartIcon="@GetActiveTabIcon()" EndIcon="@Icons.Material.Filled.KeyboardArrowDown" Variant="Variant.Outlined" Color="Color.Default" FullWidth="true" AnchorOrigin="Origin.BottomCenter" TransformOrigin="Origin.TopCenter" MaxHeight="800">
+            <MudMenuItem OnClick="@(() => UpdateActiveTab(0))" Icon="@Icons.Material.Filled.Business">@AppLabels.Company Profile</MudMenuItem>
+            @if (!IsFriendEdition)
+            {
+                <MudMenuItem OnClick="@(() => UpdateActiveTab(1))" Icon="@Icons.Material.Filled.Description">Document Templates</MudMenuItem>
+            }
+            @if (!IsFriendEdition)
+            {
+                <MudMenuItem OnClick="@(() => UpdateActiveTab(2))" Icon="@Icons.Material.Filled.Palette">Project Statuses</MudMenuItem>
+            }
+            <MudMenuItem OnClick="@(() => UpdateActiveTab(3))" Icon="@Icons.Material.Filled.Category">Calendar Categories</MudMenuItem>
+            <MudMenuItem OnClick="@(() => UpdateActiveTab(4))" Icon="@Icons.Material.Filled.Backup">Backups & Restore</MudMenuItem>
+            <MudMenuItem OnClick="@(() => UpdateActiveTab(5))" Icon="@Icons.Material.Filled.Security">Permission Groups</MudMenuItem>
+            @if (!IsFriendEdition)
+            {
+                <MudMenuItem OnClick="@(() => UpdateActiveTab(6))" Icon="@Icons.Material.Filled.Email">Email Server</MudMenuItem>
+            }
+            <MudMenuItem OnClick="@(() => UpdateActiveTab(7))" Icon="@Icons.Material.Filled.Chat">Chat Settings</MudMenuItem>
+            <MudMenuItem OnClick="@(() => UpdateActiveTab(8))" Icon="@Icons.Material.Filled.SettingsApplications">System Setup</MudMenuItem>
+            <MudMenuItem OnClick="@(() => UpdateActiveTab(9))" Icon="@Icons.Material.Filled.Terminal">Server Logs</MudMenuItem>
+            @if (!IsFriendEdition)
+            {
+                <MudMenuItem OnClick="@(() => UpdateActiveTab(10))" Icon="@Icons.Material.Filled.Schedule">Timesheets</MudMenuItem>
+            }
+        </MudMenu>
+    </div>
+
+    @if (activeTabIndex == 0)
+    {
+        <MudGrid>
+            @if (ServerUpdateService.IsUpdateAvailable)
+            {
+                <MudItem xs="12">
+                    @{
+                        var valResult = LicenseValidationService.ValidateLicense(Profile.LicensePayload, Db.ServerConfigs.GetOrCreateGlobalConfig());
+                        string maxVer = valResult.MaxAllowedVersion ?? "";
+                        bool latestExceedsAllowed = false;
+
+                        if (Version.TryParse(ServerUpdateService.LatestVersion?.TrimStart('v'), out Version? lv) && 
+                            Version.TryParse(maxVer.TrimStart('v'), out Version? mv))
+                        {
+                            latestExceedsAllowed = lv > mv;
+                        }
+
+                        if (latestExceedsAllowed)
+                        {
+                            bool isDemo = string.IsNullOrEmpty(Profile.LicensePayload);
+                            <MudAlert Severity="Severity.Error" Variant="Variant.Filled" Class="mb-2" Icon="@Icons.Material.Filled.Warning">
+                                @if (isDemo)
+                                {
+                                    <MudText Typo="Typo.body2">Updating to the latest version will lock up your server. Your demo server does not allow updates pass <b>@maxVer</b>. You can either stay on <b>@maxVer</b> for as long as you like or you can purchase a license at <MudLink Href="https://www.spokes.sh" Target="_blank" Style="color: white; text-decoration: underline;"><b>www.spokes.sh</b></MudLink>.</MudText>
+                                }
+                                else
+                                {
+                                    <MudText Typo="Typo.body2">Updating to the latest version will lock up your server. Your current license does not allow updates pass <b>@maxVer</b>. You can either stay on <b>@maxVer</b> for as long as you like or you can purchase a new license at <MudLink Href="https://www.spokes.sh" Target="_blank" Style="color: white; text-decoration: underline;"><b>www.spokes.sh</b></MudLink>.</MudText>
+                                }
+                            </MudAlert>
+                        }
+                        else
+                        {
+                            <MudAlert Severity="Severity.Info" Variant="Variant.Filled" Class="mb-2">
+                                <div class="d-flex align-center justify-space-between" style="width: 100%;">
+                                    <MudText Typo="Typo.body2">A new server update is available: <b>v@(ServerUpdateService.LatestVersion)</b>. Your current version is <b>@(ServerUpdateService.CurrentVersion)</b>.</MudText>
+                                    @if (!string.IsNullOrEmpty(Environment.GetEnvironmentVariable("WATCHTOWER_HTTP_API_TOKEN")))
+                                    {
+                                        <MudButton Variant="Variant.Filled" Color="Color.Surface" Size="Size.Small" OnClick="TriggerManualUpdate">Update Now</MudButton>
+                                    }
+                                </div>
+                            </MudAlert>
+                        }
+                    }
+                </MudItem>
+            }
+            <MudItem xs="12" sm="4" Class="d-flex flex-column align-center">
+                @if (!string.IsNullOrEmpty(Profile.LogoBase64))
+                {
+                        <MudImage Src="@Profile.LogoBase64" Alt="Logo" Height="100" Class="mb-4"
+                            ObjectFit="ObjectFit.Contain" />
+                }
+                else
+                {
+                        <MudPaper Class="d-flex align-center justify-center mb-4" Width="150px" Height="150px" Outlined="true">
+                            <MudText>No Logo</MudText>
+                        </MudPaper>
+                }
+
+                <div class="d-inline-flex align-center">
+                    <ApiFileUpload 
+                        Category="temp" 
+                        ContextId="@Guid.NewGuid().ToString()" 
+                        OnUploadCompleted="HandleLogoUploaded">
+                        <CustomContent>
+                            <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.CloudUpload">
+                                Upload Logo
+                            </MudButton>
+                        </CustomContent>
+                    </ApiFileUpload>
+                    @if (!string.IsNullOrEmpty(Profile.LogoBase64))
+                    {
+                        <MudButton Variant="Variant.Text" Color="Color.Error" Size="Size.Small" Class="ml-2" OnClick="ClearLogo">
+                            Remove
+                        </MudButton>
+                    }
+                </div>
+
+                <MudDivider Class="my-4" />
+
+                @if (!string.IsNullOrEmpty(Profile.IconBase64))
+                {
+                        <MudImage Src="@Profile.IconBase64" Alt="Icon" Height="50" Class="mb-4" ObjectFit="ObjectFit.Contain" />
+                }
+                else
+                {
+                        <MudPaper Class="d-flex align-center justify-center mb-4" Width="50px" Height="50px" Outlined="true">
+                            <MudText Typo="Typo.caption">No Icon</MudText>
+                        </MudPaper>
+                }
+
+                <div class="d-inline-flex align-center">
+                    <ApiFileUpload 
+                        Category="temp" 
+                        ContextId="@Guid.NewGuid().ToString()" 
+                        OnUploadCompleted="HandleIconUploaded">
+                        <CustomContent>
+                            <MudButton Variant="Variant.Outlined" Color="Color.Secondary" StartIcon="@Icons.Material.Filled.CloudUpload">
+                                Upload Icon
+                            </MudButton>
+                        </CustomContent>
+                    </ApiFileUpload>
+                    @if (!string.IsNullOrEmpty(Profile.IconBase64))
+                    {
+                        <MudButton Variant="Variant.Text" Color="Color.Error" Size="Size.Small" Class="ml-2" OnClick="ClearIcon">
+                            Remove
+                        </MudButton>
+                    }
+                </div>
+            </MudItem>
+
+            <MudItem xs="12" sm="8">
+                <MudTextField Variant="Variant.Outlined" Margin="Margin.Dense" ShrinkLabel="true" @bind-Value="Profile.CompanyName" Label="@($"{AppLabels.Company} Name")" Required="true" />
+                <MudTextField Variant="Variant.Outlined" Margin="Margin.Dense" ShrinkLabel="true" @bind-Value="Profile.PrivacyPolicyUrl" Label="Privacy Policy URL" HelperText="This URL will be shown to users in their Settings to comply with App Store guidelines." />
+                @if (!IsFriendEdition)
+                {
+                    <MudTextField Variant="Variant.Outlined" Margin="Margin.Dense" ShrinkLabel="true" @bind-Value="Profile.Website" Label="Website" />
+                    <MudTextField Variant="Variant.Outlined" Margin="Margin.Dense" ShrinkLabel="true" @bind-Value="Profile.PhoneNumber" Label="Phone" />
+                    <MudColorPicker Variant="Variant.Outlined" Margin="Margin.Dense" ShrinkLabel="true" Label="Primary Brand Color" @bind-Text="_primaryColor" Style="width: 100%;" />
+                    <MudColorPicker Variant="Variant.Outlined" Margin="Margin.Dense" ShrinkLabel="true" Label="Secondary Brand Color" @bind-Text="_secondaryColor" Style="width: 100%;" />
+                }
+            </MudItem>
+
+            <MudItem xs="12" sm="12">
+                <MudDivider Class="my-2" />
+                <MudText Typo="Typo.subtitle1">File Uploads</MudText>
+            </MudItem>
+            <MudItem xs="12" sm="12" Class="mt-n4">
+                <MudNumericField ShrinkLabel="true" Value="@(Profile.MaxFileUploadSizeBytes / 1024 / 1024)" ValueChanged="@((long v) => Profile.MaxFileUploadSizeBytes = v * 1024 * 1024)" Label="Max Upload Size (MB)" Variant="Variant.Outlined" Margin="Margin.Dense" Min="1" Max="2048" HelperText="Maximum allowed size per file (requires server restart to fully apply to Kestrel)" />
+            </MudItem>
+
+            @if (!IsFriendEdition)
+            {
+                <MudItem xs="12">
+                    <MudDivider Class="my-2" />
+                    <MudText Typo="Typo.h6">Document Numbering</MudText>
+                </MudItem>
+                <MudItem xs="6" Class="mt-n4">
+                    <MudTextField Variant="Variant.Outlined" Margin="Margin.Dense" ShrinkLabel="true" @bind-Value="Profile.QuotePrefix" Label="Quote Prefix" HelperText="e.g. Q-001" />
+                </MudItem>
+                <MudItem xs="6" Class="mt-n4">
+                    <MudTextField Variant="Variant.Outlined" Margin="Margin.Dense" ShrinkLabel="true" @bind-Value="Profile.InvoicePrefix" Label="Invoice Prefix" HelperText="e.g. INV-001" />
+                </MudItem>
+
+                <MudItem xs="12" Class="mt-n2">
+                    <MudDivider Class="my-2" />
+                    <MudText Typo="Typo.h6">Financial Defaults</MudText>
+                </MudItem>
+                <MudItem xs="12" sm="4" Class="mt-n4">
+                    <MudNumericField Variant="Variant.Outlined" Margin="Margin.Dense" ShrinkLabel="true" @bind-Value="Profile.KilometrageRate" Label="Kilometrage Rate ($/km)" Format="N2"
+                                     Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.AttachMoney" />
+                </MudItem>
+                <MudItem xs="12" sm="4" Class="mt-n4">
+                    <MudNumericField Variant="Variant.Outlined" Margin="Margin.Dense" ShrinkLabel="true" @bind-Value="Profile.DefaultInternalCommission" Label="Default Internal Commission (%)"
+                                     Adornment="Adornment.End" AdornmentIcon="@Icons.Material.Filled.Percent" />
+                </MudItem>
+                <MudItem xs="12" sm="4" Class="mt-n4">
+                    <MudNumericField Variant="Variant.Outlined" Margin="Margin.Dense" ShrinkLabel="true" @bind-Value="Profile.DefaultExternalCommission" Label="Default External Commission (%)"
+                                     Adornment="Adornment.End" AdornmentIcon="@Icons.Material.Filled.Percent" />
+                </MudItem>
+                <MudItem xs="12" sm="4">
+                    <MudNumericField Variant="Variant.Outlined" Margin="Margin.Dense" ShrinkLabel="true" Value="@(Profile.DefaultTaxRate * 100)"
+                                     ValueChanged="@((decimal v) => Profile.DefaultTaxRate = v / 100)" Label="Default Tax Rate (%)"
+                                     Format="N3" Adornment="Adornment.End" AdornmentIcon="@Icons.Material.Filled.Percent" />
+                </MudItem>
+                <MudItem xs="12" sm="4">
+                    <MudTextField Variant="Variant.Outlined" Margin="Margin.Dense" ShrinkLabel="true" @bind-Value="Profile.CurrencySymbol" Label="Currency Symbol" HelperText="e.g. $, £, " />
+                </MudItem>
+                <MudItem xs="12">
+                    <MudTextField Variant="Variant.Outlined" Margin="Margin.Dense" ShrinkLabel="true" 
+                                  Value='@(string.Join(", ", Profile.SupportedCurrencies))'
+                                  ValueChanged="@((string v) => Profile.SupportedCurrencies = v.Split(new[] { ',', '\n' }, StringSplitOptions.RemoveEmptyEntries).Select(w => w.Trim()).ToList())"
+                                  Label="Supported Currencies" HelperText="Enter currency codes separated by commas (e.g. CAD, USD, EUR)" />
+                </MudItem>
+
+
+                <MudItem xs="12" Class="mt-n2">
+                    <MudDivider Class="my-2" />
+                    <MudText Typo="Typo.h6">Address</MudText>
+                </MudItem>
+                <MudItem xs="12" sm="8" Class="mt-n4">
+                    <MudTextField Variant="Variant.Outlined" Margin="Margin.Dense" ShrinkLabel="true" @bind-Value="Profile.AddressStreet" Label="Street Address" />
+                </MudItem>
+                <MudItem xs="12" sm="4" Class="mt-n4">
+                    <MudTextField Variant="Variant.Outlined" Margin="Margin.Dense" ShrinkLabel="true" @bind-Value="Profile.AddressZip" Label="Zip/Postal" />
+                </MudItem>
+                <MudItem xs="12" sm="4">
+                    <MudTextField Variant="Variant.Outlined" Margin="Margin.Dense" ShrinkLabel="true" @bind-Value="Profile.AddressCity" Label="City" />
+                </MudItem>
+                <MudItem xs="12" sm="4">
+                    <MudTextField Variant="Variant.Outlined" Margin="Margin.Dense" ShrinkLabel="true" @bind-Value="Profile.AddressState" Label="State/Province" />
+                </MudItem>
+                <MudItem xs="12" sm="4">
+                    <MudTextField Variant="Variant.Outlined" Margin="Margin.Dense" ShrinkLabel="true" @bind-Value="Profile.AddressCountry" Label="Country" />
+                </MudItem>
+            }
+            
+
+
+
+            <MudItem xs="12" Class="d-flex justify-end">
+                <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="SaveProfile">Save Profile</MudButton>
+            </MudItem>
+        </MudGrid>
+    }
+    else if (activeTabIndex == 1)
+    {
+        <MudText Typo="Typo.body2" Class="mb-4">Create templates for different languages (e.g. French Invoice, English
+            PO).</MudText>
+
+        <MudButton StartIcon="@Icons.Material.Filled.Add" Variant="Variant.Filled" Color="Color.Primary"
+            OnClick="CreateTemplate">New Template</MudButton>
+
+        <div class="d-inline-flex ml-4">
+            <ApiFileUpload 
+                Category="temp" 
+                ContextId="@Guid.NewGuid().ToString()" 
+                OnUploadCompleted="HandleTemplateUploaded">
+                <CustomContent>
+                    <MudButton Variant="Variant.Outlined" Color="Color.Secondary" StartIcon="@Icons.Material.Filled.UploadFile">
+                        Import
+                    </MudButton>
+                </CustomContent>
+            </ApiFileUpload>
+        </div>
+
+        <MudTable Items="@Templates" Breakpoint="Breakpoint.None" Hover="true" Elevation="0" Outlined="true" Bordered="true" Striped="true" Class="mt-4">
+            <HeaderContent>
+                <MudTh Style="min-width: 250px;">Name</MudTh>
+                <MudTh Style="min-width: 150px;">Language</MudTh>
+                <MudTh Style="width: 100px;">Default</MudTh>
+                <MudTh Style="width: 160px;">Actions</MudTh>
+            </HeaderContent>
+            <RowTemplate>
+                <MudTd>@context.Name</MudTd>
+                <MudTd>@context.LanguageCode.ToUpper()</MudTd>
+                <MudTd>
+                    @if (context.IsDefault)
+                    {
+                            <MudIcon Icon="@Icons.Material.Filled.Check" Color="Color.Success" />
+                    }
+                </MudTd>
+                <MudTd>
+                    <MudIconButton Icon="@Icons.Material.Filled.Edit" OnClick="@(() => EditTemplate(context))" />
+                    <MudIconButton Icon="@Icons.Material.Filled.Download" Color="Color.Info" Title="Export JSON"
+                        OnClick="@(() => ExportTemplate(context))" />
+                    @if (!context.IsDefault)
+                    {
+                            <MudIconButton Icon="@Icons.Material.Filled.Delete" Color="Color.Error"
+                                OnClick="@(() => DeleteTemplate(context))" />
+                    }
+                </MudTd>
+            </RowTemplate>
+        </MudTable>
+    }
+    else if (activeTabIndex == 2)
+    {
+        <MudGrid>
+            <MudItem xs="12">
+                <MudText Typo="Typo.body2" Class="mb-4">Configure the statuses available for projects and their display
+                    colors.</MudText>
+            </MudItem>
+
+            <MudItem xs="12" Class="mt-n4">
+                <MudTable Items="@Profile.ProjectStatuses" Breakpoint="Breakpoint.None" Hover="true" Dense="true" Outlined="true" Bordered="true" Striped="true" Elevation="0">
+                    <HeaderContent>
+                        <MudTh Style="min-width: 220px;">Status Name</MudTh>
+                        <MudTh Style="min-width: 150px;">Color</MudTh>
+                        <MudTh Style="min-width: 150px;">System Mapping</MudTh>
+                        <MudTh Style="width: 120px;">Preview</MudTh>
+                        <MudTh Style="width: 80px;">Actions</MudTh>
+                    </HeaderContent>
+                    <RowTemplate>
+                        <MudTd>
+                            <MudTextField ShrinkLabel="true" Variant="Variant.Outlined" @bind-Value="context.Name" Label="Name" Margin="Margin.Dense"
+                                Required="true" />
+                        </MudTd>
+                        <MudTd>
+                            <MudSelect ShrinkLabel="true" Variant="Variant.Outlined" @bind-Value="context.Color" Label="Color" Dense="true" Margin="Margin.Dense"
+                                Style="width: 150px;">
+                                @foreach (var colorName in Enum.GetNames(typeof(Color)))
+                                {
+                                        <MudSelectItem Value="@colorName">@colorName</MudSelectItem>
+                                }
+                            </MudSelect>
+                        </MudTd>
+                        <MudTd>
+                            <MudSelect ShrinkLabel="true" Variant="Variant.Outlined" @bind-Value="context.SystemMapping" Label="System Type" Dense="true" Margin="Margin.Dense"
+                                Style="width: 150px;">
+                                @foreach (var type in SystemStatusMappings.All)
+                                {
+                                        <MudSelectItem Value="@type">@type</MudSelectItem>
+                                }
+                            </MudSelect>
+                        </MudTd>
+                        <MudTd>
+                            @{
+                                Color chipColor = Color.Default;
+                                Enum.TryParse(context.Color, out chipColor);
+                            }
+                            <MudChip T="string" Color="@chipColor" Size="Size.Small">@context.Name</MudChip>
+                        </MudTd>
+                        <MudTd>
+                            <MudIconButton Icon="@Icons.Material.Filled.Delete" Color="Color.Error" Size="Size.Small"
+                                OnClick="@(() => RemoveStatus(context))" />
+                        </MudTd>
+                    </RowTemplate>
+                    <FooterContent>
+                        <MudTd colspan="5">
+                            <MudButton StartIcon="@Icons.Material.Filled.Add" OnClick="AddStatus" Color="Color.Primary">
+                                Add Status</MudButton>
+                        </MudTd>
+                    </FooterContent>
+                </MudTable>
+            </MudItem>
+
+            <MudItem xs="12" Class="d-flex justify-end">
+                <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="SaveProfile">Save Settings
+                </MudButton>
+            </MudItem>
+        </MudGrid>
+    }
+    else if (activeTabIndex == 3)
+    {
+        <MudGrid>
+            <MudItem xs="12">
+                <MudText Typo="Typo.body2" Class="mb-4">Configure categories for calendar events and their display
+                    colors.</MudText>
+            </MudItem>
+
+            <MudItem xs="12" Class="mt-n4">
+                <MudTable Items="@Profile.CalendarCategories" Breakpoint="Breakpoint.None" Dense="true" Elevation="0" Outlined="true" Bordered="true">
+                    <HeaderContent>
+                        <MudTh Style="min-width: 220px;">Category Name</MudTh>
+                        <MudTh Style="min-width: 150px;">Color</MudTh>
+                        <MudTh Style="width: 120px;">Preview</MudTh>
+                        <MudTh Style="width: 80px;">Actions</MudTh>
+                    </HeaderContent>
+                    <RowTemplate>
+                        <MudTd>
+                            <MudTextField ShrinkLabel="true" Variant="Variant.Outlined" Margin="Margin.Dense" @bind-Value="context.Name" Label="Name"
+                                Required="true" />
+                        </MudTd>
+                        <MudTd>
+                            <MudSelect ShrinkLabel="true" Variant="Variant.Outlined" @bind-Value="context.Color" Label="Color" Dense="true" Margin="Margin.Dense"
+                                Style="width: 150px;">
+                                @foreach (var colorName in Enum.GetNames(typeof(Color)))
+                                {
+                                        <MudSelectItem Value="@colorName">@colorName</MudSelectItem>
+                                }
+                            </MudSelect>
+                        </MudTd>
+                        <MudTd>
+                            @{
+                                Color chipColor = Color.Default;
+                                Enum.TryParse(context.Color, out chipColor);
+                            }
+                            <MudChip T="string" Color="@chipColor" Size="Size.Small">@context.Name</MudChip>
+                        </MudTd>
+                        <MudTd>
+                            <MudIconButton Icon="@Icons.Material.Filled.Delete" Color="Color.Error" Size="Size.Small"
+                                OnClick="@(() => RemoveCategory(context))" />
+                        </MudTd>
+                    </RowTemplate>
+                    <FooterContent>
+                        <MudTd colspan="4">
+                            <MudButton StartIcon="@Icons.Material.Filled.Add" OnClick="AddCategory"
+                                Color="Color.Primary">Add Category</MudButton>
+                        </MudTd>
+                    </FooterContent>
+                </MudTable>
+            </MudItem>
+
+            <MudItem xs="12" Class="d-flex justify-end">
+                <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="SaveProfile">Save Settings
+                </MudButton>
+            </MudItem>
+        </MudGrid>
+    }
+    else if (activeTabIndex == 4)
+    {
+        <MudGrid>
+            <MudItem xs="12">
+                <MudText Typo="Typo.h6" GutterBottom="true">Automated Backups</MudText>
+                <MudText Typo="Typo.body2" Color="Color.Secondary">
+                    Configure automatic backups of your Spokes data. Backups are stored as ZIP files in your data directory.
+                </MudText>
+            </MudItem>
+
+            <MudItem xs="12" sm="12" Class="mt-n4">
+                <MudSwitch @bind-Value="Profile.BackupsEnabled" Color="Color.Primary" Label="Enable Automatic Backups" />
+            </MudItem>
+
+            <MudItem xs="12" sm="6" Class="mt-n4">
+                <MudNumericField ShrinkLabel="true" @bind-Value="Profile.BackupRetentionCount" Margin="Margin.Dense" Label="Backups to Keep" Min="1" Max="100"
+                    Variant="Variant.Outlined" HelperText="Older backups are automatically deleted" />
+            </MudItem>
+
+            <MudItem xs="12" sm="6" Class="mt-n4">
+                <MudTextField ShrinkLabel="true" Variant="Variant.Outlined" Margin="Margin.Dense" @bind-Value="Profile.BackupTimeLocal" Label="Scheduled Time (Local)"
+                    HelperText="24-hour format, e.g. 03:00" />
+            </MudItem>
+
+            @if (!IsFriendEdition)
+            {
+                <MudItem xs="12" sm="12" Class="mt-n4">
+                    <MudSwitch @bind-Value="Profile.BackupEmployeeEmails" Color="Color.Primary" Label="Include Employee Emails in Backup" />
+                </MudItem>
+            }
+
+            <MudItem xs="12">
+                <MudDivider />
+            </MudItem>
+
+            <MudItem xs="12">
+                <div class="d-flex align-center gap-4 mb-2">
+                    <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Backup"
+                        OnClick="RunBackupNow" Disabled="@_isBackingUp">
+                        @if (_isBackingUp)
+                        {
+                                <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" />
+                                <span>Creating Backup...</span>
+                        }
+                        else
+                        {
+                                <span>Backup Now</span>
+                        }
+                    </MudButton>
+
+                    @if (BackupSvc.LastBackupAt.HasValue)
+                    {
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                Last backup: @BackupSvc.LastBackupAt.Value.ToLocalTime().ToString("g") � @BackupSvc.LastBackupStatus
+                            </MudText>
+                    }
+                </div>
+            </MudItem>
+
+            <MudItem xs="12" Class="mt-n4">
+                <MudText Typo="Typo.h6" GutterBottom="true">Restore Backup</MudText>
+                <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-4">
+                    Upload a backup file (.zip) to restore the system state. <br />
+                    <b>WARNING:</b> Restoring a backup will overwrite all current data.
+                </MudText>
+                
+                <MudFileUpload T="IBrowserFile" Accept=".zip" FilesChanged="UploadAndRestoreBackup">
+                    <CustomContent>
+                        <MudButton Variant="Variant.Outlined" Color="Color.Warning" OnClick="@context.OpenFilePickerAsync" 
+                            StartIcon="@Icons.Material.Filled.RestorePage">
+                            Upload & Restore
+                        </MudButton>
+                    </CustomContent>
+                        <SelectedTemplate></SelectedTemplate>
+                </MudFileUpload>
+            </MudItem>
+
+            <MudItem xs="12">
+                <MudText Typo="Typo.subtitle1" Class="mb-2"><b>Existing Backups</b></MudText>
+                @if (_backupFiles.Any())
+                {
+                        <MudTable Items="@_backupFiles" Breakpoint="Breakpoint.None" Dense="true" Hover="true" Elevation="0" Bordered="true" Outlined="true">
+                            <HeaderContent>
+                                <MudTh Style="min-width: 200px;">File</MudTh>
+                                <MudTh Style="width: 100px;">Size</MudTh>
+                                <MudTh Style="width: 100px;">Type</MudTh>
+                                <MudTh Style="min-width: 150px;">Created</MudTh>
+                                <MudTh Style="width:160px">Actions</MudTh>
+                            </HeaderContent>
+                            <RowTemplate>
+                                <MudTd>@context.FileName</MudTd>
+                                <MudTd>@context.FormattedSize</MudTd>
+                                <MudTd DataLabel="Type">
+                                    @if (context.IsManual)
+                                    {
+                                        <MudChip T="string" Color="Color.Info" Size="Size.Small">Manual</MudChip>
+                                    }
+                                    else
+                                    {
+                                        <MudChip T="string" Color="Color.Success" Size="Size.Small">Auto</MudChip>
+                                    }
+                                </MudTd>
+                                <MudTd>@context.CreatedAt.ToLocalTime().ToString("g")</MudTd>
+                                <MudTd>
+                                    <MudIconButton Icon="@Icons.Material.Filled.Download" Size="Size.Small"
+                                        OnClick="@(() => DownloadBackup(context))" Title="Download" />
+                                    <MudIconButton Icon="@Icons.Material.Filled.Restore" Size="Size.Small" Color="Color.Warning"
+                                        OnClick="@(() => RestoreBackup(context))" Title="Restore" />
+                                    <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small" Color="Color.Error"
+                                        OnClick="@(() => DeleteBackup(context))" Title="Delete" />
+                                </MudTd>
+                            </RowTemplate>
+                        </MudTable>
+                }
+                else
+                {
+                        <MudText Typo="Typo.body2" Color="Color.Secondary">No backups found.</MudText>
+                }
+            </MudItem>
+
+            <MudItem xs="12" Class="d-flex justify-end mt-2">
+                <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="SaveProfile">Save Settings
+                </MudButton>
+            </MudItem>
+        </MudGrid>
+    }
+    else if (activeTabIndex == 6)
+    {
+        <MudGrid>
+            <MudItem xs="12">
+                <MudText Typo="Typo.h6">Global Email Configuration</MudText>
+                <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-4">
+                    Configure the IMAP and SMTP server settings used by all employees.
+                    Individual usernames and passwords will be set in each employee's profile.
+                </MudText>
+            </MudItem>
+
+            <MudItem xs="12" Class="mt-n4">
+                <MudDivider Class="my-2"/>
+                <MudText Typo="Typo.subtitle1" Color="Color.Primary">Incoming Mail (IMAP)</MudText>
+            </MudItem>
+            <MudItem xs="12" sm="8" Class="mt-n2">
+                <MudTextField ShrinkLabel="true" Variant="Variant.Outlined" Margin="Margin.Dense" @bind-Value="Profile.EmailSettings.ImapHost" Label="IMAP Host" HelperText="e.g. imap.gmail.com"/>
+            </MudItem>
+            <MudItem xs="12" sm="4" Class="mt-n2">
+                <MudNumericField ShrinkLabel="true" @bind-Value="Profile.EmailSettings.ImapPort" Margin="Margin.Dense" Label="Port" Variant="Variant.Outlined" HelperText="e.g. 993"/>
+            </MudItem>
+            <MudItem xs="12" Class="mt-n4">
+                <MudCheckBox @bind-Value="Profile.EmailSettings.ImapSsl" Label="Use SSL/TLS" Color="Color.Primary"/>
+            </MudItem>
+
+            
+
+            <MudItem xs="12" Class="mt-n4">
+                <MudDivider Class="my-2"/>
+                <MudText Typo="Typo.subtitle1" Color="Color.Primary">Outgoing Mail (SMTP)</MudText>
+            </MudItem>
+            <MudItem xs="12" sm="8" Class="mt-n2">
+                <MudTextField ShrinkLabel="true" Variant="Variant.Outlined" Margin="Margin.Dense" @bind-Value="Profile.EmailSettings.SmtpHost" Label="SMTP Host" HelperText="e.g. smtp.gmail.com"/>
+            </MudItem>
+            <MudItem xs="12" sm="4" Class="mt-n2">
+                <MudNumericField ShrinkLabel="true" @bind-Value="Profile.EmailSettings.SmtpPort" Margin="Margin.Dense" Label="Port" HelperText="e.g. 465" Variant="Variant.Outlined" />
+            </MudItem>
+            <MudItem xs="12" Class="mt-n4">
+                <MudCheckBox @bind-Value="Profile.EmailSettings.SmtpSsl" Label="Use SSL/TLS" Color="Color.Primary"/>
+            </MudItem>
+
+            <MudItem xs="12" Class="mt-n4">
+                <MudDivider Class="my-2" />
+                <MudText Typo="Typo.subtitle1" Color="Color.Primary">Display Settings</MudText>
+            </MudItem>
+            <MudItem xs="12">
+                <MudSelect ShrinkLabel="true" @bind-Value="Profile.TimeZoneId" Margin="Margin.Dense" Label="Server Time Zone" Variant="Variant.Outlined" HelperText="This time zone is used for displaying email dates and times">
+                    <MudSelectItem Value="@string.Empty">Server Local Time</MudSelectItem>
+                    @foreach (var tz in TimeZoneInfo.GetSystemTimeZones())
+                    {
+                        <MudSelectItem Value="@tz.Id">@tz.DisplayName</MudSelectItem>
+                    }
+                </MudSelect>
+            </MudItem>
+
+            <MudItem xs="12" Class="d-flex justify-end mt-4">
+                <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="SaveProfile">Save Settings</MudButton>
+            </MudItem>
+        </MudGrid>
+    }
+    else if (activeTabIndex == 5)
+    {
+        <MudGrid>
+            <MudItem xs="12">
+                <MudText Typo="Typo.h6">Permission Groups Config</MudText>
+                <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-4">
+                    Create roles and permission groups for your users. Select a default group for new users.
+                </MudText>
+            </MudItem>
+
+            <MudItem xs="12" sm="6" Class="mt-n4">
+                <MudSelect ShrinkLabel="true" @bind-Value="Profile.DefaultPermissionGroupId" Label="Default New User Role" Variant="Variant.Outlined" Margin="Margin.Dense" Class="mb-4">
+                    <MudSelectItem Value="@string.Empty">-- None (Chat Only) --</MudSelectItem>
+                    @foreach (var g in Profile.PermissionGroups)
+                    {
+                        <MudSelectItem Value="@g.Id">@g.Name</MudSelectItem>
+                    }
+                </MudSelect>
+            </MudItem>
+
+            <MudItem xs="12" Class="d-flex gap-2 mt-n4">
+                @if (!IsFriendEdition)
+                {
+                    <MudButton Variant="Variant.Outlined" Color="Color.Primary" OnClick="LoadBusinessDefaults">Load Business Edition Defaults</MudButton>
+                }
+                @if (IsFriendEdition)
+                {
+                    <MudButton Variant="Variant.Outlined" Color="Color.Primary" OnClick="LoadFriendDefaults">Load Friend Edition Defaults</MudButton>
+                }
+            </MudItem>
+
+            <MudItem xs="12" Class="mt-2">
+                <MudTable Items="@Profile.PermissionGroups" Breakpoint="Breakpoint.None" Hover="true" Dense="true" Outlined="true" Bordered="true" Elevation="0">
+                    <HeaderContent>
+                        <MudTh Style="min-width: 250px;">Group Name</MudTh>
+                        <MudTh Style="min-width: 200px;">Permissions Count</MudTh>
+                        <MudTh Style="width: 160px;">Actions</MudTh>
+                    </HeaderContent>
+                    <RowTemplate>
+                        <MudTd>@context.Name</MudTd>
+                        <MudTd>@context.Permissions.Count permission(s)</MudTd>
+                        <MudTd>
+                            <MudIconButton Icon="@Icons.Material.Filled.Edit" Color="Color.Info" Size="Size.Small" OnClick="@(() => EditPermissionGroup(context))" />
+                            <MudIconButton Icon="@Icons.Material.Filled.Delete" Color="Color.Error" Size="Size.Small" OnClick="@(() => RemovePermissionGroup(context))" />
+                        </MudTd>
+                    </RowTemplate>
+                    <FooterContent>
+                        <MudTd colspan="3">
+                            <MudButton StartIcon="@Icons.Material.Filled.Add" OnClick="AddPermissionGroup" Color="Color.Primary">Add Group</MudButton>
+                        </MudTd>
+                    </FooterContent>
+                </MudTable>
+            </MudItem>
+
+            <MudItem xs="12" Class="d-flex justify-end mt-4">
+                <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="@(async () => await SaveProfile())">Save Settings</MudButton>
+            </MudItem>
+        </MudGrid>
+    }
+    else if (activeTabIndex == 7)
+    {
+        <MudGrid>
+            <MudItem xs="12">
+                <MudText Typo="Typo.h6">Chat Configurations</MudText>
+                <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-4">
+                    Global settings for the Chat and Communication features.
+                </MudText>
+            </MudItem>
+            
+            <MudItem xs="12" Class="mt-n4">
+                @if (!string.IsNullOrEmpty(Environment.GetEnvironmentVariable("SPOKES_MASTER_PASSWORD")))
+                {
+                    <MudAlert Severity="Severity.Success" Class="mb-4">
+                        <b>Master Password Configured via Environment:</b> Public channel messages are securely escrowed.
+                    </MudAlert>
+                }
+                else if (!string.IsNullOrEmpty(Profile.PublicChannelMasterPassword))
+                {
+                    <MudAlert Severity="Severity.Warning" Class="mb-4">
+                        <b>Insecure Legacy Master Password Found:</b> Please copy this password and add it to your docker-compose.yml as `SPOKES_MASTER_PASSWORD` to secure your server. Restart the server after setting the variable.
+                        <MudTextField Value="@Profile.PublicChannelMasterPassword" ReadOnly="true" Margin="Margin.Dense" Class="mt-2" />
+                    </MudAlert>
+                }
+                else
+                {
+                    <MudAlert Severity="Severity.Warning" Class="mb-4">
+                        <b>Master Password Missing:</b> Set the `SPOKES_MASTER_PASSWORD` environment variable to enable Server-assisted message recovery for public channels.
+                    </MudAlert>
+                }
+            </MudItem>
+            <MudItem xs="12" Class="mt-n4">
+                <MudSelect ShrinkLabel="true" @bind-Value="Profile.DefaultPublicChannelSubscription" Label="Default Public Channel Notifications (for new users)" Variant="Variant.Outlined" Margin="Margin.Dense" Class="mb-3">
+                    <MudSelectItem Value="@("Mentions")">Mentions Only</MudSelectItem>
+                    <MudSelectItem Value="@("All")">All Messages</MudSelectItem>
+                </MudSelect>
+            </MudItem>
+            
+            <MudItem xs="12" Class="mt-n4">
+                <MudNumericField @bind-Value="Profile.MaxChatCacheSizeMb" Label="Max Global Chat Cache Size (MB)" Variant="Variant.Outlined" Margin="Margin.Dense" Min="10" Max="5000" Step="100" />
+                <MudText Typo="Typo.caption" Color="Color.Secondary">Limits the amount of RAM the server will allocate for caching chat messages globally. At least 500MB is recommended.</MudText>
+            </MudItem>
+            
+            <MudItem xs="12" Class="mt-n2">
+                <MudDivider Class="my-2" />
+                <MudText Typo="Typo.subtitle1">GIF Integration</MudText>
+            </MudItem>
+            <MudItem xs="12" sm="6" Class="mt-n4">
+                <MudSelect ShrinkLabel="true" @bind-Value="Profile.GifProvider" Label="GIF Provider" Variant="Variant.Outlined" Margin="Margin.Dense">
+                    <MudSelectItem Value="@("Spokes Default Provider")">Spokes Default Provider</MudSelectItem>
+                    <MudSelectItem Value="@("Klipy")">Klipy</MudSelectItem>
+                    <MudSelectItem Value="@("None")">None (Disabled)</MudSelectItem>
+                </MudSelect>
+            </MudItem>
+            @if (Profile.GifProvider != "Spokes Default Provider")
+            {
+                <MudItem xs="12" sm="6" Class="mt-n4">
+                    <MudTextField ShrinkLabel="true" @bind-Value="Profile.GifApiKey" Label="API Key" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                </MudItem>
+            }
+
+            
+
+            <MudItem xs="12" Class="mt-n2">
+                <MudDivider Class="my-2" />
+                <MudText Typo="Typo.subtitle1">Content Moderation</MudText>
+            </MudItem>
+            <MudItem xs="12" sm="12" Class="mt-n4">
+                <MudSwitch @bind-Value="Profile.Moderation.EnableTextFilter" Color="Color.Primary" Label="Enable Text Moderation Filter" />
+            </MudItem>
+            @if (Profile.Moderation.EnableTextFilter)
+            {
+                <MudItem xs="12" sm="6" Class="mt-n4">
+                    <MudSelect ShrinkLabel="true" @bind-Value="Profile.Moderation.TextAction" Label="Action on Violation" Variant="Variant.Outlined" Margin="Margin.Dense">
+                        <MudSelectItem Value="TextModerationAction.Block">Block Message</MudSelectItem>
+                        <MudSelectItem Value="TextModerationAction.Sanitize">Sanitize Message (replace with ***)</MudSelectItem>
+                    </MudSelect>
+                </MudItem>
+                <MudItem xs="12" Class="mt-2">
+                    <MudText Typo="Typo.subtitle2">Blocked Words</MudText>
+                    <MudText Typo="Typo.caption" Color="Color.Secondary">Enter words to block, separated by commas.</MudText>
+                    <MudTextField Lines="3" Variant="Variant.Outlined" Margin="Margin.Dense"
+                                  Value='@(string.Join(", ", Profile.Moderation.BlockedWords))'
+                                  ValueChanged="@((string v) => Profile.Moderation.BlockedWords = v.Split(new[] { ',', '\n' }, StringSplitOptions.RemoveEmptyEntries).Select(w => w.Trim()).ToList())"
+                                  Placeholder="e.g. badword, awfulword" />
+                </MudItem>
+            }
+
+            <MudItem xs="12" Class="d-flex justify-end mt-2">
+                <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="@(async () => await SaveProfile())">Save Settings</MudButton>
+            </MudItem>
+        </MudGrid>
+    }
+    else if (activeTabIndex == 8)
+    {
+        <MudGrid>
+            
+            <MudItem xs="12" Class="mt-n2">
+                <MudText Typo="Typo.h5">Licensing & Telemetry</MudText>
+                <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-4">
+                    Manage your Spokes license and usage statistics preferences.
+                </MudText>
+            </MudItem>
+
+            @if (GetAvailableEditions().Count > 1)
+            {
+                <MudItem xs="12" Class="mt-n8">
+                    <MudSelect ShrinkLabel="true" @bind-Value="Profile.Edition" Label="Active Edition" Variant="Variant.Outlined" Margin="Margin.Dense">
+                        @foreach (var edition in GetAvailableEditions())
+                        {
+                            <MudSelectItem Value="@edition">@edition Edition</MudSelectItem>
+                        }
+                    </MudSelect>
+                </MudItem>
+            }
+
+            <MudItem xs="12" Class="mt-n4">
+                @{
+                    var currentConfig = Db.ServerConfigs.GetOrCreateGlobalConfig();
+                    var activeValidation = LicenseService.ValidateLicense(Profile.LicensePayload, currentConfig);
+                }
+                @if (string.IsNullOrEmpty(Profile.LicensePayload))
+                {
+                    @if (activeValidation.Status == Spokes_Server.Core.Services.Licensing.LicenseStatus.Valid)
+                    {
+                        <MudAlert Severity="Severity.Info" Class="mb-4">
+                            <b>Free Trial Active:</b> Your server has an active 2-month free trial for native mobile push notifications.
+                        </MudAlert>
+                    }
+                    else
+                    {
+                        <MudAlert Severity="Severity.Warning" Class="mb-4">
+                            <b>Native Push Notifications Disabled:</b> Your free trial for native push notifications has expired, or you do not have a license installed.
+                            <br/>
+                            <MudText Typo="Typo.caption">The Spokes server continues to function normally, but native mobile push notifications for iOS and Android require an active Spokes license.</MudText>
+                        </MudAlert>
+                    }
+                }
+                else
+                {
+                    @if (activeValidation.Status == Spokes_Server.Core.Services.Licensing.LicenseStatus.Valid)
+                    {
+                        <MudAlert Severity="Severity.Success" Class="mb-4">
+                            <b>License Active:</b> Your Spokes instance is licensed for Native Mobile Push Notifications.
+                        </MudAlert>
+                    }
+                    else if (activeValidation.Status == Spokes_Server.Core.Services.Licensing.LicenseStatus.Expired)
+                    {
+                        <MudAlert Severity="Severity.Warning" Class="mb-4">
+                            <b>License Expired:</b> @activeValidation.Message Native mobile push notifications are disabled until renewed.
+                        </MudAlert>
+                    }
+                    else
+                    {
+                        <MudAlert Severity="Severity.Error" Class="mb-4">
+                            <b>License Invalid:</b> @activeValidation.Message
+                        </MudAlert>
+                    }
+
+                    Spokes_Server.Core.Services.Licensing.SpokesLicenseFile? license = activeValidation.ParsedLicense;
+                    if (license == null)
+                    {
+                        try 
+                        { 
+                            var options = new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+                            license = System.Text.Json.JsonSerializer.Deserialize<Spokes_Server.Core.Services.Licensing.SpokesLicenseFile>(Profile.LicensePayload, options); 
+                        } 
+                        catch { }
+                    }
+                    
+                    if (license != null)
+                    {
+                        <MudPaper Class="pa-4 mb-4" Elevation="1">
+                            <MudText Typo="Typo.subtitle2" Class="mb-2">License Details</MudText>
+                            <MudGrid>
+                                <MudItem xs="12" sm="4">
+                                    <MudText Typo="Typo.caption" Color="Color.Secondary">Registered Email</MudText>
+                                    <MudText Typo="Typo.body2">@license.Email</MudText>
+                                </MudItem>
+                                <MudItem xs="12" sm="4">
+                                    <MudText Typo="Typo.caption" Color="Color.Secondary">Push Notifications Expiry Date</MudText>
+                                    <MudText Typo="Typo.body2">@license.ValidForUpdatesUntil.ToString("yyyy-MM-dd")</MudText>
+                                </MudItem>
+                                <MudItem xs="12" sm="4">
+                                    <MudText Typo="Typo.caption" Color="Color.Secondary">Time Until Expiry</MudText>
+                                    <MudText Typo="Typo.body2" Color="@((license.ValidForUpdatesUntil - DateTime.UtcNow).TotalDays > 0 ? Color.Success : Color.Error)">
+                                        @GetTimeUntilExpiry(license.ValidForUpdatesUntil)
+                                    </MudText>
+                                </MudItem>
+                            </MudGrid>
+                        </MudPaper>
+                    }
+                }
+            </MudItem>
+
+            <MudItem xs="12" Class="mt-n4">
+                <MudText Typo="Typo.subtitle1">Upload Spokes Pass (.spokes-license)</MudText>
+                <div class="d-inline-flex mt-2">
+                    <ApiFileUpload 
+                        Category="temp" 
+                        Accept=".spokes-license"
+                        ContextId="@Guid.NewGuid().ToString()" 
+                        OnUploadCompleted="HandleLicenseUploaded">
+                        <CustomContent>
+                            <MudButton Variant="Variant.Outlined" Color="Color.Primary" StartIcon="@Icons.Material.Filled.UploadFile">
+                                Upload Spokes Pass
+                            </MudButton>
+                        </CustomContent>
+                    </ApiFileUpload>
+                </div>
+            </MudItem>
+
+            <MudItem xs="12" Class="mt-n4">
+                <MudText Typo="Typo.subtitle1">Usage Statistics</MudText>
+                <MudSwitch @bind-Value="Profile.SendUsageStatistics" Color="Color.Primary" Label="Send Anonymous Usage Statistics (Soft Ping)" />
+                <MudText Typo="Typo.caption" Color="Color.Secondary">
+                    We collect a secure hash of your license key along with basic system stats to ensure fair usage and help us improve Spokes. You may disable this at any time.
+                </MudText>
+            </MudItem>
+
+            <MudItem xs="12">
+                <MudDivider Class="my-2" />
+            </MudItem>
+
+            <MudItem xs="12" Class="mt-n6">
+                <MudText Typo="Typo.h5">System Setup</MudText>
+                <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-4">
+                    Configure core system settings such as public URLs, routing ports, and identity providers.
+                </MudText>
+            </MudItem>
+
+            <MudItem xs="12" Class="mt-n6">
+                <MudTextField ShrinkLabel="true" Variant="Variant.Outlined" Margin="Margin.Dense" @bind-Value="_systemConfig.ServerPublicUrl" Label="Server Public URL" HelperText="The base URL where this server is accessible (e.g. https://spokes.example.com)" />
+            </MudItem>
+
+            @if (!string.IsNullOrEmpty(Environment.GetEnvironmentVariable("WATCHTOWER_HTTP_API_TOKEN")))
+            {
+                <MudItem xs="12" Class="mt-n4">
+                    <MudSwitch @bind-Value="_systemConfig.EnableAutoUpdate" Color="Color.Primary" Label="Enable Automatic DigitalOcean Updates" />
+                    <MudText Typo="Typo.caption" Color="Color.Secondary">When enabled, the server will automatically pull and apply updates via Watchtower when a new version is released.</MudText>
+                </MudItem>
+            }
+
+            @if (Environment.GetEnvironmentVariable("SPOKES_HOSTING_PROVIDER") != "digitalocean")
+            {
+                <MudItem xs="12" Class="mt-n4">
+                    <MudText Typo="Typo.h6" >LiveKit Ports</MudText>
+                    <MudAlert Severity="Severity.Warning" Class="mt-2 mb-4">If you modify these ports, you MUST ensure your <b>docker-compose.yml</b> and router are updated to match precisely. These must be mapped 1-to-1-to-1 across your network.</MudAlert>
+                </MudItem>
+                
+                <MudItem xs="12" sm="4" Class="mt-n4">
+                    <MudNumericField ShrinkLabel="true" @bind-Value="_systemConfig.LiveKitFallbackPort" Margin="Margin.Dense" Label="TCP Fallback Port" Variant="Variant.Outlined" />
+                </MudItem>
+                <MudItem xs="12" sm="4" Class="mt-n4">
+                    <MudNumericField ShrinkLabel="true" @bind-Value="_systemConfig.LiveKitUdpStartPort" Margin="Margin.Dense" Label="UDP Start Port" Variant="Variant.Outlined" />
+                </MudItem>
+                <MudItem xs="12" sm="4" Class="mt-n4">
+                    <MudNumericField ShrinkLabel="true" @bind-Value="_systemConfig.LiveKitUdpEndPort" Margin="Margin.Dense" Label="UDP End Port" Variant="Variant.Outlined" />
+                </MudItem>
+            }
+
+            <MudItem xs="12" Class="mt-n4">
+                <MudText Typo="Typo.h6" >Identity Provider</MudText>
+                <MudText Typo="Typo.caption" Color="Color.Secondary">Configuring the system's global identity provider.</MudText>
+            </MudItem>
+
+            <MudItem xs="12" Class="mt-n4">
+                <MudSelect ShrinkLabel="true" Value="_systemConfig.ProviderType" ValueChanged="@((IdpType v) => OnProviderTypeChanged(v))" Label="Identity Provider Type" Variant="Variant.Outlined" Margin="Margin.Dense">
+                    <MudSelectItem Value="@IdpType.BuiltInCasdoor">Built-in Casdoor</MudSelectItem>
+                    <MudSelectItem Value="@IdpType.External">External Provider (OIDC)</MudSelectItem>
+                </MudSelect>
+            </MudItem>
+
+            @if (_systemConfig.ProviderType == IdpType.External)
+            {
+                <MudItem xs="12" Class="mt-n4">
+                    <MudText Typo="Typo.subtitle2" Class="mb-4">External Provider Configuration</MudText>
+                    <MudTextField ShrinkLabel="true" Variant="Variant.Outlined" Margin="Margin.Dense" @bind-Value="_systemConfig.Authority" Label="Issuer / Authority URL" Required="true" Class="mb-4" />
+                    <MudTextField ShrinkLabel="true" Variant="Variant.Outlined" Margin="Margin.Dense" @bind-Value="_systemConfig.ClientId" Label="Client ID" Required="true" Class="mb-4" />
+                    <MudTextField ShrinkLabel="true" Variant="Variant.Outlined" Margin="Margin.Dense" @bind-Value="_systemConfig.ClientSecret" Label="Client Secret" InputType="InputType.Password" Required="true" />
+                </MudItem>
+            }
+
+            <MudItem xs="12">
+                <MudDivider Class="my-4" />
+            </MudItem>
+
+            <MudItem xs="12" Class="mt-n4">
+                <MudText Typo="Typo.h5" Class="mb-2">VAPID Keys</MudText>
+                <MudText Typo="Typo.body2" Color="Color.Secondary">
+                    VAPID (Voluntary Application Server Identification) keys authenticate your server with push
+                    notification services.
+                    Generate keys once per Spokes instance. These keys are stored securely and used to sign push requests.
+                </MudText>
+            </MudItem>
+
+            @if (string.IsNullOrEmpty(Profile.VapidPublicKey))
+            {
+                    <MudItem xs="12">
+                        <MudAlert Severity="Severity.Warning">
+                            <MudText><strong>Push notifications are not configured.</strong> Click the button below to generate
+                                VAPID keys.</MudText>
+                        </MudAlert>
+                        <MudButton Class="mt-2" Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Key"
+                            OnClick="GenerateVapidKeys">
+                            Generate VAPID Keys
+                        </MudButton>
+                    </MudItem>
+            }
+            else
+            {
+                    <MudItem xs="12">
+                        <MudAlert Severity="Severity.Success">
+                            Push notifications are configured and ready to use.
+                        </MudAlert>
+                    </MudItem>
+
+                    <MudItem xs="12">
+                        <MudTextField ShrinkLabel="true" Variant="Variant.Outlined" Margin="Margin.Dense" @bind-Value="Profile.VapidPublicKey" Label="Public Key" ReadOnly="true"
+                            Adornment="Adornment.End" AdornmentIcon="@Icons.Material.Filled.ContentCopy"
+                            OnAdornmentClick="@(() => CopyToClipboard(Profile.VapidPublicKey))" />
+                    </MudItem>
+
+                    <MudItem xs="12" Class="mt-n2">
+                        <MudTextField ShrinkLabel="true" Variant="Variant.Outlined" Margin="Margin.Dense" Value="@MaskedPrivateKey" Label="Private Key (Hidden)" ReadOnly="true"
+                            InputType="InputType.Password"
+                            HelperText="Private key is stored securely and hidden for security" />
+                    </MudItem>
+
+                <MudItem xs="12" Class="mt-n2">
+                        <MudTextField ShrinkLabel="true" Variant="Variant.Outlined" Margin="Margin.Dense" @bind-Value="Profile.VapidSubject" Label="Contact Email"
+                            HelperText="Email address for push service operators to contact you (e.g., mailto:admin@company.com)" />
+                    </MudItem>
+
+                    <MudItem xs="12">
+                        <MudButton Variant="Variant.Outlined" Color="Color.Error" StartIcon="@Icons.Material.Filled.Refresh"
+                            OnClick="RegenerateVapidKeys">
+                            Regenerate Keys
+                        </MudButton>
+                        <MudText Typo="Typo.caption" Class="ml-4" Color="Color.Error">
+                            Warning: Regenerating keys will invalidate all existing push subscriptions.
+                        </MudText>
+                    </MudItem>
+            }
+
+            <MudItem xs="12" Class="d-flex justify-end mt-4 mb-6">
+                <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="SaveSystemSetup">Save Settings
+                </MudButton>
+            </MudItem>
+
+        </MudGrid>
+    }
+    else if (activeTabIndex == 9)
+    {
+        <MudGrid>
+            <MudItem xs="12" Class="mt-n2">
+                <MudText Typo="Typo.h5">Server Logs</MudText>
+                <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-4">
+                    View internal server errors and events. Logs are stored as JSON Lines and displayed here as raw text for easy copying.
+                </MudText>
+            </MudItem>
+            <MudItem xs="12" Class="mt-n4">
+                <MudDatePicker Label="Log Date"
+                               Date="@((DateTime?)_selectedLogDate)"
+                               DateChanged="OnLogDateChangedNullable"
+                               AdditionalDateClassesFunc="GetLogDateClasses"
+                               Variant="Variant.Outlined"
+                               Margin="Margin.Dense" />
+            </MudItem>
+            <MudItem xs="12">
+                <MudPaper Class="pa-4" Outlined="true" Style="background-color: #1e1e1e; max-height: 600px; overflow-y: auto;">
+                    @if (_currentLogs.Count == 0)
+                    {
+                        <MudText Typo="Typo.body2" Style="color: #888;">No logs found for this date.</MudText>
+                    }
+                    else
+                    {
+                        <pre style="color: #d4d4d4; font-family: Consolas, monospace; font-size: 13px; white-space: pre-wrap; margin: 0;">
+@foreach (var log in _currentLogs)
+{
+@($"[{log.TimestampUtc:yyyy-MM-dd HH:mm:ss}] [{log.Severity.ToUpper()}] [{log.Category}] {log.Message}")
+@if (!string.IsNullOrEmpty(log.Details))
+{
+@Environment.NewLine@log.Details
+}
+@Environment.NewLine
+}
+                        </pre>
+                    }
+                </MudPaper>
+                <MudButton Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.ContentCopy" Color="Color.Default" Class="mt-2" OnClick="CopyLogsToClipboard">Copy Logs</MudButton>
+            </MudItem>
+        </MudGrid>
+    }
+    else if (activeTabIndex == 10)
+    {
+        <MudGrid>
+            <MudItem xs="12" Class="mt-n2">
+                <MudText Typo="Typo.h5" GutterBottom="true">Timesheet Settings</MudText>
+                <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-4">Configure timesheet behavior for your organization.</MudText>
+            </MudItem>
+
+            @* Features *@
+            <MudItem xs="12">
+                <MudPaper Class="pa-4" Outlined="true">
+                    <MudText Typo="Typo.subtitle1" Class="mb-2"><b>Features</b></MudText>
+                    <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-3">Enable or disable optional timesheet modules for your organization.</MudText>
+                    <MudSwitch T="bool" Value="Profile.TimesheetConfig.EnableWeeklyPlan" ValueChanged="@(async (bool v) => { Profile.TimesheetConfig.EnableWeeklyPlan = v; await SaveProfile(); })" Label="Enable Weekly Plan" Color="Color.Primary" />
+                    <MudText Typo="Typo.caption" Color="Color.Secondary">When disabled, the weekly plan widget is hidden from employee timesheets and the Team Planning page is hidden from managers.</MudText>
+                </MudPaper>
+            </MudItem>
+
+            @* Approval Workflow *@
+            <MudItem xs="12">
+                <MudPaper Class="pa-4" Outlined="true">
+                    <MudText Typo="Typo.subtitle1" Class="mb-2"><b>Approval Workflow</b></MudText>
+                    <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-3">When enabled, employees must submit timesheets for manager approval. Approved timesheets become read-only.</MudText>
+                    <MudSwitch T="bool" Value="Profile.TimesheetConfig.RequireApproval" ValueChanged="@(async (bool v) => { Profile.TimesheetConfig.RequireApproval = v; await SaveProfile(); })" Label="Require timesheet approval" Color="Color.Primary" />
+                </MudPaper>
+            </MudItem>
+
+            @* Timesheet Locking *@
+            <MudItem xs="12">
+                <MudPaper Class="pa-4" Outlined="true">
+                    <MudText Typo="Typo.subtitle1" Class="mb-2"><b>Timesheet Locking</b></MudText>
+                    <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-3">Automatically lock timesheets after a set number of days to prevent edits to finalized periods.</MudText>
+                    <MudSwitch T="bool" Value="Profile.TimesheetConfig.EnableTimesheetLocking" ValueChanged="@(async (bool v) => { Profile.TimesheetConfig.EnableTimesheetLocking = v; await SaveProfile(); })" Label="Enable automatic timesheet locking" Color="Color.Primary" />
+                    @if (Profile.TimesheetConfig.EnableTimesheetLocking)
+                    {
+                        <MudNumericField T="int" Value="Profile.TimesheetConfig.LockTimesheetsOlderThanDays" ValueChanged="@(async (int v) => { Profile.TimesheetConfig.LockTimesheetsOlderThanDays = v; await SaveProfile(); })" Label="Lock timesheets older than (days)" Variant="Variant.Outlined" Min="1" Max="365" Class="mt-3" Style="max-width: 300px;" />
+                    }
+                </MudPaper>
+            </MudItem>
+
+            @* Required Fields *@
+            <MudItem xs="12">
+                <MudPaper Class="pa-4" Outlined="true">
+                    <MudText Typo="Typo.subtitle1" Class="mb-2"><b>Required Fields</b></MudText>
+                    <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-3">Control which fields employees must fill in when logging time.</MudText>
+                    <MudStack Spacing="1">
+                        <MudSwitch T="bool" Value="Profile.TimesheetConfig.RequireProject" ValueChanged="@(async (bool v) => { Profile.TimesheetConfig.RequireProject = v; await SaveProfile(); })" Label="Require project" Color="Color.Primary" />
+                        <MudSwitch T="bool" Value="Profile.TimesheetConfig.RequireTask" ValueChanged="@(async (bool v) => { Profile.TimesheetConfig.RequireTask = v; await SaveProfile(); })" Label="Require task" Color="Color.Primary" />
+                        <MudSwitch T="bool" Value="Profile.TimesheetConfig.RequireNote" ValueChanged="@(async (bool v) => { Profile.TimesheetConfig.RequireNote = v; await SaveProfile(); })" Label="Require note" Color="Color.Primary" />
+                    </MudStack>
+                </MudPaper>
+            </MudItem>
+
+            @* Time Rounding *@
+            <MudItem xs="12">
+                <MudPaper Class="pa-4" Outlined="true">
+                    <MudText Typo="Typo.subtitle1" Class="mb-2"><b>Time Rounding</b></MudText>
+                    <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-3">Round time entries in reports and exports. Raw timesheet data is not modified.</MudText>
+                    <MudSwitch T="bool" Value="Profile.TimesheetConfig.EnableRounding" ValueChanged="@(async (bool v) => { Profile.TimesheetConfig.EnableRounding = v; await SaveProfile(); })" Label="Enable time rounding" Color="Color.Primary" />
+                    @if (Profile.TimesheetConfig.EnableRounding)
+                    {
+                        <MudGrid Class="mt-3">
+                            <MudItem xs="12" sm="6">
+                                <MudSelect T="int" Value="Profile.TimesheetConfig.RoundingIntervalMinutes" ValueChanged="@(async (int v) => { Profile.TimesheetConfig.RoundingIntervalMinutes = v; await SaveProfile(); })" Label="Rounding interval" Variant="Variant.Outlined" AnchorOrigin="Origin.BottomCenter">
+                                    <MudSelectItem Value="5">5 minutes</MudSelectItem>
+                                    <MudSelectItem Value="6">6 minutes</MudSelectItem>
+                                    <MudSelectItem Value="15">15 minutes</MudSelectItem>
+                                    <MudSelectItem Value="30">30 minutes</MudSelectItem>
+                                </MudSelect>
+                            </MudItem>
+                            <MudItem xs="12" sm="6">
+                                <MudSelect T="string" Value="Profile.TimesheetConfig.RoundingDirection" ValueChanged="@(async (string v) => { Profile.TimesheetConfig.RoundingDirection = v; await SaveProfile(); })" Label="Rounding direction" Variant="Variant.Outlined" AnchorOrigin="Origin.BottomCenter">
+                                    <MudSelectItem Value="@("Nearest")">Nearest</MudSelectItem>
+                                    <MudSelectItem Value="@("Up")">Round up</MudSelectItem>
+                                    <MudSelectItem Value="@("Down")">Round down</MudSelectItem>
+                                </MudSelect>
+                            </MudItem>
+                        </MudGrid>
+                    }
+                </MudPaper>
+            </MudItem>
+        </MudGrid>
+    }
+    </MudContainer>
+
+@using Spokes_Server.Core.Services
+
+@inject Spokes_Server.Core.Services.Core.UserService UserService
+@inject Spokes_Server.Core.Services.Core.CasdoorProvisioningService CasdoorProvisioning
+
+@code {
+    private CompanyProfile Profile = default!;
+    private SystemConfig _systemConfig = new();
+    private SystemConfig _initialSystemConfig = new();
+    private List<DocumentTemplate> Templates = new();
+    private string _primaryColor = string.Empty;
+    private string _secondaryColor = string.Empty;
+    private string MaskedPrivateKey => string.IsNullOrEmpty(Profile?.VapidPrivateKey) ? "" : new string('�', 20);
+    private bool IsFriendEdition => Db.CompanyProfile.Get()?.Edition == "Family";
+    [Inject] private Spokes_Server.Core.Services.Communication.Notifications.IWebPushService WebPush { get; set; } = default!;
+    [Inject] private Spokes_Server.Core.Services.Licensing.LicenseValidationService LicenseService { get; set; } = default!;
+    [Inject] private Spokes_Server.Core.Services.Logging.ISystemLogService SystemLog { get; set; } = default!;
+
+    [SupplyParameterFromQuery] public string? Tab { get; set; }
+    [SupplyParameterFromQuery] public bool Restored { get; set; }
+    [SupplyParameterFromQuery] public bool CasdoorRestarted { get; set; }
+    private int activeTabIndex = 0;
+
+    private List<DateTime> _availableLogDates = new();
+    private DateTime _selectedLogDate = DateTime.Today;
+    private List<Spokes_Server.Core.Services.Logging.SystemLogEntry> _currentLogs = new();
+
+    protected override void OnParametersSet()
+    {
+        if (!string.IsNullOrEmpty(Tab))
+        {
+            activeTabIndex = Tab.ToLower() switch
+            {
+                "profile" => 0,
+                "templates" => 1,
+                "statuses" => 2,
+                "categories" => 3,
+                "backups" => 4,
+                "permissions" => 5,
+                "email" => 6,
+                "chat" => 7,
+                "setup" or "licensing" => 8,
+                "logs" => 9,
+                "timesheets" => 10,
+                _ => 0
+            };
+        }
+    }
+
+    private bool _isDisposed;
+
+    public void Dispose()
+    {
+        _isDisposed = true;
+    }
+
+    private void UpdateActiveTab(int index)
+    {
+        if (_isDisposed) return;
+        
+        activeTabIndex = index;
+        
+        // Prevent navigation if the component is being disposed due to navigating to another page
+        if (!Nav.Uri.Contains("/admin/settings", StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        var tabName = index switch
+        {
+            0 => "profile",
+            1 => "templates",
+            2 => "statuses",
+            3 => "categories",
+            4 => "backups",
+            5 => "permissions",
+            6 => "email",
+            7 => "chat",
+            8 => "setup",
+            9 => "logs",
+            10 => "timesheets",
+            _ => "profile"
+        };
+        
+        try
+        {
+            Nav.NavigateTo(Nav.GetUriWithQueryParameter("tab", tabName), replace: true);
+        }
+        catch (Microsoft.AspNetCore.Components.NavigationException)
+        {
+            // Ignore expected exception during component disposal
+        }
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        var emp = await UserService.GetEmployeeAsync();
+        var hasAccess = emp != null && (emp.IsAdmin || emp.HasPermission(AppPermissions.Admin.ManageSettings));
+
+        if (!hasAccess)
+        {
+            Nav.NavigateTo("/", true);
+            return;
+        }
+
+        Profile = Db.CompanyProfile.Get();
+        _systemConfig = Db.SystemConfigs.Get();
+        _initialSystemConfig = System.Text.Json.JsonSerializer.Deserialize<SystemConfig>(
+            System.Text.Json.JsonSerializer.Serialize(_systemConfig)) ?? new();
+        _primaryColor = Profile.PrimaryColor;
+        _secondaryColor = Profile.SecondaryColor;
+        RefreshTemplates();
+        RefreshBackups();
+
+        _availableLogDates = SystemLog.GetAvailableLogDates();
+        if (_availableLogDates.Count > 0 && !_availableLogDates.Contains(_selectedLogDate))
+        {
+            _selectedLogDate = _availableLogDates.First();
+        }
+        else if (_availableLogDates.Count == 0)
+        {
+            _availableLogDates.Add(DateTime.Today);
+        }
+        await LoadLogsForDate(_selectedLogDate);
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender && Restored)
+        {
+            await DialogService.ShowAsync<Spokes_Server.Components.Dialogs.RestoreCompleteDialog>("", new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true, BackdropClick = false });
+            
+            if (CasdoorRestarted)
+            {
+                Snackbar.Add("Builtin Casdoor instance restarted.", Severity.Info);
+            }
+
+            var uri = Nav.GetUriWithQueryParameters(new Dictionary<string, object?>
+            {
+                { "restored", null },
+                { "casdoorRestarted", null }
+            });
+            Nav.NavigateTo(uri, forceLoad: false, replace: true);
+        }
+    }
+
+    private async Task TriggerManualUpdate()
+    {
+        var confirmed = await DialogService.ShowMessageBoxAsync("Update Server?",
+            $"Are you sure you want to update Spokes to v{ServerUpdateService.LatestVersion}?\n\nThe server will be temporarily unavailable for a few minutes while the update is applied.",
+            yesText: "Update Now", cancelText: "Cancel");
+
+        if (confirmed == true)
+        {
+            Snackbar.Add("Update triggered. The server will restart shortly.", Severity.Success);
+            _ = ServerUpdateService.TriggerWatchtowerUpdateAsync();
+        }
+    }
+
+    private void RefreshTemplates() => Templates = Db.DocumentTemplates.GetAll().OrderBy(t => t.Name).ToList();
+
+    // --- Logs Logic ---
+    private async Task OnLogDateChanged(DateTime newDate)
+    {
+        _selectedLogDate = newDate;
+        await LoadLogsForDate(newDate);
+    }
+
+    private async Task OnLogDateChangedNullable(DateTime? date)
+    {
+        if (date.HasValue)
+        {
+            await OnLogDateChanged(date.Value);
+        }
+    }
+
+    private string GetLogDateClasses(DateTime date)
+    {
+        if (_availableLogDates.Contains(date.Date))
+            return "mud-border-primary border-2 mud-border-solid rounded-circle font-weight-bold";
+        return string.Empty;
+    }
+
+    private async Task LoadLogsForDate(DateTime date)
+    {
+        _currentLogs = await SystemLog.GetLogsAsync(date);
+        StateHasChanged();
+    }
+
+    private async Task CopyLogsToClipboard()
+    {
+        if (_currentLogs.Count == 0) return;
+        var sb = new System.Text.StringBuilder();
+        foreach (var log in _currentLogs)
+        {
+            sb.AppendLine($"[{log.TimestampUtc:yyyy-MM-dd HH:mm:ss}] [{log.Severity.ToUpper()}] [{log.Category}] {log.Message}");
+            if (!string.IsNullOrEmpty(log.Details))
+            {
+                sb.AppendLine(log.Details);
+            }
+        }
+        await JS.InvokeVoidAsync("navigator.clipboard.writeText", sb.ToString());
+        Snackbar.Add("Logs copied to clipboard.", Severity.Success);
+    }
+
+    // --- Backup Logic ---
+    [Inject] private BackupService BackupSvc { get; set; } = default!;
+    private List<BackupFileInfo> _backupFiles = new();
+    private bool _isBackingUp;
+
+    private void RefreshBackups() => _backupFiles = BackupSvc.GetBackups();
+
+    private async Task RunBackupNow()
+    {
+        _isBackingUp = true;
+        StateHasChanged();
+        try
+        {
+            await BackupSvc.RunBackupNow();
+            RefreshBackups();
+            Snackbar.Add("Backup created successfully", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Backup failed: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _isBackingUp = false;
+        }
+    }
+
+    private async Task DownloadBackup(BackupFileInfo backup)
+    {
+        var url = $"/spokesapi/backups/{Uri.EscapeDataString(backup.FileName)}";
+        await JS.InvokeVoidAsync("open", url, "_blank");
+    }
+
+    private async Task DeleteBackup(BackupFileInfo backup)
+    {
+        var confirmed = await DialogService.ShowMessageBoxAsync("Delete Backup",
+            $"Are you sure you want to delete {backup.FileName}?",
+            yesText: "Delete", cancelText: "Cancel");
+        if (confirmed == true)
+        {
+            BackupSvc.DeleteBackup(backup.FilePath);
+            RefreshBackups();
+            Snackbar.Add("Backup deleted", Severity.Info);
+        }
+    }
+
+
+
+    private async Task RestoreBackup(BackupFileInfo backup)
+    {
+        var confirmed = await DialogService.ShowMessageBoxAsync("Restore Backup?",
+            $"Are you sure you want to restore {backup.FileName}?\n\nWARNING: All data created since this backup will be PERMANENTLY LOST.",
+            yesText: "RESTORE", cancelText: "Cancel");
+
+        if (confirmed == true)
+        {
+            try 
+            {
+                bool casdoorRestarted = Db.RestoreBackup(backup.FilePath, Logger);
+                Snackbar.Add("System restored successfully!", Severity.Success);
+                
+                var uri = Nav.GetUriWithQueryParameters(new Dictionary<string, object?>
+                {
+                    { "restored", true },
+                    { "casdoorRestarted", casdoorRestarted ? true : null }
+                });
+                Nav.NavigateTo(uri, forceLoad: true);
+            }
+            catch(Exception ex)
+            {
+                Snackbar.Add($"Restore failed: {ex.Message}", Severity.Error);
+            }
+        }
+    }
+
+    private async Task UploadAndRestoreBackup(IBrowserFile file)
+    {
+        var parameters = new DialogParameters { ["File"] = file };
+        var dialog = await DialogService.ShowAsync<Spokes_Server.Components.Dialogs.RestoreBackupDialog>("", parameters, new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true, BackdropClick = false });
+        
+        var result = await dialog.Result;
+        if (result != null && !result.Canceled)
+        {
+            bool casdoorRestarted = (bool)(result.Data ?? false);
+            var uri = Nav.GetUriWithQueryParameters(new Dictionary<string, object?>
+            {
+                { "restored", true },
+                { "casdoorRestarted", casdoorRestarted ? true : null }
+            });
+            Nav.NavigateTo(uri, forceLoad: true);
+        }
+    }
+
+    private async Task SaveProfile()
+    {
+        Profile.PrimaryColor = _primaryColor;
+        Profile.SecondaryColor = _secondaryColor;
+        Db.CompanyProfile.Save(Profile);
+        
+        // Sync branding to Casdoor
+        _ = CasdoorProvisioning.SyncBrandingAsync();
+
+        Snackbar.Add("Company Profile Saved", Severity.Success);
+    }
+
+    // --- Permission Group Logic ---
+
+    private async Task AddPermissionGroup()
+    {
+        var group = new PermissionGroup { Name = "New Group" };
+        var parameters = new DialogParameters { ["Group"] = group };
+        var dialog = await DialogService.ShowAsync<Spokes_Server.Components.Dialogs.PermissionGroupDialog>("Create Permission Group", parameters, new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true });
+        var result = await dialog.Result;
+
+        if (result != null && !result.Canceled && result.Data is PermissionGroup newGroup)
+        {
+            Profile.PermissionGroups.Add(newGroup);
+            await SaveProfile();
+        }
+    }
+
+    private async Task EditPermissionGroup(PermissionGroup group)
+    {
+        var parameters = new DialogParameters { ["Group"] = group };
+        var dialog = await DialogService.ShowAsync<Spokes_Server.Components.Dialogs.PermissionGroupDialog>("Edit Permission Group", parameters, new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true });
+        var result = await dialog.Result;
+
+        if (result != null && !result.Canceled && result.Data is PermissionGroup updatedGroup)
+        {
+            var index = Profile.PermissionGroups.FindIndex(g => g.Id == updatedGroup.Id);
+            if (index != -1)
+            {
+                Profile.PermissionGroups[index] = updatedGroup;
+            }
+            await SaveProfile();
+        }
+    }
+
+    private async Task RemovePermissionGroup(PermissionGroup group)
+    {
+        var confirmed = await DialogService.ShowMessageBoxAsync("Delete Permission Group",
+            $"Are you sure you want to delete {group.Name}? Users currently having these permissions will not lose them, but this group will no longer be available for new users.",
+            yesText: "Delete", cancelText: "Cancel");
+        if (confirmed == true)
+        {
+            Profile.PermissionGroups.Remove(group);
+            if (Profile.DefaultPermissionGroupId == group.Id)
+            {
+                Profile.DefaultPermissionGroupId = string.Empty;
+            }
+            await SaveProfile();
+        }
+    }
+
+    private async Task LoadBusinessDefaults()
+    {
+        var confirmed = await DialogService.ShowMessageBoxAsync("Load Business Defaults",
+            "This will append the default Business Edition permission groups to your list. Proceed?",
+            yesText: "Load", cancelText: "Cancel");
+        if (confirmed == true)
+        {
+            Profile.PermissionGroups.AddRange(DefaultPermissionGroups.GetBusinessDefaults());
+            await SaveProfile();
+        }
+    }
+
+    private async Task LoadFriendDefaults()
+    {
+        var confirmed = await DialogService.ShowMessageBoxAsync("Load Friend Defaults",
+            "This will append the default Friend Edition permission groups to your list. Proceed?",
+            yesText: "Load", cancelText: "Cancel");
+        if (confirmed == true)
+        {
+            Profile.PermissionGroups.AddRange(DefaultPermissionGroups.GetFriendDefaults());
+            await SaveProfile();
+        }
+    }
+
+    [Inject] private Spokes_Server.Core.Services.Core.IFileService FileService { get; set; } = default!;
+    [Inject] private Spokes_Server.Core.Services.Core.ImageProcessingService ImageService { get; set; } = default!;
+
+    private void HandleLogoUploaded(List<ApiFileUpload.UploadResult> results)
+    {
+        if (results == null || results.Count == 0) return;
+        
+        var result = results.First();
+        var parts = result.FilePath.Substring("/spokesapi/files/".Length).Split('/');
+        if (parts.Length != 3) return;
+        var fullPath = FileService.GetPhysicalPath(parts[0], parts[1], parts[2]);
+        
+        if (File.Exists(fullPath))
+        {
+            try
+            {
+                var bytes = File.ReadAllBytes(fullPath);
+                var optimizedBytes = ImageService.OptimizeImage(bytes, maxDimension: 1024, out var mimeType);
+                var base64 = Convert.ToBase64String(optimizedBytes);
+                Profile.LogoBase64 = $"data:{mimeType};base64,{base64}";
+                Profile.LogoVersion++;
+                FileService.CleanTempContext(parts[1]);
+                StateHasChanged();
+            }
+            catch (Exception ex)
+            {
+                Snackbar.Add($"Error processing logo: {ex.Message}", Severity.Error);
+                FileService.CleanTempContext(parts[1]);
+            }
+        }
+    }
+
+    private void HandleIconUploaded(List<ApiFileUpload.UploadResult> results)
+    {
+        if (results == null || results.Count == 0) return;
+        
+        var result = results.First();
+        var parts = result.FilePath.Substring("/spokesapi/files/".Length).Split('/');
+        if (parts.Length != 3) return;
+        var fullPath = FileService.GetPhysicalPath(parts[0], parts[1], parts[2]);
+        
+        if (File.Exists(fullPath))
+        {
+            try
+            {
+                var bytes = File.ReadAllBytes(fullPath);
+                var optimizedBytes = ImageService.OptimizeImage(bytes, maxDimension: 256, out var mimeType);
+                var base64 = Convert.ToBase64String(optimizedBytes);
+                Profile.IconBase64 = $"data:{mimeType};base64,{base64}";
+                Profile.IconVersion++;
+                FileService.CleanTempContext(parts[1]);
+                StateHasChanged();
+            }
+            catch (Exception ex)
+            {
+                Snackbar.Add($"Error processing icon: {ex.Message}", Severity.Error);
+                FileService.CleanTempContext(parts[1]);
+            }
+        }
+    }
+
+    private void ClearLogo()
+    {
+        Profile.LogoBase64 = string.Empty;
+        Profile.LogoVersion++;
+        StateHasChanged();
+    }
+
+    private void ClearIcon()
+    {
+        Profile.IconBase64 = string.Empty;
+        Profile.IconVersion++;
+        StateHasChanged();
+    }
+
+    // --- Template Logic ---
+
+
+    private async Task CreateTemplate()
+    {
+        var t = new DocumentTemplate { Name = "New Template" };
+        await EditTemplate(t);
+    }
+
+    private async Task EditTemplate(DocumentTemplate t)
+    {
+        // Use the dedicated Template Editor Dialog
+        var parameters = new DialogParameters { ["Template"] = t };
+        var options = new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true };
+
+        var dialog = await DialogService.ShowAsync<Spokes_Server.Components.Pages.Admin.TemplateEditorDialog>("Edit Template",
+        parameters, options);
+        var result = await dialog.Result;
+
+        if (result != null && !result.Canceled && result.Data is DocumentTemplate updated)
+        {
+
+            // If this is set to default, unset others
+            if (updated.IsDefault)
+            {
+                foreach (var other in Templates.Where(x => x.Id != updated.Id && x.IsDefault))
+                {
+                    other.IsDefault = false;
+                    Db.DocumentTemplates.Save(other);
+                }
+            }
+
+            Db.DocumentTemplates.Save(updated);
+            RefreshTemplates();
+        }
+    }
+
+    private void DeleteTemplate(DocumentTemplate t)
+    {
+        Db.DocumentTemplates.Delete(t.Id);
+        RefreshTemplates();
+    }
+
+    private async Task ExportTemplate(DocumentTemplate t)
+    {
+        var json = System.Text.Json.JsonSerializer.Serialize(t, new System.Text.Json.JsonSerializerOptions
+            {
+                WriteIndented = true
+            });
+        var fileName = $"{t.Name.Replace(" ", "_")}_Template.json";
+        await JS.InvokeVoidAsync("downloadFile", fileName, "application/json", json);
+    }
+
+    private void HandleTemplateUploaded(List<ApiFileUpload.UploadResult> results)
+    {
+        if (results == null || results.Count == 0) return;
+        
+        var result = results.First();
+        var parts = result.FilePath.Substring("/spokesapi/files/".Length).Split('/');
+        if (parts.Length != 3) return;
+        var fullPath = FileService.GetPhysicalPath(parts[0], parts[1], parts[2]);
+        
+        if (File.Exists(fullPath))
+        {
+            try
+            {
+                var json = File.ReadAllText(fullPath);
+                var t = System.Text.Json.JsonSerializer.Deserialize<DocumentTemplate>(json);
+
+                if (t != null)
+                {
+                    t.Id = Guid.NewGuid().ToString(); // Ensure new ID
+                    t.Name += " (Imported)";
+                    t.IsDefault = false; // Prevent accidental default override
+                    Db.DocumentTemplates.Save(t);
+                    RefreshTemplates();
+                    Snackbar.Add("Template Imported", Severity.Success);
+                }
+                
+                FileService.CleanTempContext(parts[1]);
+                StateHasChanged();
+            }
+            catch (Exception ex)
+            {
+                Snackbar.Add($"Import Failed: {ex.Message}", Severity.Error);
+                FileService.CleanTempContext(parts[1]);
+            }
+        }
+    }
+
+    private void HandleLicenseUploaded(List<ApiFileUpload.UploadResult> results)
+    {
+        if (results == null || results.Count == 0) return;
+        
+        var result = results.First();
+        var parts = result.FilePath.Substring("/spokesapi/files/".Length).Split('/');
+        if (parts.Length != 3) return;
+        var fullPath = FileService.GetPhysicalPath(parts[0], parts[1], parts[2]);
+        
+        if (File.Exists(fullPath))
+        {
+            try
+            {
+                var json = File.ReadAllText(fullPath);
+                var config = Db.ServerConfigs.GetOrCreateGlobalConfig();
+                var validationResult = LicenseService.ValidateLicense(json, config);
+
+                if (validationResult.Status == Spokes_Server.Core.Services.Licensing.LicenseStatus.Valid || 
+                    validationResult.Status == Spokes_Server.Core.Services.Licensing.LicenseStatus.Tolerated ||
+                    validationResult.Status == Spokes_Server.Core.Services.Licensing.LicenseStatus.Expired)
+                {
+                    if (validationResult.ParsedLicense != null)
+                    {
+                        Profile.LicensePayload = json;
+                        
+                        var newEditions = Spokes_Server.Core.Services.Licensing.LicenseValidationService.GetAvailableEditions(validationResult);
+                        if (!newEditions.Contains(Profile.Edition))
+                        {
+                            Profile.Edition = newEditions.FirstOrDefault() ?? "Family";
+                        }
+                        
+                        Db.CompanyProfile.Save(Profile);
+                        
+                        // Reset license banner dismissals so admins are alerted if/when this license expires in the future
+                        var admins = Db.Employees.GetAll().Where(e => e.IsAdmin || e.Permissions.Contains(Spokes_Server.Core.Constants.AppPermissions.Admin.ManageSettings)).ToList();
+                        foreach (var admin in admins)
+                        {
+                            if (admin.DismissedLicenseBannerPermanently || admin.LicenseBannerRemindLaterDate != null)
+                            {
+                                admin.DismissedLicenseBannerPermanently = false;
+                                admin.LicenseBannerRemindLaterDate = null;
+                                Db.Employees.Save(admin);
+                            }
+                        }
+                        
+                        if (validationResult.Status == Spokes_Server.Core.Services.Licensing.LicenseStatus.Expired)
+                        {
+                            Snackbar.Add($"Expired License Saved: {validationResult.Message}", Severity.Warning);
+                        }
+                        else
+                        {
+                            Snackbar.Add("License Validated & Saved Successfully!", Severity.Success);
+                        }
+                        
+                        // Force a reload so MainLayout picks up the new status
+                        Nav.NavigateTo(Nav.Uri, forceLoad: true);
+                    }
+                    else
+                    {
+                        Snackbar.Add("License is valid but could not be parsed.", Severity.Warning);
+                    }
+                }
+                else
+                {
+                    Snackbar.Add($"Invalid License: {validationResult.Message}", Severity.Error);
+                }
+                
+                FileService.CleanTempContext(parts[1]);
+                StateHasChanged();
+            }
+            catch (Exception ex)
+            {
+                Snackbar.Add($"Upload Failed: {ex.Message}", Severity.Error);
+                FileService.CleanTempContext(parts[1]);
+            }
+        }
+    }
+
+    private void AddStatus()
+    {
+        Profile.ProjectStatuses.Add(new ProjectStatusConfig { Name = "New Status", Color = "Default" });
+    }
+
+    private void RemoveStatus(ProjectStatusConfig status)
+    {
+        Profile.ProjectStatuses.Remove(status);
+    }
+
+    private void AddCategory()
+    {
+        Profile.CalendarCategories.Add(new CalendarCategory { Name = "New Category", Color = "Default" });
+    }
+
+    private void RemoveCategory(CalendarCategory category)
+    {
+        Profile.CalendarCategories.Remove(category);
+    }
+
+    // --- Push Notification Methods ---
+    private void GenerateVapidKeys()
+    {
+        var (publicKey, privateKey) = WebPushService.GenerateVapidKeys();
+        Profile.VapidPublicKey = publicKey;
+        Profile.VapidPrivateKey = privateKey;
+        Db.CompanyProfile.Save(Profile);
+        Snackbar.Add("VAPID keys generated! Push notifications are now enabled.", Severity.Success);
+    }
+
+    private async Task RegenerateVapidKeys()
+    {
+        var result = await DialogService.ShowMessageBoxAsync(
+        "Regenerate VAPID Keys?",
+        "This will invalidate all existing push subscriptions. Users will need to re-enable notifications in their browser.",
+        yesText: "Regenerate", cancelText: "Cancel");
+
+        if (result == true)
+        {
+            // Delete all existing subscriptions
+            var allSessionsWithPush = Db.DeviceSessions.GetAll().Where(s => s.HasPush).ToList();
+            foreach (var session in allSessionsWithPush)
+            {
+                Db.DeviceSessions.ClearPushFields(session);
+            }
+
+            GenerateVapidKeys();
+            Snackbar.Add("Keys regenerated. All existing subscriptions have been cleared.", Severity.Warning);
+        }
+    }
+
+    private async Task CopyToClipboard(string text)
+    {
+        await JS.InvokeVoidAsync("spokesCopyText", text);
+        Snackbar.Add("Copied to clipboard", Severity.Info);
+    }
+
+    private string GetActiveTabName() => activeTabIndex switch
+    {
+        0 => $"{AppLabels.Company} Profile",
+        1 => "Document Templates",
+        2 => "Project Statuses",
+        3 => "Calendar Categories",
+        4 => "Backups & Restore",
+        5 => "Permission Groups",
+        6 => "Email Server",
+        7 => "Chat Settings",
+        8 => "System Setup",
+        9 => "Server Logs",
+        10 => "Timesheets",
+        _ => $"{AppLabels.Company} Profile"
+    };
+
+    private string GetActiveTabIcon() => activeTabIndex switch
+    {
+        0 => Icons.Material.Filled.Business,
+        1 => Icons.Material.Filled.Description,
+        2 => Icons.Material.Filled.Palette,
+        3 => Icons.Material.Filled.Category,
+        4 => Icons.Material.Filled.Backup,
+        5 => Icons.Material.Filled.Security,
+        6 => Icons.Material.Filled.Email,
+        7 => Icons.Material.Filled.Chat,
+        8 => Icons.Material.Filled.SettingsApplications,
+        9 => Icons.Material.Filled.Terminal,
+        10 => Icons.Material.Filled.Schedule,
+        _ => Icons.Material.Filled.Business
+    };
+
+    private string GetTimeUntilExpiry(DateTime expiry)
+    {
+        var span = expiry - DateTime.UtcNow;
+        if (span.TotalDays < 0) return $"Expired {(int)Math.Abs(span.TotalDays)} days ago";
+        
+        int totalDays = (int)span.TotalDays;
+        int years = totalDays / 365;
+        int months = (totalDays % 365) / 30;
+        int days = (totalDays % 365) % 30;
+        
+        if (years > 0) return $"{years} years, {months} months";
+        if (months > 0) return $"{months} months, {days} days";
+        return $"{days} days";
+    }
+
+    private List<string> GetAvailableEditions()
+    {
+        var config = Db.ServerConfigs.GetOrCreateGlobalConfig();
+        var validationResult = LicenseService.ValidateLicense(Profile.LicensePayload, config);
+        return Spokes_Server.Core.Services.Licensing.LicenseValidationService.GetAvailableEditions(validationResult);
+    }
+
+    private async Task OnProviderTypeChanged(IdpType newType)
+    {
+        if (_systemConfig.ProviderType == newType) return;
+
+        var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Small, FullWidth = true };
+        var dialog = await DialogService.ShowAsync<Spokes_Server.Components.Dialogs.IdpWarningDialog>("", options);
+        var result = await dialog.Result;
+
+        if (result != null && !result.Canceled)
+        {
+            _systemConfig.ProviderType = newType;
+            StateHasChanged();
+        }
+        else
+        {
+            // Force Blazor to sync the old value back to the component
+            var old = _systemConfig.ProviderType;
+            _systemConfig.ProviderType = newType;
+            await Task.Yield();
+            _systemConfig.ProviderType = old;
+            StateHasChanged();
+        }
+    }
+
+    private async Task SaveSystemSetup()
+    {
+        if (!string.IsNullOrWhiteSpace(_systemConfig.Authority))
+        {
+            var authUrl = _systemConfig.Authority.Trim();
+            if (authUrl.EndsWith("/.well-known/openid-configuration", StringComparison.OrdinalIgnoreCase))
+            {
+                authUrl = authUrl.Substring(0, authUrl.Length - "/.well-known/openid-configuration".Length);
+            }
+            _systemConfig.Authority = authUrl;
+        }
+
+        bool idpChanged = _systemConfig.ProviderType != _initialSystemConfig.ProviderType ||
+                          _systemConfig.Authority != _initialSystemConfig.Authority ||
+                          _systemConfig.ClientId != _initialSystemConfig.ClientId ||
+                          _systemConfig.ClientSecret != _initialSystemConfig.ClientSecret;
+
+        bool livekitChanged = _systemConfig.LiveKitFallbackPort != _initialSystemConfig.LiveKitFallbackPort ||
+                              _systemConfig.LiveKitUdpStartPort != _initialSystemConfig.LiveKitUdpStartPort ||
+                              _systemConfig.LiveKitUdpEndPort != _initialSystemConfig.LiveKitUdpEndPort;
+
+        bool publicUrlChanged = _systemConfig.ServerPublicUrl != _initialSystemConfig.ServerPublicUrl;
+
+        // 1. Save both configs
+        Db.SystemConfigs.Save(_systemConfig);
+        Db.CompanyProfile.Save(Profile);
+
+        // 2. Update initial snapshot
+        _initialSystemConfig = System.Text.Json.JsonSerializer.Deserialize<SystemConfig>(
+            System.Text.Json.JsonSerializer.Serialize(_systemConfig)) ?? new();
+
+        // 3. If LiveKit ports changed, hot-reload LiveKit via supervisorctl
+        if (livekitChanged)
+        {
+            LiveKitService.ApplyPortConfiguration(_systemConfig);
+        }
+
+        // 4. Sync Casdoor if public URL changed
+        if (publicUrlChanged)
+        {
+            _ = CasdoorProvisioning.SyncBrandingAsync();
+        }
+
+        // 5. Check if IdP requires server restart
+        if (idpChanged)
+        {
+            bool? result = await DialogService.ShowMessageBoxAsync(
+                "Identity Provider Update",
+                "Identity Provider settings were saved. The server must restart to apply these changes. Restart now?",
+                yesText: "Restart Server", cancelText: "Later");
+
+            if (result == true)
+            {
+                var targetUrl = !string.IsNullOrWhiteSpace(_systemConfig.ServerPublicUrl)
+                    ? $"{_systemConfig.ServerPublicUrl.TrimEnd('/')}/admin/settings"
+                    : "/admin/settings";
+
+                try
+                {
+                    await JS.InvokeVoidAsync("spokesTriggerServerRestart", targetUrl);
+                    await Task.Delay(2000);
+                    AppLifetime.StopApplication();
+                }
+                catch (Exception ex)
+                {
+                    Logger.LogError(ex, "Error during server restart");
+                    Environment.Exit(0);
+                }
+            }
+            else
+            {
+                Snackbar.Add("Identity Provider settings saved. A server restart is required for changes to take effect.", Severity.Warning);
+            }
+        }
+        else
+        {
+            string message = livekitChanged
+                ? "Settings saved. Voice server reloaded."
+                : "Settings saved successfully.";
+            Snackbar.Add(message, Severity.Success);
+        }
+    }
+}
+

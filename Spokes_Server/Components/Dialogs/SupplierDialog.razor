@@ -1,0 +1,267 @@
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Data
+@using MudBlazor
+@inject IDialogService DialogService
+@inject ISnackbar Snackbar
+@inject Database Db
+
+<MudDialog>
+    <DialogContent>
+        <MudForm @ref="form" @bind-IsValid="@success">
+            <MudTabs Elevation="2" Rounded="true" ApplyEffectsToContainer="true" TabPanelsClass="pa-4">
+
+                <MudTabPanel Text="Business Info">
+                    <MudGrid>
+                        <MudItem xs="12">
+                            <MudTextField @bind-Value="Supplier.Info.BusinessName" Label="Business / Company Name"
+                                Required="true" Variant="Variant.Outlined" />
+                        </MudItem>
+
+                        <MudItem xs="12">
+                            <MudText Typo="Typo.subtitle2" Class="mt-2">Address</MudText>
+                        </MudItem>
+
+                        <MudItem xs="4">
+                            <MudTextField @bind-Value="Supplier.Info.BusinessAdressNumber" Label="Number" />
+                        </MudItem>
+                        <MudItem xs="8">
+                            <MudTextField @bind-Value="Supplier.Info.BusinessAdressStreet" Label="Street" />
+                        </MudItem>
+
+                        <MudItem xs="6">
+                            <MudTextField @bind-Value="Supplier.Info.BusinessAdressCity" Label="City" />
+                        </MudItem>
+                        <MudItem xs="6">
+                            <MudTextField @bind-Value="Supplier.Info.BusinessAdressState" Label="State / Province" />
+                        </MudItem>
+
+                        <MudItem xs="6">
+                            <MudTextField @bind-Value="Supplier.Info.BusinessAdressCountry" Label="Country" />
+                        </MudItem>
+                        <MudItem xs="6">
+                            <MudTextField @bind-Value="Supplier.Info.BusinessAdressZip" Label="Zip / Postal Code" />
+                        </MudItem>
+                    </MudGrid>
+                </MudTabPanel>
+
+                <MudTabPanel Text="Contact Persons">
+                    <MudMenu Label="Add Contact" Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Add" Class="mb-3">
+                        <MudMenuItem OnClick="AddContact" Icon="@Icons.Material.Filled.PersonAdd">Create New</MudMenuItem>
+                        <MudMenuItem OnClick="AddFromPublic" Icon="@Icons.Material.Filled.Public">Import from Public Contacts</MudMenuItem>
+                    </MudMenu>
+                    
+                    <MudTable Items="@Supplier.Contacts" Dense="true" Hover="true" Striped="true" Elevation="0">
+                        <HeaderContent>
+                            <MudTh>Name</MudTh>
+                            <MudTh>Role</MudTh>
+                            <MudTh>Email</MudTh>
+                            <MudTh>Phone</MudTh>
+                            <MudTh>Primary</MudTh>
+                            <MudTh>Actions</MudTh>
+                        </HeaderContent>
+                        <RowTemplate>
+                            <MudTd DataLabel="Name">@context.Prefix @context.Name</MudTd>
+                            <MudTd DataLabel="Role">@context.Title</MudTd>
+                            <MudTd DataLabel="Email">@context.Email</MudTd>
+                            <MudTd DataLabel="Phone">@context.Phone</MudTd>
+                            <MudTd DataLabel="Primary">
+                                @if (context.IsPrimary)
+                                {
+                                    <MudIcon Icon="@Icons.Material.Filled.Check" Color="Color.Success" Size="Size.Small" />
+                                }
+                            </MudTd>
+                            <MudTd DataLabel="Actions">
+                                <MudIconButton Icon="@Icons.Material.Filled.Edit" Color="Color.Primary" Size="Size.Small" OnClick="@(() => EditContact(context))" />
+                                <MudIconButton Icon="@Icons.Material.Filled.Delete" Color="Color.Error" Size="Size.Small" OnClick="@(() => DeleteContact(context))" />
+                            </MudTd>
+                        </RowTemplate>
+                        <NoRecordsContent>
+                            <MudText>No contacts found. Please add one.</MudText>
+                        </NoRecordsContent>
+                    </MudTable>
+                </MudTabPanel>
+
+            </MudTabs>
+        </MudForm>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Close">Close</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="Submit">Save Supplier</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
+    [Parameter] public Supplier Supplier { get; set; } = new();
+
+    private MudForm form = default!;
+    private bool success;
+
+    protected override void OnInitialized()
+    {
+        // Data Migration: If we have legacy contact info but no contacts list, migrate it.
+        if (Supplier.Contacts.Count == 0 && !string.IsNullOrWhiteSpace(Supplier.Info.ContactPersonName))
+        {
+            Supplier.Contacts.Add(new ContactPerson
+            {
+                Prefix = Supplier.Info.ContactPersonPrefix,
+                Name = Supplier.Info.ContactPersonName,
+                Title = Supplier.Info.ContactPersonTitle,
+                Email = Supplier.Info.ContactPersonEmail,
+                Phone = Supplier.Info.ContactPersonPhone,
+                IsPrimary = true
+            });
+        }
+    }
+
+    private async Task AddContact()
+    {
+        var newContact = new ContactPerson();
+        var dialog = await DialogService.ShowAsync<ContactPersonDialog>("Add Contact", new DialogParameters { ["Contact"] = newContact });
+        var result = await dialog.Result;
+
+        if (!result.Canceled)
+        {
+            var contact = (ContactPerson)result.Data;
+            // If this is the first contact, make it primary
+            if (Supplier.Contacts.Count == 0) contact.IsPrimary = true;
+            
+            // If created as primary, unset others
+            if (contact.IsPrimary)
+            {
+                 foreach(var c in Supplier.Contacts) c.IsPrimary = false;
+            }
+
+            Supplier.Contacts.Add(contact);
+            // Sync legacy fields
+            UpdateLegacyFields();
+        }
+    }
+
+    private async Task AddFromPublic()
+    {
+        var options = new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true };
+        var dialog = await DialogService.ShowAsync<PublicContactPickerDialog>("Select Public Contacts", options);
+        var result = await dialog.Result;
+
+        if (!result.Canceled && result.Data is List<ContactPerson> selectedContacts)
+        {
+            int addedCount = 0;
+            foreach (var publicContact in selectedContacts)
+            {
+                // Simple clone to avoid referential issues 
+                var newContact = new ContactPerson
+                {
+                    Name = publicContact.Name,
+                    Prefix = publicContact.Prefix,
+                    Title = publicContact.Title,
+                    Email = publicContact.Email,
+                    Phone = publicContact.Phone
+                };
+
+                if (Supplier.Contacts.Count == 0 && addedCount == 0)
+                {
+                    newContact.IsPrimary = true;
+                }
+
+                Supplier.Contacts.Add(newContact);
+                
+                // Delete the contact from the public list as requested
+                Db.PublicContacts.Delete(publicContact.Id);
+                addedCount++;
+            }
+
+            if (addedCount > 0)
+            {
+                UpdateLegacyFields();
+                Snackbar.Add($"Imported {addedCount} contact(s) from Public Contacts", Severity.Success);
+            }
+        }
+    }
+
+    private async Task EditContact(ContactPerson contact)
+    {
+        // Clone to avoid direct mutation if cancelled (shallow copy usually ok for simple props)
+        // For better safety we might want a deep clone, but for now we'll pass direct ref 
+        // and rely on the dialog not applying changes until save. 
+        // Actually, DialogService parameters are passed by reference.
+        // A proper way is to pass a copy, then replace if saved.
+        
+        var json = System.Text.Json.JsonSerializer.Serialize(contact);
+        var copy = System.Text.Json.JsonSerializer.Deserialize<ContactPerson>(json);
+
+        var dialog = await DialogService.ShowAsync<ContactPersonDialog>("Edit Contact", new DialogParameters { ["Contact"] = copy });
+        var result = await dialog.Result;
+
+        if (!result.Canceled)
+        {
+            var updated = (ContactPerson)result.Data;
+            
+            // Update the object in list
+            var index = Supplier.Contacts.IndexOf(contact);
+            if (index != -1)
+            {
+                Supplier.Contacts[index] = updated;
+            }
+            
+            // Handle primary logic
+            if (updated.IsPrimary)
+            {
+                foreach(var c in Supplier.Contacts)
+                {
+                    if (c != updated) c.IsPrimary = false;
+                }
+            }
+            
+            // Sync legacy fields
+            UpdateLegacyFields();
+        }
+    }
+
+    private void DeleteContact(ContactPerson contact)
+    {
+        Supplier.Contacts.Remove(contact);
+        UpdateLegacyFields();
+    }
+
+    private void UpdateLegacyFields()
+    {
+        // We sync the Primary contact back to the legacy info fields 
+        // so that parts of the app using ClientInfo still work for the main contact
+        var primary = Supplier.Contacts.FirstOrDefault(c => c.IsPrimary) ?? Supplier.Contacts.FirstOrDefault();
+        
+        if (primary != null)
+        {
+            Supplier.Info.ContactPersonPrefix = primary.Prefix;
+            Supplier.Info.ContactPersonName = primary.Name;
+            Supplier.Info.ContactPersonTitle = primary.Title;
+            Supplier.Info.ContactPersonEmail = primary.Email;
+            Supplier.Info.ContactPersonPhone = primary.Phone;
+        }
+        else
+        {
+            // Clear if empty
+            Supplier.Info.ContactPersonPrefix = "";
+            Supplier.Info.ContactPersonName = "";
+            Supplier.Info.ContactPersonTitle = "";
+            Supplier.Info.ContactPersonEmail = "";
+            Supplier.Info.ContactPersonPhone = "";
+        }
+    }
+
+    private void Close() => MudDialog.Cancel();
+
+    private void Submit()
+    {
+        form.Validate();
+        if (success)
+        {
+            UpdateLegacyFields();
+            MudDialog.Close(DialogResult.Ok(Supplier));
+        }
+    }
+}

@@ -1,0 +1,54 @@
+@inherits SpokesComponentBase
+
+<MudButton Disabled="@(_isProcessing || Disabled)" 
+           OnClick="@HandleClickAsync" 
+           Color="@Color" 
+           Variant="@Variant" 
+           Size="@Size" 
+           Class="@Class"
+           Style="@Style"
+           DropShadow="@DropShadow">
+    @if (_isProcessing)
+    {
+        <MudProgressCircular Class="ms-n1" Size="MudBlazor.Size.Small" Indeterminate="true" />
+        <MudText Class="ms-2">@LoadingText</MudText>
+    }
+    else
+    {
+        @ChildContent
+    }
+</MudButton>
+
+@code {
+    [Parameter] public bool Disabled { get; set; }
+    [Parameter] public string LoadingText { get; set; } = "Processing...";
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+    [Parameter] public EventCallback<Microsoft.AspNetCore.Components.Web.MouseEventArgs> OnClick { get; set; }
+    
+    [Parameter] public Color Color { get; set; } = Color.Primary;
+    [Parameter] public Variant Variant { get; set; } = Variant.Filled;
+    [Parameter] public MudBlazor.Size Size { get; set; } = MudBlazor.Size.Medium;
+    [Parameter] public string Class { get; set; } = "";
+    [Parameter] public string Style { get; set; } = "";
+    [Parameter] public bool DropShadow { get; set; } = true;
+
+    private bool _isProcessing = false;
+
+    private async Task HandleClickAsync(Microsoft.AspNetCore.Components.Web.MouseEventArgs args)
+    {
+        if (_isProcessing || Disabled) return;
+        
+        try
+        {
+            _isProcessing = true;
+            StateHasChanged();
+            
+            await OnClick.InvokeAsync(args);
+        }
+        finally
+        {
+            _isProcessing = false;
+            await SafeInvokeAsync(StateHasChanged);
+        }
+    }
+}

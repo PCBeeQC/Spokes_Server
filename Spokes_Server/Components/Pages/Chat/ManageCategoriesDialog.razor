@@ -1,0 +1,146 @@
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Aggregate
+@using MudBlazor
+@inject Database Db
+@inject IDialogService DialogService
+
+<MudDialog>
+    <DialogContent>
+        <div class="d-flex gap-2 align-center mb-4">
+            <MudTextField @bind-Value="_newCategoryName" DebounceInterval="250" Label="New Category Name" Variant="Variant.Outlined" Margin="Margin.Dense" />
+            <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="AddCategory" Disabled="@string.IsNullOrWhiteSpace(_newCategoryName)">Add</MudButton>
+        </div>
+
+        <MudList T="string" Dense="true" Class="overflow-auto" Style="max-height: 400px;">
+            @for (int i = 0; i < Categories.Count; i++)
+            {
+                var cat = Categories[i];
+                var isFirst = i == 0;
+                var isLast = i == Categories.Count - 1;
+                <MudListItem T="string">
+                    <div class="d-flex align-center justify-space-between w-100">
+                        <MudText>@cat.Name</MudText>
+                        <div class="d-flex gap-1">
+                            <MudIconButton Icon="@Icons.Material.Filled.KeyboardArrowUp" Size="Size.Small" OnClick="@(() => MoveUp(cat))" Disabled="@isFirst" />
+                            <MudIconButton Icon="@Icons.Material.Filled.KeyboardArrowDown" Size="Size.Small" OnClick="@(() => MoveDown(cat))" Disabled="@isLast" />
+                            @if (!cat.IsSystem)
+                            {
+                                <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small" Color="Color.Error" OnClick="@(() => DeleteCategory(cat))" />
+                            }
+                            else
+                            {
+                                <MudIconButton Icon="@Icons.Material.Filled.Lock" Size="Size.Small" Disabled="true" />
+                            }
+                        </div>
+                    </div>
+                </MudListItem>
+            }
+        </MudList>
+    </DialogContent>
+    <DialogActions>
+        <MudButton Color="Color.Primary" OnClick="Close">Done</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
+    
+    private List<ChatCategory> Categories = new();
+    private string _newCategoryName = string.Empty;
+
+    protected override void OnInitialized()
+    {
+        LoadCategories();
+    }
+
+    private void LoadCategories()
+    {
+        Categories = Db.ChatCategories.GetAll().OrderBy(c => c.DisplayOrder).ToList();
+    }
+
+    private void AddCategory()
+    {
+        if (string.IsNullOrWhiteSpace(_newCategoryName)) return;
+        
+        var publicCat = Categories.FirstOrDefault(c => c.Id == "sys_public");
+        var startOrder = publicCat != null ? publicCat.DisplayOrder : -600;
+        
+        var projectsCat = Categories.FirstOrDefault(c => c.Id == "sys_projects");
+        var endOrder = projectsCat != null ? projectsCat.DisplayOrder : -500;
+
+        var customCatsInSpace = Categories.Where(c => !c.IsSystem && c.DisplayOrder > startOrder && c.DisplayOrder < endOrder).ToList();
+        var newOrder = customCatsInSpace.Any() ? customCatsInSpace.Max(c => c.DisplayOrder) + 1 : startOrder + 1;
+
+        if (newOrder >= endOrder)
+        {
+            foreach (var c in Categories.Where(c => c.DisplayOrder >= newOrder))
+            {
+                c.DisplayOrder++;
+                Db.ChatCategories.Save(c);
+            }
+        }
+
+        var newCat = new ChatCategory
+        {
+            Name = _newCategoryName.Trim(),
+            DisplayOrder = newOrder
+        };
+        
+        Db.ChatCategories.Save(newCat);
+        _newCategoryName = string.Empty;
+        LoadCategories();
+    }
+
+    private void MoveUp(ChatCategory cat)
+    {
+        var index = Categories.IndexOf(cat);
+        if (index > 0)
+        {
+            var prev = Categories[index - 1];
+            (cat.DisplayOrder, prev.DisplayOrder) = (prev.DisplayOrder, cat.DisplayOrder);
+            Db.ChatCategories.Save(cat);
+            Db.ChatCategories.Save(prev);
+            LoadCategories();
+        }
+    }
+
+    private void MoveDown(ChatCategory cat)
+    {
+        var index = Categories.IndexOf(cat);
+        if (index < Categories.Count - 1)
+        {
+            var next = Categories[index + 1];
+            (cat.DisplayOrder, next.DisplayOrder) = (next.DisplayOrder, cat.DisplayOrder);
+            Db.ChatCategories.Save(cat);
+            Db.ChatCategories.Save(next);
+            LoadCategories();
+        }
+    }
+
+    private async Task DeleteCategory(ChatCategory cat)
+    {
+        var channelsInCat = Db.ChatChannels.GetAll().Where(c => c.CategoryId == cat.Id).ToList();
+        
+        var options = new DialogOptions { CloseOnEscapeKey = true };
+        bool? result = await DialogService.ShowMessageBoxAsync(
+            "Delete Category", 
+            $"Are you sure you want to delete '{cat.Name}'? {(channelsInCat.Any() ? $"\n\nThere are {channelsInCat.Count} channel(s) in this category. They will be returned to their default categories." : "")}", 
+            yesText: "Delete", cancelText: "Cancel", options: options);
+
+        if (result == true)
+        {
+            foreach (var ch in channelsInCat)
+            {
+                ch.CategoryId = null;
+                Db.ChatChannels.Save(ch);
+            }
+            Db.ChatCategories.Delete(cat.Id);
+            LoadCategories();
+        }
+    }
+
+    private void Close()
+    {
+        MudDialog.Close(DialogResult.Ok(true));
+    }
+}

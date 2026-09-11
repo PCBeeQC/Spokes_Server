@@ -1,0 +1,378 @@
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Data
+@using Spokes_Server.Core.Services
+@using Spokes_Server.Core.Constants
+@using MudBlazor
+@inject Database Db
+@inject UserService UserService
+@inject Spokes_Server.Core.Services.Core.AppLabelService AppLabels
+
+<MudDialog>
+    <DialogContent>
+        @if (_viewMode)
+        {
+                <!-- VIEW MODE -->
+                <div class="d-flex flex-column gap-3">
+                    <MudText Typo="Typo.h5">@Event.Title</MudText>
+
+                    @if (!IsNew && !string.IsNullOrEmpty(Event.EmployeeId))
+                    {
+                        var creator = GetEmployee(Event.EmployeeId);
+                        if (creator != null)
+                        {
+                            <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mt-n2 mb-2">Created by @creator.FullName</MudText>
+                        }
+                    }
+
+                    <div class="d-flex align-center gap-2">
+                        <MudIcon Icon="@Icons.Material.Filled.AccessTime" Size="Size.Small" Color="Color.Default" />
+                        <MudText Typo="Typo.body2">
+                        @if (Event.IsAllDay)
+                        {
+                            <text>All Day (@Event.Start.ToShortDateString())</text>
+                        }
+                        else
+                        {
+                            <text>@Event.Start.ToString("g") - @Event.End.ToString("t")</text>
+                            @if (Event.Start.Date != Event.End.Date)
+                            {
+                                <text> (+1)</text>
+                            }
+                        }
+                        </MudText>
+
+                        <MudSpacer />
+                    @{
+                        var cat = _categories.FirstOrDefault(c => c.Id == Event.Category);
+                        Color catColor = Color.Default;
+                        if (cat != null) Enum.TryParse(cat.Color, out catColor);
+                    }
+                    @if (cat != null)
+                    {
+                                <MudChip T="string" Color="@catColor" Size="Size.Small" Variant="Variant.Filled">@cat.Name</MudChip>
+                    }
+                    </div>
+
+                @if (!string.IsNullOrEmpty(Event.Location))
+                {
+                            <div class="d-flex align-center gap-2">
+                                <MudIcon Icon="@Icons.Material.Filled.LocationOn" Size="Size.Small" Color="Color.Default" />
+                                <MudText Typo="Typo.body2">@Event.Location</MudText>
+                            </div>
+                }
+
+                @if (!string.IsNullOrEmpty(Event.ExternalParticipant))
+                {
+                            <div class="d-flex align-center gap-2">
+                                <MudIcon Icon="@Icons.Material.Filled.PersonOutline" Size="Size.Small" Color="Color.Default" />
+                                <MudText Typo="Typo.body2">With: @Event.ExternalParticipant</MudText>
+                            </div>
+                }
+
+                @if (!string.IsNullOrEmpty(Event.Description))
+                {
+                            <MudText Typo="Typo.body1" Class="mt-2" Style="white-space: pre-wrap; word-break: break-word;">@Event.Description</MudText>
+                }
+
+                @if (Event.IsCompanyWide || Event.Attendees.Any() || (Event.InvitedTeamIds?.Any() ?? false))
+                {
+                            <MudText Typo="Typo.overline" Class="mt-2">Shared With</MudText>
+                            <div class="d-flex flex-wrap gap-2">
+                        @if (Event.IsCompanyWide)
+                        {
+                                <MudChip T="string" Size="Size.Small" Variant="Variant.Filled" Color="Color.Info"
+                                    Icon="@Icons.Material.Filled.Public">Company-Wide</MudChip>
+                        }
+                        @foreach (var teamId in Event.InvitedTeamIds ?? new())
+                        {
+                            var team = _teams.FirstOrDefault(t => t.Id == teamId);
+                            if (team != null)
+                            {
+                                                <TeamChip Team="@team" Size="Size.Small" Variant="Variant.Text" Color="Color.Secondary" />
+                            }
+                        }
+                        @foreach (var attId in Event.Attendees)
+                        {
+                            var emp = GetEmployee(attId);
+                            if (emp != null)
+                            {
+                                <EmployeeChip Employee="@emp" Size="Size.Small" Variant="Variant.Text" Color="Color.Primary" />
+                            }
+                        }
+                            </div>
+                }
+                </div>
+        }
+        else
+        {
+                <!-- EDIT MODE -->
+                <MudGrid Spacing="2" Class="mt-n4">
+                    <MudItem xs="12">
+                        <MudTextField @bind-Value="Event.Title" Label="Event Title" Required="true" AutoFocus="true"
+                            Variant="Variant.Outlined" Margin="Margin.Dense" />
+                    </MudItem>
+
+                    <MudItem xs="12">
+                        <MudTextField @bind-Value="Event.Location" Label="Location" Variant="Variant.Outlined"
+                            Margin="Margin.Dense" Adornment="Adornment.Start"
+                            AdornmentIcon="@Icons.Material.Filled.LocationOn" />
+                    </MudItem>
+
+                    <MudItem xs="12">
+                        <MudTextField @bind-Value="Event.ExternalParticipant" Label="External Participant(s)" Variant="Variant.Outlined"
+                            Margin="Margin.Dense" Adornment="Adornment.Start"
+                            AdornmentIcon="@Icons.Material.Filled.PersonOutline" />
+                    </MudItem>
+
+                    <MudItem xs="12">
+                        <MudSelect T="string" @bind-Value="Event.Category" Label="Category" Variant="Variant.Outlined"
+                            Margin="Margin.Dense" Dense="true" AnchorOrigin="Origin.BottomCenter">
+                        @foreach (var cat in _categories)
+                        {
+                                    <MudSelectItem T="string" Value="@cat.Id">@cat.Name</MudSelectItem>
+                        }
+                        </MudSelect>
+                    </MudItem>
+
+                    <MudItem xs="6">
+                        <MudSwitch @bind-Value="Event.IsAllDay" Label="All Day" Color="Color.Primary" />
+                    </MudItem>
+
+                    <MudItem xs="6">
+                        <MudSwitch @bind-Value="_multiDay" Label="Multi-day" Color="Color.Primary" />
+                    </MudItem>
+
+                    @if (_multiDay)
+                    {
+                        <MudItem xs="6">
+                            <MudDatePicker Label="Start Date" @bind-Date="StartDate" Margin="Margin.Dense" Variant="Variant.Outlined" />
+                        </MudItem>
+                        <MudItem xs="6">
+                            <MudDatePicker Label="End Date" @bind-Date="EndDate" Margin="Margin.Dense" Variant="Variant.Outlined" />
+                        </MudItem>
+                                
+                    }
+                    else
+                    {
+                        <MudItem xs="12">
+                            <MudDatePicker Label="Date" @bind-Date="StartDate" Margin="Margin.Dense"
+                                           Variant="Variant.Outlined" />
+                        </MudItem>
+                    }
+
+                    <MudItem xs="6">
+                        <MudTimePicker Label="Start Time" Time="StartTime" TimeChanged="OnStartTimeChanged" Margin="Margin.Dense"
+                            Variant="Variant.Outlined" Disabled="Event.IsAllDay" />
+                    </MudItem>
+                    <MudItem xs="6">
+                        <MudTimePicker Label="End Time" @bind-Time="EndTime" Margin="Margin.Dense" Variant="Variant.Outlined" Disabled="Event.IsAllDay" />
+                    </MudItem>
+
+                    <!-- Attendees & Teams -->
+                    <MudItem xs="12">
+                    <MudSwitch @bind-Value="Event.IsCompanyWide" Label="@($"Share with everyone in the {AppLabels.Company}")" Color="Color.Info" Class="mb-2" />
+                         <MudGrid Spacing="1">
+                            <MudItem xs="12" sm="6">
+                                <EmployeeAutocomplete ShrinkLabel="true" Label="Add Attendee" Employees="@_allEmployees" ExcludedIds="@Event.Attendees"
+                                    ValueChanged="AddAttendee" ResetOnSelect="true" Margin="Margin.Dense" />
+                            </MudItem>
+                            <MudItem xs="12" sm="6">
+                                <TeamAutocomplete ShrinkLabel="true" Label="@($"Share with {AppLabels.Team}")" Teams="@_teams" ExcludedIds="@Event.InvitedTeamIds"
+                                    ValueChanged="AddTeam" ResetOnSelect="true" Margin="Margin.Dense" />
+                            </MudItem>
+                        </MudGrid>
+
+                        <div class="d-flex flex-wrap gap-1 mt-2">
+                        @foreach (var teamId in Event.InvitedTeamIds ?? new())
+                        {
+                            var team = _teams.FirstOrDefault(t => t.Id == teamId);
+                            if (team != null)
+                            {
+                                            <TeamChip Team="@team" OnClose="@(() => RemoveTeam(teamId))" Size="Size.Small" Color="Color.Secondary" Variant="Variant.Filled" />
+                            }
+                        }
+                        @foreach (var attId in Event.Attendees)
+                        {
+                            var emp = GetEmployee(attId);
+                            if (emp != null)
+                            {
+                                <EmployeeChip Employee="@emp" OnClose="@(() => RemoveAttendee(attId))" Size="Size.Small" Color="Color.Primary" Variant="Variant.Outlined" />
+                            }
+                        }
+                        </div>
+                    </MudItem>
+
+                    <MudItem xs="12" Class="mt-n2">
+                        <MudTextField @bind-Value="Event.Description" ShrinkLabel Label="Description" Lines="4" Variant="Variant.Outlined"
+                            Margin="Margin.Dense" />
+                    </MudItem>
+                </MudGrid>
+        }
+    </DialogContent>
+    <DialogActions>
+        @if (_viewMode)
+        {
+            @if (_canEdit)
+            {
+                <MudButton Color="Color.Error" OnClick="Delete" Variant="Variant.Text">Delete</MudButton>
+            }
+                <MudSpacer />
+                <MudButton OnClick="Close">Close</MudButton>
+            @if (_canEdit)
+            {
+                <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="@(() => _viewMode = false)">Edit</MudButton>
+            }
+        }
+        else
+        {
+            @if (!IsNew)
+            {
+                        <MudButton OnClick="@(() => _viewMode = true)">Cancel Edit</MudButton>
+            }
+            else
+            {
+                        <MudButton OnClick="Close">Close</MudButton>
+            }
+                <MudSpacer />
+                <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="Submit">Save</MudButton>
+        }
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
+    [Parameter] public CalendarEvent Event { get; set; } = default!;
+    [Parameter] public bool IsNew { get; set; }
+
+    private bool _viewMode;
+    private bool _multiDay;
+
+
+    private DateTime? StartDate;
+    private TimeSpan? StartTime;
+    private DateTime? EndDate;
+    private TimeSpan? EndTime;
+
+    private List<Employee> _allEmployees = new();
+    private List<Team> _teams = new();
+    private List<CalendarCategory> _categories = new();
+
+    private bool _canEdit;
+    private Employee? _currentUser;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _currentUser = await UserService.GetEmployeeAsync();
+
+        if (Event == null) Event = new CalendarEvent { Start = DateTime.Today, End = DateTime.Today.AddHours(1) };
+        if (Event.Attendees == null) Event.Attendees = new();
+        if (Event.InvitedTeamIds == null) Event.InvitedTeamIds = new();
+
+        // Init logic
+        StartDate = Event.Start.Date;
+        StartTime = Event.Start.TimeOfDay;
+        EndDate = Event.End.Date;
+        EndTime = Event.End.TimeOfDay;
+
+        _multiDay = Event.Start.Date != Event.End.Date;
+
+        // Mode logic
+        _viewMode = !IsNew;
+
+        _canEdit = IsNew || (_currentUser != null && (Event.EmployeeId == _currentUser.Id || _currentUser.HasPermission(AppPermissions.Admin.ManageSettings) || _currentUser.HasPermission(AppPermissions.Admin.ManageUsers)));
+
+        if (_currentUser?.IsSuspended == true)
+        {
+            _viewMode = true;
+            _canEdit = false;
+        }
+
+        // Load data
+        _allEmployees = Db.Employees.GetAll().Where(e => e.IsActive).ToList();
+        _teams = Db.Teams.GetAll();
+        _categories = Db.CompanyProfile.Get().CalendarCategories;
+
+        // Ensure current category is valid or default it
+        if (string.IsNullOrEmpty(Event.Category) && _categories.Any())
+        {
+            Event.Category = _categories.First().Id;
+        }
+    }
+
+    private void OnStartTimeChanged(TimeSpan? time)
+    {
+        StartTime = time;
+        if (time.HasValue)
+        {
+            EndTime = time.Value.Add(TimeSpan.FromHours(1));
+        }
+    }
+
+    private void AddAttendee(Employee? emp)
+    {
+        if (emp != null && !Event.Attendees.Contains(emp.Id))
+        {
+            Event.Attendees.Add(emp.Id);
+        }
+    }
+
+    private void RemoveAttendee(string id)
+    {
+        Event.Attendees.Remove(id);
+    }
+
+    private Employee GetEmployee(string id) => _allEmployees.FirstOrDefault(e => e.Id == id);
+    private string GetTeamName(string teamId) => _teams.FirstOrDefault(t => t.Id == teamId)?.Name ?? "No Team";
+
+    private void AddTeam(Team? team)
+    {
+        if (team != null && !Event.InvitedTeamIds.Contains(team.Id))
+        {
+            Event.InvitedTeamIds.Add(team.Id);
+        }
+    }
+
+    private void RemoveTeam(string teamId)
+    {
+        Event.InvitedTeamIds.Remove(teamId);
+    }
+
+    private void Submit()
+    {
+        if (string.IsNullOrWhiteSpace(Event.Title)) return;
+
+        // Reconstruct DateTime
+        var sDate = StartDate ?? DateTime.Today;
+        var sTime = StartTime ?? TimeSpan.Zero;
+        Event.Start = sDate.Add(sTime);
+
+        if (_multiDay)
+        {
+            var eDate = EndDate ?? sDate;
+            var eTime = EndTime ?? sTime.Add(TimeSpan.FromHours(1));
+            Event.End = eDate.Add(eTime);
+        }
+        else
+        {
+            // Default to same day
+            var eTime = EndTime ?? sTime.Add(TimeSpan.FromHours(1));
+            Event.End = sDate.Add(eTime);
+        }
+
+        if (Event.End < Event.Start) Event.End = Event.Start.AddHours(1);
+
+        MudDialog.Close(DialogResult.Ok(Event));
+    }
+
+    private void Delete()
+    {
+        MudDialog.Close(DialogResult.Ok((CalendarEvent)null));
+    }
+
+    private void Close() => MudDialog.Cancel();
+}
+

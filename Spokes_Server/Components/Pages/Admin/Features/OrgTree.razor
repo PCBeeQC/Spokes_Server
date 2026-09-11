@@ -1,0 +1,144 @@
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Data
+@inject Database Db
+@inject NavigationManager Nav
+@using MudBlazor
+
+<MudPaper Class="pa-4" Elevation="0" Outlined="true">
+    <MudText Typo="Typo.h6" Class="mb-4">Organization Chart</MudText>
+    
+    @if (TreeItems.Any())
+    {
+         <MudTreeView Items="TreeItems" MultiSelection="false">
+            <ItemTemplate>
+                <MudTreeViewItem @bind-Expanded="@context.Expanded" Items="@context.Children" Value="@context.Value">
+                    <Content>
+                        <MudTreeViewItemToggleButton @bind-Expanded="@context.Expanded" Visible="@context.HasChildren" />
+                        <MudPaper Elevation="0" Class="d-flex flex-wrap align-center gap-3 pa-2 my-1 border-solid border-1 mud-border-primary" Style="width: 100%; border-radius: 8px;">
+                             @if (context.Value.HasCustomAvatar)
+                             {
+                                 <MudAvatar Size="Size.Medium">
+                                     <MudImage Src="@($"/spokesapi/Media/Avatar/{context.Value.Id}?v={context.Value.AvatarVersion}")" ObjectFit="ObjectFit.Cover" />
+                                 </MudAvatar>
+                             }
+                             else
+                             {
+                                 <MudAvatar Size="Size.Medium" Style="@($"background-color: {context.Value.ProfileColor ?? Colors.DeepPurple.Default}; color: {Colors.Shades.White};")">
+                                     @context.Value.FirstName?.FirstOrDefault()@context.Value.LastName?.FirstOrDefault()
+                                 </MudAvatar>
+                             }
+                                 <div class="d-flex flex-column">
+                                 <MudText Typo="Typo.body1"><b>@context.Value.FullName</b></MudText>
+                                 <div class="d-flex align-center gap-2 flex-wrap">
+                                     <MudText Typo="Typo.caption" Color="Color.Secondary">@context.Value.Position</MudText>
+                                     @if (!string.IsNullOrEmpty(GetTeamName(context.Value.TeamId)))
+                                     {
+                                         <MudChip T="string" Size="Size.Small" Variant="Variant.Text" Color="Color.Info" Class="ml-2">@GetTeamName(context.Value.TeamId)</MudChip>
+                                     }
+                                     @foreach(var ledTeam in GetTeamsLedBy(context.Value.Id))
+                                     {
+                                          <MudChip T="string" Size="Size.Small" Variant="Variant.Filled" Color="Color.Primary" Icon="@Icons.Material.Filled.Star" Class="ml-2">Lead of @ledTeam.Name</MudChip>
+                                     }
+                                 </div>
+                             </div>
+                             <MudSpacer />
+                             <MudTooltip Text="Edit Timesheet">
+                                <MudIconButton Icon="@Icons.Material.Filled.EditCalendar" Size="Size.Small" Color="Color.Default" 
+                                               OnClick="@(() => OpenTimesheet(context.Value.Id))" />
+                             </MudTooltip>
+                        </MudPaper>
+                    </Content>
+                </MudTreeViewItem>
+            </ItemTemplate>
+        </MudTreeView>
+    }
+    else
+    {
+        <MudText>No employees found.</MudText>
+    }
+
+</MudPaper>
+
+@code {
+    private List<TreeItemData<Employee>> TreeItems = new();
+    private List<Employee> AllEmployees = new();
+    private List<Team> AllTeams = new();
+
+    protected override void OnInitialized()
+    {
+        AllEmployees = Db.Employees.GetAll().Where(e => e.IsActive).ToList();
+        AllTeams = Db.Teams.GetAll();
+        BuildTree();
+    }
+
+    private void BuildTree()
+    {
+        TreeItems.Clear();
+        
+        // 1. Find Roots (Employees who effectively have no manager in the Team structure)
+        // Manager Definition: If in a Team, and NOT the leader, your Manager is the Team Leader.
+        // If not in a team, or ARE the leader, you are a root (for now).
+        
+        var roots = AllEmployees.Where(e => GetderivedManagerId(e) == null).ToList();
+        
+        foreach (var root in roots)
+        {
+            TreeItems.Add(CreateNode(root));
+        }
+    }
+
+    private string? GetderivedManagerId(Employee e)
+    {
+        if (string.IsNullOrEmpty(e.TeamId)) return null; // No Team -> No Manager (Root)
+        
+        var team = AllTeams.FirstOrDefault(t => t.Id == e.TeamId);
+        if (team == null) return null; // Invalid Team
+        
+        if (team.LeaderId == e.Id) return null; // I am the Leader -> No Manager (Root)
+        
+        return team.LeaderId;
+    }
+
+    private TreeItemData<Employee> CreateNode(Employee emp)
+    {
+        var node = new TreeItemData<Employee>
+        {
+            Value = emp,
+            Expanded = true
+        };
+
+        // Find children: Anyone whose derived manager is ME
+        var children = AllEmployees.Where(e => GetderivedManagerId(e) == emp.Id).ToList();
+        
+        var childrenList = new List<TreeItemData<Employee>>();
+        foreach (var child in children)
+        {
+            childrenList.Add(CreateNode(child));
+        }
+        
+        node.Children = childrenList;
+        
+        return node;
+    }
+
+    private string GetTeamName(string teamId)
+    {
+        if (string.IsNullOrEmpty(teamId)) return "";
+        return AllTeams.FirstOrDefault(t => t.Id == teamId)?.Name ?? "";
+    }
+
+    private void OpenTimesheet(string employeeId)
+    {
+        Nav.NavigateTo($"/timesheet/{employeeId}");
+    }
+
+    private IEnumerable<Team> GetTeamsLedBy(string employeeId)
+    {
+        return AllTeams.Where(t => t.LeaderId == employeeId);
+    }
+}
+

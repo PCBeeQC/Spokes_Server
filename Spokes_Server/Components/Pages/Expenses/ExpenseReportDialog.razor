@@ -1,0 +1,137 @@
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Data
+@using Spokes_Server.Components.Pages.Expenses
+@inject Database Db
+@inject IDialogService DialogService
+@inject ISnackbar Snackbar
+
+<MudDialog>
+    <DialogContent>
+        <MudGrid >
+            <MudItem xs="12" sm="4" Class="mt-n2">
+                <MudTextField Value="@Report.ReportNumber" Label="Report #" ReadOnly="true" Variant="Variant.Outlined" Margin="Margin.Dense" ShrinkLabel="true" />
+            </MudItem>
+            <MudItem xs="12" sm="4" Class="mt-n4">
+                <MudTextField Value="@Report.EmployeeName" Label="Employee" ReadOnly="true" Variant="Variant.Outlined" Margin="Margin.Dense" ShrinkLabel="true" />
+            </MudItem>
+            <MudItem xs="12" sm="4" Class="mt-n4">
+                <MudDatePicker @bind-Date="date" Label="Date" ReadOnly="@IsReadOnly" Variant="Variant.Outlined" Margin="Margin.Dense" ShrinkLabel="true" />
+            </MudItem>
+            <MudItem xs="12" Class="mt-n4">
+                <div class="d-flex justify-space-between align-center mt-4 mb-2">
+                    <MudText Typo="Typo.h6">Expenses</MudText>
+                    @if (!IsReadOnly)
+                    {
+                        <MudButton StartIcon="@Icons.Material.Filled.Add" Size="Size.Small" Variant="Variant.Filled" Color="Color.Primary" OnClick="AddItem">Add Expense</MudButton>
+                    }
+                </div>
+                
+                <MudGrid Spacing="2">
+                    @foreach (var context in Report.Items)
+                    {
+                        <MudItem xs="12" sm="6" md="4" lg="3">
+                            <MudCard Elevation="0" Outlined="true" Class="h-100 d-flex flex-column my-expense-item-card" Style="border-radius: 12px;">
+                                <MudCardContent Class="pa-3 flex-grow-1">
+                                    <div class="d-flex justify-space-between align-start mb-1">
+                                        <MudText Typo="Typo.subtitle2" Style="font-weight: 600;">@(Db.Projects.GetById(context.ProjectId)?.Name ?? "No Project")</MudText>
+                                        <MudText Typo="Typo.caption" Color="Color.Secondary">@context.Date.ToShortDateString()</MudText>
+                                    </div>
+                                    <MudText Typo="Typo.body2" Class="mb-2" Style="min-height: 40px;">@context.Description</MudText>
+                                    
+                                    <div class="d-flex justify-space-between align-end mt-auto">
+                                        <div>
+                                            <MudText Typo="Typo.caption" Color="Color.Secondary" Class="d-block">@(context.IsKilometrage ? $"Km ({context.Kilometers}km)" : "Direct")</MudText>
+                                            <MudText Typo="Typo.h6" Color="Color.Primary">@context.Total.ToString("C")</MudText>
+                                        </div>
+                                        @if (!string.IsNullOrEmpty(context.ReceiptPath))
+                                        {
+                                            <MudIconButton Icon="@Icons.Material.Filled.AttachFile" Size="Size.Small" Color="Color.Default" Href="@context.ReceiptPath" Target="_blank" Title="View Receipt" />
+                                        }
+                                    </div>
+                                </MudCardContent>
+                                <MudCardActions Class="px-3 pb-3 pt-0 d-flex justify-end gap-1">
+                                    @if (IsReadOnly)
+                                    {
+                                        <MudButton Variant="Variant.Outlined" Size="Size.Small" OnClick="@(() => EditItem(context))">View</MudButton>
+                                    }
+                                    else
+                                    {
+                                        <MudButton Variant="Variant.Text" Color="Color.Error" Size="Size.Small" OnClick="@(() => Report.Items.Remove(context))">Delete</MudButton>
+                                        <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small" OnClick="@(() => EditItem(context))">Edit</MudButton>
+                                    }
+                                </MudCardActions>
+                            </MudCard>
+                        </MudItem>
+                    }
+                    @if (!Report.Items.Any())
+                    {
+                        <MudItem xs="12">
+                            <MudText Typo="Typo.body2" Color="Color.Secondary" Align="Align.Center" Class="my-4">No expenses added yet.</MudText>
+                        </MudItem>
+                    }
+                </MudGrid>
+            </MudItem>
+            <MudItem xs="12" Class="d-flex justify-end">
+                <MudPaper Class="pa-4" Elevation="3">
+                    <MudText Typo="Typo.h5" Color="Color.Primary"><b>Total: @Report.TotalAmount.ToString("C")</b>
+                    </MudText>
+                </MudPaper>
+            </MudItem>
+        </MudGrid>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">Close</MudButton>
+        @if (!IsReadOnly)
+        {
+            <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="Submit">Save Report</MudButton>
+        }
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; }
+    [Parameter] public ExpenseReport Report { get; set; }
+    [Parameter] public bool IsReadOnly { get; set; } = false;
+
+    private DateTime? date { get => Report.DateCreated; set => Report.DateCreated = value ?? DateTime.Today; }
+
+    private async Task AddItem()
+    {
+        var newItem = new ExpenseItem();
+        await OpenItemDialog(newItem, true);
+    }
+
+    private async Task EditItem(ExpenseItem item)
+    {
+        await OpenItemDialog(item, false);
+    }
+
+    private async Task OpenItemDialog(ExpenseItem item, bool isNew)
+    {
+        var parameters = new DialogParameters
+            {
+                ["Item"] = item,
+                ["ReportId"] = Report.Id,
+                ["ReadOnly"] = IsReadOnly
+            };
+
+        var options = new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true };
+        var dialog = await DialogService.ShowAsync<ExpenseItemDialog>(isNew ? "Add Expense" : (IsReadOnly ? "View Expense" :
+        "Edit Expense"), parameters);
+        var result = await dialog.Result;
+
+        if (!result.Canceled && !IsReadOnly)
+        {
+            if (isNew) Report.Items.Add(item);
+            // else Updated by reference
+        }
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+    private void Submit() => MudDialog.Close(DialogResult.Ok(Report));
+}
+

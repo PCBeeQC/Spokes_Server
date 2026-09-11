@@ -1,0 +1,840 @@
+@page "/projects/{ProjectId}/quotes/{QuoteId}"
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Data
+@using Spokes_Server.Components.Dialogs
+@using MudBlazor
+@using Markdig
+@inject Database Db
+@inject ISnackbar Snackbar
+@inject IDialogService DialogService
+@inject NavigationManager Nav
+@inject IJSRuntime JS
+@inject ILogger<QuoteViewer> Logger
+@inject UserService UserService
+@inject Spokes_Server.Core.Services.Accounting.FinancialCalculationEngine CalcEngine
+@implements IAsyncDisposable
+@using Spokes_Server.Core.Services.Documents
+@inject DocumentPdfService PdfService
+@inject MarkdownSanitizerService MarkdownSanitizer
+
+@if (Quote == null || Template == null || Profile == null)
+{
+    <MudAlert Severity="Severity.Error">Loading...</MudAlert>
+    <MudButton OnClick="GoBack">Back</MudButton>
+}
+else
+{
+    @if (Quote != null && Project != null)
+    {
+        <PageTitle>@($"{Template?.Label_Quote ?? "Quote"} {Quote.QuoteNumber} - {Project.Client.BusinessName}")</PageTitle>
+    }
+    <style>
+        .markdown-content h1,
+        .markdown-content h2,
+        .markdown-content h3 {
+            color: @Profile.PrimaryColor !important;
+            margin-top: 1rem;
+            margin-bottom: 0.5rem;
+        }
+
+        .markdown-content h4,
+        .markdown-content h5,
+        .markdown-content h6 {
+            color: black !important;
+            margin-top: 1rem;
+            margin-bottom: 0.5rem;
+        }
+
+        .markdown-content p {
+            margin-bottom: 0.8rem;
+            line-height: 1.6;
+        }
+
+        .markdown-content ul,
+        .markdown-content ol {
+            padding-left: 1.5rem;
+            margin-bottom: 1rem;
+        }
+
+        .markdown-content li {
+            margin-bottom: 0.25rem;
+        }
+
+        .markdown-content strong {
+            font-weight: bold;
+        }
+
+        .markdown-content em {
+            font-style: italic;
+        }
+    </style>
+
+    <MudGrid Spacing="0" Class="py-2 d-print-none align-center" Style="position: sticky; top: 0; z-index: 99; background-color: var(--mud-palette-background);">
+        <MudItem xs="3">
+            <MudButton StartIcon="@Icons.Material.Filled.ArrowBack" OnClick="GoBack">Back to Project</MudButton>
+        </MudItem>
+        <MudItem xs="9" Class="d-flex justify-end align-center gap-2">
+            <MudSelect T="string" Value="@Quote.Status" ValueChanged="UpdateStatus" Dense="true" Margin="Margin.Dense"
+                Variant="Variant.Outlined" Style="width: 150px;">
+                <MudSelectItem Value="@("Draft")">Draft</MudSelectItem>
+                <MudSelectItem Value="@("Final")">Final</MudSelectItem>
+                <MudSelectItem Value="@("Accepted")">Accepted</MudSelectItem>
+                <MudSelectItem Value="@("Rejected")">Rejected</MudSelectItem>
+            </MudSelect>
+            @if (Quote.Status == "Draft")
+            {
+                <MudButton Variant="Variant.Outlined" Color="Color.Error" StartIcon="@Icons.Material.Filled.Delete"
+                    OnClick="DeleteQuote">Delete</MudButton>
+            }
+            <MudButton Variant="Variant.Outlined" Color="Color.Success" StartIcon="@Icons.Material.Filled.PictureAsPdf"
+                OnClick="PrintPdf">Print / PDF</MudButton>
+            @if (Quote.Status != "Draft" && !string.IsNullOrEmpty(Quote.PdfPath))
+            {
+                <MudButton Variant="Variant.Outlined" Color="Color.Info" StartIcon="@Icons.Material.Filled.OpenInNew"
+                    OnClick="OpenPdf">Open PDF</MudButton>
+                <MudButton Variant="Variant.Outlined" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Email"
+                    OnClick="SendByEmail">Send by Email</MudButton>
+            }
+            <MudButton Variant="Variant.Outlined" Color="Color.Secondary" StartIcon="@Icons.Material.Filled.ContentCopy"
+                OnClick="DuplicateQuote">Duplicate</MudButton>
+            @if (Quote.Status == "Draft")
+            {
+                <MudButton Variant="Variant.Outlined" Color="Color.Warning" StartIcon="@Icons.Material.Filled.Edit"
+                    OnClick="EditQuote">Edit</MudButton>
+            }
+        </MudItem>
+    </MudGrid>
+
+    <MudPaper Class="mx-auto overflow-hidden" Style="max-width: 8.5in; width: 100%; min-height: 11in;" Elevation="3" id="printable-area">
+
+        @* REMOVED: Top Red Bar / Spacer Block *@
+
+        <div class="print-footer-custom">
+            <span>@Profile.CompanyName</span>
+
+            <span>
+                Ref: @Quote.Title
+                @if (Quote.IsConfidential)
+                {
+                    <span> - </span>
+                    <span style="color: #d32f2f; font-weight: bold; text-transform: uppercase;">@Template.Label_Confidential</span>
+                }
+            </span>
+            <span data-page-number style="display:none">{page} / {pages}</span>
+        </div>
+
+        <div class="print-body">
+
+            <div class="d-flex justify-space-between align-start mb-6">
+                <div style="max-width: 50%;">
+                    @if (Profile.HasCustomLogo)
+                    {
+                        <MudImage Src="@($"/spokesapi/Media/Logo?v={Profile.LogoVersion}")" Height="80" ObjectFit="ObjectFit.Contain" Class="mb-2" />
+                    }
+                    else
+                    {
+                        <MudAvatar Rounded="true"
+                            Style="@($"width: 60px; height: 60px; font-size: 2rem; color: white; background-color: {Profile.PrimaryColor}; -webkit-print-color-adjust: exact;")">
+                            @Profile.CompanyName.Substring(0, 1)
+                        </MudAvatar>
+                    }
+                    <MudText Typo="Typo.body1" Style="font-weight:bold;">@Profile.CompanyName</MudText>
+                    <MudText Typo="Typo.body2">@Profile.AddressStreet</MudText>
+                    <MudText Typo="Typo.body2">@Profile.AddressCity, @Profile.AddressState @Profile.AddressZip</MudText>
+                    <MudText Typo="Typo.body2">@Profile.Website</MudText>
+                </div>
+
+                <div class="d-flex flex-column align-end" style="max-width: 50%;">
+                    <MudText Typo="Typo.h3" Style="@($"color: {Profile.PrimaryColor}; margin-bottom: 0.25rem;")">
+                        @Template.Label_Quote</MudText>
+                    <MudText Typo="Typo.h6" Style="@($"color: {Profile.SecondaryColor};")">#@Quote.QuoteNumber</MudText>
+                    <MudText Class="mb-1">@Template.Label_Date: @Quote.Date.ToString(!string.IsNullOrEmpty(Template?.DateFormat) ? Template.DateFormat : "MM/dd/yyyy")</MudText>
+                    @if (!string.IsNullOrEmpty(Project.ProjectNumber))
+                    {
+                        <MudText Class="mb-1">@Template.Label_ProjectNumber @Project.ProjectNumber</MudText>
+                    }
+
+                    @if (!string.IsNullOrEmpty(Quote.Title))
+                    {
+                        <MudText Typo="Typo.h5" Color="Color.Dark"
+                            Style="text-align:right; margin-top: 10px; font-weight: 500;">@Quote.Title</MudText>
+                    }
+                </div>
+            </div>
+
+            <MudDivider Class="mb-8" />
+
+            <div class="d-flex justify-space-between mb-8 print-row">
+                <div class="print-col-6" style="padding-right: 10px;">
+                    <MudText Typo="Typo.caption"
+                        Style="@($"color: {Profile.SecondaryColor}; text-transform:uppercase; letter-spacing:1px; font-weight:bold;")">
+                        @Template.Label_QuoteTo</MudText>
+                    <MudText Typo="Typo.h6" Class="mt-1">@Project?.Client.BusinessName</MudText>
+                    <div class="mt-2">
+                        <MudText Typo="Typo.body1" Style="font-weight: 600;">@Project?.Client.ContactPersonPrefix
+                            @Project?.Client.ContactPersonName</MudText>
+                        <MudText Typo="Typo.body2">@Project?.Client.BusinessAdressNumber
+                            @Project?.Client.BusinessAdressStreet</MudText>
+                        <MudText Typo="Typo.body2">@Project?.Client.BusinessAdressCity, @Project?.Client.BusinessAdressState
+                            @Project?.Client.BusinessAdressZip</MudText>
+                        @if (!string.IsNullOrEmpty(Project?.Client.ContactPersonEmail))
+                        {
+                            <MudText Typo="Typo.body2" Class="mt-1">@Project?.Client.ContactPersonEmail</MudText>
+                        }
+                        @if (!string.IsNullOrEmpty(Project?.Client.ContactPersonPhone))
+                        {
+                            <MudText Typo="Typo.body2">@Project?.Client.ContactPersonPhone</MudText>
+                        }
+                    </div>
+                </div>
+
+                <div class="print-col-6 d-flex flex-column align-end" style="text-align: right; padding-left: 10px;">
+                    <MudText Typo="Typo.caption"
+                        Style="@($"color: {Profile.SecondaryColor}; text-transform:uppercase; letter-spacing:1px; font-weight:bold;")">
+                        @Template.Label_PresentedBy</MudText>
+                    <div class="mt-1">
+                        @if (!string.IsNullOrEmpty(ProjectManagerName))
+                        {
+                            <MudText Typo="Typo.body1" Style="font-weight: 600;">@ProjectManagerName</MudText>
+                            @if (!string.IsNullOrEmpty(ProjectManagerEmail))
+                            {
+                                <MudText Typo="Typo.body2">@ProjectManagerEmail</MudText>
+                            }
+                        }
+                        @if (!string.IsNullOrEmpty(Profile.PhoneNumber))
+                        {
+                            <MudText Typo="Typo.body2" Class="mt-1">@Profile.PhoneNumber</MudText>
+                        }
+                    </div>
+                </div>
+            </div>
+
+            @if (!string.IsNullOrEmpty(Quote.MainImageBase64))
+            {
+                <div class="mb-10 rounded-lg overflow-hidden keep-together fill-remaining-space"
+                    style="display: flex; justify-content: center; align-items: flex-start;">
+                    <img src="@Quote.MainImageBase64"
+                        style="max-width: 100%; width: auto; height: auto; object-fit: contain;" />
+                </div>
+
+                @if (!string.IsNullOrEmpty(Quote.ScopeOfWork))
+                {
+                    <div class="allow-break">
+                        <MudText Typo="Typo.h5" Class="mt-10 mb-4 keep-together keep-with-next"
+                                 Style="@($"color: {Profile.PrimaryColor}; border-bottom: 2px solid {Profile.PrimaryColor}; display: inline-block;")">
+                            @Template.Label_ScopeOfWork
+                        </MudText>
+                        <div class="markdown-content allow-break">
+                            @RenderMarkdown(Quote.ScopeOfWork)
+                        </div>
+                    </div>
+                }
+            }
+
+            @if (!string.IsNullOrEmpty(Quote.ScopeOfWork) && string.IsNullOrEmpty(Quote.MainImageBase64))
+            {
+                <div class="allow-break">
+                    <MudText Typo="Typo.h5" Class="mt-10 mb-4 keep-together keep-with-next"
+                        Style="@($"color: {Profile.PrimaryColor}; border-bottom: 2px solid {Profile.PrimaryColor}; display: inline-block;")">
+                        @Template.Label_ScopeOfWork
+                    </MudText>
+                    <div class="markdown-content allow-break">
+                        @RenderMarkdown(Quote.ScopeOfWork)
+                    </div>
+                </div>
+            }
+
+            <div class="allow-break">
+                <MudText Typo="Typo.h5" Class="mt-10 mb-4 keep-together keep-with-next"
+                    Style="@($"color: {Profile.PrimaryColor}; border-bottom: 2px solid {Profile.PrimaryColor}; display: inline-block;")">
+                    @Template.Label_PricingBreakdown
+                </MudText>
+
+                <table class="mud-table-root allow-break" style="width: 100%; border-collapse: collapse; table-layout: fixed;">
+                    <thead class="keep-together keep-with-next repeat-on-break">
+                        <tr class="mud-table-row">
+                            <th class="mud-table-cell" style="text-align: left; font-weight: bold; padding: 12px 16px; border-bottom: 1px solid var(--mud-palette-table-lines); word-wrap: break-word;">@Template.Label_Description</th>
+                            <th class="mud-table-cell" style="text-align: right; font-weight: bold; padding: 12px 16px; border-bottom: 1px solid var(--mud-palette-table-lines); width: 80px;">@Template.Label_Quantity</th>
+                            <th class="mud-table-cell" style="text-align: right; font-weight: bold; padding: 12px 16px; border-bottom: 1px solid var(--mud-palette-table-lines); width: 100px;">@Template.Label_Price</th>
+                            <th class="mud-table-cell" style="text-align: right; font-weight: bold; padding: 12px 16px; border-bottom: 1px solid var(--mud-palette-table-lines); width: 100px;">@Template.Label_Total</th>
+                        </tr>
+                    </thead>
+                    <tbody class="allow-break">
+                        @{ var rowIndex = 0; }
+                        @foreach (var item in CombinedItems)
+                        {
+                            var rowClass = rowIndex % 2 == 1 ? "background-color: rgba(0,0,0,0.02);" : "";
+                            <tr class="mud-table-row keep-together" style="@rowClass">
+                                @if (item is QuoteLaborItem labor)
+                                {
+                                    <td class="mud-table-cell" style="padding: 12px 16px; border-bottom: 1px solid var(--mud-palette-table-lines);">@GetTranslatedTaskName(labor)</td>
+                                    <td class="mud-table-cell" style="text-align: right; padding: 12px 16px; border-bottom: 1px solid var(--mud-palette-table-lines);">@labor.Hours.ToString("N0") h</td>
+                                    <td class="mud-table-cell" style="text-align: right; padding: 12px 16px; border-bottom: 1px solid var(--mud-palette-table-lines);">@FormatMoney(labor.Rate)</td>
+                                    <td class="mud-table-cell" style="text-align: right; padding: 12px 16px; border-bottom: 1px solid var(--mud-palette-table-lines);">@FormatMoney(labor.Total)</td>
+                                }
+                                else if (item is QuoteItemRow rowItem)
+                                {
+                                    <td class="mud-table-cell" style="padding: 12px 16px; border-bottom: 1px solid var(--mud-palette-table-lines);">
+                                        @rowItem.Description@if(rowItem.IsClientBought){<b>@Template.Label_ClientBoughtTag</b>}
+                                    </td>
+                                    <td class="mud-table-cell" style="text-align: right; padding: 12px 16px; border-bottom: 1px solid var(--mud-palette-table-lines);">@rowItem.Quantity.ToString("N0")</td>
+                                    <td class="mud-table-cell" style="text-align: right; padding: 12px 16px; border-bottom: 1px solid var(--mud-palette-table-lines);">@FormatMoney(rowItem.UnitPrice)</td>
+                                    <td class="mud-table-cell" style="text-align: right; padding: 12px 16px; border-bottom: 1px solid var(--mud-palette-table-lines);">@FormatMoney(rowItem.Total)</td>
+                                }
+                            </tr>
+                            rowIndex++;
+                        }
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="print-row mt-10 mb-10 d-flex keep-together" style="gap: 20px;">
+                <div class="print-col-5" style="flex: 5;">
+                    <MudText Typo="Typo.subtitle2" Class="mb-2"
+                        Style="@($"color: {Profile.SecondaryColor}; font-weight: bold;")">@Template.Label_PaymentSchedule:
+                    </MudText>
+
+                    @if (Quote.PaymentTerms.Any())
+                    {
+                        @foreach (var term in Quote.PaymentTerms)
+                        {
+                            <div class="d-flex justify-space-between mb-1 pr-8">
+                                <MudText Typo="Typo.caption">@term.Description (@term.Percentage%)</MudText>
+                                <MudText Typo="Typo.caption">@FormatMoney(term.Amount)</MudText>
+                            </div>
+                        }
+
+                        @if (Quote.ShowMonthlyPayments && Quote.MonthlyPaymentMonths > 0)
+                        {
+                            var remainingPercent = 100 - Quote.PaymentTerms.Sum(x => x.Percentage);
+                            var remainingAmount = Quote.GrandTotal * (remainingPercent / 100m);
+                            var monthlyAmount = remainingAmount / Quote.MonthlyPaymentMonths;
+
+                            <div class="d-flex justify-space-between mb-1 pr-8">
+                                <MudText Typo="Typo.caption">
+                                    @try { @string.Format(Quote.MonthlyPaymentDescription, Quote.MonthlyPaymentMonths, FormatMoney(monthlyAmount), remainingPercent) }
+                                    catch { @Quote.MonthlyPaymentDescription }
+                                </MudText>
+                                <MudText Typo="Typo.caption">@FormatMoney(monthlyAmount)</MudText>
+                            </div>
+                        }
+                    }
+                    else if (Quote.ShowMonthlyPayments && Quote.MonthlyPaymentMonths > 0)
+                    {
+                        var monthlyAmount = Quote.GrandTotal / Quote.MonthlyPaymentMonths;
+
+                        <div class="d-flex justify-space-between mb-1 pr-8">
+                            <MudText Typo="Typo.caption">
+                                @try { @string.Format(Quote.MonthlyPaymentDescription, Quote.MonthlyPaymentMonths, FormatMoney(monthlyAmount), 100) }
+                                catch { @Quote.MonthlyPaymentDescription }
+                            </MudText>
+                            <MudText Typo="Typo.caption">@FormatMoney(monthlyAmount)</MudText>
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="markdown-content" style="font-size: 0.85rem; color: #444;">
+                            @RenderMarkdown(Template.DefaultCostPlusTerms)
+                        </div>
+                    }
+                </div>
+
+                <div class="print-col-5" style="flex: 5;">
+                    @* Contract Subtotal *@
+                    <div class="d-flex justify-space-between mb-1">
+                        <MudText>@Template.Label_Subtotal:</MudText>
+                        <MudText>@FormatMoney(Quote.SubTotal)</MudText>
+                    </div>
+
+                    @* Tax *@
+                    @if (Quote.ShowTax)
+                    {
+                        <div class="d-flex justify-space-between mb-1">
+                            <MudText>@Template.Label_Tax (@(Quote.TaxRate * 100)%):</MudText>
+                            <MudText>@FormatMoney(Quote.TaxAmount)</MudText>
+                        </div>
+                    }
+
+                    @* Divider *@
+                    <MudDivider Class="my-2" />
+
+                    @if (Quote.TotalClientBought > 0)
+                    {
+                        @* Client Bought *@
+                        <div class="d-flex justify-space-between mb-1">
+                             <MudText>@Template.Label_ClientBoughtTotal:</MudText>
+                             <MudText>@FormatMoney(Quote.TotalClientBought)</MudText>
+                        </div>
+
+                         @* Project Budget (Hero) *@
+                         <MudDivider Class="my-2" />
+                         <div class="d-flex justify-space-between mb-1">
+                            <MudText Typo="Typo.h5" Style="@($"color: {Profile.PrimaryColor}; font-weight: bold;")">
+                                @Template.Label_QuoteTotal:
+                            </MudText>
+                            <MudText Typo="Typo.h5" Style="@($"color: {Profile.PrimaryColor}; font-weight: bold;")">
+                                @FormatMoney(Quote.TotalProjectBudget)
+                            </MudText>
+                        </div>
+                    }
+                    else
+                    {
+                        @* Standard Grand Total (Hero) *@
+                        <div class="d-flex justify-space-between mb-1">
+                            <MudText Typo="Typo.h5" Style="@($"color: {Profile.PrimaryColor}; font-weight: bold;")">
+                                @Template.Label_QuoteTotal:
+                            </MudText>
+                            <MudText Typo="Typo.h5" Style="@($"color: {Profile.PrimaryColor}; font-weight: bold;")">
+                                @FormatMoney(Quote.GrandTotal)</MudText>
+                        </div>
+                    }
+                </div>
+            </div>
+
+            @if (Quote.ShowIntermediateSignature)
+            {
+                <div class="mt-8 mb-10 pa-6 keep-together" style="border: 1px solid #ccc; background-color: #fafafa;">
+                    <MudText Typo="Typo.body2" Class="mb-8">@Template.Label_AcceptanceText</MudText>
+
+                    <div class="print-row d-flex" style="gap: 40px;">
+                        <div class="print-col-6" style="flex: 1;">
+                            <div style="border-bottom: 1px solid #000; height: 40px; margin-bottom: 8px;"></div>
+                            <MudText Typo="Typo.caption" Style="font-weight: bold;">@Template.Label_SignatureClient</MudText>
+                            <MudText Typo="Typo.caption" Class="d-block">@Project?.Client.BusinessName</MudText>
+                            <MudText Typo="Typo.caption" Class="d-block">
+                                @(!string.IsNullOrEmpty(Quote.ClientRepresentativeName) ? Quote.ClientRepresentativeName : $"{Project?.Client.ContactPersonPrefix} {Project?.Client.ContactPersonName}")
+                            </MudText>
+                        </div>
+
+                        <div class="print-col-6" style="flex: 1;">
+                            <div style="border-bottom: 1px solid #000; height: 40px; margin-bottom: 8px;"></div>
+                            <MudText Typo="Typo.caption" Style="font-weight: bold;">@Template.Label_SignatureCompany</MudText>
+                            <MudText Typo="Typo.caption" Class="d-block">@Profile.CompanyName</MudText>
+                             <MudText Typo="Typo.caption" Class="d-block">
+                                @(!string.IsNullOrEmpty(Quote.CompanyRepresentativeName) ? Quote.CompanyRepresentativeName : ProjectManagerName)
+                            </MudText>
+                        </div>
+                    </div>
+                </div>
+            }
+
+            @if (!string.IsNullOrEmpty(Quote.TermsAndConditions))
+            {
+                <div class="mb-10 allow-break">
+                    <div class="keep-together keep-with-next">
+                        <MudText Typo="Typo.h6" Class="mb-2" Style="@($"color: {Profile.PrimaryColor}; font-weight: bold;")">
+                            @Template.Label_TermsAndConditions</MudText>
+                    </div>
+                    <div class="markdown-content allow-break" style="font-size: 0.85rem; color: #444;">
+                        @RenderMarkdown(Quote.TermsAndConditions)
+                    </div>
+                </div>
+            }
+
+            @if (Quote.SignatureRequired)
+            {
+                <div class="mt-8 pa-6 keep-together" style="border: 1px solid #ccc; background-color: #fafafa;">
+                    <MudText Typo="Typo.body2" Class="mb-8">@Template.Label_AcceptanceText</MudText>
+
+                    <div class="print-row d-flex" style="gap: 40px;">
+                        <div class="print-col-6" style="flex: 1;">
+                            <div style="border-bottom: 1px solid #000; height: 40px; margin-bottom: 8px;"></div>
+                            <MudText Typo="Typo.caption" Style="font-weight: bold;">@Template.Label_SignatureClient</MudText>
+                            <MudText Typo="Typo.caption" Class="d-block">@Project?.Client.BusinessName</MudText>
+                            <MudText Typo="Typo.caption" Class="d-block">
+                                @(!string.IsNullOrEmpty(Quote.ClientRepresentativeName) ? Quote.ClientRepresentativeName : $"{Project?.Client.ContactPersonPrefix} {Project?.Client.ContactPersonName}")
+                            </MudText>
+                        </div>
+
+                        <div class="print-col-6" style="flex: 1;">
+                            <div style="border-bottom: 1px solid #000; height: 40px; margin-bottom: 8px;"></div>
+                            <MudText Typo="Typo.caption" Style="font-weight: bold;">@Template.Label_SignatureCompany</MudText>
+                            <MudText Typo="Typo.caption" Class="d-block">@Profile.CompanyName</MudText>
+                             <MudText Typo="Typo.caption" Class="d-block">
+                                @(!string.IsNullOrEmpty(Quote.CompanyRepresentativeName) ? Quote.CompanyRepresentativeName : ProjectManagerName)
+                            </MudText>
+                        </div>
+                    </div>
+                </div>
+            }
+        </div>
+    </MudPaper>
+}
+
+@code {
+    [Parameter] public string ProjectId { get; set; }
+    [Parameter] public string QuoteId { get; set; }
+
+    private Project? Project;
+    private Quote? Quote;
+    private CompanyProfile? Profile;
+    private DocumentTemplate? Template;
+    private string ProjectManagerName = "";
+    private string ProjectManagerEmail = "";
+
+    private bool _isAdmin = false;
+
+    private const int PageHeight = 940;
+    private bool _needsPagination = false;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender && Quote != null && Profile != null)
+        {
+            try { await JS.InvokeVoidAsync("paginateSections", "printable-area", PageHeight); }
+            catch { /* pagination failed, single-page fallback */ }
+        }
+        else if (_needsPagination && Quote != null && Profile != null)
+        {
+            _needsPagination = false;
+            try { await JS.InvokeVoidAsync("paginateSections", "printable-area", PageHeight); }
+            catch { /* pagination failed, single-page fallback */ }
+        }
+    }
+
+    private async Task RefreshViewer()
+    {
+        try { await JS.InvokeVoidAsync("cleanupPagination", "printable-area"); } catch {}
+        _needsPagination = true;
+        await InvokeAsync(StateHasChanged);
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        try { await JS.InvokeVoidAsync("cleanupPagination", "printable-area"); }
+        catch { /* component already disposed or JS unavailable */ }
+    }
+
+    private IEnumerable<object> CombinedItems => Quote?.LaborItems.Cast<object>().Concat(Quote.ItemRows) ?? new
+    List<object>();
+
+    private MarkupString RenderMarkdown(string text)
+    {
+        if (string.IsNullOrEmpty(text)) return new MarkupString("");
+        try
+        {
+            // Preserve multiple blank lines
+            text = text.Replace("\r\n", "\n").Replace("\r", "\n");
+            text = System.Text.RegularExpressions.Regex.Replace(text, @"\n{3,}", match => 
+                "\n\n" + string.Join("", System.Linq.Enumerable.Repeat("<div style=\"height: 1rem;\"></div>\n\n", match.Length - 2)));
+
+            var html = MarkdownSanitizer.RenderSanitizedHtml(text);
+            return new MarkupString(html);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Error rendering markdown");
+            return new MarkupString(System.Net.WebUtility.HtmlEncode(text)); // Fallback to encoded text
+        }
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            Logger.LogInformation("Initializing QuoteViewer for Quote {QuoteId}", QuoteId);
+
+            _isAdmin = await UserService.IsAdminAsync();
+
+            Project = Db.Projects.GetById(ProjectId);
+            
+            if (Project != null && !await UserService.CanViewProjectAsync(Project))
+            {
+                Nav.NavigateTo("/projects");
+                return;
+            }
+
+            Quote = Db.Quotes.GetByProject(ProjectId).FirstOrDefault(q => q.Id == QuoteId);
+            Profile = Db.CompanyProfile.Get();
+
+            if (Project == null) Logger.LogWarning("Project not found: {ProjectId}", ProjectId);
+            if (Quote == null) Logger.LogWarning("Quote not found: {QuoteId}", QuoteId);
+
+            // 1. Check Quote Override
+            if (!string.IsNullOrEmpty(Quote.TemplateId))
+            {
+                Template = Db.DocumentTemplates.GetById(Quote.TemplateId);
+            }
+
+            // 2. Check Project Default
+            if (Template == null && Project != null && !string.IsNullOrEmpty(Project.DefaultTemplateId))
+            {
+                Template = Db.DocumentTemplates.GetById(Project.DefaultTemplateId);
+            }
+            
+            // 3. System Default
+            if (Template == null)
+            {
+                Logger.LogInformation("Using Default Template");
+                Template = Db.DocumentTemplates.GetDefault();
+            }
+
+            if (Project != null && !string.IsNullOrEmpty(Project.ProjectManagerId))
+            {
+                var pm = Db.Employees.GetById(Project.ProjectManagerId);
+                if (pm != null)
+                {
+                    ProjectManagerName = pm.FullName;
+                    ProjectManagerEmail = pm.Email;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Error in OnInitialized");
+            Snackbar.Add("Error loading document data", Severity.Error);
+        }
+    }
+
+    private string FormatMoney(decimal amount)
+    {
+        var symbol = Template?.CurrencySymbol ?? "$";
+        return Template?.CurrencySymbolAfter == true 
+            ? $"{amount.ToString("N2")}{symbol}" 
+            : $"{symbol}{amount.ToString("N2")}";
+    }
+
+    private void GoBack() => Nav.NavigateTo($"/projects/{ProjectId}?tab=quote");
+
+    private void UpdateStatus(string newStatus)
+    {
+        _ = UpdateStatusAsync(newStatus);
+    }
+
+    private string GetTranslatedTaskName(QuoteLaborItem labor)
+    {
+        var taskName = labor.WorkTypeName;
+        var subTaskName = labor.SubTaskName;
+
+        if (Template != null && !string.IsNullOrEmpty(Template.TaskTranslationLanguage))
+        {
+            var lang = Template.TaskTranslationLanguage;
+            var workType = Db.WorkTypes.GetById(labor.WorkTypeId);
+            if (workType != null)
+            {
+                if (workType.NameTranslations != null && workType.NameTranslations.TryGetValue(lang, out var taskTrans) && !string.IsNullOrWhiteSpace(taskTrans))
+                {
+                    taskName = taskTrans;
+                }
+                
+                if (!string.IsNullOrEmpty(labor.SubTaskId))
+                {
+                    var subTask = workType.SubTasks.FirstOrDefault(s => s.Id == labor.SubTaskId);
+                    if (subTask != null && subTask.NameTranslations != null && subTask.NameTranslations.TryGetValue(lang, out var subTaskTrans) && !string.IsNullOrWhiteSpace(subTaskTrans))
+                    {
+                        subTaskName = subTaskTrans;
+                    }
+                }
+            }
+        }
+
+        return string.IsNullOrEmpty(subTaskName) || subTaskName == "General" ? taskName : $"{taskName} : {subTaskName}";
+    }
+
+    private async Task UpdateStatusAsync(string newStatus)
+    {
+        try
+        {
+            // Admin-only revert from Final to Draft
+            if (Quote.Status == "Final" && newStatus == "Draft" && !_isAdmin)
+            {
+                Snackbar.Add("Only administrators can revert a finalized document to draft.", Severity.Warning);
+                return;
+            }
+
+            var oldStatus = Quote.Status;
+            Quote.Status = newStatus;
+
+            if (oldStatus == "Final" && newStatus == "Draft")
+            {
+                if (!string.IsNullOrEmpty(Quote.PdfPath) && System.IO.File.Exists(Quote.PdfPath))
+                {
+                    try
+                    {
+                        System.IO.File.Delete(Quote.PdfPath);
+                    }
+                    catch (Exception ex)
+                    {
+                        Logger.LogError(ex, "Failed to delete old PDF upon reverting to draft");
+                    }
+                }
+                Quote.PdfPath = string.Empty;
+            }
+            else if (oldStatus != "Final" && newStatus == "Final")
+            {
+                Snackbar.Add("Generating PDF document...", Severity.Info);
+                Quote.PdfPath = await PdfService.GenerateQuotePdfAsync(Quote, ProjectId, Nav.BaseUri);
+            }
+
+            Db.Quotes.Save(Quote);
+            Spokes_Server.Core.Services.Projects.TimelineEventHelper.ProcessQuoteStatusChange(Db, Quote, oldStatus, newStatus, null);
+            Logger.LogInformation("Updated Quote Status to {Status}", newStatus);
+            Snackbar.Add($"Status updated to {newStatus}", Severity.Success);
+            
+            await RefreshViewer();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to update status");
+            Snackbar.Add("Failed to save status", Severity.Error);
+        }
+    }
+
+    private async Task EditQuote()
+    {
+        try
+        {
+            var parameters = new DialogParameters { ["Quote"] = Quote, ["ProjectId"] = ProjectId };
+            var options = new DialogOptions { MaxWidth = MaxWidth.ExtraExtraLarge, FullWidth = true };
+
+            var dialog = await DialogService.ShowAsync<Spokes_Server.Components.Pages.Projects.Tabs.QuoteEditorDialog>("Edit Quote",
+            parameters, options);
+            var result = await dialog.Result;
+            if (!result.Canceled)
+            {
+                Db.Quotes.Save((Quote)result.Data);
+                // Refresh local state
+                Quote = Db.Quotes.GetByProject(ProjectId).FirstOrDefault(q => q.Id == QuoteId);
+                
+                // Re-evaluate template in case it changed
+                if (!string.IsNullOrEmpty(Quote?.TemplateId))
+                {
+                    Template = Db.DocumentTemplates.GetById(Quote.TemplateId);
+                }
+                else if (Project != null && !string.IsNullOrEmpty(Project.DefaultTemplateId))
+                {
+                    Template = Db.DocumentTemplates.GetById(Project.DefaultTemplateId);
+                }
+                else
+                {
+                    Template = Db.DocumentTemplates.GetDefault();
+                }
+
+                Logger.LogInformation("Quote edited and saved.");
+                await RefreshViewer();
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Error opening Edit Dialog");
+        }
+    }
+
+    private async Task PrintPdf()
+    {
+        try
+        {
+            Logger.LogInformation("Attempting to trigger browser print...");
+
+            // This is the specific line that interacts with the browser
+            await JS.InvokeVoidAsync("window.print");
+
+            Logger.LogInformation("Browser print dialog should be open.");
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to trigger print dialog");
+            Snackbar.Add("Could not print. Check browser console.", Severity.Error);
+        }
+    }
+
+    private async Task DuplicateQuote()
+    {
+        var result = await DialogService.ShowMessageBoxAsync("Duplicate Quote", "Are you sure you want to create a copy of this quote?", yesText: "Duplicate", cancelText: "Cancel");
+        if (result != true) return;
+
+        try 
+        {
+            // 1. Clone via serialization to ensure deep copy
+            var json = System.Text.Json.JsonSerializer.Serialize(Quote);
+            var newQuote = System.Text.Json.JsonSerializer.Deserialize<Quote>(json);
+            
+            // 2. Update Metadata
+            newQuote.Id = Guid.NewGuid().ToString();
+            newQuote.QuoteNumber = Db.Quotes.GenerateQuoteNumber(Profile?.QuotePrefix ?? "EST-");
+            newQuote.Date = DateTime.Today;
+            newQuote.Status = "Draft";
+            newQuote.Title = $"{Quote.Title} (Copy)";
+            
+            // 3. Save
+            Db.Quotes.Save(newQuote);
+            
+            // 4. Navigate
+            Snackbar.Add("Quote Duplicated Successfully", Severity.Success);
+            Nav.NavigateTo($"/projects/{ProjectId}/quotes/{newQuote.Id}");
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Error duplicating quote");
+            Snackbar.Add("Failed to duplicate quote", Severity.Error);
+        }
+    }
+
+    private async Task DeleteQuote()
+    {
+        var result = await DialogService.ShowMessageBoxAsync("Delete Quote", "Are you sure you want to delete this draft quote?", yesText: "Delete", cancelText: "Cancel");
+        if (result != true) return;
+
+        try
+        {
+            Db.Quotes.Delete(QuoteId);
+            Snackbar.Add("Quote deleted successfully", Severity.Success);
+            Nav.NavigateTo($"/projects/{ProjectId}?tab=quote");
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Error deleting quote");
+            Snackbar.Add("Failed to delete quote", Severity.Error);
+        }
+    }
+
+    private async Task SendByEmail()
+    {
+        if (string.IsNullOrEmpty(Quote?.PdfPath) || !System.IO.File.Exists(Quote.PdfPath))
+        {
+            Snackbar.Add("PDF file not found. Please try generating it again by setting status to Draft then Final.", Severity.Warning);
+            return;
+        }
+
+        var parameters = new DialogParameters
+        {
+            ["To"] = Project?.Client?.ContactPersonEmail ?? "",
+            ["Subject"] = $"Quote #{Quote.QuoteNumber} from {Profile?.CompanyName}",
+            ["Body"] = $"<p>Dear {Project?.Client?.ContactPersonName ?? "Client"},</p><p>Please find attached quote #{Quote.QuoteNumber}.</p>",
+            ["IsTemplate"] = true,
+            ["PreloadedFiles"] = new List<(string Path, string FileName)> 
+            { 
+                (Quote.PdfPath, $"Quote_{Quote.QuoteNumber}.pdf") 
+            }
+        };
+
+        var options = new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true };
+        await DialogService.ShowAsync<Spokes_Server.Components.Pages.Email.EmailComposer>("Send Email", parameters, options);
+    }
+
+    private async Task OpenPdf()
+    {
+        if (string.IsNullOrEmpty(Quote?.PdfPath) || !System.IO.File.Exists(Quote.PdfPath))
+        {
+            Snackbar.Add("PDF file not found.", Severity.Warning);
+            return;
+        }
+
+        try
+        {
+            var bytes = await System.IO.File.ReadAllBytesAsync(Quote.PdfPath);
+            var base64 = Convert.ToBase64String(bytes);
+            var dataUrl = $"data:application/pdf;base64,{base64}";
+            await JS.InvokeVoidAsync("window.openBase64InNewTab", dataUrl, $"Quote_{Quote.QuoteNumber}.pdf");
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to open PDF");
+            Snackbar.Add("Failed to open PDF view", Severity.Error);
+        }
+    }
+}

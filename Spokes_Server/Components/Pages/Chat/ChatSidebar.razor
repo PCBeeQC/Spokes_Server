@@ -1,0 +1,1506 @@
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Data
+@using Spokes_Server.Core.Services
+@using Spokes_Server.Core.Helpers
+@inject Database Db
+@inject IDialogService DialogService
+@inject ChatNotificationService ChatNotifications
+@inject ChatService ChatService
+@inject ChatStateService ChatState
+@inject ScopedKeystoreService ScopedKeystore
+@inject ICryptoService Crypto
+@inject ISnackbar Snackbar
+@inject Spokes_Server.Core.Services.Core.AppLabelService AppLabels
+@inject Spokes_Server.Core.Services.Core.StartupTimingService StartupTimings
+@implements IDisposable
+
+<MudPaper Elevation="0" Style="height: 100%; display: flex; flex-direction: column;">
+    <!-- Search & Actions -->
+    <div class="pa-3 d-flex flex-column gap-2">
+        <div class="d-flex gap-2 align-center">
+            <MudTextField @bind-Value="_searchText" Placeholder="Search channels..." Variant="Variant.Outlined"
+                Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search" Immediate="true"
+                Margin="Margin.Dense" Class="flex-grow-1" UserAttributes="@_inputAttributes" />
+            <MudMenu Icon="@Icons.Material.Filled.Sort" Size="Size.Small" AnchorOrigin="Origin.BottomRight" TransformOrigin="Origin.TopRight" Color="@(_reorderMode != ReorderMode.None ? Color.Primary : Color.Default)">
+                <MudMenuItem OnClick="() => SetReorderMode(ReorderMode.Personal)">Reorder Channels</MudMenuItem>
+                
+                @if (_currentUserObj?.UsesCustomSidebarOrder == true)
+                {
+                    <MudMenuItem OnClick="ReattachToDefault">Reattach to Default</MudMenuItem>
+                }
+
+                @if (CanReorder)
+                {
+                    <div class="d-flex align-center px-3 mt-1 mb-1 pointer-events-none">
+                        <MudDivider Style="flex: 1; min-width: 0; width: auto;" />
+                        <MudText Typo="Typo.caption" Class="px-2 flex-shrink-0" Style="color: var(--mud-palette-text-secondary); font-size: 0.65rem; font-weight: bold; letter-spacing: 0.5px;">ADMIN</MudText>
+                        <MudDivider Style="flex: 1; min-width: 0; width: auto;" />
+                    </div>
+                    <MudMenuItem OnClick="() => SetReorderMode(ReorderMode.Global)">Modify Default Order</MudMenuItem>
+                }
+            </MudMenu>
+            @if (CanCreateChannel)
+            {
+                <MudIconButton Icon="@Icons.Material.Filled.Add" Size="Size.Small" OnClick="@(() => OpenCreateChannelDialog())" />
+            }
+        </div>
+        @if (_reorderMode != ReorderMode.None)
+        {
+            <div class="d-flex justify-center mt-1">
+                <MudButton Variant="Variant.Filled" Color="@(_reorderMode == ReorderMode.Global ? Color.Secondary : Color.Primary)" 
+                           OnClick="() => SetReorderMode(ReorderMode.None)" Size="Size.Small" FullWidth="true" Class="mx-2">
+                    Save Order
+                </MudButton>
+            </div>
+        }
+    </div>
+
+    <!-- Channel List -->
+    <div class="flex-grow-1 overflow-auto mt-n2" style="min-height: 0;">
+        @{ 
+            RenderFragment<ChatCategory> publicBlock = cat => @<text>
+        @* PUBLIC Channels (no team or user restrictions) *@
+        @{
+            var publicChannels = FilteredChannels.Where(c =>
+            c.ChannelType == ChatChannelType.General &&
+            !c.AllowedTeamIds.Any() &&
+            !c.ParticipantIds.Any() &&
+            (string.IsNullOrEmpty(c.CategoryId) || c.CategoryId == cat.Id))
+            .OrderBy(c => c.IsVoiceChannel ? 1 : 0)
+            .ThenBy(c => GetChannelOrder(c))
+            .ToList();
+            bool publicVoiceShown = false;
+        }
+        @if (publicChannels.Any())
+        {
+            int publicUnread = publicChannels.Sum(c => ChatNotifications.GetUnreadCount(c.Id));
+            <div class="d-flex align-center justify-space-between px-3 pt-2">
+                <div class="d-flex align-center" style="cursor: pointer; flex-grow: 1; user-select: none;" @onclick="() => { _publicCollapsed = !_publicCollapsed; SaveLocalPrefs(); }">
+                    <MudIcon Icon="@(_publicCollapsed ? Icons.Material.Filled.KeyboardArrowRight : Icons.Material.Filled.KeyboardArrowDown)" Size="Size.Small" Style="color: var(--mud-palette-text-secondary); width: 18px; height: 18px; margin-right: 4px;" />
+                    <MudText Typo="Typo.overline" Style="color: var(--mud-palette-text-secondary);">
+                        PUBLIC
+                    </MudText>
+                    @if (_publicCollapsed && publicUnread > 0)
+                    {
+                        <NotificationBadge Count="@publicUnread" Small="true" Class="ml-2" />
+                    }
+                </div>
+                @if (_reorderMode != ReorderMode.None)
+                {
+                    <div class="d-flex align-center">
+                        <MudIconButton Icon="@Icons.Material.Filled.KeyboardArrowUp" Size="Size.Small" OnClick="@(() => MoveCategoryUp(cat))" Disabled="@IsFirstVisibleCategory(cat)" Class="pa-0" />
+                        <MudIconButton Icon="@Icons.Material.Filled.KeyboardArrowDown" Size="Size.Small" OnClick="@(() => MoveCategoryDown(cat))" Disabled="@IsLastVisibleCategory(cat)" Class="pa-0" />
+                    </div>
+                }
+            </div>
+            @if (!_publicCollapsed)
+            {
+                @foreach (var channel in publicChannels)
+                {
+                    if (channel.IsVoiceChannel && !publicVoiceShown)
+                {
+                    <div class="d-flex align-center px-3 mt-1 mb-1">
+                        <MudDivider Style="flex: 1; min-width: 0; width: auto;" />
+                        <MudText Typo="Typo.caption" Class="px-2 flex-shrink-0" Style="color: var(--mud-palette-text-secondary); font-size: 0.65rem; font-weight: bold; letter-spacing: 0.5px;">VOICE CHANNELS</MudText>
+                        <MudDivider Style="flex: 1; min-width: 0; width: auto;" />
+                    </div>
+                    publicVoiceShown = true;
+                }
+                var unread = ChatNotifications.GetUnreadCount(channel.Id);
+                var preview = GetChannelPreview(channel.Id);
+
+                <MudListItem T="string" Dense="true" OnClick="@(() => OnChannelSelected.InvokeAsync(channel.Id))"
+                    Class="@(SelectedChannelId == channel.Id ? "mud-primary-text" : "")">
+                    <div class="d-flex gap-2 justify-space-between align-center" style="width: 100%;">
+                        <div class="d-flex gap-2 flex-grow-1" style="min-width: 0; align-items: flex-start;">
+                            <div style="padding-top: 2px;">
+                            @if (!string.IsNullOrEmpty(channel.Icon))
+                            {
+                                <MudIcon Icon="@channel.Icon" Size="Size.Small" />
+                            }
+                            else if (channel.IsVoiceChannel)
+                            {
+                                <MudIcon Icon="@Icons.Material.Filled.VolumeUp" Size="Size.Small" />
+                            }
+                            else
+                            {
+                                <MudIcon Icon="@Icons.Material.Filled.Public" Size="Size.Small" />
+                            }
+                            </div>
+                            <div style="flex: 1; min-width: 0;">
+                                <div class="d-flex align-center gap-1">
+                                    <MudText Typo="Typo.body2" Class="text-truncate" Style="flex: 1;">
+                                        @GetChannelDisplayName(channel)
+                                        @if (channel.IsEncrypted)
+                                        {
+                                            <MudIcon Icon="@Icons.Material.Filled.Lock" Size="Size.Small" Style="font-size: 14px; margin-left: 4px; vertical-align: text-top; color: var(--mud-palette-info);" />
+                                        }
+                                        @if (channel.IsAnnouncementOnly)
+                                        {
+                                            <MudIcon Icon="@Icons.Material.Filled.Campaign" Size="Size.Small" Style="font-size: 14px; margin-left: 4px; vertical-align: text-top; color: var(--mud-palette-success);" />
+                                        }
+                                        
+                                    </MudText>
+                                </div>
+                                @if (channel.IsVoiceChannel)
+                                {
+                                    @RenderVoiceAvatars(channel.Id)
+                                }
+                                else if (!string.IsNullOrEmpty(preview))
+                                {
+                                    <MudText Typo="Typo.caption" Color="@(unread > 0 ? Color.Secondary : Color.Default)" Class="@($"text-truncate {(unread > 0 ? "" : "mud-text-secondary")}")" Style="display: block;">@preview</MudText>
+                                }
+                            </div>
+                        </div>
+                        <div class="d-flex align-center gap-1">
+                            @if (unread > 0)
+                            {
+                                <NotificationBadge Count="@unread" />
+                            }
+                            @if (_reorderMode != ReorderMode.None)
+                            {
+                                <MudIconButton Icon="@Icons.Material.Filled.KeyboardArrowUp" Size="Size.Small" OnClick="@(() => MoveChannelUp(channel, publicChannels))" Class="pa-0" />
+                                <MudIconButton Icon="@Icons.Material.Filled.KeyboardArrowDown" Size="Size.Small" OnClick="@(() => MoveChannelDown(channel, publicChannels))" Class="pa-0" />
+                            }
+                        </div>
+                    </div>
+                </MudListItem>
+                }
+            }
+        }
+
+            </text>;
+            RenderFragment<ChatCategory> projectsBlock = cat => @<text>
+        @* Project Channels *@
+        @{
+            var projectChannels = FilteredChannels.Where(c => c.ChannelType == ChatChannelType.Project && (string.IsNullOrEmpty(c.CategoryId) || c.CategoryId == cat.Id))
+            .OrderBy(c => c.IsVoiceChannel ? 1 : 0)
+            .ThenBy(c => GetChannelOrder(c)).ToList();
+            bool projectVoiceShown = false;
+        }
+        @if (projectChannels.Any() && !IsFriendEdition)
+        {
+            int projectsUnread = projectChannels.Sum(c => ChatNotifications.GetUnreadCount(c.Id));
+            <div class="d-flex align-center justify-space-between px-3 pt-3">
+                <div class="d-flex align-center" style="cursor: pointer; flex-grow: 1; user-select: none;" @onclick="() => { _projectsCollapsed = !_projectsCollapsed; SaveLocalPrefs(); }">
+                    <MudIcon Icon="@(_projectsCollapsed ? Icons.Material.Filled.KeyboardArrowRight : Icons.Material.Filled.KeyboardArrowDown)" Size="Size.Small" Style="color: var(--mud-palette-text-secondary); width: 18px; height: 18px; margin-right: 4px;" />
+                    <MudText Typo="Typo.overline" Style="color: var(--mud-palette-text-secondary);">
+                        PROJECTS
+                    </MudText>
+                    @if (_projectsCollapsed && projectsUnread > 0)
+                    {
+                        <NotificationBadge Count="@projectsUnread" Small="true" Class="ml-2" />
+                    }
+                </div>
+                @if (_reorderMode != ReorderMode.None)
+                {
+                    <div class="d-flex align-center">
+                        <MudIconButton Icon="@Icons.Material.Filled.KeyboardArrowUp" Size="Size.Small" OnClick="@(() => MoveCategoryUp(cat))" Disabled="@IsFirstVisibleCategory(cat)" Class="pa-0" />
+                        <MudIconButton Icon="@Icons.Material.Filled.KeyboardArrowDown" Size="Size.Small" OnClick="@(() => MoveCategoryDown(cat))" Disabled="@IsLastVisibleCategory(cat)" Class="pa-0" />
+                    </div>
+                }
+            </div>
+            @if (!_projectsCollapsed)
+            {
+                @foreach (var channel in projectChannels)
+                {
+                    if (channel.IsVoiceChannel && !projectVoiceShown)
+                {
+                    <div class="d-flex align-center px-3 mt-2 mb-1">
+                        <MudDivider Style="flex: 1; min-width: 0; width: auto;" />
+                        <MudText Typo="Typo.caption" Class="px-2 flex-shrink-0" Style="color: var(--mud-palette-text-secondary); font-size: 0.65rem; font-weight: bold; letter-spacing: 0.5px;">VOICE CHANNELS</MudText>
+                        <MudDivider Style="flex: 1; min-width: 0; width: auto;" />
+                    </div>
+                    projectVoiceShown = true;
+                }
+                var unread = ChatNotifications.GetUnreadCount(channel.Id);
+                var preview = GetChannelPreview(channel.Id);
+                <MudListItem T="string" Dense="true" OnClick="@(() => OnChannelSelected.InvokeAsync(channel.Id))"
+                    Class="@(SelectedChannelId == channel.Id ? "mud-primary-text" : "")">
+                    <div class="d-flex gap-2 justify-space-between align-center" style="width: 100%;">
+                        <div class="d-flex gap-2 flex-grow-1" style="min-width: 0; align-items: flex-start;">
+                            <div style="padding-top: 2px;">
+                            @if (!string.IsNullOrEmpty(channel.Icon))
+                            {
+                                <MudIcon Icon="@channel.Icon" Size="Size.Small" Color="Color.Primary" />
+                            }
+                            else if (channel.IsVoiceChannel)
+                            {
+                                <MudIcon Icon="@Icons.Material.Filled.VolumeUp" Size="Size.Small" Color="Color.Primary" />
+                            }
+                            else
+                            {
+                                <MudIcon Icon="@Icons.Material.Filled.Folder" Size="Size.Small" Color="Color.Primary" />
+                            }
+                            </div>
+                            <div style="flex: 1; min-width: 0;">
+                                <div class="d-flex align-center gap-1">
+                                    <MudText Typo="Typo.body2" Class="text-truncate" Style="flex: 1;">
+                                        @GetChannelDisplayName(channel)
+                                        @if (channel.IsEncrypted)
+                                        {
+                                            <MudIcon Icon="@Icons.Material.Filled.Lock" Size="Size.Small" Style="font-size: 14px; margin-left: 4px; vertical-align: text-top; color: var(--mud-palette-info);" />
+                                        }
+                                        @if (channel.IsAnnouncementOnly)
+                                        {
+                                            <MudIcon Icon="@Icons.Material.Filled.Campaign" Size="Size.Small" Style="font-size: 14px; margin-left: 4px; vertical-align: text-top; color: var(--mud-palette-success);" />
+                                        }
+                                    </MudText>
+                                </div>
+                                @if (channel.IsVoiceChannel)
+                                {
+                                    @RenderVoiceAvatars(channel.Id)
+                                }
+                                else if (!string.IsNullOrEmpty(preview))
+                                {
+                                    <MudText Typo="Typo.caption" Color="@(unread > 0 ? Color.Secondary : Color.Default)" Class="@($"text-truncate {(unread > 0 ? "" : "mud-text-secondary")}")" Style="display: block;">@preview</MudText>
+                                }
+                            </div>
+                        </div>
+                        <div class="d-flex align-center gap-1">
+                            @if (unread > 0)
+                            {
+                                <NotificationBadge Count="@unread" />
+                            }
+                            @if (_reorderMode != ReorderMode.None)
+                            {
+                                <MudIconButton Icon="@Icons.Material.Filled.KeyboardArrowUp" Size="Size.Small" OnClick="@(() => MoveChannelUp(channel, projectChannels))" Class="pa-0" />
+                                <MudIconButton Icon="@Icons.Material.Filled.KeyboardArrowDown" Size="Size.Small" OnClick="@(() => MoveChannelDown(channel, projectChannels))" Class="pa-0" />
+                            }
+                        </div>
+                    </div>
+                </MudListItem>
+                }
+            }
+        }
+
+            </text>;
+            RenderFragment<ChatCategory> teamsBlock = cat => @<text>
+        @* TEAMS Channels (restricted to teams - including auto-created team channels AND General channels with team
+        restrictions) *@
+        @{
+            var teamChannels = FilteredChannels.Where(c =>
+            (c.ChannelType == ChatChannelType.Team ||
+            (c.ChannelType == ChatChannelType.General && c.AllowedTeamIds.Any())) &&
+            (string.IsNullOrEmpty(c.CategoryId) || c.CategoryId == cat.Id))
+            .OrderBy(c => c.IsVoiceChannel ? 1 : 0)
+            .ThenBy(c => GetChannelOrder(c)).ToList();
+            bool teamVoiceShown = false;
+        }
+        @if (teamChannels.Any())
+        {
+            int teamsUnread = teamChannels.Sum(c => ChatNotifications.GetUnreadCount(c.Id));
+            <div class="d-flex align-center justify-space-between px-3 pt-3">
+                <div class="d-flex align-center" style="cursor: pointer; flex-grow: 1; user-select: none;" @onclick="() => { _teamsCollapsed = !_teamsCollapsed; SaveLocalPrefs(); }">
+                    <MudIcon Icon="@(_teamsCollapsed ? Icons.Material.Filled.KeyboardArrowRight : Icons.Material.Filled.KeyboardArrowDown)" Size="Size.Small" Style="color: var(--mud-palette-text-secondary); width: 18px; height: 18px; margin-right: 4px;" />
+                    <MudText Typo="Typo.overline" Style="color: var(--mud-palette-text-secondary); text-transform: uppercase;">
+                        @AppLabels.Team
+                    </MudText>
+                    @if (_teamsCollapsed && teamsUnread > 0)
+                    {
+                        <NotificationBadge Count="@teamsUnread" Small="true" Class="ml-2" />
+                    }
+                </div>
+                <div class="d-flex align-center">
+                    <MudIconButton Icon="@Icons.Material.Filled.Add" Size="Size.Small" OnClick="@(() => OpenNewTeamChannelDialog())" />
+                    @if (_reorderMode != ReorderMode.None)
+                    {
+                        <MudIconButton Icon="@Icons.Material.Filled.KeyboardArrowUp" Size="Size.Small" OnClick="@(() => MoveCategoryUp(cat))" Disabled="@IsFirstVisibleCategory(cat)" Class="pa-0 ml-1" />
+                        <MudIconButton Icon="@Icons.Material.Filled.KeyboardArrowDown" Size="Size.Small" OnClick="@(() => MoveCategoryDown(cat))" Disabled="@IsLastVisibleCategory(cat)" Class="pa-0 ml-1" />
+                    }
+                </div>
+            </div>
+            @if (!_teamsCollapsed)
+            {
+                @foreach (var channel in teamChannels)
+                {
+                    if (channel.IsVoiceChannel && !teamVoiceShown)
+                {
+                    <div class="d-flex align-center px-3 mt-2 mb-1">
+                        <MudDivider Style="flex: 1; min-width: 0; width: auto;" />
+                        <MudText Typo="Typo.caption" Class="px-2 flex-shrink-0" Style="color: var(--mud-palette-text-secondary); font-size: 0.65rem; font-weight: bold; letter-spacing: 0.5px;">VOICE CHANNELS</MudText>
+                        <MudDivider Style="flex: 1; min-width: 0; width: auto;" />
+                    </div>
+                    teamVoiceShown = true;
+                }
+                var unread = ChatNotifications.GetUnreadCount(channel.Id);
+                var preview = GetChannelPreview(channel.Id);
+                <MudListItem T="string" Dense="true" OnClick="@(() => OnChannelSelected.InvokeAsync(channel.Id))"
+                    Class="@(SelectedChannelId == channel.Id ? "mud-primary-text" : "")">
+                    <div class="d-flex gap-2 justify-space-between align-center" style="width: 100%;">
+                        <div class="d-flex gap-2 flex-grow-1" style="min-width: 0; align-items: flex-start;">
+                            <div style="padding-top: 2px;">
+                            @if (!string.IsNullOrEmpty(channel.Icon))
+                            {
+                                <MudIcon Icon="@channel.Icon" Size="Size.Small" Color="Color.Secondary" />
+                            }
+                            else
+                            {
+                                <MudIcon Icon="@Icons.Material.Filled.Groups" Size="Size.Small" Color="Color.Secondary" />
+                            }
+                            </div>
+                            <div style="flex: 1; min-width: 0;">
+                                <div class="d-flex align-center gap-1">
+                                    <MudText Typo="Typo.body2" Class="text-truncate" Style="flex: 1;">
+                                        @GetChannelDisplayName(channel)
+                                        @if (channel.IsEncrypted)
+                                        {
+                                            <MudIcon Icon="@Icons.Material.Filled.Lock" Size="Size.Small" Style="font-size: 14px; margin-left: 4px; vertical-align: text-top; color: var(--mud-palette-info);" />
+                                        }
+                                        @if (channel.IsAnnouncementOnly)
+                                        {
+                                            <MudIcon Icon="@Icons.Material.Filled.Campaign" Size="Size.Small" Style="font-size: 14px; margin-left: 4px; vertical-align: text-top; color: var(--mud-palette-success);" />
+                                        }
+                                    </MudText>
+                                </div>
+                                @if (channel.IsVoiceChannel)
+                                {
+                                    @RenderVoiceAvatars(channel.Id)
+                                }
+                                else if (!string.IsNullOrEmpty(preview))
+                                {
+                                    <MudText Typo="Typo.caption" Color="@(unread > 0 ? Color.Secondary : Color.Default)" Class="@($"text-truncate {(unread > 0 ? "" : "mud-text-secondary")}")" Style="display: block;">@preview</MudText>
+                                }
+                            </div>
+                        </div>
+                        <div class="d-flex align-center gap-1">
+                            @if (unread > 0)
+                            {
+                                <NotificationBadge Count="@unread" />
+                            }
+                            @if (_reorderMode != ReorderMode.None)
+                            {
+                                <MudIconButton Icon="@Icons.Material.Filled.KeyboardArrowUp" Size="Size.Small" OnClick="@(() => MoveChannelUp(channel, teamChannels))" Class="pa-0" />
+                                <MudIconButton Icon="@Icons.Material.Filled.KeyboardArrowDown" Size="Size.Small" OnClick="@(() => MoveChannelDown(channel, teamChannels))" Class="pa-0" />
+                            }
+                        </div>
+                    </div>
+                </MudListItem>
+                }
+            }
+        }
+
+            </text>;
+            RenderFragment<ChatCategory> groupsBlock = cat => @<text>
+        @* GROUP CHATS *@
+        @{
+            var groupChannels = FilteredChannels.Where(c =>
+            (c.ChannelType == ChatChannelType.Group ||
+            (c.ChannelType == ChatChannelType.Direct && c.ParticipantIds.Count > 2) ||
+            (c.ChannelType == ChatChannelType.General && c.ParticipantIds.Any() && !c.AllowedTeamIds.Any())) &&
+            (string.IsNullOrEmpty(c.CategoryId) || c.CategoryId == cat.Id))
+            .OrderBy(c => c.IsVoiceChannel ? 1 : 0)
+            .ThenBy(c => GetChannelOrder(c)).ToList();
+            bool groupVoiceShown = false;
+        }
+        @if (groupChannels.Any())
+        {
+            int groupsUnread = groupChannels.Sum(c => ChatNotifications.GetUnreadCount(c.Id));
+            <div class="d-flex align-center justify-space-between px-3 pt-3">
+                <div class="d-flex align-center" style="cursor: pointer; flex-grow: 1; user-select: none;" @onclick="() => { _groupChatsCollapsed = !_groupChatsCollapsed; SaveLocalPrefs(); }">
+                    <MudIcon Icon="@(_groupChatsCollapsed ? Icons.Material.Filled.KeyboardArrowRight : Icons.Material.Filled.KeyboardArrowDown)" Size="Size.Small" Style="color: var(--mud-palette-text-secondary); width: 18px; height: 18px; margin-right: 4px;" />
+                    <MudText Typo="Typo.overline" Style="color: var(--mud-palette-text-secondary);">
+                        GROUP CHATS
+                    </MudText>
+                    @if (_groupChatsCollapsed && groupsUnread > 0)
+                    {
+                        <NotificationBadge Count="@groupsUnread" Small="true" Class="ml-2" />
+                    }
+                </div>
+                <div class="d-flex align-center">
+                    <MudIconButton Icon="@Icons.Material.Filled.Add" Size="Size.Small" OnClick="@(() => OpenNewDMDialog())" Disabled="@(_currentUserObj?.IsSuspended == true)" />
+                    @if (_reorderMode != ReorderMode.None)
+                    {
+                        <MudIconButton Icon="@Icons.Material.Filled.KeyboardArrowUp" Size="Size.Small" OnClick="@(() => MoveCategoryUp(cat))" Disabled="@IsFirstVisibleCategory(cat)" Class="pa-0 ml-1" />
+                        <MudIconButton Icon="@Icons.Material.Filled.KeyboardArrowDown" Size="Size.Small" OnClick="@(() => MoveCategoryDown(cat))" Disabled="@IsLastVisibleCategory(cat)" Class="pa-0 ml-1" />
+                    }
+                </div>
+            </div>
+            @if (!_groupChatsCollapsed)
+            {
+                @foreach (var channel in groupChannels)
+                {
+                    if (channel.IsVoiceChannel && !groupVoiceShown)
+                {
+                    <div class="d-flex align-center px-3 mt-2 mb-1">
+                        <MudDivider Style="flex: 1; min-width: 0; width: auto;" />
+                        <MudText Typo="Typo.caption" Class="px-2 flex-shrink-0" Style="color: var(--mud-palette-text-secondary); font-size: 0.65rem; font-weight: bold; letter-spacing: 0.5px;">VOICE CHANNELS</MudText>
+                        <MudDivider Style="flex: 1; min-width: 0; width: auto;" />
+                    </div>
+                    groupVoiceShown = true;
+                }
+                var unread = ChatNotifications.GetUnreadCount(channel.Id);
+                var preview = GetChannelPreview(channel.Id);
+                <MudListItem T="string" Dense="true" OnClick="@(() => OnChannelSelected.InvokeAsync(channel.Id))"
+                    Class="@(SelectedChannelId == channel.Id ? "mud-primary-text" : "")">
+                    <div class="d-flex gap-2 justify-space-between align-center" style="width: 100%;">
+                        <div class="d-flex gap-2 flex-grow-1" style="min-width: 0; align-items: flex-start;">
+                            <div style="padding-top: 2px;">
+                            @if (!string.IsNullOrEmpty(channel.Icon))
+                            {
+                                <MudIcon Icon="@channel.Icon" Size="Size.Small" Color="Color.Tertiary" />
+                            }
+                            else
+                            {
+                                <MudIcon Icon="@Icons.Material.Filled.Group" Size="Size.Small" Color="Color.Tertiary" />
+                            }
+                            </div>
+                            <div style="flex: 1; min-width: 0;">
+                                <div class="d-flex align-center gap-1">
+                                    <MudText Typo="Typo.body2" Class="text-truncate" Style="flex: 1;">
+                                        @GetChannelDisplayName(channel)
+                                        @if (channel.IsEncrypted)
+                                        {
+                                            <MudIcon Icon="@Icons.Material.Filled.Lock" Size="Size.Small" Style="font-size: 14px; margin-left: 4px; vertical-align: text-top; color: var(--mud-palette-info);" />
+                                        }
+                                        @if (channel.IsAnnouncementOnly)
+                                        {
+                                            <MudIcon Icon="@Icons.Material.Filled.Campaign" Size="Size.Small" Style="font-size: 14px; margin-left: 4px; vertical-align: text-top; color: var(--mud-palette-success);" />
+                                        }
+                                    </MudText>
+                                </div>
+                                @if (channel.IsVoiceChannel)
+                                {
+                                    @RenderVoiceAvatars(channel.Id)
+                                }
+                                else if (!string.IsNullOrEmpty(preview))
+                                {
+                                    <MudText Typo="Typo.caption" Color="@(unread > 0 ? Color.Secondary : Color.Default)" Class="@($"text-truncate {(unread > 0 ? "" : "mud-text-secondary")}")" Style="display: block;">@preview</MudText>
+                                }
+                            </div>
+                        </div>
+                        <div class="d-flex align-center gap-1">
+                            @if (unread > 0)
+                            {
+                                <NotificationBadge Count="@unread" />
+                            }
+                            @if (_reorderMode != ReorderMode.None)
+                            {
+                                <MudIconButton Icon="@Icons.Material.Filled.KeyboardArrowUp" Size="Size.Small" OnClick="@(() => MoveChannelUp(channel, groupChannels))" Class="pa-0" />
+                                <MudIconButton Icon="@Icons.Material.Filled.KeyboardArrowDown" Size="Size.Small" OnClick="@(() => MoveChannelDown(channel, groupChannels))" Class="pa-0" />
+                            }
+                        </div>
+                    </div>
+                </MudListItem>
+                }
+            }
+        }
+
+            </text>;
+            RenderFragment<ChatCategory> directBlock = cat => @<text>
+        @* Direct Messages (1-to-1 only) *@
+        @{
+            var directChannels = FilteredChannels.Where(c => c.ChannelType == ChatChannelType.Direct &&
+            c.ParticipantIds.Count <= 2 && c.ParticipantIds.Any() &&
+            (string.IsNullOrEmpty(c.CategoryId) || c.CategoryId == cat.Id))
+            .OrderBy(c => c.IsVoiceChannel ? 1 : 0)
+            .ThenBy(c => GetChannelOrder(c)).ToList();
+            bool directVoiceShown = false;
+            int directUnread = directChannels.Sum(c => ChatNotifications.GetUnreadCount(c.Id));
+        }
+        <div class="d-flex align-center justify-space-between px-3 pt-3">
+            <div class="d-flex align-center" style="cursor: pointer; flex-grow: 1; user-select: none;" @onclick="() => { _directCollapsed = !_directCollapsed; SaveLocalPrefs(); }">
+                <MudIcon Icon="@(_directCollapsed ? Icons.Material.Filled.KeyboardArrowRight : Icons.Material.Filled.KeyboardArrowDown)" Size="Size.Small" Style="color: var(--mud-palette-text-secondary); width: 18px; height: 18px; margin-right: 4px;" />
+                <MudText Typo="Typo.overline" Style="color: var(--mud-palette-text-secondary);">
+                    DIRECT MESSAGES
+                </MudText>
+                @if (_directCollapsed && directUnread > 0)
+                {
+                    <NotificationBadge Count="@directUnread" Small="true" Class="ml-2" />
+                }
+            </div>
+            <div class="d-flex align-center">
+                <MudIconButton Icon="@Icons.Material.Filled.Add" Size="Size.Small" OnClick="@(() => OpenNewDMDialog())" Disabled="@(_currentUserObj?.IsSuspended == true)" />
+                @if (_reorderMode != ReorderMode.None)
+                {
+                    <MudIconButton Icon="@Icons.Material.Filled.KeyboardArrowUp" Size="Size.Small" OnClick="@(() => MoveCategoryUp(cat))" Disabled="@IsFirstVisibleCategory(cat)" Class="pa-0 ml-1" />
+                    <MudIconButton Icon="@Icons.Material.Filled.KeyboardArrowDown" Size="Size.Small" OnClick="@(() => MoveCategoryDown(cat))" Disabled="@IsLastVisibleCategory(cat)" Class="pa-0 ml-1" />
+                }
+            </div>
+        </div>
+        @if (!_directCollapsed)
+        {
+            @foreach (var channel in directChannels)
+            {
+                if (channel.IsVoiceChannel && !directVoiceShown)
+                {
+                <div class="d-flex align-center px-3 mt-2 mb-1">
+                    <MudDivider Style="flex: 1; min-width: 0; width: auto;" />
+                    <MudText Typo="Typo.caption" Class="px-2 flex-shrink-0" Style="color: var(--mud-palette-text-secondary); font-size: 0.65rem; font-weight: bold; letter-spacing: 0.5px;">VOICE CALLS</MudText>
+                    <MudDivider Style="flex: 1; min-width: 0; width: auto;" />
+                </div>
+                directVoiceShown = true;
+            }
+            var otherUserId = channel.ParticipantIds.FirstOrDefault(id => id != CurrentUserId) ?? CurrentUserId;
+            var otherUser = Employees.FirstOrDefault(e => e.Id == otherUserId);
+            var unread = ChatNotifications.GetUnreadCount(channel.Id);
+            var preview = GetChannelPreview(channel.Id);
+
+            <MudListItem T="string" Dense="true" OnClick="@(() => OnChannelSelected.InvokeAsync(channel.Id))"
+                Class="@(SelectedChannelId == channel.Id ? "mud-primary-text" : "")">
+                <div class="d-flex gap-2 justify-space-between align-center" style="width: 100%;">
+                    <div class="d-flex gap-2 flex-grow-1" style="min-width: 0; align-items: flex-start;">
+                        @if (otherUser != null)
+                        {
+                            <EmployeeAvatar Employee="@otherUser" Size="Size.Small" Style="width: 24px; height: 24px; font-size: 12px; margin-top:2px" />
+                        }
+                        <div style="flex: 1; min-width: 0;">
+                            <div class="d-flex align-center gap-1">
+                                <MudText Typo="Typo.body2" Class="text-truncate" Style="flex: 1;">
+                                    @GetChannelDisplayName(channel)
+                                    @if (channel.IsEncrypted)
+                                    {
+                                        <MudIcon Icon="@Icons.Material.Filled.Lock" Size="Size.Small" Style="font-size: 14px; margin-left: 4px; vertical-align: text-top; color: var(--mud-palette-info);" />
+                                    }
+                                    
+                                </MudText>
+                            </div>
+                            @if (!string.IsNullOrEmpty(preview))
+                            {
+                                <MudText Typo="Typo.caption" Color="@(unread > 0 ? Color.Secondary : Color.Default)" Class="@($"text-truncate {(unread > 0 ? "" : "mud-text-secondary")}")" Style="display: block;">@preview</MudText>
+                            }
+                        </div>
+                    </div>
+                    @if (unread > 0)
+                    {
+                        <div class="d-flex align-center gap-1">
+                            <NotificationBadge Count="@unread" />
+                        </div>
+                    }
+                </div>
+            </MudListItem>
+            }
+        }
+
+            </text>;
+            RenderFragment<ChatCategory> archiveBlock = cat => @<text>
+        @* ARCHIVED Channels (only visible with ViewArchive permission) *@
+        @if (CanViewArchive && ArchivedChannels.Any())
+        {
+            int archiveUnread = ArchivedChannels.Sum(c => ChatNotifications.GetUnreadCount(c.Id));
+            <div class="d-flex align-center px-3 pt-3" style="cursor: pointer; user-select: none;" @onclick="() => { _archiveCollapsed = !_archiveCollapsed; SaveLocalPrefs(); }">
+                <MudIcon Icon="@(_archiveCollapsed ? Icons.Material.Filled.KeyboardArrowRight : Icons.Material.Filled.KeyboardArrowDown)" Size="Size.Small" Style="color: var(--mud-palette-text-secondary); width: 18px; height: 18px; margin-right: 4px;" />
+                <MudText Typo="Typo.overline" Style="color: var(--mud-palette-text-secondary);">
+                    ARCHIVED
+                </MudText>
+                @if (_archiveCollapsed && archiveUnread > 0)
+                {
+                    <NotificationBadge Count="@archiveUnread" Small="true" Class="ml-2" />
+                }
+            </div>
+            @if (!_archiveCollapsed)
+            {
+                @foreach (var channel in ArchivedChannels)
+                {
+                <MudListItem T="string" Dense="true" OnClick="@(() => OnChannelSelected.InvokeAsync(channel.Id))"
+                    Class="@(SelectedChannelId == channel.Id ? "mud-primary-text" : "")" Style="opacity: 0.6;">
+                    <div class="d-flex align-center gap-2 justify-space-between" style="width: 100%;">
+                        <div class="d-flex align-center gap-2 flex-grow-1" style="min-width: 0;">
+                            <MudIcon Icon="@Icons.Material.Filled.Archive" Size="Size.Small" />
+                            <MudText Typo="Typo.body2" Class="text-truncate">
+                                @GetChannelDisplayName(channel)
+                                @if (channel.IsEncrypted)
+                                {
+                                    <MudIcon Icon="@Icons.Material.Filled.Lock" Size="Size.Small" Style="font-size: 14px; margin-left: 4px; vertical-align: text-top; color: var(--mud-palette-info);" />
+                                }
+                                
+                            </MudText>
+                        </div>
+                        <div class="d-flex align-center">
+                            @if (CanManageChannel(channel))
+                            {
+                                <MudTooltip Text="Unarchive Channel">
+                                    <MudIconButton Icon="@Icons.Material.Filled.Unarchive" Size="Size.Small"
+                                        OnClick="@((e) => OnUnarchiveChannel.InvokeAsync(channel))" Class="pa-0 mr-1"
+                                        Style="opacity: 0.7;" />
+                                </MudTooltip>
+                            }
+                        </div>
+                    </div>
+                </MudListItem>
+                }
+            }
+        }
+            </text>;
+        }
+        @foreach (var cat in GetAllCategoriesOrdered())
+        {
+            <div data-cat="@cat.Id" style="display: contents;">
+            @if (cat.Id == "sys_public") { @publicBlock(cat) }
+            else if (cat.Id == "sys_projects") { @projectsBlock(cat) }
+            else if (cat.Id == "sys_teams") { @teamsBlock(cat) }
+            else if (cat.Id == "sys_groups") { @groupsBlock(cat) }
+            else if (cat.Id == "sys_direct") { @directBlock(cat) }
+            else if (cat.Id == "sys_archive") { @archiveBlock(cat) }
+            else if (!cat.IsSystem)
+            {
+                var catChannels = FilteredChannels.Where(c => c.CategoryId == cat.Id)
+                    .OrderBy(c => c.IsVoiceChannel ? 1 : 0)
+                    .ThenBy(c => GetChannelOrder(c))
+                    .ToList();
+                bool catVoiceShown = false;
+                if (catChannels.Any())
+                {
+                    bool isCatCollapsed = _currentUserObj?.ChatCustomCategoriesCollapsed?.ContainsKey(cat.Id) == true && _currentUserObj.ChatCustomCategoriesCollapsed[cat.Id];
+                    int customUnread = catChannels.Sum(c => ChatNotifications.GetUnreadCount(c.Id));
+                    <div class="d-flex align-center justify-space-between px-3 pt-2">
+                        <div class="d-flex align-center" style="cursor: pointer; flex-grow: 1; user-select: none;" @onclick="() => ToggleCustomCategory(cat.Id)">
+                            <MudIcon Icon="@(isCatCollapsed ? Icons.Material.Filled.KeyboardArrowRight : Icons.Material.Filled.KeyboardArrowDown)" Size="Size.Small" Style="color: var(--mud-palette-text-secondary); width: 18px; height: 18px; margin-right: 4px;" />
+                            <MudText Typo="Typo.overline" Style="color: var(--mud-palette-text-secondary); text-transform: uppercase;">
+                                @cat.Name
+                            </MudText>
+                            @if (isCatCollapsed && customUnread > 0)
+                            {
+                                <NotificationBadge Count="@customUnread" Small="true" Class="ml-2" />
+                            }
+                        </div>
+                        @if (_reorderMode != ReorderMode.None)
+                {
+                    <div class="d-flex align-center">
+                        <MudIconButton Icon="@Icons.Material.Filled.KeyboardArrowUp" Size="Size.Small" OnClick="@(() => MoveCategoryUp(cat))" Disabled="@IsFirstVisibleCategory(cat)" Class="pa-0" />
+                        <MudIconButton Icon="@Icons.Material.Filled.KeyboardArrowDown" Size="Size.Small" OnClick="@(() => MoveCategoryDown(cat))" Disabled="@IsLastVisibleCategory(cat)" Class="pa-0" />
+                    </div>
+                }
+                    </div>
+                    @if (!isCatCollapsed)
+                    {
+                        @foreach (var channel in catChannels)
+                        {
+                            if (channel.IsVoiceChannel && !catVoiceShown)
+                            {
+                                <div class="d-flex align-center px-3 mt-1 mb-1">
+                                    <MudDivider Style="flex: 1; min-width: 0; width: auto;" />
+                                    <MudText Typo="Typo.caption" Class="px-2 flex-shrink-0" Style="color: var(--mud-palette-text-secondary); font-size: 0.65rem; font-weight: bold; letter-spacing: 0.5px;">VOICE CHANNELS</MudText>
+                                    <MudDivider Style="flex: 1; min-width: 0; width: auto;" />
+                                </div>
+                                catVoiceShown = true;
+                            }
+                            var unread = ChatNotifications.GetUnreadCount(channel.Id);
+                            var preview = GetChannelPreview(channel.Id);
+                            <MudListItem T="string" Dense="true" OnClick="@(() => OnChannelSelected.InvokeAsync(channel.Id))" Class="@(SelectedChannelId == channel.Id ? "mud-primary-text" : "")">
+                                <div class="d-flex gap-2 justify-space-between align-center" style="width: 100%;">
+                                    <div class="d-flex gap-2 flex-grow-1" style="min-width: 0; align-items: flex-start;">
+                                        <div style="padding-top: 2px;">
+                                            @if (!string.IsNullOrEmpty(channel.Icon))
+                                            { <MudIcon Icon="@channel.Icon" Size="Size.Small" /> }
+                                            else if (channel.IsVoiceChannel)
+                                            { <MudIcon Icon="@Icons.Material.Filled.VolumeUp" Size="Size.Small" /> }
+                                            else
+                                            { <MudIcon Icon="@Icons.Material.Filled.ChatBubbleOutline" Size="Size.Small" /> }
+                                        </div>
+                                        <div style="flex: 1; min-width: 0;">
+                                            <div class="d-flex align-center gap-1">
+                                                <MudText Typo="Typo.body2" Class="text-truncate" Style="flex: 1;">
+                                                    @GetChannelDisplayName(channel)
+                                                    @if (channel.IsEncrypted)
+                                                    { <MudIcon Icon="@Icons.Material.Filled.Lock" Size="Size.Small" Style="font-size: 14px; margin-left: 4px; vertical-align: text-top; color: var(--mud-palette-info);" /> }
+                                                </MudText>
+                                            </div>
+                                            @if (channel.IsVoiceChannel)
+                                            { @RenderVoiceAvatars(channel.Id) }
+                                            else if (!string.IsNullOrEmpty(preview))
+                                            { <MudText Typo="Typo.caption" Color="@(unread > 0 ? Color.Secondary : Color.Default)" Class="@($"text-truncate {(unread > 0 ? "" : "mud-text-secondary")}")" Style="display: block;">@preview</MudText> }
+                                        </div>
+                                    </div>
+                                    <div class="d-flex align-center gap-1">
+                                        @if (unread > 0)
+                                        { <NotificationBadge Count="@unread" /> }
+                                        @if (_reorderMode != ReorderMode.None)
+                                        {
+                                            <MudIconButton Icon="@Icons.Material.Filled.KeyboardArrowUp" Size="Size.Small" OnClick="@(() => MoveChannelUp(channel, catChannels))" Class="pa-0" />
+                                            <MudIconButton Icon="@Icons.Material.Filled.KeyboardArrowDown" Size="Size.Small" OnClick="@(() => MoveChannelDown(channel, catChannels))" Class="pa-0" />
+                                        }
+                                    </div>
+                                </div>
+                            </MudListItem>
+                        }
+                    }
+                }
+            }
+            </div>
+        }
+    </div>
+</MudPaper>
+
+@code {
+    [Parameter] public List<ChatChannel> Channels { get; set; } = new();
+    [Parameter] public string? SelectedChannelId { get; set; }
+    [Parameter] public EventCallback<string> OnChannelSelected { get; set; }
+    [Parameter] public string? CurrentUserId { get; set; }
+    [Parameter] public List<Employee> Employees { get; set; } = new();
+    [Parameter] public bool CanViewArchive { get; set; } = false;
+    [Parameter] public EventCallback<ChatChannel> OnArchiveChannel { get; set; }
+    [Parameter] public EventCallback<ChatChannel> OnUnarchiveChannel { get; set; }
+    [Parameter] public EventCallback<Dictionary<string, int>> OnChannelOrdersChanged { get; set; }
+
+    private string _searchTextInternal = string.Empty;
+    private string _searchText
+    {
+        get => _searchTextInternal;
+        set
+        {
+            if (_searchTextInternal != value)
+            {
+                _searchTextInternal = value;
+                _cachedVisibleCategories = null;
+            }
+        }
+    }
+
+    private Dictionary<string, object> _inputAttributes = new()
+    {
+        { "autocomplete", "off" },
+        { "data-lpignore", "true" },
+        { "data-1p-ignore", "true" },
+        { "data-bwignore", "true" },
+        { "data-form-type", "other" }
+    };
+
+    private bool _globalEdit = false;
+
+    private enum ReorderMode { None, Personal, Global }
+    private ReorderMode _reorderMode = ReorderMode.None;
+
+    private void SetReorderMode(ReorderMode mode)
+    {
+        _cachedVisibleCategories = null;
+        if (mode == ReorderMode.Personal)
+        {
+            InitializeCustomOrderIfNeeded();
+        }
+        _reorderMode = mode;
+    }
+
+    private void InitializeCustomOrderIfNeeded()
+    {
+        if (_currentUserObj != null && !_currentUserObj.UsesCustomSidebarOrder)
+        {
+            var cats = Db.ChatCategories.GetAll().OrderBy(c => c.DisplayOrder).ToList();
+            for (int i = 0; i < cats.Count; i++)
+            {
+                _currentUserObj.CustomCategoryOrder[cats[i].Id] = cats[i].Id == "sys_archive" ? 10000 : i;
+            }
+
+            var allChannels = Channels.OrderBy(c => c.DisplayOrder).ToList();
+            for (int i = 0; i < allChannels.Count; i++)
+            {
+                _currentUserObj.CustomChannelOrder[allChannels[i].Id] = i;
+            }
+
+            _currentUserObj.UsesCustomSidebarOrder = true;
+            Db.Employees.Save(_currentUserObj);
+        }
+    }
+
+    private void ReattachToDefault()
+    {
+        if (_currentUserObj != null)
+        {
+            _cachedVisibleCategories = null;
+            _currentUserObj.UsesCustomSidebarOrder = false;
+            _currentUserObj.CustomCategoryOrder.Clear();
+            _currentUserObj.CustomChannelOrder.Clear();
+            Db.Employees.Save(_currentUserObj);
+            _reorderMode = ReorderMode.None;
+        }
+    }
+
+    private List<ChatCategory> GetAllCategoriesOrdered()
+    {
+        return Db.ChatCategories.GetAll().OrderBy(c => GetCategoryOrder(c)).ToList();
+    }
+
+    private bool IsCategoryVisible(ChatCategory cat)
+    {
+        if (cat.Id == "sys_public")
+        {
+            return FilteredChannels.Any(c =>
+                c.ChannelType == ChatChannelType.General &&
+                !c.AllowedTeamIds.Any() &&
+                !c.ParticipantIds.Any() &&
+                (string.IsNullOrEmpty(c.CategoryId) || c.CategoryId == cat.Id));
+        }
+        if (cat.Id == "sys_projects")
+        {
+            return !IsFriendEdition && FilteredChannels.Any(c =>
+                c.ChannelType == ChatChannelType.Project &&
+                (string.IsNullOrEmpty(c.CategoryId) || c.CategoryId == cat.Id));
+        }
+        if (cat.Id == "sys_teams")
+        {
+            return FilteredChannels.Any(c =>
+                (c.ChannelType == ChatChannelType.Team ||
+                (c.ChannelType == ChatChannelType.General && c.AllowedTeamIds.Any())) &&
+                (string.IsNullOrEmpty(c.CategoryId) || c.CategoryId == cat.Id));
+        }
+        if (cat.Id == "sys_groups")
+        {
+            return FilteredChannels.Any(c =>
+                (c.ChannelType == ChatChannelType.Group ||
+                (c.ChannelType == ChatChannelType.Direct && c.ParticipantIds.Count > 2) ||
+                (c.ChannelType == ChatChannelType.General && c.ParticipantIds.Any() && !c.AllowedTeamIds.Any())) &&
+                (string.IsNullOrEmpty(c.CategoryId) || c.CategoryId == cat.Id));
+        }
+        if (cat.Id == "sys_direct")
+        {
+            return true;
+        }
+        if (cat.Id == "sys_archive")
+        {
+            return CanViewArchive && ArchivedChannels.Any();
+        }
+        if (!cat.IsSystem)
+        {
+            return FilteredChannels.Any(c => c.CategoryId == cat.Id);
+        }
+        return false;
+    }
+
+    private List<ChatCategory>? _cachedVisibleCategories;
+    private List<ChatCategory> GetVisibleCategories()
+    {
+        return _cachedVisibleCategories ??= GetAllCategoriesOrdered()
+            .Where(c => c.Id != "sys_archive" && IsCategoryVisible(c))
+            .ToList();
+    }
+
+    private bool IsFirstVisibleCategory(ChatCategory cat)
+    {
+        var visible = GetVisibleCategories();
+        return visible.Count > 0 && visible[0].Id == cat.Id;
+    }
+
+    private bool IsLastVisibleCategory(ChatCategory cat)
+    {
+        var visible = GetVisibleCategories();
+        return visible.Count > 0 && visible[^1].Id == cat.Id;
+    }
+
+    private int GetCategoryOrder(ChatCategory cat)
+    {
+        if (cat.Id == "sys_archive")
+            return 10000;
+
+        if (_reorderMode != ReorderMode.Global && _currentUserObj?.UsesCustomSidebarOrder == true)
+        {
+            if (_currentUserObj.CustomCategoryOrder.TryGetValue(cat.Id, out int order))
+                return order;
+            return cat.DisplayOrder + 1000;
+        }
+        return cat.DisplayOrder;
+    }
+
+    private int GetChannelOrder(ChatChannel chan)
+    {
+        if (_reorderMode != ReorderMode.Global && _currentUserObj?.UsesCustomSidebarOrder == true)
+        {
+            if (_currentUserObj.CustomChannelOrder.TryGetValue(chan.Id, out int order))
+                return order;
+            return chan.DisplayOrder + 1000;
+        }
+        return chan.DisplayOrder;
+    }
+
+    private void MoveCategoryUp(ChatCategory cat)
+    {
+        var visible = GetVisibleCategories();
+        int vIdx = visible.FindIndex(c => c.Id == cat.Id);
+        if (vIdx <= 0) return;
+
+        var targetCat = visible[vIdx - 1];
+        RepositionCategory(cat, targetCat, placeBefore: true);
+    }
+
+    private void MoveCategoryDown(ChatCategory cat)
+    {
+        var visible = GetVisibleCategories();
+        int vIdx = visible.FindIndex(c => c.Id == cat.Id);
+        if (vIdx < 0 || vIdx >= visible.Count - 1) return;
+
+        var targetCat = visible[vIdx + 1];
+        RepositionCategory(cat, targetCat, placeBefore: false);
+    }
+
+    private void RepositionCategory(ChatCategory cat, ChatCategory targetCat, bool placeBefore)
+    {
+        var allCats = GetAllCategoriesOrdered().Where(c => c.Id != "sys_archive").ToList();
+        allCats.RemoveAll(c => c.Id == cat.Id);
+        int targetIdx = allCats.FindIndex(c => c.Id == targetCat.Id);
+        if (targetIdx < 0) return;
+
+        int insertIdx = placeBefore ? targetIdx : targetIdx + 1;
+        allCats.Insert(insertIdx, cat);
+
+        var archiveCat = Db.ChatCategories.GetById("sys_archive");
+        if (archiveCat != null)
+        {
+            allCats.Add(archiveCat);
+        }
+
+        _cachedVisibleCategories = null;
+        PersistCategoryOrder(allCats);
+        InvokeAsync(StateHasChanged);
+    }
+
+    private void PersistCategoryOrder(List<ChatCategory> allCats)
+    {
+        if (_reorderMode == ReorderMode.Global)
+        {
+            if (!CanReorder) return;
+            for (int i = 0; i < allCats.Count; i++)
+            {
+                allCats[i].DisplayOrder = allCats[i].Id == "sys_archive" ? 10000 : i;
+                Db.ChatCategories.Save(allCats[i]);
+            }
+        }
+        else if (_reorderMode == ReorderMode.Personal && _currentUserObj != null)
+        {
+            InitializeCustomOrderIfNeeded();
+            for (int i = 0; i < allCats.Count; i++)
+            {
+                _currentUserObj.CustomCategoryOrder[allCats[i].Id] = allCats[i].Id == "sys_archive" ? 10000 : i;
+            }
+            Db.Employees.Save(_currentUserObj);
+        }
+    }
+
+    
+    
+    
+    
+    
+    
+
+    private async Task ToggleCustomCategory(string categoryId) {
+        if (_currentUserObj == null) return;
+        if (!_currentUserObj.ChatCustomCategoriesCollapsed.ContainsKey(categoryId)) {
+            _currentUserObj.ChatCustomCategoriesCollapsed[categoryId] = true;
+        } else {
+            _currentUserObj.ChatCustomCategoriesCollapsed[categoryId] = !_currentUserObj.ChatCustomCategoriesCollapsed[categoryId];
+        }
+        SaveLocalPrefs();
+    }
+
+    
+    
+    
+    
+    private bool _publicCollapsed = false;
+    private bool _projectsCollapsed = false;
+    private bool _teamsCollapsed = false;
+    private bool _groupChatsCollapsed = false;
+    private bool _directCollapsed = false;
+    private bool _archiveCollapsed = false;
+    private bool _prefsLoaded = false;
+
+    private Dictionary<string, Employee> _employeeLookup = new();
+
+    private string GetEmployeeFirstName(string senderId)
+    {
+        if (_employeeLookup.TryGetValue(senderId, out var emp))
+        {
+            return emp.FirstName ?? emp.FullName ?? "Unknown";
+        }
+        var sender = Employees.FirstOrDefault(e => e.Id == senderId);
+        return sender?.FirstName ?? "Unknown";
+    }
+
+    private Employee? _currentUserObj => Employees.FirstOrDefault(e => e.Id == CurrentUserId);
+    private bool CanCreateChannel => _currentUserObj?.HasPermission(Spokes_Server.Core.Constants.AppPermissions.Chat.CreateChannels) == true || _currentUserObj?.IsAdmin == true;
+    private bool CanReorder => _currentUserObj?.HasPermission(Spokes_Server.Core.Constants.AppPermissions.Chat.EditAllPublicChannels) == true || _currentUserObj?.IsAdmin == true;
+
+    protected override void OnParametersSet()
+    {
+        var lookup = new Dictionary<string, Employee>();
+        foreach (var emp in Employees)
+        {
+            if (!string.IsNullOrEmpty(emp.Id))
+            {
+                lookup[emp.Id] = emp;
+            }
+        }
+        _employeeLookup = lookup;
+        _cachedVisibleCategories = null;
+
+        if (_currentUserObj != null && !_prefsLoaded)
+        {
+            _publicCollapsed = _currentUserObj.ChatPublicCollapsed;
+            _projectsCollapsed = _currentUserObj.ChatProjectsCollapsed;
+            _teamsCollapsed = _currentUserObj.ChatTeamsCollapsed;
+            _groupChatsCollapsed = _currentUserObj.ChatGroupChatsCollapsed;
+            _directCollapsed = _currentUserObj.ChatDirectCollapsed;
+            _archiveCollapsed = _currentUserObj.ChatArchiveCollapsed;
+            _prefsLoaded = true;
+        }
+        StartupTimings.Add($"Server: ChatSidebar OnParametersSet Done (Channels: {Channels.Count}, Employees: {Employees.Count})");
+    }
+
+    private void SaveLocalPrefs()
+    {
+        var user = _currentUserObj;
+        if (user != null)
+        {
+            user.ChatPublicCollapsed = _publicCollapsed;
+            user.ChatProjectsCollapsed = _projectsCollapsed;
+            user.ChatTeamsCollapsed = _teamsCollapsed;
+            user.ChatGroupChatsCollapsed = _groupChatsCollapsed;
+            user.ChatDirectCollapsed = _directCollapsed;
+            user.ChatArchiveCollapsed = _archiveCollapsed;
+            Db.Employees.Save(user);
+        }
+    }
+
+    private string GetChannelDisplayName(ChatChannel channel)
+    {
+        return ChatChannelFormatter.GetDisplayName(channel, CurrentUserId, Employees);
+    }
+
+    private bool MatchesSearch(ChatChannel c)
+    {
+        if (string.IsNullOrWhiteSpace(_searchText))
+            return true;
+
+        var name = GetChannelDisplayName(c);
+        if (!string.IsNullOrEmpty(name) && name.Contains(_searchText, StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        return false;
+    }
+
+    private bool IsBlockedDM(ChatChannel c)
+    {
+        if (c.ChannelType != ChatChannelType.Direct || _currentUserObj == null) return false;
+        var otherUserId = c.ParticipantIds.FirstOrDefault(id => id != CurrentUserId) ?? CurrentUserId;
+        return otherUserId != CurrentUserId && _currentUserObj.BlockedUserIds.Contains(otherUserId);
+    }
+
+    private IEnumerable<ChatChannel> FilteredChannels => Channels.Where(c => !c.IsArchived && MatchesSearch(c) && !IsBlockedDM(c));
+
+    private IEnumerable<ChatChannel> ArchivedChannels => Channels.Where(c => c.IsArchived && MatchesSearch(c));
+
+    private bool IsFriendEdition => Db.CompanyProfile.Get()?.Edition == "Family";
+
+    protected override void OnInitialized()
+    {
+        StartupTimings.Add("Server: ChatSidebar OnInitialized");
+        // Subscribe to unread count changes to re-render badges
+        ChatNotifications.OnUnreadCountChanged += OnUnreadChanged;
+        ChatState.VoiceMemberJoined += OnVoicePresenceChanged;
+        ChatState.VoiceMemberLeft += OnVoicePresenceChanged;
+        ChatState.VoiceActiveSpeakersChanged += OnVoiceSpeakersChanged;
+    }
+
+    private void OnUnreadChanged()
+    {
+        InvokeAsync(StateHasChanged);
+    }
+    
+    private void OnVoicePresenceChanged(string channelId, string userId)
+    {
+        InvokeAsync(StateHasChanged);
+    }
+    
+    private void OnVoiceSpeakersChanged(string channelId, string[] speakerIds)
+    {
+        InvokeAsync(StateHasChanged);
+    }
+
+    public void Dispose()
+    {
+        ChatNotifications.OnUnreadCountChanged -= OnUnreadChanged;
+        ChatState.VoiceMemberJoined -= OnVoicePresenceChanged;
+        ChatState.VoiceMemberLeft -= OnVoicePresenceChanged;
+        ChatState.VoiceActiveSpeakersChanged -= OnVoiceSpeakersChanged;
+    }
+
+    private string FormatPreviewContent(string? rawContent, System.Collections.Generic.List<ChatAttachment>? attachments = null)
+    {
+        return Spokes_Server.Core.Helpers.ChatPreviewFormatter.FormatAndTruncatePreview(rawContent, attachments, 30);
+    }
+
+    private readonly Dictionary<string, (string MessageId, string Text)> _decryptedPreviewCache = new();
+
+    protected override Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            StartupTimings.Add("Server: ChatSidebar OnAfterRenderAsync Start");
+        }
+        return Task.CompletedTask;
+    }
+
+    private string? GetChannelPreview(string channelId)
+    {
+        var preview = Db.ChatMessages.GetChannelPreviewSummary(channelId, _currentUserObj?.BlockedUserIds);
+        if (preview == null) return null;
+
+        var senderName = GetEmployeeFirstName(preview.SenderId);
+
+        if (preview.IsEncrypted)
+        {
+            if (ScopedKeystore.IsUnlocked && CurrentUserId != null)
+            {
+                if (_decryptedPreviewCache.TryGetValue(channelId, out var cached) && cached.MessageId == preview.MessageId)
+                {
+                    return $"{senderName}: {cached.Text}";
+                }
+
+                var channel = Channels.FirstOrDefault(c => c.Id == channelId) ?? Db.ChatChannels.GetById(channelId);
+                var privKey = ScopedKeystore.GetPrivateKey();
+                if (channel != null && privKey != null && channel.EncryptedChannelKeys.TryGetValue(CurrentUserId, out var cipherChannelKey))
+                {
+                    try
+                    {
+                        var cipherContent = preview.EncryptedContent;
+                        if (cipherContent == null)
+                        {
+                            var fullMsg = Db.ChatMessages.GetLatestInChannel(channelId);
+                            cipherContent = fullMsg?.Content;
+                        }
+
+                        if (!string.IsNullOrEmpty(cipherContent))
+                        {
+                            var plainKey = Crypto.DecryptRsa(cipherChannelKey, privKey);
+                            var plainContent = Crypto.DecryptAes(cipherContent, plainKey);
+                            var formatted = FormatPreviewContent(plainContent, preview.Attachments);
+                            _decryptedPreviewCache[channelId] = (preview.MessageId, formatted);
+                            return $"{senderName}: {formatted}";
+                        }
+                    }
+                    catch { }
+                }
+            }
+            return $"{senderName}: 🔒 Locked Message";
+        }
+
+        var snippet = preview.PreviewText;
+        return string.IsNullOrEmpty(snippet) ? null : $"{senderName}: {snippet}";
+    }
+
+    private async Task OpenCreateChannelDialog(string? initialAccessType = null, string? categoryId = null)
+    {
+        await OpenChannelDialog(null, initialAccessType, categoryId);
+    }
+
+    private async Task OpenChannelDialog(ChatChannel? existing, string? initialAccessType = null, string? categoryId = null)
+    {
+        var teams = Db.Teams.GetAll().OrderBy(t => t.Name).ToList();
+        var employees = Db.Employees.GetAll().Where(e => e.IsActive).OrderBy(e => e.FullName).ToList();
+        var projects = Db.Projects.GetAll().Where(p => p.IsActive).OrderBy(p => p.Name).ToList();
+
+        var parameters = new DialogParameters
+            {
+                ["AllTeams"] = teams,
+                ["AllEmployees"] = employees,
+                ["AllProjects"] = projects,
+                ["ExistingChannel"] = existing,
+                ["InitialAccessType"] = initialAccessType,
+                ["InitialCategoryId"] = categoryId,
+                ["CanManageCategories"] = CanCreateChannel
+            };
+
+        string title = existing == null ? "Create New Channel" : "Edit Channel";
+        var options = new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true };
+        var dialog = await DialogService.ShowAsync<CreateChannelDialog>(title, parameters, options);
+        var result = await dialog.Result;
+
+        if (result != null && !result.Canceled && result.Data is CreateChannelDialog.ChannelCreationResult data)
+        {
+            ChatChannel channelToSave;
+
+            if (existing == null)
+            {
+                // Create New
+                var participantIds = data.ParticipantIds ?? new();
+                if (data.Type == ChatChannelType.Group && !string.IsNullOrEmpty(CurrentUserId) && !participantIds.Contains(CurrentUserId))
+                {
+                    participantIds.Add(CurrentUserId);
+                }
+
+                channelToSave = new ChatChannel
+                    {
+                        Name = data.Name,
+                        Description = data.Description,
+                        Icon = data.Icon,
+                        CategoryId = data.CategoryId,
+                        ChannelType = data.Type,
+                        LinkedEntityId = data.LinkedEntityId,
+                        AllowedTeamIds = data.AllowedTeamIds ?? new(),
+                        ParticipantIds = participantIds,
+                        CreatedById = CurrentUserId,
+                        CreatedAt = DateTime.UtcNow,
+                        IsVoiceChannel = data.IsVoiceChannel,
+                        IsEncrypted = data.IsEncrypted,
+                        AudioBitrateKbps = data.AudioBitrateKbps,
+                        IsAnnouncementOnly = data.IsAnnouncementOnly,
+                        AllowedPostUserIds = data.AllowedPostUserIds ?? new(),
+                        AllowedPostTeamIds = data.AllowedPostTeamIds ?? new()
+                    };
+                await ChatService.CreateChannelAsync(channelToSave);
+                
+                if (data.IsEncrypted)
+                {
+                    await ChatService.ToggleChannelEncryptionAsync(channelToSave.Id, true, CurrentUserId!);
+                }
+
+                await OnChannelSelected.InvokeAsync(channelToSave.Id);
+            }
+            else
+            {
+                // Update Existing
+                channelToSave = existing;
+                var isEncryptionChanging = channelToSave.IsEncrypted != data.IsEncrypted;
+                
+                channelToSave.Name = data.Name;
+                channelToSave.Description = data.Description;
+                channelToSave.Icon = data.Icon;
+                channelToSave.CategoryId = data.CategoryId;
+                // Type/LinkedEntity usually shouldn't change for project channels, but for custom ones it might.
+                // For simplicity, we update them.
+                channelToSave.ChannelType = data.Type;
+                channelToSave.LinkedEntityId = data.LinkedEntityId;
+                channelToSave.AllowedTeamIds = data.AllowedTeamIds ?? new();
+                channelToSave.ParticipantIds = data.ParticipantIds ?? new();
+                channelToSave.IsArchived = data.IsArchived;
+                channelToSave.IsVoiceChannel = data.IsVoiceChannel;
+                channelToSave.IsEncrypted = data.IsEncrypted;
+                channelToSave.AudioBitrateKbps = data.AudioBitrateKbps;
+                channelToSave.IsAnnouncementOnly = data.IsAnnouncementOnly;
+                channelToSave.AllowedPostUserIds = data.AllowedPostUserIds ?? new();
+                channelToSave.AllowedPostTeamIds = data.AllowedPostTeamIds ?? new();
+
+                if (isEncryptionChanging)
+                {
+                    if (!data.IsEncrypted && !ScopedKeystore.IsUnlocked)
+                    {
+                        Snackbar.Add("Your vault must be unlocked to disable encryption.", Severity.Error);
+                        return;
+                    }
+
+                    var privateKey = !data.IsEncrypted ? ScopedKeystore.GetPrivateKey() : null;
+                    await ChatService.ToggleChannelEncryptionAsync(channelToSave.Id, data.IsEncrypted, CurrentUserId!, privateKey);
+                }
+                
+                // ToggleChannelEncryptionAsync handles its own UpdateChannelAsync, otherwise we do it here
+                await ChatService.UpdateChannelAsync(channelToSave);
+            }
+
+            // Force refresh UI (Channel creation event usually handles it, but edit might need manual trigger if not handled)
+            StateHasChanged();
+        }
+    }
+
+    private bool CanManageChannel(ChatChannel channel)
+    {
+        var currentUserObj = Employees.FirstOrDefault(e => e.Id == CurrentUserId);
+        if (currentUserObj == null) return false;
+
+        // Dynamic owner rules (Channel Creator or Team Leader)
+        if (channel.ChannelType == ChatChannelType.Team)
+        {
+            var teams = Db.Teams.GetAll();
+            bool isLeader = teams.Any(t => channel.AllowedTeamIds.Contains(t.Id) && t.LeaderId == CurrentUserId);
+            if (isLeader) return true;
+        }
+        else if (channel.CreatedById == CurrentUserId)
+        {
+            return true;
+        }
+
+        if (currentUserObj.IsAdmin == true)
+            return true;
+            
+        // Check if user has permission to edit all public channels
+        if (currentUserObj.HasPermission(Spokes_Server.Core.Constants.AppPermissions.Chat.EditAllPublicChannels))
+        {
+            if (channel.ChannelType == ChatChannelType.General || channel.ChannelType == ChatChannelType.Project)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private async Task MoveChannelUp(ChatChannel channel, List<ChatChannel> list)
+    {
+        var index = list.IndexOf(channel);
+        if (index > 0)
+        {
+            if (_reorderMode == ReorderMode.Global)
+            {
+                if (!CanReorder) return;
+                for (int i = 0; i < list.Count; i++) list[i].DisplayOrder = i;
+                
+                list[index].DisplayOrder = index - 1;
+                list[index - 1].DisplayOrder = index;
+
+                var updates = new Dictionary<string, int>
+                {
+                    { list[index].Id, list[index].DisplayOrder },
+                    { list[index - 1].Id, list[index - 1].DisplayOrder }
+                };
+                
+                await OnChannelOrdersChanged.InvokeAsync(updates);
+            }
+            else if (_reorderMode == ReorderMode.Personal && _currentUserObj != null)
+            {
+                InitializeCustomOrderIfNeeded();
+                for (int i = 0; i < list.Count; i++) 
+                {
+                    _currentUserObj.CustomChannelOrder[list[i].Id] = i;
+                }
+                int temp = _currentUserObj.CustomChannelOrder[channel.Id];
+                _currentUserObj.CustomChannelOrder[channel.Id] = _currentUserObj.CustomChannelOrder[list[index - 1].Id];
+                _currentUserObj.CustomChannelOrder[list[index - 1].Id] = temp;
+                Db.Employees.Save(_currentUserObj);
+                await InvokeAsync(StateHasChanged);
+            }
+        }
+    }
+
+    private async Task MoveChannelDown(ChatChannel channel, List<ChatChannel> list)
+    {
+        var index = list.IndexOf(channel);
+        if (index >= 0 && index < list.Count - 1)
+        {
+            if (_reorderMode == ReorderMode.Global)
+            {
+                if (!CanReorder) return;
+                for (int i = 0; i < list.Count; i++) list[i].DisplayOrder = i;
+                
+                list[index].DisplayOrder = index + 1;
+                list[index + 1].DisplayOrder = index;
+
+                var updates = new Dictionary<string, int>
+                {
+                    { list[index].Id, list[index].DisplayOrder },
+                    { list[index + 1].Id, list[index + 1].DisplayOrder }
+                };
+                
+                await OnChannelOrdersChanged.InvokeAsync(updates);
+            }
+            else if (_reorderMode == ReorderMode.Personal && _currentUserObj != null)
+            {
+                InitializeCustomOrderIfNeeded();
+                for (int i = 0; i < list.Count; i++) 
+                {
+                    _currentUserObj.CustomChannelOrder[list[i].Id] = i;
+                }
+                int temp = _currentUserObj.CustomChannelOrder[channel.Id];
+                _currentUserObj.CustomChannelOrder[channel.Id] = _currentUserObj.CustomChannelOrder[list[index + 1].Id];
+                _currentUserObj.CustomChannelOrder[list[index + 1].Id] = temp;
+                Db.Employees.Save(_currentUserObj);
+                await InvokeAsync(StateHasChanged);
+            }
+        }
+    }
+
+    private async Task OpenNewDMDialog()
+    {
+        var parameters = new DialogParameters
+            {
+                ["Employees"] = Employees.Where(e => e.IsActive).OrderBy(e => e.FullName).ToList(),
+                ["CurrentUserId"] = CurrentUserId
+            };
+
+        var options = new DialogOptions
+            {
+                CloseButton = true,
+                MaxWidth = MaxWidth.Small,
+                FullWidth = true,
+                Position = DialogPosition.TopCenter
+            };
+
+        var dialog = await DialogService.ShowAsync<NewDirectMessageDialog>("New Direct Message", parameters, options);
+        var result = await dialog.Result;
+
+        if (result != null && !result.Canceled && result.Data is (List<string> selectedUserIds, bool isEncrypted))
+        {
+            try
+            {
+                ChatChannel channel;
+                if (selectedUserIds.Count == 1)
+                {
+                    channel = await ChatService.CreateDirectMessageChannelAsync(CurrentUserId!, selectedUserIds[0], isEncrypted);
+                }
+                else
+                {
+                    channel = await ChatService.CreateGroupDirectMessageChannelAsync(CurrentUserId!, selectedUserIds, isEncrypted);
+                }
+
+                // Refresh channels and navigate
+                await OnChannelSelected.InvokeAsync(channel.Id);
+            }
+            catch (Exception ex)
+            {
+                Snackbar.Add(ex.Message, Severity.Error);
+            }
+        }
+    }
+
+    private async Task OpenNewTeamChannelDialog()
+    {
+        var teams = Db.Teams.GetAll().OrderBy(t => t.Name).ToList();
+        var parameters = new DialogParameters
+            {
+                ["Teams"] = teams,
+                ["Employees"] = Employees,
+                ["CurrentUserId"] = CurrentUserId,
+                ["Label"] = AppLabels.Team
+            };
+
+        var options = new DialogOptions
+            {
+                CloseButton = true,
+                MaxWidth = MaxWidth.Small,
+                FullWidth = true,
+                Position = DialogPosition.TopCenter
+            };
+
+        var dialog = await DialogService.ShowAsync<NewTeamChannelDialog>($"New {AppLabels.Team} Channel", parameters, options);
+        var result = await dialog.Result;
+
+        if (result != null && !result.Canceled && result.Data is (List<string> teamIds, bool isEncrypted))
+        {
+            try
+            {
+                var channel = await ChatService.CreateTeamChannelAsync(CurrentUserId!, teamIds, isEncrypted);
+                await OnChannelSelected.InvokeAsync(channel.Id);
+            }
+            catch (Exception ex)
+            {
+                Snackbar.Add(ex.Message, Severity.Error);
+            }
+        }
+    }
+
+    private RenderFragment RenderVoiceAvatars(string channelId) => __builder =>
+    {
+        var activeUsers = ChatState.GetVoiceParticipants(channelId);
+        if (activeUsers.Any())
+        {
+            var speakers = ChatState.GetActiveSpeakers(channelId);
+            <div class="voice-user-list" style="margin-top: 4px;">
+                @foreach (var uid in activeUsers)
+                {
+                    var u = Employees.FirstOrDefault(e => e.Id == uid);
+                    if (u != null)
+                    {
+                        var isSpeaking = speakers.Contains(uid);
+                        var borderStyle = isSpeaking ? "border: 2px solid var(--mud-palette-success);" : "";
+                        <div class="d-flex align-center gap-2" style="padding: 2px 0 2px 8px;">
+                            <EmployeeAvatar Employee="@u" Size="Size.Small" Style="@($"width: 22px; height: 22px; flex-shrink: 0; {borderStyle}")" />
+                            <MudText Typo="Typo.caption" Class="text-truncate" Style="@($"color: {(isSpeaking ? "var(--mud-palette-success)" : "var(--mud-palette-text-secondary)")}; line-height: 1.2;")">
+                                @u.FullName
+                            </MudText>
+                        </div>
+                    }
+                }
+            </div>
+        }
+    };
+}

@@ -1,0 +1,54 @@
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Models.HR
+@using MudBlazor
+
+<MudDialog>
+    <DialogContent>
+        <MudForm @ref="form" @bind-IsValid="@success">
+            <MudGrid>
+                <MudItem xs="4">
+                    <MudTextField @bind-Value="Contact.Prefix" Label="Prefix" HelperText="Mr., Ms., Dr." />
+                </MudItem>
+                <MudItem xs="8">
+                    <MudTextField @bind-Value="Contact.Name" Label="Full Name" Required="true" />
+                </MudItem>
+                <MudItem xs="12">
+                    <MudTextField @bind-Value="Contact.Title" Label="Job Title" />
+                </MudItem>
+                <MudItem xs="12">
+                    <MudTextField @bind-Value="Contact.Email" Label="Email" InputType="InputType.Email" />
+                </MudItem>
+                <MudItem xs="12">
+                    <MudTextField @bind-Value="Contact.Phone" Label="Phone" InputType="InputType.Telephone" />
+                </MudItem>
+                <MudItem xs="12">
+                    <MudCheckBox @bind-Value="Contact.IsPrimary" Label="Primary Contact" Color="Color.Primary" />
+                </MudItem>
+            </MudGrid>
+        </MudForm>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Close">Close</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="Submit">Save</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
+    [Parameter] public ContactPerson Contact { get; set; } = new();
+
+    private MudForm form = default!;
+    private bool success;
+
+    private void Close() => MudDialog.Cancel();
+
+    private void Submit()
+    {
+        form.Validate();
+        if (success) MudDialog.Close(DialogResult.Ok(Contact));
+    }
+}
+

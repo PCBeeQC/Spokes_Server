@@ -1,0 +1,117 @@
+@using MudBlazor
+@using Spokes_Server.Core.Data
+@using Microsoft.AspNetCore.Components.Forms
+@inject IDialogService DialogService
+@inject Database Db
+@inject ILogger<RestoreBackupDialog> Logger
+
+<MudDialog>
+    <DialogContent>
+        <div class="d-flex flex-column align-center text-center px-4 py-6">
+            @if (CurrentState == State.Confirming)
+            {
+                <MudIcon Icon="@Icons.Material.Filled.Warning" Color="Color.Error" Style="font-size: 64px;" Class="mb-4" />
+                <MudText Typo="Typo.h5" GutterBottom="true">Restore Backup?</MudText>
+                <MudText Typo="Typo.body1" Class="mb-4">
+                    Are you sure you want to restore from <b>@File.Name</b>?
+                </MudText>
+                <MudAlert Severity="Severity.Error" Variant="Variant.Filled" Class="mb-2">
+                    <b>WARNING:</b> All current data will be overwritten and lost. This action cannot be undone.
+                </MudAlert>
+            }
+            else if (CurrentState == State.Uploading)
+            {
+                <MudIcon Icon="@Icons.Material.Filled.CloudUpload" Color="Color.Primary" Style="font-size: 64px;" Class="mb-4" />
+                <MudText Typo="Typo.h5" GutterBottom="true">Uploading Backup</MudText>
+                <MudProgressLinear Color="Color.Primary" Value="@UploadProgress" Class="my-4" Size="Size.Large" />
+                <MudText Typo="Typo.h6" Color="Color.Primary">@UploadProgress%</MudText>
+            }
+            else if (CurrentState == State.Restoring)
+            {
+                <MudProgressCircular Color="Color.Primary" Indeterminate="true" Size="Size.Large" Class="mb-4" />
+                <MudText Typo="Typo.h5" GutterBottom="true">Restoring Database</MudText>
+                <MudText Typo="Typo.body1" Color="Color.Secondary">Please wait, applying backup...</MudText>
+            }
+            else if (CurrentState == State.Error)
+            {
+                <MudIcon Icon="@Icons.Material.Filled.Error" Color="Color.Error" Style="font-size: 64px;" Class="mb-4" />
+                <MudText Typo="Typo.h5" GutterBottom="true">Restore Failed</MudText>
+                <MudText Typo="Typo.body1" Color="Color.Error">@ErrorMessage</MudText>
+            }
+        </div>
+    </DialogContent>
+    <DialogActions>
+        @if (CurrentState == State.Confirming)
+        {
+            <MudButton OnClick="Close" Variant="Variant.Text">Close</MudButton>
+            <MudButton Color="Color.Error" Variant="Variant.Filled" OnClick="StartRestore">I Understand, Restore</MudButton>
+        }
+        else if (CurrentState == State.Error)
+        {
+            <MudButton OnClick="Close" Color="Color.Primary" Variant="Variant.Filled">Close</MudButton>
+        }
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
+    [Parameter] public IBrowserFile File { get; set; } = default!;
+
+    private enum State { Confirming, Uploading, Restoring, Error }
+    private State CurrentState = State.Confirming;
+    private int UploadProgress = 0;
+    private string ErrorMessage = "";
+
+    private void Close() => MudDialog.Cancel();
+
+    private async Task StartRestore()
+    {
+        CurrentState = State.Uploading;
+        StateHasChanged();
+
+        var tempFile = Path.GetTempFileName();
+        try
+        {
+            using var stream = File.OpenReadStream(long.MaxValue);
+            using var fs = System.IO.File.Create(tempFile);
+            
+            var buffer = new byte[81920]; // 80KB chunks
+            int bytesRead;
+            long totalRead = 0;
+            long totalSize = File.Size;
+
+            while ((bytesRead = await stream.ReadAsync(buffer, 0, buffer.Length)) != 0)
+            {
+                await fs.WriteAsync(buffer, 0, bytesRead);
+                totalRead += bytesRead;
+                int newProgress = (int)(totalRead * 100 / totalSize);
+                
+                // Only trigger re-render if progress has changed enough (e.g. 1%) to avoid too much overhead
+                if (newProgress > UploadProgress)
+                {
+                    UploadProgress = newProgress;
+                    StateHasChanged();
+                }
+            }
+
+            CurrentState = State.Restoring;
+            StateHasChanged();
+            
+            // Give UI a moment to show the "Restoring" state before synchronous backup work blocks the thread
+            await Task.Delay(100);
+
+            bool casdoorRestarted = Db.RestoreBackup(tempFile, Logger);
+
+            try { System.IO.File.Delete(tempFile); } catch {}
+
+            MudDialog.Close(DialogResult.Ok(casdoorRestarted));
+        }
+        catch (Exception ex)
+        {
+            try { System.IO.File.Delete(tempFile); } catch {}
+            ErrorMessage = ex.Message;
+            CurrentState = State.Error;
+            StateHasChanged();
+        }
+    }
+}

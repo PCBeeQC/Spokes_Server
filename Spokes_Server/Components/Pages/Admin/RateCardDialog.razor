@@ -1,0 +1,88 @@
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Data
+@using MudBlazor
+@inject Database Db
+
+<MudDialog>
+    <DialogContent>
+        <MudForm @ref="form" @bind-IsValid="@success">
+            <MudTextField @bind-Value="RateCard.Name" Label="Rate Card Name (e.g. Discounted)" Required="true" />
+            <MudSwitch @bind-Value="RateCard.IsActive" Color="Color.Success" Label="Active" />
+            
+            <MudNumericField @bind-Value="MarkupPercent" Label="Expense Markup Rate" 
+                             Format="N0" Step="1" Min="0" Max="100" 
+                             Variant="Variant.Outlined" Margin="Margin.Dense"
+                             Adornment="Adornment.End" AdornmentText="%"
+                             HelperText="Markup applied to project expenses for Cost+ invoicing" />
+
+            <MudText Typo="Typo.subtitle2" Class="mt-4">Prices</MudText>
+            <MudTable Items="@AllWorkTypes" Hover="true" Dense="true" Elevation="0" Height="300px" FixedHeader="true">
+                <HeaderContent>
+                    <MudTh>Task</MudTh>
+                    <MudTh>Standard Rate</MudTh>
+                    <MudTh>Override Rate</MudTh>
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd>@context.Name</MudTd>
+                    <MudTd>
+                        <MudText Color="Color.Secondary" Typo="Typo.caption">@context.DefaultRate.ToString("C")</MudText>
+                    </MudTd>
+                    <MudTd>
+                        <MudNumericField T="decimal?"
+                                         Value="@GetRate(context.Id)"
+                                         ValueChanged="@((v) => SetRate(context.Id, v))"
+                                         Placeholder="Standard"
+                                         Format="N2"
+                                         HideSpinButtons="true"
+                                         Variant="Variant.Outlined"
+                                         Margin="Margin.Dense" />
+                    </MudTd>
+                </RowTemplate>
+            </MudTable>
+        </MudForm>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+        <MudButton Color="Color.Primary" OnClick="Submit">Save</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
+    [Parameter] public RateCard RateCard { get; set; } = default!;
+
+    private MudForm form = default!;
+    private bool success;
+    private List<WorkType> AllWorkTypes = new();
+
+    private decimal MarkupPercent
+    {
+        get => RateCard.MarkupRate * 100;
+        set => RateCard.MarkupRate = value / 100;
+    }
+
+    protected override void OnInitialized()
+    {
+        AllWorkTypes = Db.WorkTypes.GetAll().Where(x => x.IsActive).OrderBy(x => x.Name).ToList();
+    }
+
+    private decimal? GetRate(string workTypeId)
+    {
+        return RateCard.Rates.ContainsKey(workTypeId) ? RateCard.Rates[workTypeId] : null;
+    }
+
+    private void SetRate(string workTypeId, decimal? value)
+    {
+        if (value.HasValue && value.Value >= 0)
+            RateCard.Rates[workTypeId] = value.Value;
+        else
+            RateCard.Rates.Remove(workTypeId);
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+    private void Submit() { form.Validate(); if (success) MudDialog.Close(DialogResult.Ok(RateCard)); }
+}

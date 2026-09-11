@@ -1,0 +1,227 @@
+@page "/boards"
+@page "/boards/{BoardId}"
+@using Spokes_Server.Core.Data
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Services
+@using Spokes_Server.Components.Boards
+@inject Database Db
+@inject BoardService BoardService
+@inject NavigationManager Nav
+@inject IDialogService DialogService
+@inject UserService UserService
+
+<PageTitle>Boards</PageTitle>
+
+<!-- Set height to fill remaining screen space minus AppBar -->
+<MudContainer MaxWidth="MaxWidth.ExtraLarge" Class="pa-0" Style="height: calc(100vh - 64px); overflow: hidden;">
+    <MudGrid Style="height: 100%;" Spacing="0">
+
+        <!-- SIDEBAR (3/12 width) -->
+        <MudItem xs="2" md="3" lg="2" Style="height: 100%;">
+            <BoardSidebar SelectedBoardId="@BoardId" OnBoardSelected="OnBoardSelected" />
+        </MudItem>
+
+        <!-- MAIN CONTENT (9/12 width) -->
+        <MudItem xs="10" md="9" lg="10" Style="height: 100%; display: flex; flex-direction: column; overflow: hidden;">
+
+            @if (_board == null)
+            {
+                <div class="d-flex flex-column align-center justify-center flex-grow-1 bg-gray-50">
+                    <MudIcon Icon="@Icons.Material.Filled.DashboardCustomize" Size="Size.Large" Color="Color.Secondary"
+                        Style="font-size: 5rem; opacity: 0.2;" />
+                    <MudText Typo="Typo.h5" Color="Color.Secondary" Class="mt-4">Select a board to view</MudText>
+                </div>
+            }
+            else
+            {
+                <!-- HEADER & TOOLBAR -->
+                <BoardHeader Board="_board" @bind-ActiveView="_activeView" OnChange="OnParametersSetAsync" />
+                <BoardToolbar Board="_board" View="_activeView" OnNewCard="AddNewCard" OnChange="ApplyFilters"
+                    SearchText="@_searchText" SearchTextChanged="OnSearchChanged" />
+
+                <!-- BOARD CONTENT -->
+                <div class="flex-grow-1 overflow-hidden" style="background-color: var(--mud-palette-background-grey);">
+                    @if (_activeView != null)
+                    {
+                        @if (_activeView.Type == BoardViewType.Kanban)
+                        {
+                            <KanbanBoard Board="_board" View="_activeView" Cards="_filteredCards" />
+                        }
+                        else if (_activeView.Type == BoardViewType.Table)
+                        {
+                            <TableBoard Board="_board" View="_activeView" Cards="_filteredCards" />
+                        }
+                        else if (_activeView.Type == BoardViewType.Gallery)
+                        {
+                            <GalleryBoard Board="_board" View="_activeView" Cards="_filteredCards" />
+                        }
+                        else if (_activeView.Type == BoardViewType.Calendar)
+                        {
+                            <CalendarBoard Board="_board" View="_activeView" Cards="_filteredCards" />
+                        }
+                        else
+                        {
+                            <MudAlert Severity="Severity.Info">View Type @_activeView.Type not implemented yet.</MudAlert>
+                        }
+                    }
+                </div>
+            }
+        </MudItem>
+    </MudGrid>
+</MudContainer>
+
+@code {
+    [Parameter] public string? BoardId { get; set; }
+
+    private Board? _board;
+    private BoardView? _activeView;
+    private Employee? _currentUser;
+
+    private List<BoardCard> _allCards = new();
+    private List<BoardCard> _filteredCards = new();
+    private string _searchText = "";
+
+    protected override async Task OnParametersSetAsync()
+    {
+        _currentUser ??= await UserService.GetEmployeeAsync();
+
+        if (!string.IsNullOrEmpty(BoardId))
+        {
+            _board = Db.Boards.GetById(BoardId);
+            if (_board != null)
+            {
+                // Issue 79 & 82 Fix: Secure board access
+                if (_currentUser == null || (!_board.IsPublic && !_board.MemberIds.Contains(_currentUser.Id)))
+                {
+                    _board = null;
+                    return;
+                }
+
+                if (_activeView == null || !_board.Views.Contains(_activeView))
+                {
+                    _activeView = _board.Views.FirstOrDefault();
+                }
+
+                // Fetch Data
+                _allCards = Db.BoardCards.GetByBoardId(_board.Id);
+                ApplyFilters();
+            }
+        }
+        else
+        {
+            _board = null;
+        }
+    }
+
+    async Task OnBoardSelected(string id)
+    {
+        BoardId = id;
+        _searchText = ""; // Reset search on board switch
+        await OnParametersSetAsync();
+    }
+
+    void OnSearchChanged(string text)
+    {
+        _searchText = text;
+        ApplyFilters();
+    }
+
+    void ApplyFilters()
+    {
+        if (_board == null) return;
+
+        var query = _allCards.AsEnumerable();
+
+        // 1. Search
+        if (!string.IsNullOrWhiteSpace(_searchText))
+        {
+            query = query.Where(c => c.Title.Contains(_searchText, StringComparison.OrdinalIgnoreCase));
+            // Could search props too?
+        }
+
+        // 2. Filters
+        if (_activeView != null && _activeView.Filters.Any())
+        {
+            foreach (var filter in _activeView.Filters)
+            {
+                query = query.Where(c => MatchesFilter(c, filter));
+            }
+        }
+
+        // 3. Sorting
+        if (_activeView != null && _activeView.SortOptions.Any())
+        {
+            IOrderedEnumerable<BoardCard>? orderedQuery = null;
+
+            for (int i = 0; i < _activeView.SortOptions.Count; i++)
+            {
+                var sort = _activeView.SortOptions[i];
+                // Local function to select the sort key
+                object KeySelector(BoardCard c)
+                {
+                    if (sort.PropertyId == "title") return c.Title;
+                    if (sort.PropertyId == "createdAt") return c.CreatedAt;
+                    if (sort.PropertyId == "updatedAt") return c.UpdatedAt;
+
+                    if (c.PropertyValues.TryGetValue(sort.PropertyId, out var val)) return val;
+                    return "";
+                }
+
+                if (i == 0)
+                {
+                    orderedQuery = sort.IsDescending
+                    ? query.OrderByDescending(KeySelector)
+                    : query.OrderBy(KeySelector);
+                }
+                else
+                {
+                    orderedQuery = sort.IsDescending
+                    ? orderedQuery.ThenByDescending(KeySelector)
+                    : orderedQuery.ThenBy(KeySelector);
+                }
+            }
+            if (orderedQuery != null)
+            {
+                query = orderedQuery;
+            }
+        }
+
+        _filteredCards = query.ToList();
+    }
+
+    bool MatchesFilter(BoardCard card, BoardViewFilter filter)
+    {
+        string val = "";
+        if (card.PropertyValues.TryGetValue(filter.PropertyId, out var v)) val = v;
+
+        return filter.Operator switch
+        {
+            BoardFilterOperator.Contains => val.Contains(filter.Value, StringComparison.OrdinalIgnoreCase),
+            BoardFilterOperator.DoesNotContain => !val.Contains(filter.Value, StringComparison.OrdinalIgnoreCase),
+            BoardFilterOperator.Is => val.Equals(filter.Value, StringComparison.OrdinalIgnoreCase),
+            BoardFilterOperator.IsNot => !val.Equals(filter.Value, StringComparison.OrdinalIgnoreCase),
+            BoardFilterOperator.IsEmpty => string.IsNullOrEmpty(val),
+            BoardFilterOperator.IsNotEmpty => !string.IsNullOrEmpty(val),
+            _ => true
+        };
+    }
+
+    async Task AddNewCard()
+    {
+        if (_board == null) return;
+
+        var newCard = BoardService.CreateCard(_board.Id, "Untitled");
+
+        // Add to local list immediately so UI updates
+        _allCards.Add(newCard);
+        ApplyFilters();
+
+        var parameters = new DialogParameters<CardDetailDialog> { { x => x.Card, newCard }, { x => x.Board, _board } };
+        var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Medium, FullWidth = true };
+        await DialogService.ShowAsync<CardDetailDialog>("Card Details", parameters, options);
+    }
+}

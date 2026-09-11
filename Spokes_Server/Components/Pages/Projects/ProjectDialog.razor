@@ -1,0 +1,603 @@
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Data
+@using Spokes_Server.Components.Dialogs
+@using MudBlazor
+@inject Database Db
+@inject IDialogService DialogService
+@inject ISnackbar Snackbar
+
+<MudDialog>
+    <DialogContent>
+        <MudForm @ref="form" @bind-IsValid="@success">
+            <MudTabs Elevation="0" Outlined="true" Border="true" Rounded="true" ApplyEffectsToContainer="true" TabPanelsClass="pa-4">
+
+                <MudTabPanel Text="Details">
+                    <MudGrid>
+                        <MudItem xs="4">
+                            <MudTextField @bind-Value="Project.ProjectNumber" Label="Project Number / ID" Required="true" Variant="Variant.Outlined" 
+                                          OnBlur="CheckDuplicateId" Error="@idExists" ErrorText="This Project ID is already in use." />
+                        </MudItem>
+                        <MudItem xs="8">
+                            <MudTextField @bind-Value="Project.Name" Label="Project Name" Required="true" Variant="Variant.Outlined" />
+                        </MudItem>
+
+                        <MudItem xs="12">
+                            <MudTextField @bind-Value="Project.Description" Label="Scope / Description" Lines="3" Variant="Variant.Outlined" />
+                        </MudItem>
+
+
+                        <MudItem xs="12">
+                            <MudSwitch @bind-Value="Project.IsInternal" Label="Internal Project (No Client)" Color="Color.Primary" />
+                            @if (Project.IsInternal)
+                            {
+                                    <MudAlert Severity="Severity.Info" Dense="true" Class="mt-2">Internal projects are for tracking company costs (e.g. R&D, Time Off). No invoices created.</MudAlert>
+                            }
+                        </MudItem>
+
+                        <MudItem xs="6">
+                            <MudSelect T="string" Label="Billing Rate Card" @bind-Value="Project.RateCardId" Clearable="true" HelperText="Leave empty for Standard Rates" Variant="Variant.Outlined">
+                                @foreach (var card in Db.RateCards.GetAll().Where(r => r.IsActive))
+                                {
+                                        <MudSelectItem Value="@card.Id">@card.Name</MudSelectItem>
+                                }
+                            </MudSelect>
+                        </MudItem>
+
+                        <MudItem xs="6">
+                            <MudSelect T="string" Label="Document Template" @bind-Value="Project.DefaultTemplateId" HelperText="Determines language, tax & banking info" Variant="Variant.Outlined">
+                                @foreach (var t in Templates)
+                                {
+                                        <MudSelectItem Value="@t.Id">@t.Name @(t.IsDefault ? "(System Default)" : "")</MudSelectItem>
+                                }
+                            </MudSelect>
+                        </MudItem>
+
+                        <MudItem xs="12">
+                            <MudSelect T="string" Label="Status" @bind-Value="Project.Status" Variant="Variant.Outlined">
+                                @foreach (var status in AvailableStatuses)
+                                {
+                                    <MudSelectItem Value="@status.Name">@status.Name</MudSelectItem>
+                                }
+                            </MudSelect>
+                        </MudItem>
+
+                        <MudItem xs="12">
+                            <MudSelect T="string" Label="Project Manager" @bind-Value="Project.ProjectManagerId" Clearable="true" Variant="Variant.Outlined">
+                                @foreach (var emp in Employees)
+                                {
+                                        <MudSelectItem Value="@emp.Id">@emp.FullName</MudSelectItem>
+                                }
+                            </MudSelect>
+                        </MudItem>
+                    </MudGrid>
+                </MudTabPanel>
+
+                <MudTabPanel Text="Client Info" Disabled="@Project.IsInternal">
+                    <MudGrid>
+                        <MudItem xs="12">
+                            <Spokes_Server.Components.Shared.CompanyContactSelector 
+                                Label="Select Client"
+                                ContactLabel="Select Contact Person"
+                                Icon="@Icons.Material.Filled.Search"
+                                HelperText="Search your address book..."
+                                InitialCompanyName="@Project.Client.BusinessName"
+                                InitialContactName="@Project.Client.ContactPersonName"
+                                SelectedCompanyChanged="OnClientSelected"
+                                SelectedContactChanged="OnContactSelected"
+                                Required="true" />
+                        </MudItem>
+
+                        <MudItem xs="3">
+                            <MudTextField @bind-Value="Project.Client.ContactPersonPrefix" Label="Prefix" ReadOnly="true" Variant="Variant.Filled" />
+                        </MudItem>
+                        <MudItem xs="9">
+                            <MudTextField @bind-Value="Project.Client.ContactPersonName" Label="Contact Person" ReadOnly="true" Variant="Variant.Filled" />
+                        </MudItem>
+
+                        <MudItem xs="6">
+                            <MudTextField @bind-Value="Project.Client.ContactPersonEmail" Label="Email" ReadOnly="true" Variant="Variant.Filled" />
+                        </MudItem>
+                        <MudItem xs="6">
+                            <MudTextField @bind-Value="Project.Client.ContactPersonPhone" Label="Phone" ReadOnly="true" Variant="Variant.Filled" />
+                        </MudItem>
+
+                        <MudItem xs="12">
+                            <MudTextField Value="@FullAddress" Label="Billing Address" ReadOnly="true" Variant="Variant.Filled" Lines="2" />
+                        </MudItem>
+                    </MudGrid>
+                </MudTabPanel>
+
+                <MudTabPanel Text="Overrides" Icon="@Icons.Material.Filled.Discount">
+                    <MudText Typo="Typo.body2" Class="mb-4">Project-specific rate overrides can be configured here. These rates will be used instead of the standard or rate card prices.</MudText>
+
+                    <MudTable Items="@Project.CustomRates.ToList()" Dense="true" Hover="true">
+                        <HeaderContent>
+                            <MudTh>Work Type</MudTh>
+                            <MudTh>Override Rate ($/h)</MudTh>
+                            <MudTh>Actions</MudTh>
+                        </HeaderContent>
+                        <RowTemplate>
+                            <MudTd>
+                                @{
+                                    var wt = WorkTypes.FirstOrDefault(w => w.Id == context.Key);
+                                }
+                                @(wt?.Name ?? "Unknown Task")
+                            </MudTd>
+                            <MudTd>
+                                <MudNumericField T="decimal" Value="@context.Value" 
+                                                 ValueChanged="@((v) => Project.CustomRates[context.Key] = v)"
+                                                 Format="N2" Margin="Margin.Dense" />
+                            </MudTd>
+                            <MudTd>
+                                <MudIconButton Icon="@Icons.Material.Filled.Delete" Color="Color.Error" Size="Size.Small" 
+                                               OnClick="@(() => { Project.CustomRates.Remove(context.Key); StateHasChanged(); })" />
+                            </MudTd>
+                        </RowTemplate>
+                        <FooterContent>
+                            <MudTd colspan="3">
+                                <div class="d-flex gap-2">
+                                    <MudSelect T="string" @bind-Value="newOverrideWorkTypeId" Label="Add Override for..." Dense="true" Margin="Margin.Dense">
+                                        @foreach (var wt in WorkTypes.Where(w => !Project.CustomRates.ContainsKey(w.Id)))
+                                        {
+                                                <MudSelectItem Value="@wt.Id">@wt.Name</MudSelectItem>
+                                        }
+                                    </MudSelect>
+                                    <MudButton StartIcon="@Icons.Material.Filled.Add" OnClick="AddOverride" Color="Color.Primary" Disabled="@(string.IsNullOrEmpty(newOverrideWorkTypeId))">Add</MudButton>
+                                </div>
+                            </MudTd>
+                        </FooterContent>
+                    </MudTable>
+                </MudTabPanel>
+
+                <MudTabPanel Text="Commissions">
+                    <MudText Typo="Typo.body2" Class="mb-4">Configure who receives a commission when this project is completed and paid.</MudText>
+
+                    <MudTable Items="@Project.Commissions" Hover="true" Dense="true" Elevation="0">
+                        <HeaderContent>
+                            <MudTh>Name</MudTh>
+                            <MudTh>Type</MudTh>
+                            <MudTh>Basis</MudTh>
+                            <MudTh>Percentage</MudTh>
+                            <MudTh>Actions</MudTh>
+                        </HeaderContent>
+                        <RowTemplate>
+                            <MudTd>
+                                @if (context.Type == "Internal")
+                                {
+                                        <MudSelect T="string" Value="@context.EmployeeId" 
+                                                   ValueChanged="@((id) => OnInternalBeneficiarySelected(context, id))"
+                                                   Label="Select Employee" Margin="Margin.Dense" Dense="true">
+                                        @foreach (var emp in Employees)
+                                        {
+                                                    <MudSelectItem Value="@emp.Id">@emp.FullName</MudSelectItem>
+                                        }
+                                        </MudSelect>
+                                }
+                                else
+                                {
+                                        <MudTextField @bind-Value="context.Name" Label="Beneficiary Name" Margin="Margin.Dense" />
+                                }
+                            </MudTd>
+                            <MudTd>
+                                <MudSelect @bind-Value="context.Type" Label="Type" Margin="Margin.Dense" Dense="true">
+                                    <MudSelectItem Value="@("Internal")">Internal</MudSelectItem>
+                                    <MudSelectItem Value="@("External")">External</MudSelectItem>
+                                </MudSelect>
+                            </MudTd>
+                            <MudTd>
+                                <MudSelect @bind-Value="context.CommissionBasis" Label="Basis" Margin="Margin.Dense" Dense="true">
+                                    <MudSelectItem Value="@("Revenue")">Revenue</MudSelectItem>
+                                    <MudSelectItem Value="@("Margin")">Gross Margin</MudSelectItem>
+                                </MudSelect>
+                            </MudTd>
+                            <MudTd>
+                                <MudNumericField @bind-Value="context.Percentage" Label="%" Min="0" Max="100" Margin="Margin.Dense" />
+                            </MudTd>
+                            <MudTd>
+                                <MudIconButton Icon="@Icons.Material.Filled.Delete" Color="Color.Error" Size="Size.Small" OnClick="@(() => Project.Commissions.Remove(context))" />
+                            </MudTd>
+                        </RowTemplate>
+                        <FooterContent>
+                            <MudTd colspan="5">
+                                <div class="d-flex justify-space-between align-center">
+                                    <MudButton StartIcon="@Icons.Material.Filled.Add" OnClick="AddCommission" Color="Color.Primary">Add Beneficiary</MudButton>
+
+                                    <div class="d-flex align-center gap-2">
+                                        <MudText Typo="Typo.caption">Total Internal: <b>@TotalInternalCommission.ToString("N2")%</b> / @DefaultInternalRate.ToString("N2")%</MudText>
+                                        @if (Math.Abs(TotalInternalCommission - DefaultInternalRate) > 0.001m)
+                                        {
+                                                <MudIcon Icon="@Icons.Material.Filled.Warning" Color="Color.Warning" Size="Size.Small" />
+                                        }
+                                        else
+                                        {
+                                                <MudIcon Icon="@Icons.Material.Filled.CheckCircle" Color="Color.Success" Size="Size.Small" />
+                                        }
+                                    </div>
+                                </div>
+                            </MudTd>
+                        </FooterContent>
+                    </MudTable>
+                </MudTabPanel>
+
+
+
+
+
+                <MudTabPanel Text="Approved Tasks" Icon="@Icons.Material.Filled.Checklist">
+                     <MudText Typo="Typo.body2" Class="mb-4">Select which tasks are allowed to be used on this project. Only selected tasks will appear in the timesheet.</MudText>
+
+                     <MudTable Items="@WorkTypes" Dense="true" Hover="true" Striped="true" FixedHeader="true" Height="300px">
+                        <HeaderContent>
+                            <MudTh>Approved</MudTh>
+                            <MudTh>Task Name</MudTh>
+                            <MudTh>Default Rate</MudTh>
+                        </HeaderContent>
+                        <RowTemplate>
+                             <MudTd>
+                                 <MudCheckBox T="bool" Value="@Project.ApprovedWorkTypeIds.Contains(context.Id)"
+                                              ValueChanged="@((val) => ToggleTaskApproval(context.Id, val))"
+                                              Color="Color.Primary" Dense="true" />
+                            </MudTd>
+                             <MudTd>@context.Name</MudTd>
+                             <MudTd>@context.DefaultRate.ToString("C")</MudTd>
+                        </RowTemplate>
+                        <FooterContent>
+                             <MudTd colspan="3">
+                                 <MudButton Variant="Variant.Outlined" Color="Color.Primary" OnClick="SelectAllTasks">Select All</MudButton>
+                                 <MudButton Variant="Variant.Outlined" Color="Color.Secondary" OnClick="DeselectAllTasks" Class="ml-2">Deselect All</MudButton>
+                            </MudTd>
+                        </FooterContent>
+                    </MudTable>
+                </MudTabPanel>
+
+                <MudTabPanel Text="Access Control" Icon="@Icons.Material.Filled.Security">
+                    <MudText Typo="Typo.body2" Class="mb-4">Control who can contribute to this project (Timesheets, Expenses, Chat). Viewing permissions are controlled separately.</MudText>
+                    
+                    <MudGrid>
+                        <MudItem xs="12">
+                            <MudSelect T="string" Label="Access Policy" @bind-Value="Project.AccessPolicy" Variant="Variant.Outlined">
+                                <MudSelectItem Value="@("Public")">Public (Everyone can contribute)</MudSelectItem>
+                                <MudSelectItem Value="@("Restricted")">Restricted (Selected Teams/Users only)</MudSelectItem>
+                            </MudSelect>
+                        </MudItem>
+
+                        @if (Project.AccessPolicy == "Restricted")
+                        {
+                            <MudItem xs="12">
+                                <MudText Typo="Typo.subtitle2" Class="mt-4 mb-2">Allowed Teams</MudText>
+                                
+                                <TeamAutocomplete Label="Add Team" Teams="@Teams" ExcludedIds="@selectedAllowedTeamIds"
+                                    ValueChanged="AddTeam" ResetOnSelect="true" />
+
+                                <div class="d-flex flex-wrap gap-1 mt-2">
+                                    @foreach(var teamId in selectedAllowedTeamIds)
+                                    {
+                                        var team = Teams.FirstOrDefault(t => t.Id == teamId);
+                                        if (team != null)
+                                        {
+                                            <TeamChip Team="@team" OnClose="@(() => RemoveTeam(teamId))" Size="Size.Small" />
+                                        }
+                                    }
+                                </div>
+                            </MudItem>
+
+                            <MudItem xs="12">
+                                <MudText Typo="Typo.subtitle2" Class="mt-4 mb-2">Allowed Users (Exceptions)</MudText>
+                                
+                                <EmployeeAutocomplete Label="Add User" Employees="@Employees" ExcludedIds="@selectedAllowedUserIds"
+                                    ValueChanged="AddUser" ResetOnSelect="true" />
+
+                                <div class="d-flex flex-wrap gap-1 mt-2">
+                                    @foreach(var userId in selectedAllowedUserIds)
+                                    {
+                                        var user = Employees.FirstOrDefault(u => u.Id == userId);
+                                        if (user != null)
+                                        {
+                                            <EmployeeChip Employee="@user" OnClose="@(() => RemoveUser(userId))" Size="Size.Small" />
+                                        }
+                                    }
+                                </div>
+                            </MudItem>
+                        }
+                    </MudGrid>
+                </MudTabPanel>
+
+            </MudTabs>
+        </MudForm>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+        <MudButton Color="Color.Primary" OnClick="Submit" Variant="Variant.Filled">Save Project</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    private string _nullString = null;
+    [Inject] public Microsoft.AspNetCore.Hosting.IWebHostEnvironment Environment { get; set; }
+
+
+
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; }
+    [Parameter] public Project Project { get; set; } = new();
+
+    private MudForm form;
+    private bool success;
+    private bool idExists;
+
+    private void CheckDuplicateId()
+    {
+        if (string.IsNullOrWhiteSpace(Project.ProjectNumber))
+        {
+            idExists = false;
+            return;
+        }
+
+        var existing = Db.Projects.GetAll().FirstOrDefault(p => p.ProjectNumber.Equals(Project.ProjectNumber, StringComparison.InvariantCultureIgnoreCase));
+        if (existing != null)
+        {
+            // If new project (Id empty) OR editing different project
+            if (string.IsNullOrEmpty(Project.Id) || existing.Id != Project.Id)
+            {
+                idExists = true;
+                Snackbar.Add($"Project ID '{Project.ProjectNumber}' is already used by '{existing.Name}'", Severity.Warning);
+            }
+            else
+            {
+                idExists = false;
+            }
+        }
+        else
+        {
+            idExists = false;
+        }
+    }
+
+    // Data Sources
+    private List<DocumentTemplate> Templates = new();
+    private List<Supplier> AllContacts = new();
+    private List<Employee> Employees = new();
+    private List<WorkType> WorkTypes = new();
+    private List<Team> Teams = new();
+    private List<ProjectStatusConfig> AvailableStatuses = new();
+
+    // Selection State
+    private string? newOverrideWorkTypeId;
+    private decimal DefaultInternalRate;
+    private decimal TotalInternalCommission => Project.Commissions.Where(c => c.Type == "Internal").Sum(c => c.Percentage);
+    private Supplier? selectedClient;
+    private ContactPerson? selectedContact;
+    
+
+
+    // Allocation Helpers
+    private string? newAllocationTaskId;
+    private string? newAllocationTeamId;
+    private decimal newAllocationHours;
+
+    // Access Control Helpers
+    private IEnumerable<string> selectedAllowedTeamIds = new HashSet<string>();
+    private IEnumerable<string> selectedAllowedUserIds = new HashSet<string>();
+
+    protected override void OnInitialized()
+    {
+        Templates = Db.DocumentTemplates.GetAll().OrderBy(t => t.Name).ToList();
+        AllContacts = Db.Suppliers.GetAll().OrderBy(s => s.Info.BusinessName).ToList();
+        Employees = Db.Employees.GetAll().Where(e => e.IsActive).OrderBy(e => e.FirstName).ToList();
+        WorkTypes = Db.WorkTypes.GetAll().Where(w => w.IsActive).OrderBy(w => w.Name).ToList();
+        Teams = Db.Teams.GetAll().OrderBy(t => t.Name).ToList();
+
+        var profile = Db.CompanyProfile.Get();
+        DefaultInternalRate = profile.DefaultInternalCommission;
+        AvailableStatuses = profile.ProjectStatuses ?? new List<ProjectStatusConfig>();
+
+        // 1. Set Default Template for new projects
+        if (string.IsNullOrEmpty(Project.Id) || string.IsNullOrEmpty(Project.DefaultTemplateId))
+        {
+            var def = Templates.FirstOrDefault(t => t.IsDefault);
+            if (def != null) Project.DefaultTemplateId = def.Id;
+        }
+
+        // Note: Project initialization of Client/Contact UI state is now handled by
+        // passing InitialCompanyName and InitialContactName to CompanyContactSelector.
+
+        // 3. Bind Access Control Lists
+        selectedAllowedTeamIds = new HashSet<string>(Project.AllowedTeamIds);
+        selectedAllowedUserIds = new HashSet<string>(Project.AllowedUserIds);
+    }
+
+    private void AddCommission()
+    {
+        // Default to Internal, remaining or default
+        var remaining = DefaultInternalRate - TotalInternalCommission;
+        if (remaining < 0) remaining = 0;
+
+        Project.Commissions.Add(new CommissionBeneficiary
+            {
+                Name = "New Beneficiary",
+                Type = "Internal",
+                CommissionBasis = "Revenue",
+                Percentage = remaining > 0 ? remaining : 0
+            });
+    }
+
+    private void OnInternalBeneficiarySelected(CommissionBeneficiary context, string employeeId)
+    {
+        context.EmployeeId = employeeId;
+        var emp = Employees.FirstOrDefault(e => e.Id == employeeId);
+        if (emp != null)
+        {
+            context.Name = emp.FullName;
+        }
+    }
+
+
+
+    private void AddOverride()
+    {
+        if (string.IsNullOrEmpty(newOverrideWorkTypeId)) return;
+        var wt = WorkTypes.FirstOrDefault(w => w.Id == newOverrideWorkTypeId);
+        if (wt != null && !Project.CustomRates.ContainsKey(wt.Id))
+        {
+            Project.CustomRates.Add(wt.Id, wt.DefaultRate);
+            newOverrideWorkTypeId = null;
+        }
+    }
+
+    private string FullAddress => $"{Project.Client.BusinessAdressNumber} {Project.Client.BusinessAdressStreet}\n{Project.Client.BusinessAdressCity}, {Project.Client.BusinessAdressState} {Project.Client.BusinessAdressZip}";
+
+    // --- AUTOCOMPLETE LOGIC ---
+
+    private void OnClientSelected(Supplier s)
+    {
+        selectedClient = s;
+        if (s != null)
+        {
+            // Snapshot the data into the Project (Deep Copy of Business Info)
+            // We only want to copy the business details first, then let contact selection handle the rest
+            // or default to primary contact if available.
+            
+            Project.Client.BusinessName = s.Info.BusinessName;
+            Project.Client.BusinessAdressNumber = s.Info.BusinessAdressNumber;
+            Project.Client.BusinessAdressStreet = s.Info.BusinessAdressStreet;
+            Project.Client.BusinessAdressCity = s.Info.BusinessAdressCity;
+            Project.Client.BusinessAdressState = s.Info.BusinessAdressState;
+            Project.Client.BusinessAdressCountry = s.Info.BusinessAdressCountry;
+            Project.Client.BusinessAdressZip = s.Info.BusinessAdressZip;
+
+            // Default to primary contact
+            var primary = s.Contacts.FirstOrDefault(c => c.IsPrimary) ?? s.Contacts.FirstOrDefault();
+            if (primary != null)
+            {
+                selectedContact = primary;
+                UpdateProjectContactInfo(primary);
+            }
+            else
+            {
+                selectedContact = null;
+                // Fallback to legacy info if no contacts list (should be migrated, but just in case)
+                Project.Client.ContactPersonPrefix = s.Info.ContactPersonPrefix;
+                Project.Client.ContactPersonName = s.Info.ContactPersonName;
+                Project.Client.ContactPersonTitle = s.Info.ContactPersonTitle;
+                Project.Client.ContactPersonEmail = s.Info.ContactPersonEmail;
+                Project.Client.ContactPersonPhone = s.Info.ContactPersonPhone;
+            }
+        }
+    }
+
+    private void OnContactSelected(ContactPerson contact)
+    {
+        selectedContact = contact;
+        if (contact != null)
+        {
+            UpdateProjectContactInfo(contact);
+        }
+    }
+
+    private void UpdateProjectContactInfo(ContactPerson contact)
+    {
+        Project.Client.ContactPersonPrefix = contact.Prefix;
+        Project.Client.ContactPersonName = contact.Name;
+        Project.Client.ContactPersonTitle = contact.Title;
+        Project.Client.ContactPersonEmail = contact.Email;
+        Project.Client.ContactPersonPhone = contact.Phone;
+    }
+
+    // --- CREATE / EDIT LOGIC ---
+    // (Handled by the CompanyContactSelector control)
+
+    private void Cancel() => MudDialog.Cancel();
+
+    private void Submit()
+    {
+        form.Validate();
+        if (!success) return;
+
+        // Validation: Warn if internal commissions differ from the default rate, but allow saving (override)
+        var hasInternalCommissions = Project.Commissions.Any(c => c.Type == "Internal");
+        if (hasInternalCommissions && Math.Abs(TotalInternalCommission - DefaultInternalRate) > 0.001m)
+        {
+            Snackbar.Add($"Note: Internal commissions ({TotalInternalCommission}%) differ from the company default ({DefaultInternalRate}%).", Severity.Warning);
+        }
+
+        // Sync Access Control
+        Project.AllowedTeamIds = selectedAllowedTeamIds.ToList();
+        Project.AllowedUserIds = selectedAllowedUserIds.ToList();
+
+        MudDialog.Close(DialogResult.Ok(Project));
+    }
+
+    private void ToggleTaskApproval(string taskId, bool isApproved)
+    {
+        if (isApproved)
+        {
+            if (!Project.ApprovedWorkTypeIds.Contains(taskId))
+            {
+                Project.ApprovedWorkTypeIds.Add(taskId);
+            }
+        }
+        else
+        {
+            Project.ApprovedWorkTypeIds.Remove(taskId);
+        }
+    }
+
+    private void SelectAllTasks()
+    {
+        foreach (var wt in WorkTypes)
+        {
+            if (!Project.ApprovedWorkTypeIds.Contains(wt.Id))
+            {
+                Project.ApprovedWorkTypeIds.Add(wt.Id);
+            }
+        }
+    }
+
+    private void DeselectAllTasks()
+    {
+        Project.ApprovedWorkTypeIds.Clear();
+    }
+
+    private void AddTeam(Team? team)
+    {
+        if (team != null)
+        {
+            var list = selectedAllowedTeamIds.ToList();
+            if(!list.Contains(team.Id))
+            {
+                list.Add(team.Id);
+                selectedAllowedTeamIds = list;
+            }
+        }
+    }
+
+    private void AddUser(Employee? emp)
+    {
+        if (emp != null)
+        {
+            var list = selectedAllowedUserIds.ToList();
+            if(!list.Contains(emp.Id))
+            {
+                 list.Add(emp.Id);
+                 selectedAllowedUserIds = list;
+            }
+        }
+    }
+
+    private void RemoveTeam(string teamId)
+    {
+        var list = selectedAllowedTeamIds.ToList();
+        list.Remove(teamId);
+        selectedAllowedTeamIds = list;
+    }
+
+    private void RemoveUser(string userId)
+    {
+        var list = selectedAllowedUserIds.ToList();
+        list.Remove(userId);
+        selectedAllowedUserIds = list;
+    }
+}

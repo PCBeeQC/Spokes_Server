@@ -1,0 +1,70 @@
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Models.HR
+@using MudBlazor
+
+<MudDialog>
+    <DialogContent>
+        <MudForm @ref="form" @bind-IsValid="@success">
+            <MudGrid>
+                <MudItem xs="12">
+                    <MudText Typo="Typo.h6">@ProjectName</MudText>
+                    <MudText Typo="Typo.subtitle1">@TaskName</MudText>
+                </MudItem>
+
+                <MudItem xs="12">
+                    <MudSelect T="string" @bind-Value="selectedEmployeeId" Label="Assign To" Required="true">
+                        @foreach (var emp in Members)
+                        {
+                            <MudSelectItem Value="@emp.Id">@emp.FullName</MudSelectItem>
+                        }
+                    </MudSelect>
+                </MudItem>
+
+                <MudItem xs="6">
+                    <MudNumericField @bind-Value="hours" Label="Hours" Min="0.5M" Step="0.5M" Max="40M" />
+                </MudItem>
+
+                <MudItem xs="12">
+                    <MudTextField @bind-Value="note" Label="Note (Specific instructions)" Lines="2" />
+                </MudItem>
+            </MudGrid>
+        </MudForm>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="Submit"
+            Disabled="@(string.IsNullOrEmpty(selectedEmployeeId) || hours <= 0)">Allocate</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
+
+    [Parameter] public List<Employee> Members { get; set; } = new();
+    [Parameter] public string ProjectName { get; set; } = string.Empty;
+    [Parameter] public string TaskName { get; set; } = string.Empty;
+
+    private MudForm form = default!;
+    private bool success;
+
+    private string selectedEmployeeId = string.Empty;
+    private decimal hours = 4.0m;
+    private string note = string.Empty;
+
+    private void Cancel() => MudDialog.Cancel();
+
+    private void Submit()
+    {
+        var result = new AllocationResult
+            {
+                EmployeeId = selectedEmployeeId,
+                Hours = hours,
+                Note = note
+            };
+        MudDialog.Close(DialogResult.Ok(result));
+    }
+}
+

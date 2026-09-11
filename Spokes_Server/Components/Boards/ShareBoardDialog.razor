@@ -1,0 +1,115 @@
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Services
+@using Spokes_Server.Core.Data
+@inject Database Db
+@inject BoardService BoardService
+
+<MudDialog>
+    <DialogContent>
+        <MudStack Spacing="4">
+            <!-- PUBLIC TOGGLE -->
+            <MudPaper Elevation="0" Class="pa-4 border rounded"
+                Style="background-color: var(--mud-palette-background-grey);">
+                <MudStack Row="true" AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween">
+                    <div>
+                        <MudText Typo="Typo.subtitle1">Public Access</MudText>
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">
+                            Allow anyone in the workspace to view and edit this board.
+                        </MudText>
+                    </div>
+                    <MudSwitch T="bool" Value="@Board.IsPublic" ValueChanged="OnPublicToggled" Color="Color.Primary" />
+                </MudStack>
+            </MudPaper>
+
+            <MudDivider />
+
+            <!-- ADD MEMBER -->
+            <EmployeeAutocomplete Label="Add Member" Placeholder="Search by name..."
+                                  @bind-Value="_selectedEmployee"
+                                  ExcludedIds="@GetExcludedMemberIds()" />
+            <MudButton Disabled="@(_selectedEmployee == null)" OnClick="AddMember" Variant="Variant.Filled"
+                Color="Color.Primary" FullWidth="true">
+                Invite
+            </MudButton>
+
+            <!-- MEMBER LIST -->
+            <MudText Typo="Typo.subtitle2" Class="mt-2">Members (@Board.MemberIds.Count)</MudText>
+            <MudList T="string">
+                <!-- OWNER -->
+                @{
+                    var owner = Db.Employees.GetById(Board.OwnerId);
+                    if (owner != null)
+                    {
+                        <MudListItem Icon="@Icons.Material.Filled.Star" IconColor="Color.Warning">
+                            <MudStack Row="true" AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween">
+                                <MudText>@owner.FullName (Owner)</MudText>
+                            </MudStack>
+                        </MudListItem>
+                    }
+                }
+
+                @foreach (var memberId in Board.MemberIds.Where(id => id != Board.OwnerId))
+                {
+                    var member = Db.Employees.GetById(memberId);
+                    if (member != null)
+                    {
+                        <MudListItem Icon="@Icons.Material.Filled.Person">
+                            <MudStack Row="true" AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween">
+                                <MudText>@member.FullName</MudText>
+                                <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small"
+                                    OnClick="@(() => RemoveMember(memberId))" Color="Color.Error" />
+                            </MudStack>
+                        </MudListItem>
+                    }
+                }
+            </MudList>
+
+        </MudStack>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Close">Done</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
+    [Parameter] public Board Board { get; set; } = default!;
+
+    private Employee? _selectedEmployee;
+
+    void Close() => MudDialog.Close(DialogResult.Ok(true));
+
+    void OnPublicToggled(bool isPublic)
+    {
+        Board.IsPublic = isPublic;
+        BoardService.UpdateBoard(Board);
+    }
+
+    private IEnumerable<string> GetExcludedMemberIds()
+    {
+        var set = new HashSet<string>(Board.MemberIds);
+        if (!string.IsNullOrEmpty(Board.OwnerId))
+            set.Add(Board.OwnerId);
+        return set;
+    }
+
+    void AddMember()
+    {
+        if (_selectedEmployee != null && !Board.MemberIds.Contains(_selectedEmployee.Id))
+        {
+            Board.MemberIds.Add(_selectedEmployee.Id);
+            BoardService.UpdateBoard(Board);
+            _selectedEmployee = null;
+        }
+    }
+
+    void RemoveMember(string id)
+    {
+        Board.MemberIds.Remove(id);
+        BoardService.UpdateBoard(Board);
+    }
+}

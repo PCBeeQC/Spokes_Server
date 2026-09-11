@@ -1,0 +1,74 @@
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Data
+@using Spokes_Server.Core.Services
+@inject Database Db
+@inject ISnackbar Snackbar
+@inject IDialogService DialogService
+@inject IFileService FileService
+
+<MudTd DataLabel="Name">@Expense.Name</MudTd>
+<MudTd DataLabel="Amount">@Expense.Amount.ToString("C2")</MudTd>
+<MudTd DataLabel="Due Date">@Expense.NextDueDate.ToShortDateString()</MudTd>
+<MudTd DataLabel="Status">
+    @if (Expense.History.Any(h => h.IsPaid))
+    {
+        <MudChip T="string" Size="Size.Small" Color="Color.Success">Paid</MudChip>
+    }
+    else
+    {
+        <MudChip T="string" Size="Size.Small" Color="Color.Warning">Pending</MudChip>
+    }
+</MudTd>
+<MudTd DataLabel="Actions">
+    <ApiFileUpload Category="recurringcosts" ContextId="@Expense.Id" MaximumFileCount="1"
+                   OnUploadCompleted="HandleBillApiUploaded"
+                   OnUploadError='(e) => Snackbar.Add($"Upload failed: {e}", Severity.Error)'>
+        <CustomContent>
+            <MudIconButton Icon="@Icons.Material.Filled.CloudUpload" Variant="Variant.Filled" Color="Color.Info" Size="Size.Small" />
+        </CustomContent>
+    </ApiFileUpload>
+    <MudIconButton Icon="@Icons.Material.Filled.Delete" Color="Color.Error" Size="Size.Small"
+        OnClick="@DeleteExpense" />
+</MudTd>
+
+@code {
+    [Parameter] public RecurringExpense Expense { get; set; } = new();
+    [Parameter] public EventCallback OnChanged { get; set; }
+
+    private async Task HandleBillApiUploaded(List<ApiFileUpload.UploadResult> results)
+    {
+        var result = results.FirstOrDefault();
+        if (result == null) return;
+
+        var record = new RecurringBillRecord
+            {
+                Date = DateTime.Today,
+                Amount = Expense.Amount,
+                AttachmentPath = result.FilePath,
+                AttachmentName = result.FileName,
+                IsPaid = true
+            };
+
+        Expense.History.Add(record);
+        Db.RecurringExpenses.Save(Expense);
+        Snackbar.Add("Bill uploaded & Paid", Severity.Success);
+        await OnChanged.InvokeAsync();
+    }
+
+    private async Task DeleteExpense()
+    {
+        var confirm = await DialogService.ShowMessageBoxAsync("Delete", "Are you sure?", yesText: "Delete", cancelText: "Cancel");
+        if (confirm == true)
+        {
+            Db.RecurringExpenses.Delete(Expense.Id);
+            await OnChanged.InvokeAsync();
+        }
+    }
+}
+
+
+

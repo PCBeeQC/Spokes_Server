@@ -1,0 +1,175 @@
+@inherits LayoutComponentBase
+@using Microsoft.AspNetCore.Components.Authorization
+@using Spokes_Server.Core.Data
+@using Spokes_Server.Core.Models
+@inject Database Db
+@inject AuthenticationStateProvider AuthStateProvider
+@inject NavigationManager Nav
+<MudThemeProvider Theme="@_theme" @bind-IsDarkMode="_isDarkMode" ObserveSystemThemeChange="false" />
+<MudPopoverProvider />
+<MudDialogProvider />
+<MudSnackbarProvider />
+<MudLayout>
+    <MudAppBar Elevation="1">
+        <MudIconButton Icon="@Icons.Material.Filled.Menu" Color="Color.Inherit" Edge="Edge.Start"
+            OnClick="@((e) => DrawerToggle())" />
+        <div class="d-flex align-center ml-3">
+            @if (!string.IsNullOrEmpty(Profile?.IconBase64))
+            {
+                <MudImage Src="@Profile.IconBase64" Height="32" Class="mr-2" />
+            }
+            else if (!string.IsNullOrEmpty(Profile?.LogoBase64))
+            {
+                <MudImage Src="@Profile.LogoBase64" Height="32" Class="mr-2" />
+            }
+            <MudText Typo="Typo.h6" Style="font-weight: 700;">@Profile?.CompanyName</MudText>
+        </div>
+        <MudMenu Icon="@Icons.Material.Filled.Add" Color="Color.Inherit" Edge="Edge.Start" Class="ml-4">
+            <MudMenuItem OnClick="@(() => Nav.NavigateTo("/projects/new"))">New Project</MudMenuItem>
+            <MudMenuItem OnClick="@(() => Nav.NavigateTo("/my-timesheet"))">Log Time</MudMenuItem>
+            <MudMenuItem OnClick="@(() => Nav.NavigateTo("/me/expenses"))">New Expense</MudMenuItem>
+        </MudMenu>
+        <MudSpacer />
+        <Spokes_Server.Components.Shared.PushNotificationButton />
+        <MudIconButton Icon="@DarkLightModeButtonIcon" Color="Color.Inherit" OnClick="@DarkModeToggle" Class="mr-4" />
+        <AuthorizeView>
+            <Authorized Context="auth">
+                <MudText Class="mr-4">
+                    @(auth.User.FindFirst("email")?.Value
+                        ?? auth.User.FindFirst(System.Security.Claims.ClaimTypes.Email)?.Value
+                        ?? auth.User.Identity?.Name)
+                </MudText>
+                <form action="logout" method="post">
+                    <MudButton ButtonType="ButtonType.Submit" Variant="Variant.Filled" Color="Color.Error">Logout
+                    </MudButton>
+                    <AntiforgeryToken />
+                </form>
+            </Authorized>
+        </AuthorizeView>
+    </MudAppBar>
+    <MudDrawer id="nav-drawer" @bind-Open="_drawerOpen" ClipMode="DrawerClipMode.Always" Elevation="2">
+        <NavMenu />
+    </MudDrawer>
+    <MudMainContent Class="pt-16 pa-4">
+        @Body
+    </MudMainContent>
+</MudLayout>
+<div id="blazor-error-ui" data-nosnippet>
+    An unhandled error has occurred.
+    <a href="." class="reload">Reload</a>
+    <span class="dismiss">??</span>
+</div>
+@code {
+    private bool _drawerOpen = true;
+    private bool _isDarkMode = true;
+    private MudTheme? _theme = null;
+    private Employee? _currentUser;
+    private CompanyProfile? Profile;
+    protected override async Task OnInitializedAsync()
+    {
+        Profile = Db.CompanyProfile.Get();
+        // 1. Setup Theme
+        _theme = new()
+            {
+                PaletteLight = _lightPalette,
+                PaletteDark = _darkPalette,
+                LayoutProperties = new LayoutProperties()
+            };
+        // 2. Load User Preference
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        var user = authState.User;
+        var sub = user.FindFirst("sub")?.Value
+        ?? user.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+        if (sub != null)
+        {
+            // Look up the user in our DB
+            // Look up the current user via OpenIdAccount (fresh from database)
+            // This ensures we always have the latest link status, not stale claims
+            var openIdAccount = Db.OpenIdAccounts.GetBySub(sub);
+            if (openIdAccount != null && !string.IsNullOrEmpty(openIdAccount.LinkedEmployeeId))
+            {
+                _currentUser = Db.Employees.GetById(openIdAccount.LinkedEmployeeId);
+            }
+            else
+            {
+                // Fallback to old OidcSub lookup for backwards compatibility
+                _currentUser = Db.Employees.GetByOidcSub(sub);
+            }
+            // Redirect to access-pending if authenticated but no employee linked
+            if (user.Identity?.IsAuthenticated == true && _currentUser == null)
+            {
+                var currentUri = Nav.Uri;
+                if (!currentUri.Contains("/access-pending"))
+                {
+                    Nav.NavigateTo("/access-pending", replace: true);
+                    return;
+                }
+            }
+            if (_currentUser != null)
+            {
+                _isDarkMode = _currentUser.IsDarkMode;
+            }
+        }
+    }
+    private void DrawerToggle()
+    {
+        _drawerOpen = !_drawerOpen;
+    }
+    private void DarkModeToggle()
+    {
+        _isDarkMode = !_isDarkMode;
+        // 3. Save Preference to Disk
+        if (_currentUser != null)
+        {
+            // Re-fetch the latest version of the user to ensure we don't overwrite other changes
+            var freshUser = Db.Employees.GetById(_currentUser.Id);
+            if (freshUser != null)
+            {
+                freshUser.IsDarkMode = _isDarkMode;
+                Db.Employees.Save(freshUser);
+            }
+        }
+    }
+    private readonly PaletteLight _lightPalette = new()
+        {
+            Black = "#110e2d",
+            AppbarText = "#424242",
+            AppbarBackground = "rgba(255,255,255,0.8)",
+            DrawerBackground = "#ffffff",
+            GrayLight = "#e8e8e8",
+            GrayLighter = "#f9f9f9",
+        };
+    private readonly PaletteDark _darkPalette = new()
+        {
+            Primary = "#7e6fff",
+            Surface = "#1e1e2d",
+            Background = "#1a1a27",
+            BackgroundGray = "#151521",
+            AppbarText = "#92929f",
+            AppbarBackground = "rgba(26,26,39,0.8)",
+            DrawerBackground = "#1a1a27",
+            ActionDefault = "#74718e",
+            ActionDisabled = "#9999994d",
+            ActionDisabledBackground = "#605f6d4d",
+            TextPrimary = "#b2b0bf",
+            TextSecondary = "#92929f",
+            TextDisabled = "#ffffff33",
+            DrawerIcon = "#92929f",
+            DrawerText = "#92929f",
+            GrayLight = "#2a2833",
+            GrayLighter = "#1e1e2d",
+            Info = "#4a86ff",
+            Success = "#3dcb6c",
+            Warning = "#ffb545",
+            Error = "#ff3f5f",
+            LinesDefault = "#33323e",
+            TableLines = "#33323e",
+            Divider = "#292838",
+            OverlayLight = "#1e1e2d80",
+        };
+    public string DarkLightModeButtonIcon => _isDarkMode switch
+    {
+        true => Icons.Material.Rounded.LightMode,
+        false => Icons.Material.Outlined.DarkMode,
+    };
+}

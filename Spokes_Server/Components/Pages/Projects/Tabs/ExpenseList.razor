@@ -1,0 +1,78 @@
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Data
+@inject Database Db
+
+<MudTable Items="@ProjectExpenses" Hover="true" Dense="true" Elevation="0" Class="pa-4">
+    <HeaderContent>
+        <MudTh>Date</MudTh>
+        <MudTh>Employee</MudTh>
+        <MudTh>Report #</MudTh>
+        <MudTh>Description</MudTh>
+        <MudTh>Type</MudTh>
+        <MudTh>Cost</MudTh>
+        <MudTh>Receipt</MudTh>
+    </HeaderContent>
+    <RowTemplate>
+        <MudTd>@context.Date.ToShortDateString()</MudTd>
+        <MudTd>@context.EmployeeName</MudTd>
+        <MudTd>@context.ReportNumber</MudTd>
+        <MudTd>@context.Description</MudTd>
+        <MudTd>@(context.IsKilometrage ? "Kilometrage" : "Expense")</MudTd>
+            <MudTd>@context.Total.ToString("C")</MudTd>
+            <MudTd>
+                @if (!string.IsNullOrEmpty(context.ReceiptPath))
+            {
+                <MudIconButton Icon="@Icons.Material.Filled.AttachFile" Size="Size.Small" Href="@context.ReceiptPath"
+                    Target="_blank" />
+            }
+        </MudTd>
+    </RowTemplate>
+    <FooterContent>
+        <MudTd colspan="7">
+            <MudText Typo="Typo.h6">Total Expenses: @ProjectExpenses.Sum(e => e.Total).ToString("C")</MudText>
+        </MudTd>
+    </FooterContent>
+</MudTable>
+
+@code {
+    [Parameter] public string ProjectId { get; set; }
+
+    private List<ExpenseItemViewModel> ProjectExpenses = new();
+
+    protected override void OnInitialized()
+    {
+        var allReports = Db.ExpenseReports.GetAll();
+        ProjectExpenses = allReports
+        .SelectMany(r => r.Items.Select(i => new ExpenseItemViewModel
+            {
+                Date = i.Date,
+                EmployeeName = r.EmployeeName,
+                ReportNumber = r.ReportNumber,
+                Description = i.Description,
+                IsKilometrage = i.IsKilometrage,
+                Total = i.Total,
+                ReceiptPath = i.ReceiptPath,
+                ProjectId = i.ProjectId
+            }))
+        .Where(x => x.ProjectId == ProjectId)
+        .OrderByDescending(x => x.Date)
+        .ToList();
+    }
+
+    class ExpenseItemViewModel
+    {
+        public DateTime Date { get; set; }
+        public string EmployeeName { get; set; }
+        public string ReportNumber { get; set; }
+        public string Description { get; set; }
+        public bool IsKilometrage { get; set; }
+        public decimal Total { get; set; }
+        public string ReceiptPath { get; set; }
+        public string ProjectId { get; set; }
+    }
+}
+

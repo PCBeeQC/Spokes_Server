@@ -1,0 +1,119 @@
+@using Spokes_Server.Core.Services
+@inject SearchService SearchService
+@inject NavigationManager Nav
+
+<MudDialog>
+    <DialogContent>
+        <MudTextField @ref="_searchField" @bind-Value="_query" Placeholder="Search projects, invoices, people..."
+            Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search"
+            Immediate="true" DebounceInterval="200" OnDebounceIntervalElapsed="OnSearch"
+            AutoFocus="true" Variant="Variant.Outlined" Class="mb-2 mt-2"
+            OnKeyDown="OnKeyDown" />
+
+        @if (_results.Any())
+        {
+                <MudList T="SearchResult" Dense="true" Clickable="true" @bind-SelectedValue="_selectedResult">
+                @{
+                    string? lastType = null;
+                }
+                @foreach (var result in _results)
+                {
+                    @if (result.Type != lastType)
+                    {
+                        lastType = result.Type;
+                                    <MudText Typo="Typo.overline" Color="Color.Primary" Class="ml-2 mt-2">@result.Type</MudText>
+                    }
+
+                            <MudListItem T="SearchResult" Value="result" OnClick="@(() => NavigateTo(result))">
+                                <div class="d-flex align-center gap-3">
+                                    <MudIcon Icon="@GetIcon(result)" Size="Size.Small" Color="Color.Secondary" />
+                                    <div>
+                                        <MudText Typo="Typo.body2"><b>@result.Title</b></MudText>
+                                @if (!string.IsNullOrEmpty(result.Subtitle))
+                                {
+                                                <MudText Typo="Typo.caption" Color="Color.Secondary">@result.Subtitle</MudText>
+                                }
+                                    </div>
+                                </div>
+                            </MudListItem>
+                }
+                </MudList>
+        }
+        else if (!string.IsNullOrEmpty(_query) && _query.Length >= 2)
+        {
+                <div class="d-flex flex-column align-center pa-6">
+                    <MudIcon Icon="@Icons.Material.Filled.SearchOff" Size="Size.Large" Color="Color.Secondary" Class="mb-2" />
+                    <MudText Typo="Typo.body2" Color="Color.Secondary">No results found</MudText>
+                </div>
+        }
+        else
+        {
+                <div class="d-flex flex-column align-center pa-6">
+                    <MudText Typo="Typo.caption" Color="Color.Secondary">Type at least 2 characters to search</MudText>
+                </div>
+        }
+    </DialogContent>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    private MudTextField<string>? _searchField;
+    private string _query = string.Empty;
+    private List<SearchResult> _results = new();
+    private SearchResult? _selectedResult;
+    private int _selectedIndex = -1;
+
+    private void OnSearch(string value)
+    {
+        _query = value;
+        _results = SearchService.Search(_query);
+        _selectedIndex = -1;
+        StateHasChanged();
+    }
+
+    private void NavigateTo(SearchResult result)
+    {
+        MudDialog.Close();
+        Nav.NavigateTo(result.Url);
+    }
+
+    private void OnKeyDown(KeyboardEventArgs args)
+    {
+        if (!_results.Any()) return;
+
+        if (args.Key == "ArrowDown")
+        {
+            _selectedIndex = Math.Min(_selectedIndex + 1, _results.Count - 1);
+            _selectedResult = _results[_selectedIndex];
+        }
+        else if (args.Key == "ArrowUp")
+        {
+            _selectedIndex = Math.Max(_selectedIndex - 1, 0);
+            _selectedResult = _results[_selectedIndex];
+        }
+        else if (args.Key == "Enter" && _selectedIndex >= 0 && _selectedIndex < _results.Count)
+        {
+            NavigateTo(_results[_selectedIndex]);
+        }
+        else if (args.Key == "Escape")
+        {
+            MudDialog.Cancel();
+        }
+    }
+
+    private string GetIcon(SearchResult result)
+    {
+        return result.Type switch
+        {
+            "Project" => Icons.Material.Filled.Work,
+            "Employee" => Icons.Material.Filled.Person,
+            "Quote" => Icons.Material.Filled.RequestQuote,
+            "Invoice" => Icons.Material.Filled.Receipt,
+            "Purchase Order" => Icons.Material.Filled.ShoppingCart,
+            "Expense Report" => Icons.Material.Filled.AccountBalanceWallet,
+            "Board Card" => Icons.Material.Filled.DashboardCustomize,
+            _ => Icons.Material.Filled.Article
+        };
+    }
+}

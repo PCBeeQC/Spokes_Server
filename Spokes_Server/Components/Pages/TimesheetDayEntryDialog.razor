@@ -1,0 +1,203 @@
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Helpers
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.HR
+@using MudBlazor
+
+<MudDialog>
+    <TitleContent>
+        <div class="d-flex align-center gap-2 px-4 pt-3">
+            <MudIcon Icon="@(IsEditMode ? Icons.Material.Filled.EditCalendar : Icons.Material.Filled.AddCircleOutline)" Color="Color.Primary" />
+            <MudText Typo="Typo.h6">@(IsEditMode ? "Edit Entry" : "Log Time") — @Date.ToString("dddd, MMM dd")</MudText>
+        </div>
+    </TitleContent>
+    <DialogContent>
+        <MudStack Spacing="3" Class="px-4 pt-2 pb-2">
+            <MudAutocomplete T="string" Value="@ProjectId" ValueChanged="@OnProjectChanged"
+                SearchFunc="SearchProjects" ToStringFunc="GetProjectName" Label="Project" Variant="Variant.Outlined"
+                Dense="true" ResetValueOnEmptyText="true" CoerceText="false" MaxItems="null" Virtualize="true"
+                Required="true" />
+
+            <MudAutocomplete T="string" Value="@WorkTypeId" ValueChanged="@OnWorkTypeChanged"
+                SearchFunc="SearchTasks" ToStringFunc="GetTaskName" Label="Task" Variant="Variant.Outlined" Dense="true"
+                ResetValueOnEmptyText="true" CoerceText="false" Disabled="@string.IsNullOrEmpty(ProjectId)"
+                Required="true" />
+
+            <MudAutocomplete T="string" Value="@SubTaskId" ValueChanged="@(s => SubTaskId = s)"
+                SearchFunc="SearchSubTasks" ToStringFunc="GetSubTaskName" Label="Sub-Task (Optional)" Variant="Variant.Outlined"
+                Dense="true" ResetValueOnEmptyText="true" CoerceText="false"
+                Disabled="@string.IsNullOrEmpty(WorkTypeId)" />
+
+            <MudDivider Class="my-1" />
+
+            <div>
+                <MudText Typo="Typo.caption" Class="mb-1" Style="font-weight: 600; display: block;">Quick Presets</MudText>
+                <div class="d-flex flex-wrap gap-2">
+                    <MudChip T="string" Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small" OnClick="@(() => ApplyPreset(1.0m))">1h</MudChip>
+                    <MudChip T="string" Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small" OnClick="@(() => ApplyPreset(2.0m))">2h</MudChip>
+                    <MudChip T="string" Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small" OnClick="@(() => ApplyPreset(4.0m))">4h</MudChip>
+                    @if (DefaultDailyHours > 0)
+                    {
+                        <MudChip T="string" Variant="Variant.Outlined" Color="Color.Secondary" Size="Size.Small" OnClick="@(() => ApplyPreset(DefaultDailyHours))">
+                            Full Day (@(DefaultDailyHours.ToString("0.##"))h)
+                        </MudChip>
+                    }
+                </div>
+            </div>
+
+            <MudTextField @bind-Value="hoursText" Label="Hours (e.g. 8, 7.5, 7:30)" Variant="Variant.Outlined"
+                Margin="Margin.Dense" Required="true" Adornment="Adornment.End" AdornmentIcon="@Icons.Material.Filled.Schedule"
+                OnBlur="OnHoursBlur" HelperText="@(Hours > 0 ? $"{Hours:0.##} hours entered" : "Enter hours or select a preset")" />
+
+            <MudTextField @bind-Value="Note" Label="Work Description / Notes" Variant="Variant.Outlined"
+                Lines="3" Margin="Margin.Dense" Required="@RequireNote"
+                HelperText="@(RequireNote ? "A description note is required." : "Optional description of work performed")" />
+        </MudStack>
+    </DialogContent>
+    <DialogActions>
+        <div class="px-4 pb-4 pt-0 d-flex align-center w-100">
+            @if (IsEditMode)
+            {
+                <MudButton Color="Color.Error" StartIcon="@Icons.Material.Filled.Delete" OnClick="Delete" Class="mr-auto">
+                    Delete
+                </MudButton>
+            }
+            <MudSpacer />
+            <MudButton OnClick="Cancel">Cancel</MudButton>
+            <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="Save">Save</MudButton>
+        </div>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
+
+    [Parameter] public DateTime Date { get; set; }
+    [Parameter] public decimal DefaultDailyHours { get; set; } = 8.0m;
+    [Parameter] public List<Project> Projects { get; set; } = new();
+    [Parameter] public List<WorkType> WorkTypes { get; set; } = new();
+    [Parameter] public bool RequireNote { get; set; } = false;
+    [Parameter] public bool IsEditMode { get; set; } = false;
+
+    [Parameter] public string ProjectId { get; set; } = "";
+    [Parameter] public string WorkTypeId { get; set; } = "";
+    [Parameter] public string SubTaskId { get; set; } = "";
+    [Parameter] public decimal Hours { get; set; } = 0;
+    [Parameter] public string Note { get; set; } = "";
+
+    [Inject] private ISnackbar Snackbar { get; set; } = default!;
+
+    private string hoursText = "";
+
+    protected override void OnInitialized()
+    {
+        if (Hours > 0)
+        {
+            hoursText = TimesheetSearchHelper.FormatHours(Hours);
+        }
+    }
+
+    private void ApplyPreset(decimal presetHours)
+    {
+        Hours = presetHours;
+        hoursText = TimesheetSearchHelper.FormatHours(presetHours);
+    }
+
+    private void OnHoursBlur()
+    {
+        Hours = TimesheetSearchHelper.ParseTimeInput(hoursText);
+        if (Hours > 0)
+        {
+            hoursText = TimesheetSearchHelper.FormatHours(Hours);
+        }
+    }
+
+    private void OnProjectChanged(string newProjectId)
+    {
+        ProjectId = newProjectId;
+        if (!string.IsNullOrEmpty(WorkTypeId))
+        {
+            var allowed = TimesheetSearchHelper.SearchTasks("", ProjectId, Projects, WorkTypes);
+            if (!allowed.Contains(WorkTypeId))
+            {
+                WorkTypeId = "";
+                SubTaskId = "";
+            }
+        }
+    }
+
+    private void OnWorkTypeChanged(string newWorkTypeId)
+    {
+        WorkTypeId = newWorkTypeId;
+        SubTaskId = "";
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+
+    private void Delete()
+    {
+        MudDialog.Close(DialogResult.Ok(new TimesheetDayEntryResult
+        {
+            IsDelete = true
+        }));
+    }
+
+    private void Save()
+    {
+        Hours = TimesheetSearchHelper.ParseTimeInput(hoursText);
+
+        if (string.IsNullOrWhiteSpace(ProjectId))
+        {
+            Snackbar.Add("Please select a project.", Severity.Warning);
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(WorkTypeId))
+        {
+            Snackbar.Add("Please select a task.", Severity.Warning);
+            return;
+        }
+
+        if (Hours <= 0)
+        {
+            Snackbar.Add("Please enter valid hours.", Severity.Warning);
+            return;
+        }
+
+        if (RequireNote && string.IsNullOrWhiteSpace(Note))
+        {
+            Snackbar.Add("A description note is required.", Severity.Warning);
+            return;
+        }
+
+        MudDialog.Close(DialogResult.Ok(new TimesheetDayEntryResult
+        {
+            IsDelete = false,
+            ProjectId = ProjectId,
+            WorkTypeId = WorkTypeId,
+            SubTaskId = SubTaskId ?? "",
+            Hours = Hours,
+            Note = Note?.Trim() ?? ""
+        }));
+    }
+
+    // --- Search Helpers ---
+    private async Task<IEnumerable<string>> SearchProjects(string value, CancellationToken token)
+        => TimesheetSearchHelper.SearchProjects(value, Projects);
+
+    private string GetProjectName(string id)
+        => TimesheetSearchHelper.GetProjectName(id, Projects);
+
+    private async Task<IEnumerable<string>> SearchTasks(string value, CancellationToken token)
+        => TimesheetSearchHelper.SearchTasks(value, ProjectId, Projects, WorkTypes);
+
+    private string GetTaskName(string id)
+        => TimesheetSearchHelper.GetTaskName(id, WorkTypes);
+
+    private async Task<IEnumerable<string>> SearchSubTasks(string value, CancellationToken token)
+        => TimesheetSearchHelper.SearchSubTasks(value, WorkTypeId, WorkTypes);
+
+    private string GetSubTaskName(string subTaskId)
+        => TimesheetSearchHelper.GetSubTaskName(subTaskId, WorkTypeId, WorkTypes);
+}

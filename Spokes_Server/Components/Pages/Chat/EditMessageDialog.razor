@@ -1,0 +1,35 @@
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Models.HR
+
+<MudDialog>
+    <DialogContent>
+        <MudTextField @bind-Value="NewContent" Label="Edit Message" Variant="Variant.Outlined" Lines="8" AutoGrow="true" MaxLines="15"
+            FullWidth="true" AutoFocus="true" />
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="Submit"
+            Disabled="@(string.IsNullOrWhiteSpace(NewContent))">
+            Save Changes
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
+    [Parameter] public string OriginalContent { get; set; } = "";
+
+    private string NewContent { get; set; } = "";
+
+    protected override void OnInitialized()
+    {
+        NewContent = OriginalContent;
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+    private void Submit() => MudDialog.Close(DialogResult.Ok(NewContent));
+}
+

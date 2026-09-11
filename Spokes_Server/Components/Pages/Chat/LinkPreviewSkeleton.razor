@@ -1,0 +1,26 @@
+<MudPaper Elevation="0" Class="mt-2"
+    Style="border: 1px solid var(--mud-palette-divider); border-radius: 8px; overflow: hidden; max-width: 480px;">
+
+    <!-- Image Skeleton -->
+    <div style="height: 160px; width: 100%;">
+        <MudSkeleton SkeletonType="SkeletonType.Rectangle" Height="160px" Width="100%" Animation="Animation.Wave" />
+    </div>
+
+    <div class="pa-3">
+        <!-- Site name / domain -->
+        <div class="d-flex align-center gap-2 mb-2">
+            <MudSkeleton SkeletonType="SkeletonType.Rectangle" Width="14px" Height="14px" Animation="Animation.Wave" />
+            <MudSkeleton SkeletonType="SkeletonType.Text" Width="80px" Height="12px" Animation="Animation.Wave" />
+        </div>
+
+        <!-- Title -->
+        <MudSkeleton SkeletonType="SkeletonType.Text" Width="80%" Height="16px" Animation="Animation.Wave" Class="mb-1" />
+        
+        <!-- Description -->
+        <MudSkeleton SkeletonType="SkeletonType.Text" Width="100%" Height="12px" Animation="Animation.Wave" Class="mt-2" />
+        <MudSkeleton SkeletonType="SkeletonType.Text" Width="60%" Height="12px" Animation="Animation.Wave" />
+    </div>
+</MudPaper>
+
+@code {
+}

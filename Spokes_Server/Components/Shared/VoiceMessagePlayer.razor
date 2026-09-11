@@ -1,0 +1,144 @@
+@inject IJSRuntime JS
+@implements IAsyncDisposable
+
+<MudPaper Elevation="0" Class="py-2 px-3 rounded-xl mt-1 mb-1" Style="background-color: var(--mud-palette-background-grey); max-width: 400px; border: 1px solid var(--mud-palette-lines-default);">
+    <div class="d-flex align-center w-100">
+        <MudIconButton Icon="@(_isPlaying ? Icons.Material.Filled.Pause : Icons.Material.Filled.PlayArrow)"
+                       Size="Size.Medium"
+                       Color="Color.Primary"
+                       OnClick="TogglePlay" 
+                       Class="mr-2 pa-1" />
+
+        <input type="range" min="0" max="100" value="@_progress" @oninput="OnProgressChanged" class="mud-slider voice-slider flex-grow-1" style="min-width: 150px;" />
+    </div>
+    
+    <div class="d-flex justify-space-between px-2" style="margin-left: 32px; margin-top: -2px;">
+        <MudText Typo="Typo.caption" Color="Color.Secondary" Style="font-size: 0.65rem;">@FormatTime(_currentTime)</MudText>
+        <MudText Typo="Typo.caption" Color="Color.Secondary" Style="font-size: 0.65rem;">@FormatTime(_duration)</MudText>
+    </div>
+
+    <!-- Hidden audio element -->
+    <audio @ref="_audioRef" src="@AudioUrl" @onloadedmetadata="OnLoadedMetadata" @ontimeupdate="OnTimeUpdate" @onended="OnEnded"></audio>
+</MudPaper>
+
+<style>
+    .voice-slider {
+        -webkit-appearance: none;
+        appearance: none;
+        background: var(--mud-palette-action-disabled);
+        height: 4px;
+        border-radius: 2px;
+        outline: none;
+    }
+    .voice-slider::-webkit-slider-thumb {
+        -webkit-appearance: none;
+        appearance: none;
+        width: 14px;
+        height: 14px;
+        border-radius: 50%;
+        background: var(--mud-palette-primary);
+        cursor: pointer;
+    }
+    .voice-slider::-moz-range-thumb {
+        width: 14px;
+        height: 14px;
+        border-radius: 50%;
+        background: var(--mud-palette-primary);
+        cursor: pointer;
+        border: none;
+    }
+</style>
+
+@code {
+    [Parameter]
+    public string AudioUrl { get; set; } = "";
+
+    private ElementReference _audioRef;
+    private bool _isPlaying = false;
+    private double _progress = 0;
+    private double _currentTime = 0;
+    private double _duration = 0;
+
+    private async Task TogglePlay()
+    {
+        if (_isPlaying)
+        {
+            await JS.InvokeVoidAsync("spokesAudioPlayer.pause", _audioRef);
+            _isPlaying = false;
+        }
+        else
+        {
+            await JS.InvokeVoidAsync("spokesAudioPlayer.play", _audioRef);
+            _isPlaying = true;
+        }
+    }
+
+    private async Task OnProgressChanged(ChangeEventArgs e)
+    {
+        if (double.TryParse(e.Value?.ToString(), out double newProgress))
+        {
+            var newTime = (newProgress / 100) * _duration;
+            await JS.InvokeVoidAsync("spokesAudioPlayer.setCurrentTime", _audioRef, newTime);
+            _progress = newProgress;
+            _currentTime = newTime;
+        }
+    }
+
+    private void OnLoadedMetadata(EventArgs e)
+    {
+        _ = InvokeAsync(async () =>
+        {
+            try
+            {
+                var duration = await JS.InvokeAsync<double>("spokesAudioPlayer.getDuration", _audioRef);
+                if (duration > 0)
+                {
+                    _duration = duration;
+                    StateHasChanged();
+                }
+            }
+            catch { }
+        });
+    }
+
+    private void OnTimeUpdate(EventArgs e)
+    {
+        _ = InvokeAsync(async () =>
+        {
+            try
+            {
+                var currentTime = await JS.InvokeAsync<double>("spokesAudioPlayer.getCurrentTime", _audioRef);
+                _currentTime = currentTime;
+                if (_duration > 0)
+                {
+                    _progress = (_currentTime / _duration) * 100;
+                }
+                StateHasChanged();
+            }
+            catch { }
+        });
+    }
+
+    private void OnEnded(EventArgs e)
+    {
+        _isPlaying = false;
+        _progress = 0;
+        _currentTime = 0;
+        StateHasChanged();
+    }
+
+    private string FormatTime(double seconds)
+    {
+        if (double.IsNaN(seconds) || double.IsInfinity(seconds) || seconds < 0) seconds = 0;
+        var t = TimeSpan.FromSeconds(seconds);
+        return $"{(int)t.TotalMinutes}:{t.Seconds:D2}";
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_isPlaying)
+        {
+            try { await JS.InvokeVoidAsync("spokesAudioPlayer.pause", _audioRef); } catch { }
+        }
+    }
+}

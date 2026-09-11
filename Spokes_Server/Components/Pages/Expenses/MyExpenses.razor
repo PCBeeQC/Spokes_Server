@@ -1,0 +1,328 @@
+@page "/me/expenses"
+@implements IDisposable
+<PageTitle>My Expenses</PageTitle>
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Data
+@using Spokes_Server.Core.Constants
+@using Spokes_Server.Components.Pages.Expenses
+@inject Database Db
+@inject AuthenticationStateProvider AuthStateProvider
+@inject IDialogService DialogService
+@inject ISnackbar Snackbar
+@inject NavigationManager Nav
+@inject UserService UserService
+
+<MudContainer MaxWidth="MaxWidth.Large" Class="mt-4 pb-4 px-3 px-md-4">
+
+    <MudText Typo="Typo.h5" GutterBottom="true">My Expenses</MudText>
+
+    <MudToggleGroup T="int" Value="activeTabIndex" ValueChanged="UpdateActiveTab" Outline="true" Delimiters="true" Rounded="true" CheckMark="false" Class="mb-6 flex-wrap" Error="false">
+        <MudToggleItem Value="0" Text="Expenses" Icon="@Icons.Material.Filled.Receipt" />
+        <MudToggleItem Value="1" Text="Commissions" Icon="@Icons.Material.Filled.Percent" />
+    </MudToggleGroup>
+
+    @if (activeTabIndex == 0)
+    {
+        @* Desktop View (table / multi-column card grid) *@
+        <div class="d-none d-md-block">
+            @if (CanCreateReport)
+            {
+                <MudButton StartIcon="@Icons.Material.Filled.Add" Variant="Variant.Filled" Color="Color.Primary"
+                           OnClick="CreateReport">New Expense Report</MudButton>
+            }
+
+            <MudGrid Class="mt-2" Spacing="3">
+                @foreach (var report in MyReports)
+                {
+                    <MudItem xs="12" sm="6" md="4" lg="3">
+                        <MudCard Elevation="0" Outlined="true" Class="h-100 d-flex flex-column my-expense-card" Style="border-radius: 16px;">
+                            <MudCardContent Class="pa-4 flex-grow-1">
+                                <div class="d-flex justify-space-between align-start mb-2">
+                                    <div>
+                                        <MudText Typo="Typo.h6">#@report.ReportNumber</MudText>
+                                        <MudText Typo="Typo.caption" Color="Color.Secondary">@report.DateCreated.ToShortDateString()</MudText>
+                                    </div>
+                                    <div>
+                                        @if (report.Status == ExpenseReportStatus.Draft)
+                                        {
+                                            <MudChip T="string" Size="Size.Small">Draft</MudChip>
+                                        }
+                                        else if (report.Status == ExpenseReportStatus.Submitted)
+                                        {
+                                            <MudChip T="string" Size="Size.Small" Color="Color.Warning">Submitted</MudChip>
+                                        }
+                                        else if (report.Status == ExpenseReportStatus.Paid)
+                                        {
+                                            <MudChip T="string" Size="Size.Small" Color="Color.Success" Icon="@Icons.Material.Filled.Check">Paid</MudChip>
+                                        }
+                                    </div>
+                                </div>
+                                <MudText Typo="Typo.h4" Class="mt-6 mb-2" Align="Align.Center">@report.TotalAmount.ToString("C")</MudText>
+                            </MudCardContent>
+                            <MudCardActions Class="px-4 pb-4 pt-0 d-flex justify-space-between align-center">
+                                @if (report.Status == ExpenseReportStatus.Draft)
+                                {
+                                    <div>
+                                        <MudButton Variant="Variant.Outlined" Color="Color.Error" Size="Size.Small" OnClick="@(() => DeleteReport(report))">Delete</MudButton>
+                                        <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small" OnClick="@(() => EditReport(report))">Edit</MudButton>
+                                    </div>
+                                    <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small" Class="rounded-pill px-4" Style="text-transform: none; font-weight: 600;" DisableElevation="true" OnClick="@(() => SubmitReport(report))">Submit</MudButton>
+                                }
+                                else
+                                {
+                                    <MudSpacer />
+                                    <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small" Class="rounded-pill px-4" Style="text-transform: none; font-weight: 600;" OnClick="@(() => ViewReport(report))">View</MudButton>
+                                }
+                            </MudCardActions>
+                        </MudCard>
+                    </MudItem>
+                }
+                @if (!MyReports.Any())
+                {
+                    <MudItem xs="12">
+                        <MudText Typo="Typo.body1" Align="Align.Center" Class="mt-4" Color="Color.Secondary">No expense reports found.</MudText>
+                    </MudItem>
+                }
+            </MudGrid>
+        </div>
+
+        @* Mobile View (single-page streamlined flow for on-the-road users) *@
+        <div class="d-block d-md-none">
+            <ExpenseMobileView MyReports="MyReports"
+                               EmployeeId="@EmployeeId"
+                               EmployeeName="@EmployeeName"
+                               CanCreateReport="CanCreateReport"
+                               OnReportUpdated="Refresh" />
+        </div>
+    }
+    else if (activeTabIndex == 1)
+    {
+
+        <MudGrid Spacing="3">
+            @foreach (var context in MyCommissions)
+            {
+                <MudItem xs="12" sm="6" md="4" lg="3">
+                    <MudCard Elevation="0" Outlined="true" Class="h-100 d-flex flex-column my-expense-card" Style="border-radius: 16px;">
+                        <MudCardContent Class="pa-4 flex-grow-1">
+                            <div class="d-flex justify-space-between align-start mb-2">
+                                <MudText Typo="Typo.subtitle1" Style="font-weight: 700;">@context.ProjectName</MudText>
+                                <StatusChip Status="@context.Status" />
+                            </div>
+                            <MudText Typo="Typo.body2" Color="Color.Secondary">@context.Percentage.ToString("0.##")% Commission</MudText>
+                            <MudText Typo="Typo.h5" Class="mt-4 GutterBottom">@context.Amount.ToString("C")</MudText>
+                            @if (context.DatePaid.HasValue)
+                            {
+                                <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mt-2 d-block">Paid: @context.DatePaid.Value.ToShortDateString()</MudText>
+                            }
+                        </MudCardContent>
+                    </MudCard>
+                </MudItem>
+            }
+            @if (!MyCommissions.Any())
+            {
+                <MudItem xs="12">
+                    <MudText Typo="Typo.body1" Align="Align.Center" Class="mt-4" Color="Color.Secondary">No commissions found.</MudText>
+                </MudItem>
+            }
+        </MudGrid>
+    }
+</MudContainer>
+
+<style>
+    .my-expense-card {
+        transition: transform 0.2s ease, box-shadow 0.2s ease;
+        border: 1px solid var(--mud-palette-lines-default);
+    }
+    .my-expense-card:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(0,0,0,0.08) !important;
+        border-color: var(--mud-palette-primary-hover);
+    }
+</style>
+
+@code {
+    private List<ExpenseReport> MyReports = new();
+    private List<CommissionItem> MyCommissions = new();
+    private string EmployeeId = "";
+    private string EmployeeName = "";
+    private bool CanCreateReport = false;
+
+    public class CommissionItem
+    {
+        public string ProjectName { get; set; } = string.Empty;
+        public decimal Percentage { get; set; }
+        public decimal Amount { get; set; }
+        public string Status { get; set; } = string.Empty;
+        public DateTime? DatePaid { get; set; }
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        var emp = await UserService.GetEmployeeAsync();
+        if (emp != null)
+        {
+            if (!emp.IsAdmin && !emp.HasPermission(AppPermissions.Finance.AccessExpenses))
+            {
+                Nav.NavigateTo("/", true);
+                return;
+            }
+
+            EmployeeId = emp.Id;
+            EmployeeName = emp.FullName;
+            CanCreateReport = emp.HasPermission(AppPermissions.Finance.AccessExpenses) || emp.IsAdmin;
+            Refresh();
+        }
+    }
+
+    private void Refresh()
+    {
+        if (string.IsNullOrEmpty(EmployeeId)) return;
+
+        // 1. Expense Reports
+        MyReports = Db.ExpenseReports.GetAll()
+        .Where(r => r.EmployeeId == EmployeeId)
+        .OrderByDescending(r => r.DateCreated)
+        .ToList();
+
+        // 2. Commissions (From Ledger)
+        MyCommissions.Clear();
+        var ledgers = Db.CommissionLedgerRecords.GetAll()
+            .Where(r => r.BeneficiaryId == EmployeeId || r.BeneficiaryId == EmployeeName)
+            .OrderByDescending(r => r.DateGenerated)
+            .ToList();
+
+        foreach (var record in ledgers)
+        {
+            var p = Db.Projects.GetById(record.ProjectId);
+            var percentage = p?.Commissions.FirstOrDefault(c => c.EmployeeId == EmployeeId || c.Name == EmployeeName)?.Percentage ?? 0;
+
+            MyCommissions.Add(new CommissionItem
+            {
+                ProjectName = p?.DisplayName ?? "Unknown Project",
+                Percentage = percentage,
+                Amount = record.CommissionAmount,
+                Status = record.Status,
+                DatePaid = record.DatePaid
+            });
+        }
+    }
+
+    private async Task CreateReport()
+    {
+        if (!CanCreateReport) return;
+
+        var newReport = new ExpenseReport
+            {
+                EmployeeId = EmployeeId,
+                EmployeeName = EmployeeName
+            };
+
+        // Save immediately to generate ID and Number
+        Db.ExpenseReports.Save(newReport);
+        Refresh();
+
+        await EditReport(newReport);
+    }
+
+    private async Task EditReport(ExpenseReport report)
+    {
+        var parameters = new DialogParameters { ["Report"] = report, ["IsReadOnly"] = false };
+        var options = new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true };
+
+        var dialog = await DialogService.ShowAsync<ExpenseReportDialog>("Edit Report", parameters);
+        var result = await dialog.Result;
+
+        if (!result.Canceled)
+        {
+            Db.ExpenseReports.Save(report);
+            Refresh();
+            Snackbar.Add("Report Saved", Severity.Success);
+        }
+    }
+
+    private async Task ViewReport(ExpenseReport report)
+    {
+        var parameters = new DialogParameters { ["Report"] = report, ["IsReadOnly"] = true };
+        var options = new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true };
+        await DialogService.ShowAsync<ExpenseReportDialog>("View Report", parameters);
+    }
+
+    private void SubmitReport(ExpenseReport report)
+    {
+        // Simple submit
+        report.DateSubmitted = DateTime.Now;
+        Db.ExpenseReports.Save(report);
+        Refresh();
+        Refresh();
+        Snackbar.Add("Report Submitted for Approval", Severity.Success);
+    }
+
+    private async Task DeleteReport(ExpenseReport report)
+    {
+        var result = await DialogService.ShowMessageBoxAsync(
+        "Delete Report",
+        $"Are you sure you want to delete report #{report.ReportNumber}?",
+        yesText: "Delete", cancelText: "Cancel");
+
+        if (result == true)
+        {
+            Db.ExpenseReports.Delete(report.Id);
+            Refresh();
+            Snackbar.Add("Report Deleted", Severity.Success);
+        }
+    }
+
+    [SupplyParameterFromQuery] public string? Tab { get; set; }
+    private int activeTabIndex = 0;
+
+    protected override void OnParametersSet()
+    {
+        if (!string.IsNullOrEmpty(Tab))
+        {
+            activeTabIndex = Tab.ToLower() switch
+            {
+                "expenses" => 0,
+                "commissions" => 1,
+                _ => 0
+            };
+        }
+    }
+
+    private bool _isDisposed;
+
+    public void Dispose()
+    {
+        _isDisposed = true;
+    }
+
+    private void UpdateActiveTab(int index)
+    {
+        if (_isDisposed) return;
+
+        activeTabIndex = index;
+
+        if (!Nav.Uri.Contains("/me/expenses", StringComparison.OrdinalIgnoreCase))
+            return;
+
+        var tabName = index switch
+        {
+            0 => "expenses",
+            1 => "commissions",
+            _ => "expenses"
+        };
+        
+        try
+        {
+            Nav.NavigateTo(Nav.GetUriWithQueryParameter("tab", tabName), replace: true);
+        }
+        catch (Microsoft.AspNetCore.Components.NavigationException)
+        {
+        }
+    }
+}
+
+

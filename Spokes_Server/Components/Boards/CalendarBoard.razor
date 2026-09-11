@@ -1,0 +1,151 @@
+@using Spokes_Server.Core.Data
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Services
+@using System.Globalization
+@inject Database Db
+@inject BoardService BoardService
+@inject IDialogService DialogService
+
+<MudPaper Class="h-100 d-flex flex-column" Elevation="0">
+    <!-- CALENDAR HEADER -->
+    <MudPaper Elevation="0" Class="pa-2 d-flex align-center justify-space-between border-b">
+        <div class="d-flex align-center gap-2">
+            <MudIconButton Icon="@Icons.Material.Filled.ChevronLeft" OnClick="PrevMonth" />
+            <MudText Typo="Typo.h6" Style="font-weight: 600; width: 200px; text-align: center;">
+                @_currentMonth.ToString("MMMM yyyy")</MudText>
+            <MudIconButton Icon="@Icons.Material.Filled.ChevronRight" OnClick="NextMonth" />
+            <MudButton OnClick="GoToToday" Variant="Variant.Outlined" Size="Size.Small" Class="ml-2">Today</MudButton>
+        </div>
+
+        <MudSelect T="string" Label="Date Property" Value="@View.DatePropertyId" ValueChanged="OnDatePropertyChanged"
+            Variant="Variant.Outlined" Margin="Margin.Dense" Style="min-width: 200px;" Dense="true">
+            @foreach (var prop in Board.Properties.Where(p => p.Type == BoardPropertyType.Date))
+            {
+                <MudSelectItem Value="@prop.Id">@prop.Name</MudSelectItem>
+            }
+        </MudSelect>
+    </MudPaper>
+
+    <!-- CALENDAR GRID -->
+    <div class="flex-grow-1 overflow-auto p-2"
+        style="display: grid; grid-template-columns: repeat(7, 1fr); grid-template-rows: auto repeat(5, 1fr); gap: 1px; background-color: var(--mud-palette-divider);">
+
+        <!-- WEEKDAY HEADERS -->
+        @foreach (var day in CultureInfo.CurrentCulture.DateTimeFormat.AbbreviatedDayNames)
+        {
+            <div class="p-2 text-center text-uppercase font-weight-bold"
+                style="background-color: var(--mud-palette-surface);">
+                <MudText Typo="Typo.caption">@day</MudText>
+            </div>
+        }
+
+        <!-- DAYS -->
+        @for (int i = 0; i < 35; i++) // Fixed 5 weeks for simplicity
+        {
+            var date = _calendarStartDate.AddDays(i);
+            var isToday = date.Date == DateTime.Today;
+            var isCurrentMonth = date.Month == _currentMonth.Month;
+            var cardsForDay = GetCardsForDate(date);
+
+            <div class="d-flex flex-column pa-1"
+                style="background-color: @(isCurrentMonth ? "var(--mud-palette-surface)" : "var(--mud-palette-background-grey)"); min-height: 100px; overflow: hidden;">
+                <div class="d-flex justify-content-between align-items-center mb-1">
+                    <MudText Typo="Typo.body2"
+                        Color="@(isToday? Color.Primary: (isCurrentMonth ? Color.Default : Color.Secondary))"
+                        Style="@(isToday ? "font-weight: bold; background: var(--mud-palette-primary-hover); border-radius: 50%; width: 24px; height: 24px; text-align: center; line-height: 24px;" : "")">
+                        @date.Day
+                    </MudText>
+                </div>
+
+                <div class="d-flex flex-column gap-1 overflow-y-auto flex-grow-1">
+                    @foreach (var card in cardsForDay)
+                    {
+                        <MudPaper Elevation="1" Class="pa-1 px-2 cursor-pointer hover-effect" @onclick="@(() => OpenCard(card))"
+                            Style="border-left: 3px solid var(--mud-palette-primary);">
+                            <MudText Typo="Typo.caption"
+                                Style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block;">
+                                @card.Title
+                            </MudText>
+                        </MudPaper>
+                    }
+                </div>
+            </div>
+        }
+    </div>
+</MudPaper>
+
+
+@code {
+    [Parameter] public Board Board { get; set; } = default!;
+    [Parameter] public BoardView View { get; set; } = default!;
+    [Parameter] public List<BoardCard> Cards { get; set; } = new();
+
+    private DateTime _currentMonth = DateTime.Today;
+    private DateTime _calendarStartDate;
+
+    protected override void OnParametersSet()
+    {
+        _currentMonth = new DateTime(_currentMonth.Year, _currentMonth.Month, 1);
+        CalculateCalendarStart();
+    }
+
+    void CalculateCalendarStart()
+    {
+        var firstDayOfMonth = new DateTime(_currentMonth.Year, _currentMonth.Month, 1);
+        var diff = (int)firstDayOfMonth.DayOfWeek - (int)CultureInfo.CurrentCulture.DateTimeFormat.FirstDayOfWeek;
+        if (diff < 0) diff += 7;
+        _calendarStartDate = firstDayOfMonth.AddDays(-diff);
+    }
+
+    void PrevMonth()
+    {
+        _currentMonth = _currentMonth.AddMonths(-1);
+        CalculateCalendarStart();
+    }
+
+    void NextMonth()
+    {
+        _currentMonth = _currentMonth.AddMonths(1);
+        CalculateCalendarStart();
+    }
+
+    void GoToToday()
+    {
+        _currentMonth = DateTime.Today;
+        OnParametersSet();
+    }
+
+    void OnDatePropertyChanged(string propId)
+    {
+        View.DatePropertyId = propId;
+        BoardService.UpdateBoard(Board);
+    }
+
+    List<BoardCard> GetCardsForDate(DateTime date)
+    {
+        if (string.IsNullOrEmpty(View.DatePropertyId) || !Cards.Any()) return new();
+
+        return Cards.Where(c =>
+        {
+            if (c.PropertyValues.TryGetValue(View.DatePropertyId, out var val))
+            {
+                if (DateTime.TryParse(val, out var d))
+                {
+                    return d.Date == date.Date;
+                }
+            }
+            return false;
+        }).ToList();
+    }
+
+    async Task OpenCard(BoardCard card)
+    {
+        var parameters = new DialogParameters<CardDetailDialog> { { x => x.Card, card }, { x => x.Board, Board } };
+        var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Medium, FullWidth = true };
+        await DialogService.ShowAsync<CardDetailDialog>("Card Details", parameters, options);
+    }
+}

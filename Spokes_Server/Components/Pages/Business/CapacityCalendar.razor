@@ -1,0 +1,383 @@
+@using Spokes_Server.Core.Data
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Models.HR
+@using MudBlazor
+@using System.Globalization
+@inject Database Db
+
+<MudPaper Class="pa-4" Elevation="0">
+    <div class="d-flex justify-space-between align-center mb-4">
+        <div class="d-flex align-center gap-2">
+            <MudIconButton Icon="@Icons.Material.Filled.ChevronLeft" OnClick="PrevMonth" />
+            <MudText Typo="Typo.h5"><b>@CurrentMonth.ToString("MMMM yyyy")</b></MudText>
+            <MudIconButton Icon="@Icons.Material.Filled.ChevronRight" OnClick="NextMonth" />
+            <MudButton Variant="Variant.Outlined" OnClick="GoToToday" Size="Size.Small" Class="ml-4">Today</MudButton>
+        </div>
+
+        <div class="d-flex gap-4">
+            <!-- Filter: Quotes -->
+            <div class="d-flex align-center gap-1 cursor-pointer filter-chip @(ShowQuotes ? "" : "f-disabled")"
+            @onclick="@(() => ToggleFilter("Quotes"))">
+                <MudIcon Icon="@Icons.Material.Filled.Circle" Size="Size.Small" Color="Color.Primary" />
+                <MudText Typo="Typo.caption" Style="@(ShowQuotes ? "font-weight:bold" : "color:gray")">Projects / Quotes
+                </MudText>
+            </div>
+
+            <!-- Filter: Invoices -->
+            <div class="d-flex align-center gap-1 cursor-pointer filter-chip @(ShowInvoices ? "" : "f-disabled")"
+            @onclick="@(() => ToggleFilter("Invoices"))">
+                <MudIcon Icon="@Icons.Material.Filled.Circle" Size="Size.Small" Color="Color.Success" />
+                <MudText Typo="Typo.caption" Style="@(ShowInvoices ? "font-weight:bold" : "color:gray")">Receivables
+                </MudText>
+            </div>
+
+            <!-- Filter: Bills -->
+            <div class="d-flex align-center gap-1 cursor-pointer filter-chip @(ShowBills ? "" : "f-disabled")"
+            @onclick="@(() => ToggleFilter("Bills"))">
+                <MudIcon Icon="@Icons.Material.Filled.Circle" Size="Size.Small" Color="Color.Warning" />
+                <MudText Typo="Typo.caption" Style="@(ShowBills ? "font-weight:bold" : "color:gray")">Payables</MudText>
+            </div>
+        </div>
+    </div>
+
+    @if (Loading)
+    {
+        <MudProgressLinear Indeterminate="true" Class="mb-4" />
+    }
+
+    <!-- Calendar Grid -->
+    <div class="calendar-grid">
+        <!-- Headers -->
+        @foreach (var day in new[] { "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun" })
+        {
+            <div class="calendar-header">@day</div>
+        }
+
+        <!-- Cells -->
+        @foreach (var day in CalendarDays)
+        {
+            <div class="@GetCellClass(day)">
+                <div class="day-number">@day.Date.Day</div>
+
+                <div class="day-content">
+                    @foreach (var evt in FilteredEvents.Where(e => e.Date == day.Date))
+                    {
+                        <div class="calendar-event @evt.TypeClass @(evt.IsContinuation ? "evt-cont" : "")"
+                        @onclick="@(() => OnEventClick(evt))" title="@evt.Title">
+                            @if (!string.IsNullOrEmpty(evt.Icon) && !evt.IsContinuation)
+                            {
+                                <MudIcon Icon="@evt.Icon" Size="Size.Small" Class="mr-1" />
+                            }
+                            <span>@evt.Title</span>
+                        </div>
+                    }
+                </div>
+            </div>
+        }
+    </div>
+
+</MudPaper>
+
+<style>
+    .calendar-grid {
+        display: grid;
+        grid-template-columns: repeat(7, 1fr);
+        gap: 1px;
+        background-color: var(--mud-palette-divider);
+        border: 1px solid var(--mud-palette-divider);
+    }
+
+    .calendar-header {
+        background-color: var(--mud-palette-background-grey);
+        padding: 8px;
+        text-align: center;
+        font-weight: bold;
+    }
+
+    .calendar-cell {
+        background-color: var(--mud-palette-surface);
+        min-height: 120px;
+        padding: 4px;
+        display: flex;
+        flex-direction: column;
+    }
+
+    .calendar-cell.other-month {
+        background-color: var(--mud-palette-background-grey);
+        opacity: 0.5;
+    }
+
+    .calendar-cell.today {
+        background-color: rgba(var(--mud-palette-primary-rgb), 0.05);
+    }
+
+    .day-number {
+        text-align: right;
+        font-size: 0.8rem;
+        color: var(--mud-palette-text-secondary);
+        margin-bottom: 4px;
+    }
+
+    .day-content {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+    }
+
+    .calendar-event {
+        font-size: 0.75rem;
+        padding: 2px 4px;
+        border-radius: 4px;
+        color: white;
+        cursor: pointer;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        display: flex;
+        align-items: center;
+    }
+
+    /* Spanning Styles */
+    .evt-cont {
+        border-top-left-radius: 0;
+        border-bottom-left-radius: 0;
+        margin-left: -5px;
+        /* Overlap grid gap padding */
+        padding-left: 8px;
+        opacity: 0.9;
+    }
+
+    .evt-span-start {
+        border-top-right-radius: 0;
+        border-bottom-right-radius: 0;
+        margin-right: -5px;
+    }
+
+    .evt-quote-span {
+        background-color: var(--mud-palette-primary);
+    }
+
+    .evt-invoice {
+        background-color: var(--mud-palette-success);
+    }
+
+    .evt-bill {
+        background-color: var(--mud-palette-warning);
+        color: black;
+    }
+
+    .filter-chip {
+        padding: 4px 8px;
+        border-radius: 16px;
+        transition: all 0.2s;
+    }
+
+    .filter-chip:hover {
+        background-color: var(--mud-palette-action-hover);
+    }
+
+    .f-disabled {
+        opacity: 0.5;
+        grayscale: 100%;
+    }
+
+    .cursor-pointer {
+        cursor: pointer;
+    }
+</style>
+
+@code {
+    private DateOnly CurrentMonth = DateOnly.FromDateTime(DateTime.Today);
+    private List<CalendarDay> CalendarDays = new();
+
+    private List<CalendarEvent> AllEvents = new();
+    private IEnumerable<CalendarEvent> FilteredEvents => AllEvents.Where(ShouldShow);
+
+    private bool Loading = false;
+
+    // Filter State
+    private bool ShowQuotes = true;
+    private bool ShowInvoices = true;
+    private bool ShowBills = true;
+
+    protected override async Task OnInitializedAsync()
+    {
+        // Go to first of month
+        CurrentMonth = new DateOnly(CurrentMonth.Year, CurrentMonth.Month, 1);
+        await LoadData();
+    }
+
+    private bool ShouldShow(CalendarEvent evt)
+    {
+        if (evt.Category == "Quote" && !ShowQuotes) return false;
+        if (evt.Category == "Invoice" && !ShowInvoices) return false;
+        if (evt.Category == "Bill" && !ShowBills) return false;
+        return true;
+    }
+
+    private void ToggleFilter(string category)
+    {
+        if (category == "Quotes") ShowQuotes = !ShowQuotes;
+        if (category == "Invoices") ShowInvoices = !ShowInvoices;
+        if (category == "Bills") ShowBills = !ShowBills;
+        StateHasChanged();
+    }
+
+    private async Task PrevMonth()
+    {
+        CurrentMonth = CurrentMonth.AddMonths(-1);
+        await LoadData();
+    }
+
+    private async Task NextMonth()
+    {
+        CurrentMonth = CurrentMonth.AddMonths(1);
+        await LoadData();
+    }
+
+    private async Task GoToToday()
+    {
+        var today = DateOnly.FromDateTime(DateTime.Today);
+        CurrentMonth = new DateOnly(today.Year, today.Month, 1);
+        await LoadData();
+    }
+
+    private async Task LoadData()
+    {
+        Loading = true;
+        BuildGrid();
+
+        AllEvents.Clear();
+        var startEx = CalendarDays.First().Date;
+        var endEx = CalendarDays.Last().Date;
+
+        // 1. Quotes (Accepted) - Spanning Logic
+        var quotes = Db.Quotes.GetAll().Where(q => q.Status == QuoteStatus.Accepted).ToList();
+
+        foreach (var q in quotes)
+        {
+            // Determine effective range
+            var start = q.StartDate ?? q.Deadline ?? DateOnly.FromDateTime(DateTime.Today);
+            var end = q.Deadline ?? q.StartDate ?? start;
+
+            // Check overlaps with current view
+            if (start <= endEx && end >= startEx)
+            {
+                // Iterate days in intersection
+                var current = start < startEx ? startEx : start;
+                var last = end > endEx ? endEx : end;
+
+                while (current <= last)
+                {
+                    var isStart = current == start;
+                    var isCont = !isStart && current.DayOfWeek != DayOfWeek.Monday; // If Monday, treat as new block visually
+
+                    var evt = new CalendarEvent
+                        {
+                            Date = current,
+                            Title = isStart || current.DayOfWeek == DayOfWeek.Monday ? q.QuoteNumber : "", // Clean look: only show label on start or week start
+                            Category = "Quote",
+                            TypeClass = $"evt-quote-span {(current < end ? "evt-span-start" : "")}",
+                            Icon = isStart ? Icons.Material.Filled.PlayArrow : "",
+                            IsContinuation = isCont
+                        };
+                    AllEvents.Add(evt);
+                    current = current.AddDays(1);
+                }
+            }
+        }
+
+        // 2. Invoices (Receivable)
+        var invoices = Db.Invoices.GetAll().Where(i => i.Status != "Paid" && i.Status != "Void").ToList();
+        foreach (var inv in invoices)
+        {
+            var d = DateOnly.FromDateTime(inv.DueDate);
+            if (d >= startEx && d <= endEx)
+            {
+                AllEvents.Add(new CalendarEvent
+                    {
+                        Date = d,
+                        Title = $"Inv: {inv.InvoiceNumber}",
+                        Category = "Invoice",
+                        TypeClass = "evt-invoice",
+                        Icon = Icons.Material.Filled.AttachMoney
+                    });
+            }
+        }
+
+        // 3. Bills (Payable)
+        var bills = Db.Bills.GetAll().Where(b => b.Status != "Paid" && b.Status != "Void").ToList();
+        foreach (var bill in bills)
+        {
+            var d = DateOnly.FromDateTime(bill.DueDate);
+            if (d >= startEx && d <= endEx)
+            {
+                AllEvents.Add(new CalendarEvent
+                    {
+                        Date = d,
+                        Title = $"Bill: {bill.SupplierName}",
+                        Category = "Bill",
+                        TypeClass = "evt-bill",
+                        Icon = Icons.Material.Filled.MoneyOff
+                    });
+            }
+        }
+
+        // Sort: Quotes first (bottom layer), then fin
+        AllEvents = AllEvents.OrderBy(e => e.Category != "Quote").ThenBy(e => e.Date).ToList();
+
+        Loading = false;
+    }
+
+    private void BuildGrid()
+    {
+        CalendarDays.Clear();
+
+        var firstDayOfMonth = CurrentMonth;
+        var lastDayOfMonth = firstDayOfMonth.AddMonths(1).AddDays(-1);
+
+        // Find Monday of the first week
+        int diff = (7 + (firstDayOfMonth.DayOfWeek - DayOfWeek.Monday)) % 7;
+        var runner = firstDayOfMonth.AddDays(-1 * diff);
+
+        // Fill until we cover the last day
+        while (runner <= lastDayOfMonth || runner.DayOfWeek != DayOfWeek.Monday)
+        {
+            CalendarDays.Add(new CalendarDay { Date = runner, IsCurrentMonth = runner.Month == CurrentMonth.Month });
+            runner = runner.AddDays(1);
+        }
+    }
+
+    private string GetCellClass(CalendarDay day)
+    {
+        var cls = "calendar-cell";
+        if (!day.IsCurrentMonth) cls += " other-month";
+        if (day.Date == DateOnly.FromDateTime(DateTime.Today)) cls += " today";
+        return cls;
+    }
+
+    private void OnEventClick(CalendarEvent evt)
+    {
+        // Placeholder for future detail view
+    }
+
+    public class CalendarDay
+    {
+        public DateOnly Date { get; set; }
+        public bool IsCurrentMonth { get; set; }
+    }
+
+    public class CalendarEvent
+    {
+        public DateOnly Date { get; set; }
+        public string Title { get; set; } = string.Empty;
+        public string Category { get; set; } = string.Empty; // Quote, Invoice, Bill
+        public string TypeClass { get; set; } = string.Empty;
+        public string Icon { get; set; } = string.Empty;
+        public bool IsContinuation { get; set; } // If true, hide icon/border-left
+    }
+}
+

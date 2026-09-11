@@ -1,0 +1,714 @@
+@page "/purchases/{Id}"
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Data
+@using Spokes_Server.Components.Pages.Purchases
+@using MudBlazor
+@inject Database Db
+@inject ISnackbar Snackbar
+@inject IDialogService DialogService
+@inject NavigationManager Nav
+@inject IJSRuntime JS
+@inject AuthenticationStateProvider AuthStateProvider
+@using Microsoft.AspNetCore.Components.Authorization
+@using Spokes_Server.Core.Constants
+@inject UserService UserService
+@inject Spokes_Server.Core.Services.Accounting.FinancialCalculationEngine CalcEngine
+@implements IAsyncDisposable
+@using Spokes_Server.Core.Services.Documents
+@inject DocumentPdfService PdfService
+
+@if (PO == null || Template == null || Profile == null)
+{
+    <MudAlert Severity="Severity.Error">Loading purchase order...</MudAlert>
+    <MudButton OnClick="GoBack">Back</MudButton>
+}
+else
+{
+    @if (PO != null)
+    {
+        <PageTitle>@($"{PO.PoNumber} - {PO.Supplier?.BusinessName}")</PageTitle>
+    }
+    <MudGrid Spacing="0" Class="py-2 d-print-none align-center" Style="position: sticky; top: 0; z-index: 99; background-color: var(--mud-palette-background);">
+        <MudItem xs="5">
+            <MudButton StartIcon="@Icons.Material.Filled.ArrowBack" OnClick="GoBack">Back to List</MudButton>
+        </MudItem>
+        <MudItem xs="7" Class="d-flex justify-end align-center gap-2">
+            <MudSelect T="string" Value="@PO.Status" ValueChanged="UpdateStatus" Dense="true" Margin="Margin.Dense"
+                Variant="Variant.Outlined" Style="width: 170px;">
+                <MudSelectItem Value="@("Draft")">Draft</MudSelectItem>
+                <MudSelectItem Value="@("Final")">Final</MudSelectItem>
+                <MudSelectItem Value="@("Partially Billed")">Partially Billed</MudSelectItem>
+                <MudSelectItem Value="@("Fully Billed")">Fully Billed</MudSelectItem>
+                <MudSelectItem Value="@("Closed")">Closed</MudSelectItem>
+            </MudSelect>
+            <MudButton Variant="Variant.Outlined" Color="Color.Success" StartIcon="@Icons.Material.Filled.PictureAsPdf"
+                OnClick="GeneratePdf">Print / PDF</MudButton>
+            @if (PO.Status != "Draft" && !string.IsNullOrEmpty(PO.PdfPath))
+            {
+                <MudButton Variant="Variant.Outlined" Color="Color.Info" StartIcon="@Icons.Material.Filled.OpenInNew" OnClick="OpenPdf">Open PDF</MudButton>
+                <MudButton Variant="Variant.Outlined" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Email"
+                    OnClick="SendByEmail">Send by Email</MudButton>
+            }
+            @if (PO.Status == "Draft")
+            {
+                <MudButton Variant="Variant.Outlined" Color="Color.Warning" StartIcon="@Icons.Material.Filled.Edit"
+                    OnClick="EditPO">Edit</MudButton>
+            }
+        </MudItem>
+    </MudGrid>
+
+    <style>
+        #printable-area {
+            font-size: 11px;
+            line-height: 1.3;
+        }
+        #printable-area .mud-typography {
+            line-height: 1.3;
+        }
+        #printable-area .mud-typography-h4 {
+            font-size: 16pt !important;
+            font-weight: bold;
+            margin-bottom: 2px !important;
+        }
+        #printable-area .mud-typography-h5 {
+            font-size: 14pt !important;
+            font-weight: bold;
+        }
+        #printable-area .mud-typography-h6 {
+            font-size: 12pt !important;
+            font-weight: bold;
+        }
+        #printable-area .mud-typography-body1 {
+            font-size: 11px !important;
+        }
+        #printable-area .mud-typography-body2 {
+            font-size: 10px !important;
+        }
+        #printable-area .mud-typography-caption {
+            font-size: 9px !important;
+        }
+        #printable-area .mud-table-cell {
+            padding: 4px 8px !important;
+            font-size: 12px !important;
+            line-height: 1.2 !important;
+        }
+    </style>
+
+    <MudPaper Class="mx-auto overflow-hidden" Style="max-width: 8.5in; width: 100%; min-height: 11in;" Elevation="3" id="printable-area">
+
+        <div class="print-footer-custom">
+            <span>@Profile.CompanyName</span>
+            <span>Ref: @PO.PoNumber</span>
+            <span data-page-number style="display:none">{page} / {pages}</span>
+        </div>
+
+        <div class="print-body">
+
+            <div class="d-flex justify-space-between align-start mb-2 keep-together">
+                <div style="max-width: 50%;">
+                    @if (Profile.HasCustomLogo)
+                    {
+                        <MudImage Src="@($"/spokesapi/Media/Logo?v={Profile.LogoVersion}")" Height="80" ObjectFit="ObjectFit.Contain" Class="mb-2" />
+                    }
+                    else
+                    {
+                        <MudAvatar Rounded="true"
+                            Style="@($"width: 60px; height: 60px; font-size: 2rem; color: white; background-color: {Profile.PrimaryColor}; -webkit-print-color-adjust: exact;")">
+                            @Profile.CompanyName.Substring(0, 1)
+                        </MudAvatar>
+                    }
+                    <MudText Typo="Typo.body1" Style="font-weight:bold;">@Profile.CompanyName</MudText>
+                    <MudText Typo="Typo.body2">@Profile.AddressStreet</MudText>
+                    <MudText Typo="Typo.body2">@Profile.AddressCity, @Profile.AddressState @Profile.AddressZip</MudText>
+                    <MudText Typo="Typo.body2">@Profile.Website</MudText>
+                </div>
+
+                <div class="d-flex flex-column align-end" style="max-width: 50%;">
+                    <MudText Typo="Typo.h4" Style="@($"color: {Profile.PrimaryColor}; font-weight: 300;")" Class="mb-1">
+                        @Template.Label_PurchaseOrder</MudText>
+                    <MudText Typo="Typo.h6" Style="@($"color: {Profile.SecondaryColor};")">#@PO.PoNumber</MudText>
+                    <MudText Class="mb-2">@Template.Label_Date: @PO.Date.ToString(!string.IsNullOrEmpty(Template?.DateFormat) ? Template.DateFormat : "MM/dd/yyyy")</MudText>
+
+                    <div class="mt-4" style="text-align: right;">
+                        <MudText Typo="Typo.caption"
+                            Style="@($"color: {Profile.SecondaryColor}; text-transform:uppercase; letter-spacing: 1px; font-weight: bold;")">
+                            @Template.Label_IssuedBy</MudText>
+                        <MudText Typo="Typo.body2" Style="font-weight: bold;">@IssuedByName</MudText>
+                        @if (!string.IsNullOrEmpty(IssuedByEmail))
+                        {
+                            <MudText Typo="Typo.body2">@IssuedByEmail</MudText>
+                        }
+                    </div>
+                </div>
+            </div>
+
+            <MudDivider Class="mb-4" />
+
+            <div class="print-row d-flex justify-space-between mb-4 keep-together">
+
+                <div class="print-col-6">
+                    <MudText Typo="Typo.caption"
+                        Style="@($"color: {Profile.SecondaryColor}; text-transform:uppercase; letter-spacing:1px; font-weight:bold;")">
+                        @Template.Label_Vendor</MudText>
+
+                    <MudText Typo="Typo.h6" Class="mt-1">@PO.Supplier.BusinessName</MudText>
+
+                    <div class="mt-2">
+                        @if (!string.IsNullOrEmpty(PO.Supplier.ContactPersonName))
+                        {
+                            <MudText Typo="Typo.body1" Style="font-weight: 600;">@PO.Supplier.ContactPersonPrefix
+                                @PO.Supplier.ContactPersonName</MudText>
+                        }
+
+                        <MudText Typo="Typo.body2">@PO.Supplier.BusinessAdressNumber @PO.Supplier.BusinessAdressStreet
+                        </MudText>
+                        <MudText Typo="Typo.body2">@PO.Supplier.BusinessAdressCity, @PO.Supplier.BusinessAdressState
+                            @PO.Supplier.BusinessAdressZip</MudText>
+
+                        @if (!string.IsNullOrEmpty(PO.Supplier.ContactPersonEmail))
+                        {
+                            <MudText Typo="Typo.body2" Class="mt-1">@PO.Supplier.ContactPersonEmail</MudText>
+                        }
+                        @if (!string.IsNullOrEmpty(PO.Supplier.ContactPersonPhone))
+                        {
+                            <MudText Typo="Typo.body2">@PO.Supplier.ContactPersonPhone</MudText>
+                        }
+                    </div>
+
+                    @if (!string.IsNullOrEmpty(PO.SupplierQuoteRef))
+                    {
+                        <div class="mt-4 pa-3"
+                            style="background: #f5f5f5; border-radius: 4px; display: inline-block; -webkit-print-color-adjust: exact;">
+                            <MudText Typo="Typo.caption" Style="@($"color: {Profile.SecondaryColor};")" Class="d-block">
+                                @Template.Label_SupplierRef</MudText>
+                            <MudText Typo="Typo.body2" Style="font-weight: 600;">@PO.SupplierQuoteRef</MudText>
+                        </div>
+                    }
+                </div>
+
+                <div class="print-col-6 d-flex flex-column align-end" style="text-align: right;">
+                    <MudText Typo="Typo.caption"
+                        Style="@($"color: {Profile.SecondaryColor}; text-transform:uppercase; letter-spacing:1px; font-weight:bold;")">
+                        @Template.Label_ShipTo</MudText>
+
+                    @if (PO.Recipient != null && !string.IsNullOrEmpty(PO.Recipient.BusinessName))
+                    {
+                        <MudText Typo="Typo.h6" Class="mt-1">@PO.Recipient.BusinessName</MudText>
+                        <div class="mt-2">
+                            @if (!string.IsNullOrEmpty(PO.Recipient.ContactPersonName))
+                            {
+                                <MudText Typo="Typo.body1" Style="font-weight: 600;">@PO.Recipient.ContactPersonPrefix
+                                    @PO.Recipient.ContactPersonName</MudText>
+                            }
+                            <MudText Typo="Typo.body2">@PO.Recipient.BusinessAdressStreet</MudText>
+                            <MudText Typo="Typo.body2">@PO.Recipient.BusinessAdressCity, @PO.Recipient.BusinessAdressState
+                                @PO.Recipient.BusinessAdressZip</MudText>
+                            @if (!string.IsNullOrEmpty(PO.Recipient.ContactPersonPhone))
+                            {
+                                <MudText Typo="Typo.body2">@PO.Recipient.ContactPersonPhone</MudText>
+                            }
+                        </div>
+                    }
+                    else
+                    {
+                        <MudText Typo="Typo.h6" Class="mt-1">@Profile.CompanyName</MudText>
+                        <div class="mt-2">
+                            <MudText Typo="Typo.body2">@Profile.AddressStreet</MudText>
+                            <MudText Typo="Typo.body2">@Profile.AddressCity, @Profile.AddressState @Profile.AddressZip</MudText>
+                            <MudText Typo="Typo.body2">@Profile.PhoneNumber</MudText>
+                        </div>
+                    }
+                </div>
+            </div>
+
+            @if (!string.IsNullOrEmpty(PO.Note))
+            {
+                <div class="mt-4 mb-4 pa-4 keep-together" style="background-color: #f9f9f9; border-left: 4px solid var(--mud-palette-primary); border-radius: 4px; -webkit-print-color-adjust: exact;">
+                    <MudText Typo="Typo.subtitle2" Class="mb-1" Style="font-weight: bold; color: var(--mud-palette-primary);">Note</MudText>
+                    <MudText Typo="Typo.body2" Style="white-space: pre-line;">@PO.Note</MudText>
+                </div>
+            }
+
+            <div class="allow-break">
+                @{
+                    double descWeight = 30;
+                    double partWeight = 15;
+                    double projWeight = 15;
+                    double customWeightSum = PO.CustomHeaders.Sum(h => Math.Max(8, h.Length));
+                    double totalDynamicWeight = descWeight + partWeight + projWeight + customWeightSum;
+
+                    string GetWidthCalc(double weight) => $"calc((100% - 280px) * {(weight / totalDynamicWeight).ToString(System.Globalization.CultureInfo.InvariantCulture)})";
+                    string descWidth = GetWidthCalc(descWeight);
+                    string partWidth = GetWidthCalc(partWeight);
+                    string projWidth = GetWidthCalc(projWeight);
+                }
+                <table class="mud-table-root allow-break" style="width: 100%; border-collapse: collapse; table-layout: fixed;">
+                    <thead class="keep-together keep-with-next repeat-on-break">
+                        <tr class="mud-table-row">
+                            <th class="mud-table-cell" style="text-align: left; font-weight: bold; padding: 6px 8px; border-bottom: 1px solid var(--mud-palette-table-lines); word-wrap: break-word; overflow-wrap: break-word; width: @descWidth;">@Template.Label_Description</th>
+                            <th class="mud-table-cell" style="text-align: left; font-weight: bold; padding: 6px 8px; border-bottom: 1px solid var(--mud-palette-table-lines); word-wrap: break-word; overflow-wrap: break-word; width: @partWidth;">Part #</th>
+                            <th class="mud-table-cell" style="text-align: left; font-weight: bold; padding: 6px 8px; border-bottom: 1px solid var(--mud-palette-table-lines); word-wrap: break-word; overflow-wrap: break-word; width: @projWidth;">Project</th>
+
+                            @foreach (var head in PO.CustomHeaders)
+                            {
+                                string headWidth = GetWidthCalc(Math.Max(8, head.Length));
+                                <th class="mud-table-cell" style="text-align: left; font-weight: bold; padding: 6px 8px; border-bottom: 1px solid var(--mud-palette-table-lines); word-wrap: break-word; overflow-wrap: break-word; width: @headWidth;">@head</th>
+                            }
+
+                            <th class="mud-table-cell" style="text-align: right; font-weight: bold; padding: 6px 8px; border-bottom: 1px solid var(--mud-palette-table-lines); white-space: nowrap; width: 80px;">@Template.Label_Quantity</th>
+                            <th class="mud-table-cell" style="text-align: right; font-weight: bold; padding: 6px 8px; border-bottom: 1px solid var(--mud-palette-table-lines); white-space: nowrap; width: 100px;">@Template.Label_Price</th>
+                            <th class="mud-table-cell" style="text-align: right; font-weight: bold; padding: 6px 8px; border-bottom: 1px solid var(--mud-palette-table-lines); white-space: nowrap; width: 100px;">@Template.Label_Total</th>
+                        </tr>
+                    </thead>
+                    <tbody class="allow-break">
+                        @{ var rowIndex = 0; }
+                        @foreach (var item in PO.Items)
+                        {
+                            var rowClass = rowIndex % 2 == 1 ? "background-color: rgba(0,0,0,0.02);" : "";
+                            <tr class="mud-table-row keep-together" style="@rowClass">
+                                <td class="mud-table-cell" style="padding: 6px 8px; border-bottom: 1px solid var(--mud-palette-table-lines); word-wrap: break-word;">@item.Description</td>
+                                <td class="mud-table-cell" style="padding: 6px 8px; border-bottom: 1px solid var(--mud-palette-table-lines); word-wrap: break-word;">@item.PartNumber</td>
+
+                                <td class="mud-table-cell" style="padding: 6px 8px; border-bottom: 1px solid var(--mud-palette-table-lines); word-wrap: break-word;">
+                                    @if (!string.IsNullOrEmpty(item.ProjectId))
+                                    {
+                                        <span>@GetProjectName(item.ProjectId)</span>
+                                    }
+                                    else
+                                    {
+                                        <span>-</span>
+                                    }
+                                </td>
+
+                                @foreach (var head in PO.CustomHeaders)
+                                {
+                                    <td class="mud-table-cell" style="padding: 6px 8px; border-bottom: 1px solid var(--mud-palette-table-lines); word-wrap: break-word;">@(item.CustomData.ContainsKey(head) ? item.CustomData[head] : "-")</td>
+                                }
+
+                                <td class="mud-table-cell" style="text-align: right; padding: 6px 8px; border-bottom: 1px solid var(--mud-palette-table-lines); white-space: nowrap;">@item.Quantity.ToString("G29")</td>
+                                <td class="mud-table-cell" style="text-align: right; padding: 6px 8px; border-bottom: 1px solid var(--mud-palette-table-lines); white-space: nowrap;">@FormatMoney(item.UnitPrice)</td>
+                                <td class="mud-table-cell" style="text-align: right; padding: 6px 8px; border-bottom: 1px solid var(--mud-palette-table-lines); white-space: nowrap;">@FormatMoney(item.Total)</td>
+                            </tr>
+                            rowIndex++;
+                        }
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="print-row mt-4 mb-4 d-flex keep-together" style="gap: 20px;">
+                <div class="print-col-5" style="flex: 5;">
+                </div>
+                <div class="print-col-5" style="flex: 5;">
+                    <div class="d-flex justify-space-between mb-1">
+                        <MudText>@Template.Label_Subtotal:</MudText>
+                        <MudText>@FormatMoney(PO.SubTotal)</MudText>
+                    </div>
+
+                    @if (PO.ApplyTax)
+                    {
+                        <div class="d-flex justify-space-between mb-1">
+                            <MudText>@Template.Label_Tax (@(Math.Round(PO.TaxRate * 100,3))%):</MudText>
+                            <MudText>@FormatMoney(PO.TaxAmount)</MudText>
+                        </div>
+                    }
+
+                    <MudDivider Class="my-2" />
+                    <div class="d-flex justify-space-between mb-1">
+                        <MudText Typo="Typo.h5" Style="@($"color: {Profile.PrimaryColor}; font-weight: bold;")">
+                            <b>@Template.Label_PoTotal:</b>
+                        </MudText>
+                        <MudText Typo="Typo.h5" Style="@($"color: {Profile.PrimaryColor}; font-weight: bold;")">
+                            <b>@FormatMoney(PO.GrandTotal) @PO.Currency</b>
+                        </MudText>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+    </MudPaper>
+
+    <div class="d-print-none mt-8 mb-16">
+        <div class="d-flex align-center justify-space-between mb-2">
+            <MudText Typo="Typo.h5">Supplier Invoices / Bills</MudText>
+            @if (CanManageBills)
+            {
+                <MudButton StartIcon="@Icons.Material.Filled.Add" Variant="Variant.Filled" Color="Color.Primary"
+                    OnClick="AddBill">
+                    Receive Bill
+                </MudButton>
+            }
+        </div>
+
+        @if (LinkedBills.Any())
+        {
+            <MudTable Items="@LinkedBills" Hover="true" Dense="true">
+                <HeaderContent>
+                    <MudTh>Date</MudTh>
+                    <MudTh>Description</MudTh>
+                    <MudTh>Balance / Total</MudTh>
+                    <MudTh>Status</MudTh>
+                    <MudTh>Att.</MudTh>
+                    <MudTh>Actions</MudTh>
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd>@context.Date.ToShortDateString()</MudTd>
+                    <MudTd>@context.Description</MudTd>
+                    <MudTd>
+                        @if (context.BalanceDue > 0 && context.BalanceDue < context.Amount)
+                        {
+                            <MudText Color="Color.Warning" Typo="Typo.body2"><b>@context.BalanceDue.ToString("C")</b> / @context.Amount.ToString("C")</MudText>
+                        }
+                        else if (context.BalanceDue > 0)
+                        {
+                            <MudText Color="Color.Error" Typo="Typo.body2"><b>@context.BalanceDue.ToString("C")</b> / @context.Amount.ToString("C")</MudText>
+                        }
+                        else
+                        {
+                            <MudText Color="Color.Success" Typo="Typo.body2">Paid</MudText>
+                        }
+                    </MudTd>
+                    <MudTd>
+                        <MudChip T="string" Size="Size.Small"
+                            Color="@(context.Status == "Paid" ? Color.Success : Color.Warning)">@context.Status</MudChip>
+                    </MudTd>
+                    <MudTd>
+                        @if (!string.IsNullOrEmpty(context.AttachmentPath))
+                        {
+                            <MudIconButton Icon="@Icons.Material.Filled.AttachFile" Size="Size.Small" Color="Color.Secondary"
+                                OnClick='@(() => JS.InvokeVoidAsync("window.open", context.AttachmentPath, "_blank"))' />
+                        }
+                    </MudTd>
+                    <MudTd>
+                        @if (CanManageBills)
+                        {
+                            @if (context.BalanceDue > 0)
+                            {
+                                <MudButton Variant="Variant.Outlined" Color="Color.Info" Size="Size.Small" Class="mr-2" StartIcon="@Icons.Material.Filled.Payment" OnClick="@(() => RecordPayment(context))">Record Payment</MudButton>
+                            }
+                            <MudIconButton Icon="@Icons.Material.Filled.Edit" Size="Size.Small"
+                                OnClick="@(() => EditBill(context))" />
+                        }
+                    </MudTd>
+                </RowTemplate>
+            </MudTable>
+        }
+        else
+        {
+            <MudAlert Severity="Severity.Info" Variant="Variant.Outlined">No bills attached to this Purchase Order yet.
+            </MudAlert>
+        }
+    </div>
+}
+
+@code {
+    [Parameter] public string Id { get; set; } = string.Empty;
+
+    private PurchaseOrder? PO;
+    private CompanyProfile? Profile;
+    private DocumentTemplate? Template;
+    private Dictionary<string, string> ProjectNames = new();
+
+    private string IssuedByName = "";
+    private string IssuedByEmail = "";
+    private bool CanManageBills = false;
+    private bool _isAdmin = false;
+
+    private const int PageHeight = 940;
+    private bool _needsPagination = false;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender && PO != null && Profile != null)
+        {
+            try { await JS.InvokeVoidAsync("paginateSections", "printable-area", PageHeight); }
+            catch { /* pagination failed, single-page fallback */ }
+        }
+        else if (_needsPagination && PO != null && Profile != null)
+        {
+            _needsPagination = false;
+            try { await JS.InvokeVoidAsync("paginateSections", "printable-area", PageHeight); }
+            catch { /* pagination failed, single-page fallback */ }
+        }
+    }
+
+    private async Task RefreshViewer()
+    {
+        try { await JS.InvokeVoidAsync("cleanupPagination", "printable-area"); } catch {}
+        _needsPagination = true;
+        await InvokeAsync(StateHasChanged);
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        try { await JS.InvokeVoidAsync("cleanupPagination", "printable-area"); }
+        catch { /* component already disposed or JS unavailable */ }
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        var emp = await UserService.GetEmployeeAsync();
+        bool canView = emp != null && (emp.IsAdmin || 
+            emp.HasPermission(AppPermissions.Purchases.ManagePOs) || 
+            emp.HasPermission(AppPermissions.Purchases.ViewPOs) || 
+            emp.HasPermission(AppPermissions.Purchases.ManageBills));
+
+        if (!canView)
+        {
+            Nav.NavigateTo("/purchases", true);
+            return;
+        }
+
+        CanManageBills = emp != null && (emp.IsAdmin || emp.HasPermission(AppPermissions.Purchases.ManageBills));
+
+        _isAdmin = emp?.IsAdmin ?? false;
+
+        PO = Db.Purchases.GetById(Id);
+        Profile = Db.CompanyProfile.Get();
+
+        if (PO != null && !string.IsNullOrEmpty(PO.TemplateId))
+        {
+            Template = Db.DocumentTemplates.GetById(PO.TemplateId);
+        }
+
+        if (Template == null) Template = Db.DocumentTemplates.GetDefault();
+
+        if (PO != null)
+        {
+            var projectIds = PO.Items.Select(i => i.ProjectId).Distinct().ToList();
+            var projects = Db.Projects.GetAll().Where(p => projectIds.Contains(p.Id));
+            ProjectNames = projects.ToDictionary(p => p.Id, p => p.DisplayName);
+
+            var employee = Db.Employees.GetAll().FirstOrDefault(e => e.FullName == PO.IssuedBy);
+            if (employee != null)
+            {
+                IssuedByName = employee.FullName;
+                IssuedByEmail = employee.Email;
+            }
+            else
+            {
+                IssuedByName = PO.IssuedBy;
+            }
+
+            LoadBills();
+        }
+    }
+
+    private string GetProjectName(string projectId) => ProjectNames.ContainsKey(projectId) ? ProjectNames[projectId] : "";
+    private string FormatMoney(decimal amount)
+    {
+        var symbol = Template?.CurrencySymbol ?? "$";
+        return Template?.CurrencySymbolAfter == true
+        ? $"{amount.ToString("N2")}{symbol}"
+        : $"{symbol}{amount.ToString("N2")}";
+    }
+    private async Task GoBack() => await JS.InvokeVoidAsync("history.back");
+
+    private async Task EditPO()
+    {
+        var parameters = new DialogParameters { ["PO"] = PO };
+        var options = new DialogOptions { MaxWidth = MaxWidth.ExtraExtraLarge, FullWidth = true };
+
+        var dialog = await DialogService.ShowAsync<PurchaseOrderDialog>("Edit PO", parameters, options);
+        var result = await dialog.Result;
+
+        if (result != null && !result.Canceled)
+        {
+            if (result.Data is string s && s == "Deleted")
+            {
+                PO!.Status = "Void";
+                Db.Purchases.Save(PO);
+                Nav.NavigateTo("/purchases");
+                return;
+            }
+            else if (result.Data is PurchaseOrder po)
+            {
+                Db.Purchases.Save(po);
+                PO = po;
+                await OnInitializedAsync();
+                await RefreshViewer();
+            }
+        }
+    }
+
+    private async Task GeneratePdf()
+    {
+        await JS.InvokeVoidAsync("window.print");
+    }
+
+    private void UpdateStatus(string newStatus)
+    {
+        _ = UpdateStatusAsync(newStatus);
+    }
+
+    private async Task UpdateStatusAsync(string newStatus)
+    {
+        if (PO == null) return;
+
+        // Admin-only revert from Final to Draft
+        if (PO.Status == "Final" && newStatus == "Draft" && !_isAdmin)
+        {
+            Snackbar.Add("Only administrators can revert a finalized document to draft.", Severity.Warning);
+            return;
+        }
+
+        var oldStatus = PO.Status;
+        PO.Status = newStatus;
+
+        if (oldStatus == "Final" && newStatus == "Draft")
+        {
+            if (!string.IsNullOrEmpty(PO.PdfPath) && System.IO.File.Exists(PO.PdfPath))
+            {
+                try { System.IO.File.Delete(PO.PdfPath); } catch { }
+            }
+            PO.PdfPath = string.Empty;
+        }
+        else if (oldStatus == "Draft" && newStatus == "Final")
+        {
+            Snackbar.Add("Generating PDF document...", Severity.Info);
+            PO.PdfPath = await PdfService.GeneratePurchaseOrderPdfAsync(PO, Nav.BaseUri);
+        }
+
+        Db.Purchases.Save(PO);
+        Snackbar.Add($"Status updated to {newStatus}", Severity.Success);
+        
+        await RefreshViewer();
+    }
+
+    // --- BILLS LOGIC ---
+    private List<Bill> LinkedBills = new();
+
+    private void LoadBills()
+    {
+        if (PO != null)
+        {
+            LinkedBills = Db.Bills.GetByPo(PO.Id);
+            PO.TotalBilled = LinkedBills.Sum(b => b.Amount);
+        }
+    }
+
+    private async Task AddBill()
+    {
+        if (PO == null) return;
+        
+        LoadBills(); // Ensure we have the latest totals
+        
+        var bill = new Bill
+            {
+                PurchaseOrderId = PO.Id,
+                SupplierName = PO.Supplier?.BusinessName ?? "",
+                Amount = PO.RemainingBalance > 0 ? PO.RemainingBalance : 0,
+                Description = $"Invoice for {PO.PoNumber}",
+                Date = DateTime.Today
+            };
+        await OpenBillDialog(bill);
+    }
+
+    private async Task EditBill(Bill bill)
+    {
+        await OpenBillDialog(bill);
+    }
+
+    private async Task RecordPayment(Bill bill)
+    {
+        var parameters = new DialogParameters<Spokes_Server.Components.Dialogs.RecordPaymentDialog>
+        {
+            { x => x.Message, $"Record payment for {bill.Description}" },
+            { x => x.MaxAmount, bill.BalanceDue },
+            { x => x.ExistingPayments, bill.Payments }
+        };
+        var dialog = await DialogService.ShowAsync<Spokes_Server.Components.Dialogs.RecordPaymentDialog>("Record Payment", parameters);
+        var result = await dialog.Result;
+
+        if (result != null && !result.Canceled && result.Data is PaymentRecord payment)
+        {
+            bill.Payments.Add(payment);
+            if (bill.BalanceDue <= 0)
+            {
+                bill.Status = "Paid";
+                bill.DatePaid = payment.Date;
+            }
+            Db.Bills.Save(bill);
+            LoadBills();
+            StateHasChanged();
+        }
+    }
+
+    private async Task OpenBillDialog(Bill bill)
+    {
+        var parameters = new DialogParameters { ["Bill"] = bill };
+        var options = new DialogOptions { MaxWidth = MaxWidth.ExtraExtraLarge, FullWidth = true, CloseButton = true };
+
+        var dialog = await DialogService.ShowAsync<Spokes_Server.Components.Dialogs.BillEditorDialog>("Bill Details", parameters,
+        options);
+        var result = await dialog.Result;
+
+        if (result != null && !result.Canceled && result.Data is Bill b)
+        {
+            Db.Bills.Save(b);
+            LoadBills();
+            
+            if (PO != null)
+            {
+                if (PO.TotalBilled >= PO.GrandTotal)
+                {
+                    PO.Status = "Fully Billed";
+                }
+                else if (PO.TotalBilled > 0 && PO.Status == "Final")
+                {
+                    PO.Status = "Partially Billed";
+                }
+                Db.Purchases.Save(PO);
+            }
+            StateHasChanged();
+        }
+    }
+
+    private async Task SendByEmail()
+    {
+        if (string.IsNullOrEmpty(PO?.PdfPath) || !System.IO.File.Exists(PO.PdfPath))
+        {
+            Snackbar.Add("PDF file not found. Please try generating it again by setting status to Draft then Final.", Severity.Warning);
+            return;
+        }
+
+        var parameters = new DialogParameters
+        {
+            ["To"] = PO.Supplier?.ContactPersonEmail ?? "",
+            ["Subject"] = $"Purchase Order #{PO.PoNumber} from {Profile?.CompanyName}",
+            ["Body"] = $"<p>Dear {PO.Supplier?.ContactPersonName ?? "Supplier"},</p><p>Please find attached Purchase Order #{PO.PoNumber}.</p>",
+            ["IsTemplate"] = true,
+            ["PreloadedFiles"] = new List<(string Path, string FileName)> 
+            { 
+                (PO.PdfPath, $"PO_{PO.PoNumber}.pdf") 
+            }
+        };
+
+        var options = new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true };
+        await DialogService.ShowAsync<Spokes_Server.Components.Pages.Email.EmailComposer>("Send Email", parameters, options);
+    }
+
+    private async Task OpenPdf()
+    {
+        if (string.IsNullOrEmpty(PO?.PdfPath) || !System.IO.File.Exists(PO.PdfPath))
+        {
+            Snackbar.Add("PDF file not found.", Severity.Warning);
+            return;
+        }
+
+        try
+        {
+            var bytes = await System.IO.File.ReadAllBytesAsync(PO.PdfPath);
+            var base64 = Convert.ToBase64String(bytes);
+            var dataUrl = $"data:application/pdf;base64,{base64}";
+            await JS.InvokeVoidAsync("window.openBase64InNewTab", dataUrl, $"PO_{PO.PoNumber}.pdf");
+        }
+        catch (Exception)
+        {
+            Snackbar.Add("Failed to open PDF view", Severity.Error);
+        }
+    }
+}

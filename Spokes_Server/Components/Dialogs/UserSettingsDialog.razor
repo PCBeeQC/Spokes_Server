@@ -1,0 +1,1398 @@
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Data
+@using Spokes_Server.Core.Constants
+@using MudBlazor
+@using Microsoft.AspNetCore.Components.Authorization
+@using System.Security.Claims
+@using System.Text.Json
+@implements IDisposable
+@inject IJSRuntime JS
+@inject ISnackbar Snackbar
+@inject Database Db
+@inject AuthenticationStateProvider AuthStateProvider
+@inject Spokes_Server.Core.Services.Core.UserService UserService
+@inject IDialogService DialogService
+@inject PresenceStateService PresenceState
+@inject NavigationManager Nav
+@inject Spokes_Server.Core.Services.Core.AccountDeletionService AccountDeletionService
+@inject Microsoft.Extensions.Configuration.IConfiguration Config
+@inject Spokes_Server.Core.Services.Licensing.LicenseValidationService LicenseValidationService
+
+<MudDialog>
+    <TitleContent>
+        <div class="d-flex align-center gap-2">
+            <MudIcon Icon="@Icons.Material.Filled.Settings" />
+            <MudText Typo="Typo.h6">User Settings</MudText>
+        </div>
+    </TitleContent>
+    <DialogContent>
+        @if (!IsInitialized)
+        {
+            <MudProgressLinear Indeterminate="true" Class="mb-4" />
+        }
+        else
+        {
+            <div class="d-flex flex-column gap-4 mb-4">
+                @* --- Security Panel --- *@
+                <div>
+                    
+                    <MudPaper Elevation="0" Outlined="true" Class="rounded-lg overflow-hidden">
+                        <div class="d-flex align-center my-1 ml-4">
+                            <MudIcon Icon="@Icons.Material.Filled.Lock" Size="Size.Small" Class="mr-2" />
+                            <MudText Typo="Typo.h6">Security</MudText>
+                        </div>
+                        <MudDivider />
+                        <div class="d-flex align-center justify-space-between px-4 py-3">
+                            <div>
+                                <MudText Typo="Typo.body1" Style="font-weight: 500;">Secure Chat</MudText>
+                                <MudText Typo="Typo.body2" Color="Color.Secondary">Manage your local chat encryption password.</MudText>
+                            </div>
+                            <MudButton Class="ml-2" Variant="Variant.Outlined" Color="Color.Primary" OnClick="OpenSecureChatSettings">Manage</MudButton>
+                        </div>
+                    </MudPaper>
+                </div>
+
+                @* --- Notification Preferences Panel --- *@
+                <div>
+                    
+                    <MudPaper Elevation="0" Outlined="true" Class="rounded-lg overflow-hidden">
+                        <div class="d-flex align-center my-1 ml-4">
+                            <MudIcon Icon="@Icons.Material.Filled.Notifications" Size="Size.Small" Class="mr-2" />
+                            <MudText Typo="Typo.h6">Notification Preferences</MudText>
+                        </div>
+                        <MudDivider />
+                        @if (!IsFriendEdition)
+                        {
+                            <div class="d-flex align-center justify-space-between px-4 mt-2">
+                                <MudText Typo="Typo.body2" Style="font-weight: 500;">Enable All Notifications</MudText>
+                                <MudSwitch Value="_pushEnabled" Color="Color.Primary" ValueChanged="OnMasterToggleChanged" T="bool" Class="ma-0" />
+                            </div>
+                        }
+
+                        <div class="d-flex flex-column px-4 pb-4">
+                            @if (!IsFriendEdition)
+                            {
+                                <div class="d-flex align-center justify-space-between">
+                                    <MudText Typo="Typo.body2">Chat Messages</MudText>
+                                    <MudSwitch Value="_chatEnabled" Color="Color.Secondary" Disabled="!_pushEnabled" ValueChanged="OnChatToggleChanged" T="bool" Class="ma-0" />
+                                </div>
+                                <div class="d-flex align-center justify-space-between">
+                                    <MudText Typo="Typo.body2">Emails</MudText>
+                                    <MudSwitch Value="_emailEnabled" Color="Color.Secondary" Disabled="!_pushEnabled" ValueChanged="OnEmailToggleChanged" T="bool" Class="ma-0" />
+                                </div>
+                            }
+
+                            <div class="d-flex align-center justify-space-between py-2">
+                                <div class="mr-4">
+                                    <MudText Typo="Typo.body2">Chat Reactions</MudText>
+                                    <MudText Typo="Typo.caption" Color="Color.Secondary" Style="line-height: 1.2;">Receive notifications when another user reacts to your messages.</MudText>
+                                </div>
+                                <MudSwitch Value="_reactionEnabled" Color="Color.Secondary" Disabled="!_pushEnabled" ValueChanged="OnReactionToggleChanged" T="bool" Class="ma-0" />
+                            </div>
+
+                            <div class="d-flex align-center justify-space-between py-2">
+                                <div class="mr-4">
+                                    <MudText Typo="Typo.body2">Treat Replies as Mentions</MudText>
+                                    <MudText Typo="Typo.caption" Color="Color.Secondary" Style="line-height: 1.2;">Receive notifications when someone replies directly to your message.</MudText>
+                                </div>
+                                <MudSwitch Value="_replyTreatAsMentionEnabled" Color="Color.Secondary" Disabled="!_pushEnabled" ValueChanged="OnReplyTreatAsMentionToggleChanged" T="bool" Class="ma-0" />
+                            </div>
+
+                            @if (_currentUser?.HasPermission(Spokes_Server.Core.Constants.AppPermissions.Chat.Moderator) == true)
+                            {
+                                <div class="d-flex align-center justify-space-between py-2">
+                                    <div class="mr-4">
+                                        <MudText Typo="Typo.body2">Moderation Alerts</MudText>
+                                        <MudText Typo="Typo.caption" Color="Color.Secondary" Style="line-height: 1.2;">Receive notifications when a user reports a message.</MudText>
+                                    </div>
+                                    <MudSwitch Value="_moderationEnabled" Color="Color.Secondary" Disabled="!_pushEnabled" ValueChanged="OnModerationToggleChanged" T="bool" Class="ma-0" />
+                                </div>
+                            }
+
+                                <div class="d-flex align-center justify-space-between py-2">
+                                    <div class="mr-4">
+                                        <MudText Typo="Typo.body2">Limit Notification Sounds</MudText>
+                                        <MudText Typo="Typo.caption" Color="Color.Secondary" Style="line-height: 1.2;">Only play a sound for the first few unread messages in a channel.</MudText>
+                                    </div>
+                                <MudSwitch Value="_limitConsecutiveSounds" Color="Color.Secondary" Disabled="!_pushEnabled" ValueChanged="OnLimitConsecutiveSoundsChanged" T="bool" Class="ma-0" />
+                                </div>
+                                
+                                <MudCollapse Expanded="_limitConsecutiveSounds">
+                                    <div class="d-flex align-center pt-2 pb-2 pl-4">
+                                        <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mr-4">Notification limit per channel</MudText>
+                                        <MudNumericField Value="_consecutiveSoundLimit" T="int" ValueChanged="OnConsecutiveSoundLimitChanged" Min="1" Max="20" Variant="Variant.Outlined" Margin="Margin.Dense" Style="max-width: 80px;" Disabled="!_pushEnabled" />
+                                    </div>
+                                </MudCollapse>
+                        </div>
+                    </MudPaper>
+                </div>
+
+                @* --- Notification Schedule Panel --- *@
+                @if (_pushEnabled)
+                {
+                    <div>
+                        
+                        <MudPaper Elevation="0" Outlined="true" Class="rounded-lg overflow-hidden">
+                            <div class="d-flex align-center my-1 ml-4">
+                                <MudIcon Icon="@Icons.Material.Filled.AccessTime" Size="Size.Small" Class="mr-2" />
+                                <MudText Typo="Typo.h6" >Quiet Hours</MudText>
+                            </div>
+                            <MudDivider />
+                            <div class="d-flex align-center justify-space-between px-4 py-3">
+                                <div class="mr-4">
+                                    <MudText Typo="Typo.body1" Style="font-weight: 500;">Enable Quiet Hours</MudText>
+                                    <MudText Typo="Typo.caption" Color="Color.Secondary" Style="line-height: 1.2;">Notifications outside these hours will be queued and delivered when your day starts.</MudText>
+                                </div>
+                                <MudSwitch Value="_scheduleEnabled" Color="Color.Secondary" ValueChanged="OnScheduleToggleChanged" T="bool" Class="ma-0" />
+                            </div>
+
+                            @if (_scheduleEnabled)
+                            {
+                                <div class="px-4 pb-4">
+                                    <MudGrid Spacing="2">
+                                        @foreach (var day in _schedule)
+                                        {
+                                            <MudItem xs="12" sm="6" md="6">
+                                                <MudCard Elevation="0" Outlined="true" Class="h-100 device-card" Style="border-radius: 8px;">
+                                                    <MudCardContent Class="pa-3">
+                                                        <div class="d-flex justify-space-between align-center mb-2">
+                                                            <MudText Typo="Typo.subtitle2" Style="font-weight: 600;">@day.Day.ToString()</MudText>
+                                                            <MudSwitch T="bool" Value="day.IsEnabled"
+                                                                ValueChanged="@(v => OnDayToggleChanged(day.Day, v))"
+                                                                Color="Color.Primary" Class="ma-0" />
+                                                        </div>
+                                                        <div class="d-flex gap-2">
+                                                            <MudSelect T="int" Value="day.StartHour" Dense="true" Margin="Margin.Dense"
+                                                                Variant="Variant.Outlined" Disabled="!day.IsEnabled" Label="From"
+                                                                ValueChanged="@(v => OnStartHourChanged(day.Day, v))">
+                                                                @for (int h = 0; h < 24; h++)
+                                                                {
+                                                                    var hour = h;
+                                                                    <MudSelectItem T="int" Value="hour">@FormatHour(hour)</MudSelectItem>
+                                                                }
+                                                            </MudSelect>
+                                                            <MudSelect T="int" Value="day.EndHour" Dense="true" Margin="Margin.Dense"
+                                                                Variant="Variant.Outlined" Disabled="!day.IsEnabled" Label="To"
+                                                                ValueChanged="@(v => OnEndHourChanged(day.Day, v))">
+                                                                @for (int h = 0; h < 24; h++)
+                                                                {
+                                                                    var hour = h;
+                                                                    <MudSelectItem T="int" Value="hour">@FormatHour(hour)</MudSelectItem>
+                                                                }
+                                                            </MudSelect>
+                                                        </div>
+                                                    </MudCardContent>
+                                                </MudCard>
+                                            </MudItem>
+                                        }
+                                    </MudGrid>
+                                </div>
+                            }
+                        </MudPaper>
+                    </div>
+                }
+
+                @* --- Current Device Panel --- *@
+                <div>
+                    
+                    <MudPaper Elevation="0" Outlined="true" Class="rounded-lg overflow-hidden">
+                        <div class="d-flex align-center my-1 ml-4">
+                            <MudIcon Icon="@Icons.Material.Filled.Smartphone" Size="Size.Small" Class="mr-2" />
+                            <MudText Typo="Typo.h6">This Device</MudText>
+                        </div>
+                        <MudDivider></MudDivider>
+                        <div class="pa-4">
+                            @if (!IsSupported)
+                            {
+                                <MudAlert Severity="Severity.Warning" Dense="true" Class="mb-0">
+                                    Push notifications are not supported on this browser: @UnsupportedReason
+                                </MudAlert>
+                            }
+                            else if (!IsConfigured)
+                            {
+                                <MudAlert Severity="Severity.Info" Dense="true" Class="mb-0">
+                                    Push notifications are not configured by an administrator.
+                                </MudAlert>
+                            }
+                            else if (_isNativeMobile && !_isNativePushLicensed)
+                            {
+                                @if (IsSubscribed)
+                                {
+                                    <MudAlert Severity="Severity.Warning" Dense="false" Class="mb-0">
+                                        <div class="d-flex flex-column gap-1">
+                                            <div class="d-flex align-center justify-space-between">
+                                                <MudText Typo="Typo.subtitle2" Style="font-weight: 600;">Mobile Notifications Paused</MudText>
+                                                <MudButton Variant="Variant.Outlined" Color="Color.Error" Size="Size.Small"
+                                                    Disabled="@IsLoading" OnClick="UnsubscribeDevice">
+                                                    Disable
+                                                </MudButton>
+                                            </div>
+                                            <MudText Typo="Typo.body2">
+                                                This device is registered, but notifications cannot be delivered because this server's Spokes Pass has expired. Subscriptions are retained and will resume automatically once renewed.
+                                            </MudText>
+                                            @if (_currentUser?.IsAdmin == true || _currentUser?.HasPermission(AppPermissions.Admin.ManageSettings) == true)
+                                            {
+                                                <div class="mt-2">
+                                                    <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                                                               OnClick="@(() => { MudDialog.Close(); Nav.NavigateTo("/admin/settings?tab=setup"); })">
+                                                        Manage Spokes Pass
+                                                    </MudButton>
+                                                </div>
+                                            }
+                                        </div>
+                                    </MudAlert>
+                                }
+                                else
+                                {
+                                    <MudAlert Severity="Severity.Warning" Dense="false" Class="mb-0">
+                                        <div class="d-flex flex-column gap-2">
+                                            <div class="d-flex align-center gap-2">
+                                                <MudIcon Icon="@Icons.Material.Filled.NotificationsOff" Color="Color.Warning" Size="Size.Medium" />
+                                                <MudText Typo="Typo.subtitle1" Style="font-weight: 600;">Mobile Notifications Unavailable</MudText>
+                                            </div>
+                                            <MudText Typo="Typo.body2">
+                                                @if (_currentUser?.IsAdmin == true || _currentUser?.HasPermission(AppPermissions.Admin.ManageSettings) == true)
+                                                {
+                                                    <span>Your server is not currently licensed for native mobile push notifications. A single Spokes Pass covers all mobile devices on this server.</span>
+                                                }
+                                                else
+                                                {
+                                                    <span>Spokes Pass is required for mobile notifications to work. Only 1 pass per server is required. Talk to your server owner, I'm sure they would love to split the cost :)</span>
+                                                }
+                                            </MudText>
+                                            @if (_currentUser?.IsAdmin == true || _currentUser?.HasPermission(AppPermissions.Admin.ManageSettings) == true)
+                                            {
+                                                <div class="mt-1">
+                                                    <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                                                               OnClick="@(() => { MudDialog.Close(); Nav.NavigateTo("/admin/settings?tab=setup"); })">
+                                                        Resolve in Server Settings
+                                                    </MudButton>
+                                                </div>
+                                            }
+                                        </div>
+                                    </MudAlert>
+                                }
+                            }
+                            else if (IsSubscribed)
+                            {
+                                <div class="d-flex align-center justify-space-between">
+                                    <div class="d-flex align-center gap-2">
+                                        <MudIcon Icon="@Icons.Material.Filled.CheckCircle" Color="Color.Success" Size="Size.Small" />
+                                        <MudText Typo="Typo.body2">Notifications are enabled on this device.</MudText>
+                                    </div>
+                                    <MudButton Class="ml-2" Variant="Variant.Outlined" Color="Color.Error" Size="Size.Small"
+                                        Disabled="@IsLoading" OnClick="UnsubscribeDevice">
+                                        Disable
+                                    </MudButton>
+                                </div>
+                            }
+                            else if (_currentUser?.IsSuspended == true)
+                            {
+                                <MudAlert Severity="Severity.Warning" Dense="true" Class="mb-0">
+                                    Suspended accounts cannot enable notifications for new devices.
+                                </MudAlert>
+                            }
+                            else
+                            {
+                                <MudText Typo="Typo.body2" Class="mb-3">
+                                    Enable push notifications to receive alerts when the browser is minimized.
+                                </MudText>
+
+                                <MudGrid Spacing="2">
+                                    <MudItem xs="12" sm="6">
+                                        <MudSelect Value="_newDeviceType" ValueChanged="@((string v) => _newDeviceType = v)" Label="Device Type" Variant="Variant.Outlined"
+                                            Margin="Margin.Dense" T="string">
+                                            <MudSelectItem Value="@("Desktop")">Desktop</MudSelectItem>
+                                            <MudSelectItem Value="@("Mobile")">Mobile</MudSelectItem>
+                                        </MudSelect>
+                                    </MudItem>
+                                    <MudItem xs="12" sm="6">
+                                        <MudTextField Value="_newDeviceName" ValueChanged="@((string v) => _newDeviceName = v)" Label="Device Name (optional)"
+                                            Placeholder="e.g., Work Laptop" Variant="Variant.Outlined" Margin="Margin.Dense" T="string" />
+                                    </MudItem>
+                                </MudGrid>
+
+                                <div class="mt-3">
+                                    <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                                        Disabled="@IsLoading" OnClick="SubscribeDevice" StartIcon="@Icons.Material.Filled.NotificationsActive">
+                                        @if (IsLoading)
+                                        {
+                                            <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" />
+                                        }
+                                        Enable Notifications
+                                    </MudButton>
+                                </div>
+                            }
+                            </div>
+                        
+                    </MudPaper>
+                </div>
+            </div>
+
+            @* --- Registered Devices --- *@
+            @if (_devices.Any())
+            {
+                <MudDivider Class="mt-5 mb-3" />
+                <MudText Typo="Typo.h6" Class="ml-4 mb-2">Registered Devices</MudText>
+
+                <MudGrid Spacing="3">
+                    @foreach (var device in _devices)
+                    {
+                        <MudItem xs="12" sm="6" md="6">
+                            <MudCard Elevation="0" Outlined="true" Class="h-100 d-flex flex-column device-card" Style="border-radius: 16px;">
+                                <MudCardContent Class="pa-4 flex-grow-1">
+                                    <div class="d-flex align-center justify-space-between mb-2">
+                                        <div class="d-flex align-center gap-2" style="max-width: 100%;">
+                                            <MudIcon Icon="@(device.DeviceType == "Mobile" ? Icons.Material.Filled.PhoneAndroid : Icons.Material.Filled.Computer)" Size="Size.Small" Color="Color.Default" Class="flex-shrink-0" />
+                                            
+                                            @if (_editingDeviceId == device.Id)
+                                            {
+                                                <div class="d-flex align-center">
+                                                    <MudTextField Value="_editingDeviceName" ValueChanged="@((string v) => _editingDeviceName = v)" Variant="Variant.Text"
+                                                        Margin="Margin.Dense" Style="max-width: 120px; margin-top: -8px;"
+                                                        OnKeyDown="@(e => { if (e.Key == "Enter") SaveDeviceName(device.Id); })"
+                                                        Immediate="true" T="string" />
+                                                    <MudIconButton Icon="@Icons.Material.Filled.Check" Size="Size.Small" Color="Color.Primary"
+                                                        OnClick="@(() => SaveDeviceName(device.Id))" />
+                                                </div>
+                                            }
+                                            else
+                                            {
+                                                <MudText Typo="Typo.subtitle1" Style="font-weight: 600; text-overflow: ellipsis; overflow: hidden; white-space: nowrap;" Title="@device.DeviceName">
+                                                    @(string.IsNullOrEmpty(device.DeviceName) ? "(unnamed)" : device.DeviceName)
+                                                </MudText>
+                                                
+                                                @if (!string.IsNullOrEmpty(device.DeviceName) ? true : device.HasPush)
+                                                {
+                                                    <MudIconButton Icon="@Icons.Material.Filled.Edit" Size="Size.Small"
+                                                                   OnClick="@(() => StartEditDeviceName(device))" Class="flex-shrink-0 pa-1 ml-n1" />
+                                                }
+                                            }
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="d-flex align-center mb-1 ml-1">
+                                        @if (device.Id == _currentSessionId)
+                                        {
+
+                                            <MudChip T="string" Size="Size.Small" Color="Color.Info" Variant="Variant.Text" Class="ml-n2"
+                                                     Style="font-size: 0.7rem; padding: 0 4px; height: 20px;">This device</MudChip>
+                                        
+                                        }
+
+                                        @if (PresenceState.GetOnlineSessions().Contains(device.Id))
+                                        {
+                                            <MudChip T="string" Size="Size.Small" Color="Color.Success" Variant="Variant.Filled" Class="ml-2"
+                                                     Style="font-size: 0.7rem; padding: 0 4px; height: 20px;">Online</MudChip>
+                                        }
+
+                                        @if (device.HasVaultCookie)
+                                        {
+                                            <MudChip T="string" Size="Size.Small" Color="Color.Warning" Variant="Variant.Filled" Class="ml-2"
+                                                     Style="font-size: 0.7rem; padding: 0 4px; height: 20px;">Secure Chat</MudChip>
+                                        }
+                                    </div>
+
+                                    @if (device.LastSeenAt.HasValue)
+                                    {
+                                        <div class="d-flex align-center mb-3 ml-1">
+                                            <MudText Typo="Typo.caption" Color="Color.Secondary">Last seen: @device.LastSeenAt.Value.ToLocalTime().ToString("g")</MudText>
+                                        </div>
+                                    }
+
+                                    @if (device.HasPush)
+                                    {
+                                        var isDeviceMobile = device.DeviceType == "Mobile" || device.PushSubscriptionType == "NativeRelay";
+                                        var isPushBlockedForDevice = isDeviceMobile && !_isNativePushLicensed;
+
+                                        <MudDivider Class="mb-3" />
+                                        <div class="d-flex flex-column gap-2 ml-1">
+                                            <div class="d-flex justify-space-between align-center">
+                                                <div class="d-flex align-center gap-2">
+                                                    <MudText Typo="Typo.body2" Color="Color.Secondary">Push Notifications</MudText>
+                                                    @if (isPushBlockedForDevice)
+                                                    {
+                                                        <MudChip T="string" Size="Size.Small" Color="Color.Warning" Variant="Variant.Outlined" Style="font-size: 0.65rem; height: 18px; padding: 0 4px;">Pass Required</MudChip>
+                                                    }
+                                                </div>
+                                                <MudSwitch T="bool" Value="device.IsEnabled" Class="ma-0"
+                                                    Disabled="@isPushBlockedForDevice"
+                                                    ValueChanged="@(v => ToggleDeviceEnabled(device.Id, v))"
+                                                    Color="Color.Primary" Size="Size.Small" />
+                                            </div>
+                                            @if (device.DeviceType == "Desktop")
+                                            {
+                                                <div class="d-flex justify-space-between align-center mt-n1">
+                                                    <MudText Typo="Typo.body2" Color="Color.Secondary">Idle Tracking</MudText>
+                                                    <MudSwitch T="bool" Value="device.IsIdleDetectionEnabled" Class="ma-0"
+                                                        ValueChanged="@(v => ToggleDeviceIdleDetection(device.Id, v))"
+                                                        Color="Color.Secondary" Size="Size.Small" />
+                                                </div>
+                                            }
+                                            
+                                            <div class="d-flex justify-space-between align-center mt-n1">
+                                                <MudText Typo="Typo.body2" Color="Color.Secondary">Test Notification</MudText>
+                                                <MudButton Variant="Variant.Text" Color="Color.Primary" Size="Size.Small" Class="px-2" Style="min-width: unset; height: 28px;"
+                                                           OnClick="@(() => TestDevice(device.Id))" Disabled="@_isTesting">Send</MudButton>
+                                            </div>
+                                            
+                                            <div class="d-flex justify-space-between align-center mt-n1">
+                                                <MudText Typo="Typo.body2" Color="Color.Secondary">Remove Push</MudText>
+                                                <MudButton Variant="Variant.Text" Color="Color.Error" Size="Size.Small" Class="px-2" Style="min-width: unset; height: 28px;"
+                                                           OnClick="@(() => DeleteDevice(device.Id))">Remove</MudButton>
+                                            </div>
+                                        </div>
+                                    }
+                                </MudCardContent>
+                                
+                                <MudCardActions Class="px-4 pb-3 pt-0 d-flex justify-end align-center">
+                                    <MudButton Variant="Variant.Text" Color="Color.Error" Size="Size.Small" StartIcon="@Icons.Material.Filled.Logout"
+                                        OnClick="@(() => RevokeSession(device.Id))">Log Out</MudButton>
+                                </MudCardActions>
+                            </MudCard>
+                        </MudItem>
+                    }
+                </MudGrid>
+            }
+
+            @if (IsFriendEdition)
+            {
+                <MudDivider Class="my-4" />
+                <MudPaper Elevation="0" Outlined="true" Class="rounded-lg overflow-hidden" Style="border-color: var(--mud-palette-error);">
+                    <div class="d-flex align-center my-1 ml-4">
+                        <MudIcon Icon="@Icons.Material.Filled.Warning" Color="Color.Error" Size="Size.Small" Class="mr-2" />
+                        <MudText Typo="Typo.h6" Color="Color.Error">Danger Zone</MudText>
+                    </div>
+                    <MudDivider />
+                    <div class="d-flex align-center justify-space-between px-4 py-3">
+                        <div>
+                            <MudText Typo="Typo.body1" Style="font-weight: 500;">Delete Account</MudText>
+                            <MudText Typo="Typo.body2" Color="Color.Secondary">Permanently delete your account and wipe your data from the server.</MudText>
+                        </div>
+                        <MudButton Class="ml-2" Variant="Variant.Filled" Color="Color.Error" OnClick="ConfirmDeleteAccount">Delete Account</MudButton>
+                    </div>
+                </MudPaper>
+            }
+
+            <MudDivider Class="my-4" />
+            <MudPaper Elevation="0" Outlined="true" Class="rounded-lg overflow-hidden">
+                <div class="d-flex align-center my-1 ml-4">
+                    <MudIcon Icon="@Icons.Material.Filled.PrivacyTip" Color="Color.Default" Size="Size.Small" Class="mr-2" />
+                    <MudText Typo="Typo.h6" Color="Color.Default">Legal</MudText>
+                </div>
+                <MudDivider />
+                <div class="d-flex align-center justify-space-between px-4 py-3">
+                    <div>
+                        <MudText Typo="Typo.body1" Style="font-weight: 500;">Privacy Policy</MudText>
+                        <MudText Typo="Typo.body2" Color="Color.Secondary">Read how your data is handled by this server.</MudText>
+                    </div>
+                    <MudButton Class="ml-2" Variant="Variant.Outlined" Color="Color.Primary" Href="@(Db.CompanyProfile.Get()?.PrivacyPolicyUrl ?? "https://spokes.sh/privacy/")" Target="_blank">View Policy</MudButton>
+                </div>
+            </MudPaper>
+        }
+        @if (_debugLogs.Any())
+        {
+            <MudDivider Class="my-4" />
+            <div class="d-flex justify-space-between align-center mb-2">
+                <MudText Typo="Typo.subtitle1" Style="font-weight: 600;">Debug Logs</MudText>
+                <div>
+                    <MudIconButton Icon="@Icons.Material.Filled.ContentCopy" Size="Size.Small" OnClick="CopyLogs" Title="Copy Logs" />
+                    <MudIconButton Icon="@Icons.Material.Filled.Clear" Size="Size.Small" OnClick="@(() => _debugLogs.Clear())" Title="Clear Logs" />
+                </div>
+            </div>
+            <div style="background: var(--mud-palette-background-grey); padding: 8px; border-radius: 4px; font-family: monospace; font-size: 0.8rem; max-height: 150px; overflow-y: auto;">
+                @foreach(var log in _debugLogs)
+                {
+                    <div style="margin-bottom: 4px; color: @(log.IsError ? "var(--mud-palette-error)" : "inherit")">
+                        <span style="color: var(--mud-palette-text-secondary)">[@log.Timestamp.ToString("HH:mm:ss")]</span> @log.Message
+                    </div>
+                }
+            </div>
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Close">Close</MudButton>
+    </DialogActions>
+</MudDialog>
+
+<form id="delete-account-logout-form" method="post" action="/logout" style="display: none;" data-enhance="false">
+    <AntiforgeryToken />
+    <input type="hidden" name="client" id="delete-account-client-input" value="desktop" />
+</form>
+
+<style>
+    .device-card {
+        transition: transform 0.2s ease, box-shadow 0.2s ease;
+        border: 1px solid var(--mud-palette-lines-default);
+    }
+    .device-card:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(0,0,0,0.08) !important;
+        border-color: var(--mud-palette-primary-hover);
+    }
+</style>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
+
+    // State
+    private bool IsInitialized = false;
+    private bool IsSupported = false;
+    private string UnsupportedReason = "";
+    private bool IsConfigured = false;
+    private bool IsSubscribed = false;
+    private bool IsLoading = false;
+    private bool _isNativeMobile = false;
+    private bool _isNativePushLicensed = true;
+    private string _nativePushMessage = "";
+
+    // Preferences
+    private bool _pushEnabled = true;
+    private bool _chatEnabled = true;
+    private bool _reactionEnabled = true;
+    private bool _replyTreatAsMentionEnabled = true;
+    private bool _emailEnabled = true;
+    private bool _moderationEnabled = true;
+    private bool _limitConsecutiveSounds = false;
+    private int _consecutiveSoundLimit = 3;
+
+    // Schedule
+    private bool _scheduleEnabled = false;
+    private List<DaySchedule> _schedule = Enumerable.Range(0, 7)
+        .Select(i => new DaySchedule { Day = (DayOfWeek)i }).ToList();
+
+    // New device form
+    private string _newDeviceType = "Desktop";
+    private string _newDeviceName = "";
+
+    // Device list
+    private List<DeviceInfo> _devices = new();
+    private string? _currentEndpoint = null;
+    private string? _currentSessionId = null;
+    private string? _editingDeviceId = null;
+    private string _editingDeviceName = "";
+
+    // User
+    private Employee? _currentUser;
+    private bool IsFriendEdition => Db.CompanyProfile.Get()?.Edition == "Family";
+
+    // Debugging and Testing
+    private DotNetObjectReference<UserSettingsDialog>? _objRef;
+    private List<DebugLog> _debugLogs = new();
+    private bool _isTesting = false;
+
+    private void AddSubscriptionLog(string message, bool isError = false)
+    {
+        AddDebugLog(message, isError);
+    }
+
+    private class DebugLog
+    {
+        public DateTime Timestamp { get; set; } = DateTime.Now;
+        public string Message { get; set; } = "";
+        public bool IsError { get; set; }
+    }
+
+    private async Task CopyLogs()
+    {
+        var logText = string.Join(Environment.NewLine, _debugLogs.Select(l => $"[{l.Timestamp:HH:mm:ss}] {l.Message}"));
+        try
+        {
+            await JS.InvokeVoidAsync("spokesCopyText", logText);
+            Snackbar.Add("Logs copied to clipboard", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add("Failed to copy logs", Severity.Error);
+        }
+    }
+
+    private void AddDebugLog(string message, bool isError = false)
+    {
+        _debugLogs.Add(new DebugLog { Message = message, IsError = isError });
+        InvokeAsync(StateHasChanged);
+    }
+
+    protected override void OnInitialized()
+    {
+        _objRef = DotNetObjectReference.Create(this);
+    }
+
+    public void Dispose()
+    {
+        _objRef?.Dispose();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            await LoadAll();
+            if (_objRef != null)
+            {
+                await JS.InvokeVoidAsync("pushNotifications.setupMessageListener", _objRef);
+            }
+            IsInitialized = true;
+            StateHasChanged();
+        }
+    }
+
+    private async Task LoadAll()
+    {
+        // Load user
+        _currentUser = await UserService.GetEmployeeAsync();
+        if (_currentUser != null)
+        {
+            _pushEnabled = _currentUser.PushNotificationsEnabled;
+            _chatEnabled = _currentUser.ChatNotificationsEnabled;
+            _reactionEnabled = _currentUser.ReactionNotificationsEnabled;
+            _replyTreatAsMentionEnabled = _currentUser.ReplyNotificationsTreatAsMention;
+            _emailEnabled = _currentUser.EmailNotificationsEnabled;
+            _moderationEnabled = _currentUser.ModerationNotificationsEnabled;
+            _limitConsecutiveSounds = _currentUser.LimitConsecutiveNotificationSounds;
+            _consecutiveSoundLimit = _currentUser.ConsecutiveNotificationSoundLimit;
+            _scheduleEnabled = _currentUser.NotificationScheduleEnabled;
+            _schedule = _currentUser.NotificationSchedule
+                .Select(d => new DaySchedule { Day = d.Day, IsEnabled = d.IsEnabled, StartHour = d.StartHour, EndHour = d.EndHour })
+                .ToList();
+        }
+
+        // Load push support status
+        try
+        {
+            IsSupported = await JS.InvokeAsync<bool>("pushNotifications.isSupported");
+            if (!IsSupported)
+            {
+                UnsupportedReason = await JS.InvokeAsync<string>("pushNotifications.getSupportReason");
+            }
+            if (IsSupported)
+            {
+                try
+                {
+                    _isNativeMobile = await JS.InvokeAsync<bool>("pushNotifications.isNativePlatform");
+                }
+                catch { }
+
+                var currentConfig = Db.ServerConfigs.GetOrCreateGlobalConfig();
+                var profile = Db.CompanyProfile.Get();
+                var licenseResult = LicenseValidationService.ValidateLicense(profile?.LicensePayload, currentConfig);
+                _isNativePushLicensed = licenseResult.Status != Spokes_Server.Core.Services.Licensing.LicenseStatus.HardLock &&
+                                        licenseResult.Status != Spokes_Server.Core.Services.Licensing.LicenseStatus.Expired;
+                _nativePushMessage = licenseResult.Message;
+
+                IsConfigured = !string.IsNullOrEmpty(profile?.VapidPublicKey);
+
+                if (IsConfigured)
+                {
+                    var existingSub = await JS.InvokeAsync<Dictionary<string, object>?>("pushNotifications.getExistingSubscription");
+                    IsSubscribed = existingSub != null && existingSub.ContainsKey("endpoint");
+                    if (existingSub != null && existingSub.TryGetValue("endpoint", out var epObj))
+                    {
+                        _currentEndpoint = epObj?.ToString();
+                    }
+                }
+
+                // Auto-detect device type
+                _newDeviceType = await JS.InvokeAsync<string>("pushNotifications.detectDeviceType");
+                _newDeviceName = await JS.InvokeAsync<string>("pushNotifications.detectDeviceName");
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error loading push status: {ex.Message}");
+        }
+
+        try
+        {
+            var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+            _currentSessionId = authState.User.FindFirst("SessionId")?.Value;
+
+            if (!string.IsNullOrEmpty(_currentSessionId))
+            {
+                try
+                {
+                    var vaultRes = await JS.InvokeAsync<System.Text.Json.JsonElement>("eval", @"
+                        (async () => {
+                            const opts = { credentials: 'include', cache: 'no-store', headers: await window.spokesAuth.getHeaders() };
+                            const r = await fetch('/spokesapi/vault/status', opts);
+                            if (r.ok) return await r.json();
+                            return { hasCookie: false };
+                        })()
+                    ");
+                    if (vaultRes.ValueKind != System.Text.Json.JsonValueKind.Null && vaultRes.TryGetProperty("hasCookie", out var hc))
+                    {
+                        var hasCookie = hc.GetBoolean();
+                        var currentSession = Db.DeviceSessions.GetById(_currentSessionId);
+                        if (currentSession != null && currentSession.HasVaultCookie != hasCookie)
+                        {
+                            currentSession.HasVaultCookie = hasCookie;
+                            Db.DeviceSessions.Save(currentSession);
+                        }
+                    }
+                }
+                catch { }
+            }
+        }
+        catch { }
+
+        // Load devices
+        await LoadDevices();
+    }
+
+    private async Task LoadDevices()
+    {
+        try
+        {
+            if (_currentUser == null) return;
+
+            // Unified device list: each DeviceSession IS a device card. No join logic needed.
+            var sessions = Db.DeviceSessions.GetActiveByEmployeeId(_currentUser.Id);
+            _devices = sessions.Select(s => new DeviceInfo
+            {
+                Id = s.Id,
+                DeviceType = s.DeviceType,
+                DeviceName = !string.IsNullOrEmpty(s.DeviceName) ? s.DeviceName : s.DeviceInfo,
+                DeviceInfoText = s.DeviceInfo,
+                LastSeenAt = s.LastSeenAt,
+                IsEnabled = s.HasPush && s.PushEnabled,
+                IsIdleDetectionEnabled = s.IsIdleDetectionEnabled,
+                HasPush = s.HasPush,
+                PushSubscriptionType = s.PushSubscriptionType ?? "",
+                Endpoint = s.PushEndpoint ?? "",
+                HasVaultCookie = s.HasVaultCookie,
+                DeviceId = s.DeviceId
+            })
+            .OrderByDescending(d => d.Id == _currentSessionId)
+            .ThenByDescending(d => d.LastSeenAt)
+            .ToList();
+
+            // Update IsSubscribed based on server-authoritative state
+            if (!string.IsNullOrEmpty(_currentSessionId))
+            {
+                var currentDevice = _devices.FirstOrDefault(d => d.Id == _currentSessionId);
+                if (currentDevice != null)
+                {
+                    IsSubscribed = currentDevice.HasPush;
+                }
+            }
+        }
+        catch
+        {
+            _devices = new List<DeviceInfo>();
+        }
+    }
+
+    private string ParseUserAgentToDeviceInfo(string userAgent)
+    {
+        if (string.IsNullOrEmpty(userAgent)) return "Unknown Device";
+        var deviceInfo = "Unknown Device";
+        if (userAgent.Contains("Windows")) deviceInfo = "Windows";
+        else if (userAgent.Contains("iPhone") || userAgent.Contains("iPad")) deviceInfo = "iOS";
+        else if (userAgent.Contains("Android")) deviceInfo = "Android";
+        else if (userAgent.Contains("Mac OS")) deviceInfo = "macOS";
+        
+        if (userAgent.Contains("Capacitor") || userAgent.Contains("wv")) deviceInfo += " (App)";
+        return deviceInfo;
+    }
+
+    private async Task RevokeSession(string sessionId)
+    {
+        var session = Db.DeviceSessions.GetById(sessionId);
+        if (session != null)
+        {
+            session.RevokedAt = DateTime.UtcNow;
+            // Push fields live on the session — clear them on revocation
+            if (session.HasPush)
+            {
+                session.PushEndpoint = null;
+                session.PushEnabled = false;
+            }
+            Db.DeviceSessions.Save(session);
+
+            if (sessionId == _currentSessionId)
+            {
+                // Force logout immediately if revoking the current session
+                bool isCapacitor = false;
+                try { isCapacitor = await JS.InvokeAsync<bool>("eval", "!!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform())"); } catch { }
+                var suffix = isCapacitor ? "?client=mobile" : "";
+                Nav.NavigateTo($"/spokesapi/auth/force-logout{suffix}", forceLoad: true);
+                return;
+            }
+            else
+            {
+                // Trigger remote logout for active clients
+                PresenceState.TriggerRemoteLogout(sessionId);
+            }
+
+            Snackbar.Add("Session revoked.", Severity.Success);
+            await LoadDevices();
+            StateHasChanged();
+        }
+    }
+
+    // --- Preferences ---
+
+    private async Task OnMasterToggleChanged(bool value)
+    {
+        _pushEnabled = value;
+        await SavePreferences();
+    }
+
+    private async Task OnChatToggleChanged(bool value)
+    {
+        _chatEnabled = value;
+        await SavePreferences();
+    }
+
+    private async Task OnEmailToggleChanged(bool value)
+    {
+        _emailEnabled = value;
+        await SavePreferences();
+    }
+
+    private async Task OnReactionToggleChanged(bool value)
+    {
+        _reactionEnabled = value;
+        await SavePreferences();
+    }
+
+    private async Task OnReplyTreatAsMentionToggleChanged(bool value)
+    {
+        _replyTreatAsMentionEnabled = value;
+        await SavePreferences();
+    }
+
+    private async Task OnModerationToggleChanged(bool value)
+    {
+        _moderationEnabled = value;
+        await SavePreferences();
+    }
+
+    private async Task OnLimitConsecutiveSoundsChanged(bool value)
+    {
+        _limitConsecutiveSounds = value;
+        await SavePreferences();
+    }
+
+    private async Task OnConsecutiveSoundLimitChanged(int value)
+    {
+        _consecutiveSoundLimit = value;
+        await SavePreferences();
+    }
+
+    private async Task SavePreferences()
+    {
+        if (_currentUser == null) return;
+
+        var fresh = Db.Employees.GetById(_currentUser.Id);
+        if (fresh == null) return;
+
+        fresh.PushNotificationsEnabled = _pushEnabled;
+        fresh.ChatNotificationsEnabled = _chatEnabled;
+        fresh.ReactionNotificationsEnabled = _reactionEnabled;
+        fresh.ReplyNotificationsTreatAsMention = _replyTreatAsMentionEnabled;
+        fresh.EmailNotificationsEnabled = _emailEnabled;
+        fresh.ModerationNotificationsEnabled = _moderationEnabled;
+        fresh.LimitConsecutiveNotificationSounds = _limitConsecutiveSounds;
+        fresh.ConsecutiveNotificationSoundLimit = _consecutiveSoundLimit;
+        fresh.NotificationScheduleEnabled = _scheduleEnabled;
+        fresh.NotificationSchedule = _schedule
+            .Select(d => new DaySchedule { Day = d.Day, IsEnabled = d.IsEnabled, StartHour = d.StartHour, EndHour = d.EndHour })
+            .ToList();
+        Db.Employees.Save(fresh);
+
+        await Task.CompletedTask;
+    }
+
+    // --- Schedule ---
+
+    private async Task OnScheduleToggleChanged(bool value)
+    {
+        _scheduleEnabled = value;
+        await SavePreferences();
+    }
+
+    private async Task OnDayToggleChanged(DayOfWeek day, bool value)
+    {
+        var entry = _schedule.FirstOrDefault(d => d.Day == day);
+        if (entry != null) entry.IsEnabled = value;
+        await SavePreferences();
+    }
+
+    private async Task OnStartHourChanged(DayOfWeek day, int value)
+    {
+        var entry = _schedule.FirstOrDefault(d => d.Day == day);
+        if (entry != null) entry.StartHour = value;
+        await SavePreferences();
+    }
+
+    private async Task OnEndHourChanged(DayOfWeek day, int value)
+    {
+        var entry = _schedule.FirstOrDefault(d => d.Day == day);
+        if (entry != null) entry.EndHour = value;
+        await SavePreferences();
+    }
+
+    private string FormatHour(int hour)
+    {
+        var ampm = hour < 12 ? "AM" : "PM";
+        var display = hour == 0 ? 12 : (hour > 12 ? hour - 12 : hour);
+        return $"{display}:00 {ampm}";
+    }
+
+    // --- Subscribe / Unsubscribe ---
+
+    [JSInvokable]
+    public void OnJSLog(string message)
+    {
+        AddSubscriptionLog($"[JS] {message}");
+    }
+
+    private async Task SubscribeDevice()
+    {
+        if (IsLoading) return;
+        IsLoading = true;
+        _debugLogs.Clear();
+        AddSubscriptionLog("Starting subscription process...");
+        StateHasChanged();
+
+        try
+        {
+            // 1. Request permission
+            AddSubscriptionLog("Requesting permission...");
+            var permResult = await JS.InvokeAsync<Dictionary<string, object>>("pushNotifications.requestPermission", _objRef);
+            var permission = permResult?.GetValueOrDefault("permission")?.ToString() ?? "denied";
+
+            if (permission != "granted")
+            {
+                AddSubscriptionLog($"Permission denied. Result: {permission}", true);
+                Snackbar.Add("Notification permission was denied. Enable in browser settings.", Severity.Warning);
+                return;
+            }
+            AddSubscriptionLog("Permission granted.");
+
+            // 2. Register service worker
+            AddSubscriptionLog("Registering service worker...");
+            var swResult = await JS.InvokeAsync<Dictionary<string, object>>("pushNotifications.registerServiceWorker");
+            var swSuccess = swResult?.GetValueOrDefault("success")?.ToString() == "True";
+
+            if (!swSuccess)
+            {
+                var swErr = swResult?.GetValueOrDefault("error")?.ToString();
+                AddSubscriptionLog($"SW registration failed: {swErr}", true);
+                Snackbar.Add("Failed to register service worker.", Severity.Error);
+                return;
+            }
+            AddSubscriptionLog("Service worker registered.");
+
+            // 3. Get VAPID public key
+            var profile = Db.CompanyProfile.Get();
+            if (string.IsNullOrEmpty(profile?.VapidPublicKey))
+            {
+                AddSubscriptionLog("VAPID public key not found.", true);
+                Snackbar.Add("Push notifications not configured.", Severity.Error);
+                return;
+            }
+            AddSubscriptionLog("VAPID public key retrieved.");
+
+            // 4. Subscribe to push
+            AddSubscriptionLog("Subscribing to push manager/native APNs...");
+            var subscription = await JS.InvokeAsync<Dictionary<string, object>>("pushNotifications.subscribe",
+                profile.VapidPublicKey, _objRef);
+
+            if (subscription == null || !subscription.ContainsKey("endpoint"))
+            {
+                var subErr = subscription?.GetValueOrDefault("error")?.ToString() ?? "Unknown error";
+                AddSubscriptionLog($"Subscription failed: {subErr}", true);
+                Snackbar.Add("Failed to subscribe to push notifications.", Severity.Error);
+                return;
+            }
+            AddSubscriptionLog("Push subscription successful.");
+
+            // 4.5 Request Idle Permission if Desktop
+            bool isIdleEnabled = false;
+            if (_newDeviceType == "Desktop")
+            {
+                AddSubscriptionLog("Requesting idle tracking permission...");
+                isIdleEnabled = await JS.InvokeAsync<bool>("pushNotifications.requestIdlePermission");
+                AddSubscriptionLog($"Idle permission: {isIdleEnabled}");
+            }
+
+            // 5. Send to server with device info
+            AddSubscriptionLog("Sending subscription to server...");
+            var result = await JS.InvokeAsync<bool>("pushNotifications.sendSubscriptionToServer",
+                subscription, _newDeviceType, _newDeviceName, isIdleEnabled);
+
+            if (result)
+            {
+                AddSubscriptionLog("Subscription saved on server.");
+                IsSubscribed = true;
+                _currentEndpoint = subscription.GetValueOrDefault("endpoint")?.ToString();
+                Snackbar.Add("Push notifications enabled!", Severity.Success);
+                await LoadDevices();
+                StateHasChanged();
+
+                if (isIdleEnabled)
+                {
+                    try
+                    {
+                        await JS.InvokeAsync<bool>("pushNotifications.startIdleDetector");
+                    }
+                    catch { /* Ignore if browser does not support it */ }
+                }
+            }
+            else
+            {
+                AddSubscriptionLog("Server failed to save subscription.", true);
+                Snackbar.Add("Failed to save subscription.", Severity.Error);
+            }
+        }
+        catch (Exception ex)
+        {
+            AddSubscriptionLog($"Exception: {ex.Message}", true);
+            Console.WriteLine($"Error enabling notifications: {ex.Message}");
+            Snackbar.Add("Error enabling notifications.", Severity.Error);
+        }
+        finally
+        {
+            AddSubscriptionLog("Finished.");
+            IsLoading = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task UnsubscribeDevice()
+    {
+        if (IsLoading) return;
+        IsLoading = true;
+        StateHasChanged();
+
+        try
+        {
+            var result = await JS.InvokeAsync<Dictionary<string, object>>("pushNotifications.unsubscribeAndNotifyServer");
+            var success = result?.GetValueOrDefault("success")?.ToString() == "True";
+
+            if (success)
+            {
+                IsSubscribed = false;
+                _currentEndpoint = null;
+                Snackbar.Add("Push notifications disabled on this device.", Severity.Success);
+                await LoadDevices();
+                StateHasChanged();
+            }
+            else
+            {
+                Snackbar.Add("Failed to disable notifications.", Severity.Error);
+            }
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Error: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            IsLoading = false;
+            StateHasChanged();
+        }
+    }
+
+    // --- Device Management ---
+
+    private void StartEditDeviceName(DeviceInfo device)
+    {
+        _editingDeviceId = device.Id;
+        _editingDeviceName = device.DeviceName ?? "";
+    }
+
+    private async Task SaveDeviceName(string deviceId)
+    {
+        try
+        {
+            var device = _devices.FirstOrDefault(d => d.Id == deviceId);
+            if (device == null) return;
+
+            // Update the DeviceSession directly (push fields and session are now unified)
+            var session = Db.DeviceSessions.GetById(deviceId);
+            if (session != null)
+            {
+                session.DeviceName = _editingDeviceName;
+                session.DeviceInfo = _editingDeviceName;
+                Db.DeviceSessions.Save(session);
+            }
+
+            device.DeviceName = _editingDeviceName;
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Error renaming device: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _editingDeviceId = null;
+            StateHasChanged();
+        }
+    }
+
+    private async Task ToggleDeviceEnabled(string deviceId, bool enabled)
+    {
+        try
+        {
+            var enabledStr = enabled ? "true" : "false";
+            await JS.InvokeAsync<dynamic>("eval", $@"
+                (async () => {{
+                    var hdrs = await window.spokesAuth.getHeaders({{ 'Content-Type': 'application/json' }});
+                    await fetch('/spokesapi/push/devices/{deviceId}', {{
+                        method: 'PUT',
+                        headers: hdrs,
+                        body: JSON.stringify({{ isEnabled: {enabledStr} }})
+                    }});
+                }})()
+            ");
+
+            var device = _devices.FirstOrDefault(d => d.Id == deviceId);
+            if (device != null) device.IsEnabled = enabled;
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Error updating device: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private async Task ToggleDeviceIdleDetection(string deviceId, bool enabled)
+    {
+        try
+        {
+            var enabledStr = enabled ? "true" : "false";
+            await JS.InvokeAsync<dynamic>("eval", $@"
+                (async () => {{
+                    var hdrs = await window.spokesAuth.getHeaders({{ 'Content-Type': 'application/json' }});
+                    await fetch('/spokesapi/push/devices/{deviceId}', {{
+                        method: 'PUT',
+                        headers: hdrs,
+                        body: JSON.stringify({{ isIdleDetectionEnabled: {enabledStr} }})
+                    }});
+                }})()
+            ");
+
+            var device = _devices.FirstOrDefault(d => d.Id == deviceId);
+            if (device != null) device.IsIdleDetectionEnabled = enabled;
+
+            if (device?.Endpoint == _currentEndpoint)
+            {
+                if (enabled)
+                {
+                    await JS.InvokeAsync<bool>("pushNotifications.startIdleDetector");
+                }
+                else
+                {
+                    await JS.InvokeVoidAsync("pushNotifications.stopIdleDetector");
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Error updating device idle tracking: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private async Task DeleteDevice(string sessionId)
+    {
+        try
+        {
+            // Clear push fields from the DeviceSession (via API for auth)
+            await JS.InvokeAsync<dynamic>("eval", $@"
+                (async () => {{
+                    var hdrs = await window.spokesAuth.getHeaders();
+                    await fetch('/spokesapi/push/devices/{sessionId}', {{
+                        method: 'DELETE',
+                        headers: hdrs
+                    }});
+                }})()
+            ");
+
+            var device = _devices.FirstOrDefault(d => d.Id == sessionId);
+            if (device != null)
+            {
+                device.HasPush = false;
+                device.IsEnabled = false;
+            }
+
+            // If we deleted the current device's subscription
+            if (sessionId == _currentSessionId)
+            {
+                // The server-side push data is cleared, but the browser push subscription may still exist.
+                // Unsubscribe locally too.
+                await JS.InvokeAsync<object>("pushNotifications.unsubscribe");
+                IsSubscribed = false;
+                _currentEndpoint = null;
+            }
+
+            StateHasChanged();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Error deleting device: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private void Close() => MudDialog.Close();
+
+    private async Task ConfirmDeleteAccount()
+    {
+        bool? result = await DialogService.ShowMessageBoxAsync(
+            "Delete Account",
+            "Are you absolutely sure? This will permanently delete your account and all associated data from this server. This action cannot be undone.",
+            yesText: "Delete My Account", cancelText: "Cancel");
+
+        if (result == true && _currentUser != null)
+        {
+            bool isDemo = Config.GetValue<bool>("Spokes_DemoMode");
+            
+            if (!isDemo)
+            {
+                await AccountDeletionService.DeleteAccountAsync(_currentUser.Id, _currentSessionId);
+            }
+
+            var successMessage = isDemo 
+                ? "Your account deletion was successfully simulated (Demo Mode). You will now be logged out."
+                : "Your account and all associated personal data have been successfully wiped from our servers.";
+
+            await DialogService.ShowMessageBoxAsync("Account Deleted", successMessage, yesText: "Return to Login");
+                
+            bool isCapacitor = false;
+            try { isCapacitor = await JS.InvokeAsync<bool>("eval", "!!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform())"); } catch { }
+            
+            if (isDemo)
+            {
+                // To prevent the demo server from instantly auto-logging the reviewer back into a new random account,
+                // we manually wipe cookies and redirect directly to the login page with admin_login=1 to bypass auto-login.
+                await JS.InvokeVoidAsync("eval", $@"
+                    document.cookie = 'Spokes_Session_v3=; Max-Age=0; path=/';
+                    document.cookie = 'Spokes_Refresh=; Max-Age=0; path=/';
+                    var suffix = {isCapacitor.ToString().ToLower()} ? '&client=mobile' : '';
+                    window.location.href = '/sso/login?admin_login=1' + suffix;
+                ");
+            }
+            else
+            {
+                await JS.InvokeVoidAsync("eval", $@"
+                    var form = document.getElementById('delete-account-logout-form');
+                    if (form) {{
+                        if ({isCapacitor.ToString().ToLower()}) {{
+                            document.getElementById('delete-account-client-input').value = 'mobile';
+                        }}
+                        form.submit();
+                    }}
+                ");
+            }
+        }
+    }
+
+    private string EscapeJs(string input)
+    {
+        return (input ?? "").Replace("\\", "\\\\").Replace("'", "\\'").Replace("\n", "\\n").Replace("\r", "");
+    }
+
+    private async Task TestDevice(string deviceId)
+    {
+        _isTesting = true;
+        AddDebugLog($"Starting test push for device {deviceId}...");
+        
+        try
+        {
+            var response = await JS.InvokeAsync<dynamic>("eval", $@"
+                (async () => {{
+                    var hdrs = await window.spokesAuth.getHeaders();
+                    var res = await fetch('/spokesapi/push/devices/{deviceId}/test', {{ method: 'POST', headers: hdrs }});
+                    var data = await res.json();
+                    return {{ ok: res.ok, status: res.status, data: data }};
+                }})()
+            ");
+
+            var ok = response.GetProperty("ok").GetBoolean();
+            if (ok)
+            {
+                var msg = response.GetProperty("data").TryGetProperty("message", out JsonElement successMsg) ? successMsg.GetString() : "Test push dispatched to push service successfully.";
+                AddDebugLog($"Server: {msg}");
+                Snackbar.Add("Test notification sent successfully!", Severity.Success);
+            }
+            else
+            {
+                var data = response.GetProperty("data");
+                var msg = data.TryGetProperty("error", out JsonElement errMsg) ? errMsg.GetString() : "Unknown error";
+                var code = data.TryGetProperty("code", out JsonElement codeElem) ? codeElem.GetString() : "";
+                AddDebugLog($"Server Error {response.GetProperty("status").GetInt32()}: {msg}", true);
+
+                if (code == "LICENSE_EXPIRED" || msg?.Contains("license", StringComparison.OrdinalIgnoreCase) == true)
+                {
+                    Snackbar.Add("Spokes Pass is required for mobile notifications to work. Only 1 pass per server is required. Talk to your server owner, I'm sure they would love to split the cost :)", Severity.Warning, config =>
+                    {
+                        config.VisibleStateDuration = 10000;
+                        config.ShowCloseIcon = true;
+                    });
+                }
+                else
+                {
+                    Snackbar.Add($"Failed to send test notification: {msg}", Severity.Error);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            AddDebugLog($"Client Error: {ex.Message}", true);
+            Snackbar.Add($"Error: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _isTesting = false;
+            StateHasChanged();
+        }
+    }
+
+    public class TestPushResult
+    {
+        public bool Success { get; set; }
+        public bool FallbackUsed { get; set; }
+        public string? Error { get; set; }
+    }
+
+    [JSInvokable]
+    public void OnTestPushResult(TestPushResult result)
+    {
+        if (result.Success)
+        {
+            AddDebugLog($"Service Worker: Notification displayed successfully{(result.FallbackUsed ? " (using Safari fallback)" : "")}.");
+        }
+        else
+        {
+            AddDebugLog($"Service Worker Error: Failed to display notification. {result.Error}", true);
+        }
+    }
+
+    private class DeviceInfo
+    {
+        public string Id { get; set; } = "";
+        public string DeviceInfoText { get; set; } = "";
+        public DateTime? LastSeenAt { get; set; }
+
+        public string DeviceType { get; set; } = "Desktop";
+        public string DeviceName { get; set; } = "";
+        public bool IsEnabled { get; set; } = true;
+        public bool IsIdleDetectionEnabled { get; set; } = true;
+        public bool HasPush { get; set; }
+        public string PushSubscriptionType { get; set; } = "";
+        public string Endpoint { get; set; } = "";
+        public string? DeviceId { get; set; }
+        public bool HasVaultCookie { get; set; } = false;
+    }
+
+    private async Task OpenSecureChatSettings()
+    {
+        var parameters = new DialogParameters<SecureChatSettingsDialog> { { x => x.Employee, _currentUser } };
+        var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Small, FullWidth = true };
+        var dialog = await DialogService.ShowAsync<SecureChatSettingsDialog>("Secure Chat Settings", parameters);
+        await dialog.Result;
+        StateHasChanged(); // Refresh UI in case they enabled it
+    }
+}

@@ -1,0 +1,200 @@
+@page "/planning/timesheet-approvals"
+<PageTitle>Timesheet Approvals</PageTitle>
+@using Spokes_Server.Core.Data
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Constants
+@using Spokes_Server.Core.Services
+@using Spokes_Server.Core.Services.HR
+@using System.Globalization
+@using Microsoft.AspNetCore.Components.Authorization
+@inject Database Db
+@inject HRService HRService
+@inject UserService UserService
+@inject IDialogService DialogService
+@inject ISnackbar Snackbar
+@inject NavigationManager Nav
+
+<MudContainer MaxWidth="MaxWidth.Large" Class="mt-6">
+    <MudText Typo="Typo.h4" Class="mb-4">Timesheet Approvals</MudText>
+
+    @if (_loading)
+    {
+        <MudProgressLinear Color="Color.Primary" Indeterminate="true" />
+    }
+    else if (!_pendingTimesheets.Any())
+    {
+        <MudPaper Elevation="0" Outlined="true" Class="pa-8 text-center rounded-lg">
+            <MudIcon Icon="@Icons.Material.Filled.CheckCircle" Size="Size.Large" Color="Color.Success" Class="mb-4" />
+            <MudText Typo="Typo.h6" Color="Color.Success">All caught up!</MudText>
+            <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mt-2">No timesheets are pending approval.</MudText>
+        </MudPaper>
+    }
+    else
+    {
+        <MudPaper Elevation="0" Outlined="true" Class="rounded-lg">
+            <MudTable Items="@_pendingTimesheets" Dense="true" Hover="true" Striped="true" FixedHeader="true">
+                <HeaderContent>
+                    <MudTh>Employee</MudTh>
+                    <MudTh>Week</MudTh>
+                    <MudTh>Date Range</MudTh>
+                    <MudTh Style="text-align: right;">Total Hours</MudTh>
+                    <MudTh>Submitted</MudTh>
+                    <MudTh Style="text-align: center;">Actions</MudTh>
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd DataLabel="Employee">
+                        <MudLink Href="@($"timesheet/{context.EmployeeId}")" Typo="Typo.body2">
+                            @GetEmployeeDisplayName(context)
+                        </MudLink>
+                    </MudTd>
+                    <MudTd DataLabel="Week">
+                        <MudText Typo="Typo.body2">Week @context.WeekNumber, @context.Year</MudText>
+                    </MudTd>
+                    <MudTd DataLabel="Date Range">
+                        <MudText Typo="Typo.body2">@GetWeekDateRange(context)</MudText>
+                    </MudTd>
+                    <MudTd DataLabel="Total Hours" Style="text-align: right;">
+                        <MudText Typo="Typo.body2" Style="font-weight: 600;">@FormatHours(context.TotalHours)</MudText>
+                    </MudTd>
+                    <MudTd DataLabel="Submitted">
+                        <MudText Typo="Typo.body2" Color="Color.Secondary">@(context.SubmittedAt?.ToLocalTime().ToString("MMM dd, HH:mm") ?? "")</MudText>
+                    </MudTd>
+                    <MudTd DataLabel="Actions" Style="text-align: center;">
+                        <MudButtonGroup OverrideStyles="false">
+                            <MudButton Variant="Variant.Filled" Color="Color.Success" Size="Size.Small"
+                                StartIcon="@Icons.Material.Filled.Check" OnClick="@(() => ApproveTimesheet(context))">
+                                Approve
+                            </MudButton>
+                            <MudButton Variant="Variant.Outlined" Color="Color.Error" Size="Size.Small"
+                                StartIcon="@Icons.Material.Filled.Close" OnClick="@(() => RejectTimesheet(context))">
+                                Reject
+                            </MudButton>
+                        </MudButtonGroup>
+                    </MudTd>
+                </RowTemplate>
+            </MudTable>
+        </MudPaper>
+    }
+</MudContainer>
+
+@code {
+    private bool _loading = true;
+    private Employee? _currentUser;
+    private List<Timesheet> _pendingTimesheets = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        _currentUser = await UserService.GetEmployeeAsync();
+        if (_currentUser == null)
+        {
+            Nav.NavigateTo("/", true);
+            return;
+        }
+
+        // Only admins and team leaders can access this page
+        if (!_currentUser.IsAdmin && !IsTeamLeader(_currentUser))
+        {
+            Snackbar.Add("You don't have permission to view this page", Severity.Error);
+            Nav.NavigateTo("/my-timesheet");
+            return;
+        }
+
+        LoadPendingTimesheets();
+        _loading = false;
+    }
+
+    private void LoadPendingTimesheets()
+    {
+        var allTimesheets = Db.Timesheets.GetAll();
+
+        if (_currentUser!.IsAdmin)
+        {
+            _pendingTimesheets = allTimesheets
+                .Where(t => t.Status == "Submitted")
+                .OrderByDescending(t => t.SubmittedAt)
+                .ToList();
+        }
+        else
+        {
+            // Team leaders only see their team members' timesheets (excluding their own to prevent self-approval)
+            var managedEmployeeIds = HRService.GetManagedEmployeeIds(_currentUser, includeSelf: false);
+            _pendingTimesheets = allTimesheets
+                .Where(t => t.Status == "Submitted" && managedEmployeeIds.Contains(t.EmployeeId))
+                .OrderByDescending(t => t.SubmittedAt)
+                .ToList();
+        }
+    }
+
+    private bool IsTeamLeader(Employee emp)
+    {
+        return Db.Teams.GetAll().Any(t => t.LeaderId == emp.Id);
+    }
+
+    private string GetEmployeeDisplayName(Timesheet ts)
+    {
+        if (!string.IsNullOrWhiteSpace(ts.EmployeeName))
+            return ts.EmployeeName;
+        var emp = Db.Employees.GetById(ts.EmployeeId);
+        return emp?.FullName ?? ts.EmployeeId;
+    }
+
+    private async Task ApproveTimesheet(Timesheet timesheet)
+    {
+        if (_currentUser == null) return;
+        try
+        {
+            HRService.ApproveTimesheet(timesheet.Id, _currentUser.Id);
+            Snackbar.Add($"Approved timesheet for {GetEmployeeDisplayName(timesheet)} (Week {timesheet.WeekNumber})", Severity.Success);
+            LoadPendingTimesheets();
+            StateHasChanged();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add(ex.Message, Severity.Error);
+        }
+    }
+
+    private async Task RejectTimesheet(Timesheet timesheet)
+    {
+        if (_currentUser == null) return;
+
+        var parameters = new DialogParameters<Spokes_Server.Components.Dialogs.NoteEditDialog>
+        {
+            { x => x.Note, "" },
+            { x => x.Title, "Rejection Reason" }
+        };
+        var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Small, FullWidth = true };
+        var dialog = await DialogService.ShowAsync<Spokes_Server.Components.Dialogs.NoteEditDialog>("Rejection Reason", parameters, options);
+        var dialogResult = await dialog.Result;
+
+        if (!dialogResult.Canceled && dialogResult.Data is string rejectionNote)
+        {
+            HRService.RejectTimesheet(timesheet.Id, rejectionNote, _currentUser.Id);
+            Snackbar.Add($"Rejected timesheet for {GetEmployeeDisplayName(timesheet)}", Severity.Warning);
+            LoadPendingTimesheets();
+            StateHasChanged();
+        }
+    }
+
+    private string GetWeekDateRange(Timesheet ts)
+    {
+        try
+        {
+            var weekMonday = ISOWeek.ToDateTime(ts.Year, ts.WeekNumber, DayOfWeek.Monday);
+            return $"{weekMonday:MMM dd} - {weekMonday.AddDays(6):MMM dd, yyyy}";
+        }
+        catch
+        {
+            return "";
+        }
+    }
+
+    private string FormatHours(decimal hours)
+    {
+        if (hours == 0) return "0:00";
+        var ts = TimeSpan.FromHours((double)hours);
+        return $"{(int)ts.TotalHours}:{ts.Minutes:D2}";
+    }
+}

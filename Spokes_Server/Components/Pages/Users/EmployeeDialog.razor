@@ -1,0 +1,412 @@
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Constants
+@using MudBlazor
+@inject UserService UserService
+@inject EncryptionService EncryptionService
+@using Spokes_Server.Core.Data
+@inject Database Db
+@inject Spokes_Server.Core.Services.Core.AppLabelService AppLabels
+
+<MudDialog>
+    <DialogContent>
+        <MudForm @ref="form" @bind-IsValid="@success">
+            <MudToggleGroup T="int" @bind-Value="activeTabIndex" Outline="true" Delimiters="true" Rounded="true" CheckMark="false" Class="mb-6 flex-wrap" Error="false">
+                <MudToggleItem Value="0" Text="Profile" />
+                @if (!IsFriendEdition)
+                {
+                    <MudToggleItem Value="1" Text="HR Details" />
+                }
+                <MudToggleItem Value="2" Text="Access" />
+                <MudToggleItem Value="3" Text="Identity" />
+            </MudToggleGroup>
+
+            <MudPaper Elevation="0" Outlined="true" Class="pa-4">
+            @if (activeTabIndex == 0)
+            {
+                    <MudGrid>
+                        <MudItem xs="12" sm="6">
+                            <MudTextField Variant="Variant.Outlined" Margin="Margin.Dense" ShrinkLabel="true" @bind-Value="Employee.FirstName" Label="First Name" Required="true" />
+                        </MudItem>
+                        <MudItem xs="12" sm="6">
+                            <MudTextField Variant="Variant.Outlined" Margin="Margin.Dense" ShrinkLabel="true" @bind-Value="Employee.LastName" Label="Last Name" Required="true" />
+                        </MudItem>
+                        <MudItem xs="12">
+                            <MudTextField Variant="Variant.Outlined" Margin="Margin.Dense" ShrinkLabel="true" @bind-Value="Employee.Email" Label="Email" Required="true" />
+                        </MudItem>
+                        @if (!IsFriendEdition)
+                        {
+                            
+                            <MudItem xs="12">
+                                @if (!string.IsNullOrEmpty(Employee.EncryptedEmailPassword))
+                                {
+                                    <MudTextField Variant="Variant.Outlined" Margin="Margin.Dense" ShrinkLabel="true" Value="@("********")" Label="Email Password" ReadOnly="true"
+                                                  Adornment="Adornment.End" AdornmentIcon="@Icons.Material.Filled.Lock" />
+                                    <MudButton Variant="Variant.Text" Color="Color.Primary" OnClick="@(() => _showPasswordInput = true)">
+                                        Change Password
+                                    </MudButton>
+                                }
+
+                                @if (string.IsNullOrEmpty(Employee.EncryptedEmailPassword) || _showPasswordInput)
+                                {
+                                    <MudTextField Variant="Variant.Outlined" Margin="Margin.Dense" ShrinkLabel="true" @bind-Value="_newPassword" Label="@(string.IsNullOrEmpty(Employee.EncryptedEmailPassword) ? "Email Password" : "New Email Password")"
+                                                  InputType="InputType.Password"
+                                                  HelperText="Password is encrypted before storage" />
+                                }
+                            </MudItem>
+                            <MudItem xs="12">
+                                <MudTextField Variant="Variant.Outlined" Margin="Margin.Dense" ShrinkLabel="true" @bind-Value="Employee.Position" Label="Position / Title" />
+                            </MudItem>
+
+                            <MudItem xs="12" sm="6">
+                                <MudSelect Variant="Variant.Outlined" Margin="Margin.Dense" ShrinkLabel="true" T="string" @bind-Value="Employee.TeamId" Label="Primary Team" Clearable="true">
+                                    @foreach (var t in AllTeams)
+                                    {
+                                        <MudSelectItem Value="@t.Id">@t.Name</MudSelectItem>
+                                    }
+                                </MudSelect>
+                            </MudItem>
+                            <MudItem xs="12" sm="6">
+                                <MudNumericField Variant="Variant.Outlined" Margin="Margin.Dense" ShrinkLabel="true" @bind-Value="Employee.WeeklyHours" Label="Weekly Capacity (Hours)" Min="0"
+                                                 Max="168" Step="4" />
+                            </MudItem>
+                        }
+                        
+                        
+
+
+                        
+                    </MudGrid>
+            }
+            else if (activeTabIndex == 1)
+            {
+                    <MudGrid>
+                        <MudItem xs="12" sm="6">
+                            <MudDatePicker Variant="Variant.Outlined" Margin="Margin.Dense" ShrinkLabel="true" @bind-Date="dateOfBirth" Label="Date of Birth" />
+                        </MudItem>
+                        <MudItem xs="12" sm="6">
+                            <MudDatePicker Variant="Variant.Outlined" Margin="Margin.Dense" ShrinkLabel="true" @bind-Date="dateOfJoining" Label="Start Date" 
+                                HelperText="Used as hour bank start date" />
+                        </MudItem>
+                        <MudItem xs="12" sm="6">
+                            <MudDatePicker Variant="Variant.Outlined" Margin="Margin.Dense" ShrinkLabel="true" @bind-Date="employmentEndDate" Label="End Date" 
+                                Clearable="true" HelperText="Stops hour bank accumulation when set" />
+                        </MudItem>
+                        <MudItem xs="12" sm="6">
+                            <MudTextField Variant="Variant.Outlined" Margin="Margin.Dense" ShrinkLabel="true" @bind-Value="Employee.PersonalEmail" Label="Personal Email" />
+                        </MudItem>
+                        <MudItem xs="12" sm="6">
+                            <MudTextField Variant="Variant.Outlined" Margin="Margin.Dense" ShrinkLabel="true" @bind-Value="Employee.PhoneNumber" Label="Personal Phone" />
+                        </MudItem>
+                        <MudItem xs="12">
+                            <MudTextField Variant="Variant.Outlined" Margin="Margin.Dense" ShrinkLabel="true" @bind-Value="Employee.Address" Label="Address" Lines="2" />
+                        </MudItem>
+                        <MudItem xs="12" sm="6">
+                            <MudTextField Variant="Variant.Outlined" Margin="Margin.Dense" ShrinkLabel="true" @bind-Value="Employee.EmergencyContact" Label="Emergency Contact Name" />
+                        </MudItem>
+                        <MudItem xs="12" sm="6">
+                            <MudTextField Variant="Variant.Outlined" Margin="Margin.Dense" ShrinkLabel="true" @bind-Value="Employee.EmergencyContactPhone" Label="Emergency Contact Phone" />
+                        </MudItem>
+                    </MudGrid>
+            }
+            else if (activeTabIndex == 2)
+            {
+                    <MudGrid>
+                        <MudItem xs="12">
+                            <MudSwitch @bind-Value="Employee.IsActive" Color="Color.Success" Label="Active Account" />
+                            <MudSwitch @bind-Value="Employee.IsAdmin" Color="Color.Error"
+                                Label="Global Administrator (Super User)" Disabled="!CurrentUserIsAdmin" />
+                        </MudItem>
+
+                        <MudItem xs="12">
+                            <MudDivider Class="my-2" />
+                            <MudText Typo="Typo.subtitle2">Granular Permissions</MudText>
+                            <MudText Typo="Typo.caption" Class="mb-2 d-block">Only applicable if not Admin.</MudText>
+
+                            <div class="mb-4">
+                                <MudSelect T="string" Label="Permission Group" Value="@Employee.PermissionGroupId" ValueChanged="OnPermissionGroupChanged" Variant="Variant.Outlined" Clearable="true" Placeholder="None (Custom)">
+                                    @foreach(var group in Profile?.PermissionGroups ?? new())
+                                    {
+                                        <MudSelectItem Value="@group.Id">@group.Name</MudSelectItem>
+                                    }
+                                </MudSelect>
+                                <MudText Typo="Typo.caption" Class="mt-1 d-block text-muted">Select a group to dynamically inherit permissions, or leave empty to set custom granular permissions.</MudText>
+                            </div>
+
+                            <MudGrid Class="mt-2">
+                            @foreach (var category in AppPermissions.GetAll())
+                            {
+                                    if (IsFriendEdition && IsBusinessCategory(category.Key))
+                                        continue;
+
+                                    <MudItem xs="12" sm="6" md="4">
+                                        <MudPaper Elevation="0" Outlined="true" Class="pa-3 h-100">
+                                            <MudText Typo="Typo.subtitle2" Class="mb-3 text-primary">@category.Key</MudText>
+                                            <div class="d-flex flex-column gap-1 align-start">
+                                            @foreach (var perm in category.Value)
+                                            {
+                                                bool isAdminOnlyPerm = perm == AppPermissions.Admin.ManageUsers || perm == AppPermissions.Admin.ManageSettings;
+                                                
+                                                bool isGroupLinked = !string.IsNullOrEmpty(Employee.PermissionGroupId);
+                                                var linkedGroup = isGroupLinked ? Profile?.PermissionGroups.FirstOrDefault(g => g.Id == Employee.PermissionGroupId) : null;
+                                                bool groupHasPerm = linkedGroup?.Permissions.Contains(perm) ?? false;
+                                                
+                                                bool hasIt = isGroupLinked ? groupHasPerm : HasPerm(perm);
+                                                bool disabled = Employee.IsAdmin || (isAdminOnlyPerm && !CurrentUserIsAdmin) || isGroupLinked;
+
+                                                <MudTooltip Text="@AppPermissions.GetDescription(perm)" Delay="300" Placement="Placement.Top">
+                                                    <MudCheckBox T="bool" Value="@hasIt"
+                                                                 ValueChanged="@((v) => TogglePerm(perm, v))" Label="@GetShortPermName(category.Key, perm)" Dense="true"
+                                                                 Color="Color.Primary"
+                                                                 Disabled="@disabled" />
+                                                </MudTooltip>
+                                            }
+                                            </div>
+                                        </MudPaper>
+                                    </MudItem>
+                            }
+                            </MudGrid>
+                        </MudItem>
+                    </MudGrid>
+            }
+            else if (activeTabIndex == 3)
+            {
+                    <MudGrid>
+                        <MudItem xs="12">
+                            <MudText Typo="Typo.subtitle2" Class="mb-2">Linked OpenID Accounts</MudText>
+                            <MudText Typo="Typo.caption" Class="mb-3 d-block">
+                                Multiple OpenID accounts can be linked to this employee for authentication.
+                            </MudText>
+
+                            @if (LinkedOpenIdAccounts.Any())
+                            {
+                                    <MudTable Items="@LinkedOpenIdAccounts" Dense="true" Hover="true" Striped="true"
+                                        Class="mb-4">
+                                        <HeaderContent>
+                                            <MudTh>Name</MudTh>
+                                            <MudTh>Email</MudTh>
+                                            <MudTh>Last Login</MudTh>
+                                            <MudTh>Actions</MudTh>
+                                        </HeaderContent>
+                                        <RowTemplate>
+                                            <MudTd DataLabel="Name">@context.Name</MudTd>
+                                            <MudTd DataLabel="Email">@context.Email</MudTd>
+                                            <MudTd DataLabel="Last Login">@context.LastLoginAt.ToString("g")</MudTd>
+                                            <MudTd DataLabel="Actions">
+                                                <MudIconButton Icon="@Icons.Material.Filled.LinkOff" Size="Size.Small"
+                                                    Color="Color.Error" title="Unlink this account"
+                                                    OnClick="@(() => UnlinkOpenIdAccount(context))" />
+                                            </MudTd>
+                                        </RowTemplate>
+                                    </MudTable>
+                            }
+                            else
+                            {
+                                    <MudAlert Severity="Severity.Info" Class="mb-4">
+                                        No OpenID accounts are linked to this employee.
+                                    </MudAlert>
+                            }
+                        </MudItem>
+
+                        <MudItem xs="12">
+                            <MudDivider Class="my-2" />
+                            <MudText Typo="Typo.subtitle2" Class="mb-2">Link New OpenID Account</MudText>
+
+                            @if (UnlinkedOpenIdAccounts.Any())
+                            {
+                                    <MudTable Items="@UnlinkedOpenIdAccounts" Dense="true" Hover="true" Class="mb-2">
+                                        <HeaderContent>
+                                            <MudTh>Name</MudTh>
+                                            <MudTh>Email</MudTh>
+                                            <MudTh>First Seen</MudTh>
+                                            <MudTh>Link</MudTh>
+                                        </HeaderContent>
+                                        <RowTemplate>
+                                            <MudTd DataLabel="Name">@context.Name</MudTd>
+                                            <MudTd DataLabel="Email">@context.Email</MudTd>
+                                            <MudTd DataLabel="First Seen">@context.FirstSeenAt.ToString("d")</MudTd>
+                                            <MudTd DataLabel="Link">
+                                                <MudIconButton Icon="@Icons.Material.Filled.Link" Size="Size.Small"
+                                                    Color="Color.Primary" title="Link to this employee"
+                                                    OnClick="@(() => LinkOpenIdAccount(context))" />
+                                            </MudTd>
+                                        </RowTemplate>
+                                    </MudTable>
+                            }
+                            else
+                            {
+                                    <MudText Typo="Typo.body2" Color="Color.Tertiary">
+                                        No unlinked OpenID accounts available. New accounts appear here when users log in.
+                                    </MudText>
+                            }
+                        </MudItem>
+
+                        <MudItem xs="12">
+                            <MudDivider Class="my-2" />
+                            <MudText Typo="Typo.subtitle2" Class="mb-2">All OpenID Accounts</MudText>
+                            <MudText Typo="Typo.caption" Class="mb-3 d-block text-muted">
+                                Complete list of all OpenID accounts in the system.
+                            </MudText>
+
+                            <MudTable Items="@AllOpenIdAccounts" Dense="true" Hover="true" Striped="true">
+                                <HeaderContent>
+                                    <MudTh>Name</MudTh>
+                                    <MudTh>Email</MudTh>
+                                    <MudTh>Linked To</MudTh>
+                                    <MudTh>Last Login</MudTh>
+                                </HeaderContent>
+                                <RowTemplate>
+                                    <MudTd DataLabel="Name">@context.Name</MudTd>
+                                    <MudTd DataLabel="Email">@context.Email</MudTd>
+                                    <MudTd DataLabel="Linked To">
+                                        @if (!string.IsNullOrEmpty(context.LinkedEmployeeId))
+                                        {
+                                            var linkedEmp = AllEmployees.FirstOrDefault(e => e.Id ==
+                                            context.LinkedEmployeeId);
+                                                <MudChip T="string" Size="Size.Small" Color="Color.Success">
+                                                @(linkedEmp?.FullName ?? "Unknown")</MudChip>
+                                        }
+                                        else
+                                        {
+                                                <MudChip T="string" Size="Size.Small" Color="Color.Warning">Unlinked</MudChip>
+                                        }
+                                    </MudTd>
+                                    <MudTd DataLabel="Last Login">@context.LastLoginAt.ToString("g")</MudTd>
+                                </RowTemplate>
+                            </MudTable>
+                        </MudItem>
+                    </MudGrid>
+            }
+            </MudPaper>
+        </MudForm>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+        <MudButton Color="Color.Primary" OnClick="Submit">Save Changes</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
+    [Parameter] public Employee Employee { get; set; } = default!;
+    [Parameter] public List<Employee> AllEmployees { get; set; } = new();
+    [Parameter] public List<Team> AllTeams { get; set; } = new();
+    [Parameter] public List<OpenIdAccount> AllOpenIdAccounts { get; set; } = new();
+
+    private MudForm form = default!;
+    private bool success;
+    private bool CurrentUserIsAdmin = false;
+    private CompanyProfile Profile = default!;
+    private int activeTabIndex = 0;
+    private bool IsFriendEdition => Profile?.Edition == "Family";
+
+    // Email Password Handling
+    private string _newPassword = "";
+    private bool _showPasswordInput = false;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var currentEmp = await UserService.GetEmployeeAsync();
+        CurrentUserIsAdmin = currentEmp?.IsAdmin ?? false;
+        Profile = Db.CompanyProfile.Get();
+    }
+
+    // OpenID Account Lists (computed from AllOpenIdAccounts)
+    private List<OpenIdAccount> LinkedOpenIdAccounts =>
+    AllOpenIdAccounts.Where(a => a.LinkedEmployeeId == Employee.Id).ToList();
+
+    private List<OpenIdAccount> UnlinkedOpenIdAccounts =>
+    AllOpenIdAccounts.Where(a => string.IsNullOrEmpty(a.LinkedEmployeeId)).ToList();
+
+    // Helper properties for Nullable Date conversion (MudBlazor DatePicker uses DateTime?, Model uses DateOnly)
+    private DateTime? dateOfBirth
+    {
+        get => Employee.DateOfBirth.ToDateTime(TimeOnly.MinValue);
+        set => Employee.DateOfBirth = value.HasValue ? DateOnly.FromDateTime(value.Value) :
+        DateOnly.FromDateTime(DateTime.UtcNow);
+    }
+
+    private DateTime? dateOfJoining
+    {
+        get => Employee.DateOfJoining.ToDateTime(TimeOnly.MinValue);
+        set => Employee.DateOfJoining = value.HasValue ? DateOnly.FromDateTime(value.Value) :
+        DateOnly.FromDateTime(DateTime.UtcNow);
+    }
+
+    private DateTime? employmentEndDate
+    {
+        get => Employee.EmploymentEndDate?.ToDateTime(TimeOnly.MinValue);
+        set => Employee.EmploymentEndDate = value.HasValue ? DateOnly.FromDateTime(value.Value) : null;
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+
+    private void Submit()
+    {
+        form.Validate();
+        if (success)
+        {
+            if (!string.IsNullOrWhiteSpace(_newPassword))
+            {
+                Employee.EncryptedEmailPassword = EncryptionService.Encrypt(_newPassword);
+            }
+            MudDialog.Close(DialogResult.Ok(Employee));
+        }
+    }
+
+    // Permission Helpers
+    private bool HasPerm(string p) => Employee.Permissions.Contains(p);
+
+    private string GetShortPermName(string category, string perm)
+    {
+        return perm.StartsWith(category + ".") ? perm.Substring(category.Length + 1) : perm;
+    }
+
+    private void TogglePerm(string p, bool hasIt)
+    {
+        if (hasIt && !Employee.Permissions.Contains(p))
+            Employee.Permissions.Add(p);
+        else if (!hasIt && Employee.Permissions.Contains(p))
+            Employee.Permissions.Remove(p);
+    }
+
+    // OpenID Account Management
+    private void LinkOpenIdAccount(OpenIdAccount account)
+    {
+        account.LinkedEmployeeId = Employee.Id;
+        // Note: Actual save happens when dialog is closed successfully
+    }
+
+    private void UnlinkOpenIdAccount(OpenIdAccount account)
+    {
+        account.LinkedEmployeeId = string.Empty;
+        // Note: Actual save happens when dialog is closed successfully
+    }
+
+    private void ApplyPermissionGroup(PermissionGroup group)
+    {
+        // Handled by OnPermissionGroupChanged
+    }
+
+    private void OnPermissionGroupChanged(string? groupId)
+    {
+        Employee.PermissionGroupId = groupId;
+        if (!string.IsNullOrEmpty(groupId))
+        {
+            Employee.Permissions.Clear();
+        }
+    }
+
+    private bool IsBusinessCategory(string categoryKey)
+    {
+        var businessCategories = new[] { 
+            "Projects", "Email", "Address Book", "Finance", 
+            "Purchases", "Timesheets", "Business Documents", "My Week" 
+        };
+        return businessCategories.Contains(categoryKey);
+    }
+}
+

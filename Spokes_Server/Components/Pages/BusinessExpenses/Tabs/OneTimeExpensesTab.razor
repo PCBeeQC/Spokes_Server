@@ -1,0 +1,174 @@
+@using Spokes_Server.Core.Data
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Models.HR
+@inject Database Db
+@inject ISnackbar Snackbar
+@inject IDialogService DialogService
+
+<MudPaper Class="pa-4 mb-4" Elevation="0" Outlined="true">
+    <MudText Typo="Typo.h6" Class="mb-3">One-Time Expense Summary</MudText>
+    <MudGrid>
+        <MudItem xs="12" sm="6" md="4">
+            <MudPaper Class="pa-3" Elevation="0" Style="background: var(--mud-palette-background-grey);">
+                <MudText Typo="Typo.caption" Class="mud-text-secondary">Total One-Time Expenses</MudText>
+                <MudText Typo="Typo.h5" Color="Color.Primary">@OneTimeExpenses.Sum(e => e.Amount).ToString("C2")</MudText>
+            </MudPaper>
+        </MudItem>
+        <MudItem xs="12" sm="6" md="4">
+            <MudPaper Class="pa-3" Elevation="0" Style="background: var(--mud-palette-background-grey);">
+                <MudText Typo="Typo.caption" Class="mud-text-secondary">Pending</MudText>
+                <MudText Typo="Typo.h5" Color="Color.Warning">@GetPendingCount()</MudText>
+            </MudPaper>
+        </MudItem>
+        <MudItem xs="12" sm="6" md="4">
+            <MudPaper Class="pa-3" Elevation="0" Style="background: var(--mud-palette-background-grey);">
+                <MudText Typo="Typo.caption" Class="mud-text-secondary">Paid</MudText>
+                <MudText Typo="Typo.h5" Color="Color.Success">@GetPaidCount()</MudText>
+            </MudPaper>
+        </MudItem>
+    </MudGrid>
+</MudPaper>
+
+<MudTable Items="@OneTimeExpenses" Elevation="0" Outlined="true" Dense="true" Hover="true" Striped="true">
+    <ToolBarContent>
+        <MudText Typo="Typo.h6">One-Time Expenses</MudText>
+        <MudSpacer />
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Add"
+            OnClick="AddExpense">Add One-Time Bill</MudButton>
+    </ToolBarContent>
+    <HeaderContent>
+        <MudTh>Name</MudTh>
+        <MudTh>Supplier</MudTh>
+        <MudTh>Amount</MudTh>
+        <MudTh>Due Date</MudTh>
+        <MudTh>Status</MudTh>
+        <MudTh>Actions</MudTh>
+    </HeaderContent>
+    <RowTemplate>
+        <MudTd DataLabel="Name">@context.Name</MudTd>
+        <MudTd DataLabel="Supplier">
+            @if (!string.IsNullOrEmpty(context.Supplier))
+            {
+                @context.Supplier
+            }
+            else
+            {
+                <MudText Typo="Typo.caption" Class="mud-text-secondary">-</MudText>
+            }
+        </MudTd>
+        <MudTd DataLabel="Amount">@context.Amount.ToString("C2")</MudTd>
+        <MudTd DataLabel="Due Date">@context.NextDueDate.ToShortDateString()</MudTd>
+        <MudTd DataLabel="Status">
+            @if (context.History.Any(h => h.IsPaid))
+            {
+                <MudChip T="string" Size="Size.Small" Color="Color.Success">Paid</MudChip>
+            }
+            else if (context.History.Any())
+            {
+                <MudChip T="string" Size="Size.Small" Color="Color.Warning">Pending</MudChip>
+            }
+            else
+            {
+                <MudChip T="string" Size="Size.Small" Color="Color.Default">No Bill</MudChip>
+            }
+        </MudTd>
+        <MudTd DataLabel="Actions">
+            <MudIconButton Icon="@Icons.Material.Filled.Edit" Color="Color.Primary" Size="Size.Small"
+                OnClick="@(() => EditExpense(context))" />
+            <MudIconButton Icon="@Icons.Material.Filled.Delete" Color="Color.Error" Size="Size.Small"
+                OnClick="@(() => DeleteExpense(context))" />
+        </MudTd>
+    </RowTemplate>
+</MudTable>
+
+@code {
+    private List<RecurringExpense> OneTimeExpenses = new();
+
+    protected override void OnInitialized()
+    {
+        RefreshList();
+    }
+
+    private void RefreshList()
+    {
+        OneTimeExpenses = Db.RecurringExpenses.GetAll()
+            .Where(e => e.Frequency == RecurringExpenseFrequency.OneTime && e.IsEstimate)
+            .OrderBy(e => e.NextDueDate)
+            .ToList();
+        StateHasChanged();
+    }
+
+    private int GetPendingCount() => OneTimeExpenses.Count(e => !e.History.Any(h => h.IsPaid));
+    private int GetPaidCount() => OneTimeExpenses.Count(e => e.History.Any(h => h.IsPaid));
+
+    private async Task AddExpense()
+    {
+        var newExpense = new RecurringExpense
+        {
+            Frequency = RecurringExpenseFrequency.OneTime,
+            NextDueDate = DateTime.Today,
+            CreatedDate = DateTime.Today
+        };
+        
+        var parameters = new DialogParameters<RecurringExpenseDialog>
+        {
+            { x => x.Expense, newExpense },
+            { x => x.IsNew, true },
+            { x => x.ShowBillHistory, false }
+        };
+        
+        var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Medium, FullWidth = true };
+        var dialog = await DialogService.ShowAsync<RecurringExpenseDialog>("Add One-Time Expense", parameters, options);
+        var result = await dialog.Result;
+        
+        if (!result.Canceled && result.Data is RecurringExpense expense)
+        {
+            // Ensure it stays one-time
+            expense.Frequency = RecurringExpenseFrequency.OneTime;
+            Db.RecurringExpenses.Save(expense);
+            RefreshList();
+            Snackbar.Add("One-time expense added", Severity.Success);
+        }
+    }
+
+    private async Task EditExpense(RecurringExpense expense)
+    {
+        var parameters = new DialogParameters<RecurringExpenseDialog>
+        {
+            { x => x.Expense, expense },
+            { x => x.IsNew, false },
+            { x => x.ShowBillHistory, false }
+        };
+        
+        var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Medium, FullWidth = true };
+        var dialog = await DialogService.ShowAsync<RecurringExpenseDialog>("Edit One-Time Expense", parameters, options);
+        var result = await dialog.Result;
+        
+        if (!result.Canceled && result.Data is RecurringExpense updated)
+        {
+            // Ensure it stays one-time
+            updated.Frequency = RecurringExpenseFrequency.OneTime;
+            Db.RecurringExpenses.Save(updated);
+            
+            var idx = OneTimeExpenses.FindIndex(e => e.Id == updated.Id);
+            if (idx >= 0) OneTimeExpenses[idx] = updated;
+            
+            Snackbar.Add("One-time expense updated", Severity.Success);
+            StateHasChanged();
+        }
+    }
+
+    private async Task DeleteExpense(RecurringExpense expense)
+    {
+        var confirm = await DialogService.ShowMessageBoxAsync("Delete", "Are you sure?", yesText: "Delete", cancelText: "Cancel");
+        if (confirm == true)
+        {
+            Db.RecurringExpenses.Delete(expense.Id);
+            RefreshList();
+        }
+    }
+}
+

@@ -1,0 +1,165 @@
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Data
+@using System.IO
+@inject Database Db
+@inject ISnackbar Snackbar
+@inject IDialogService DialogService
+@inject Microsoft.AspNetCore.Hosting.IWebHostEnvironment Environment
+@inject AuthenticationStateProvider AuthStateProvider
+@using Microsoft.AspNetCore.Components.Authorization
+@using Spokes_Server.Core.Constants
+@using Spokes_Server.Core.Services
+@inject UserService UserService
+
+<MudGrid>
+    <MudItem xs="12" Class="d-flex justify-space-between align-center">
+        <MudText Typo="Typo.body2">Attach client Purchase Orders (POs) to this project.</MudText>
+        @if (CanEdit)
+        {
+            <MudSwitch T="bool" @bind-Value="IsEditing" Label="Edit Mode" Color="Color.Primary" />
+        }
+    </MudItem>
+
+    <MudItem xs="12">
+        <MudTable Items="@Project.PurchaseOrders" Dense="true" Hover="true" Elevation="0">
+            <HeaderContent>
+                <MudTh>PO Number</MudTh>
+                <MudTh>Date</MudTh>
+                <MudTh>Amount</MudTh>
+                <MudTh>File</MudTh>
+                <MudTh>Actions</MudTh>
+            </HeaderContent>
+            <RowTemplate>
+                <MudTd>
+                    <MudTextField @bind-Value="context.PoNumber" Label="PO #" Margin="Margin.Dense" OnBlur="AutoSave"
+                        Disabled="@(!IsEditing)" Variant="@(IsEditing ? Variant.Text : Variant.Text)"
+                        DisableUnderLine="@(!IsEditing)" />
+                </MudTd>
+                <MudTd>
+                    <MudDatePicker Date="context.DateReceived"
+                        DateChanged="@((DateTime? d) => { context.DateReceived = d; AutoSave(); })" Label="Date"
+                        Margin="Margin.Dense" Editable="true" Disabled="@(!IsEditing)" DisableToolbar="@(!IsEditing)" />
+                </MudTd>
+                <MudTd>
+                    <MudNumericField Value="context.Amount"
+                        ValueChanged="@((decimal v) => { context.Amount = v; AutoSave(); })" Label="Amount" Format="N2"
+                        Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.AttachMoney"
+                        Margin="Margin.Dense" Disabled="@(!IsEditing)" DisableUnderLine="@(!IsEditing)"
+                        HideSpinButtons="@(!IsEditing)" />
+                </MudTd>
+                <MudTd>
+                    @if (!string.IsNullOrEmpty(context.FilePath))
+                    {
+                        <div class="d-flex align-center gap-2">
+                            <MudLink Href="@context.FilePath" Target="_blank" Typo="Typo.body2">View</MudLink>
+                            @if (IsEditing)
+                            {
+                                <MudIconButton Icon="@Icons.Material.Filled.Delete" Color="Color.Error" Size="Size.Small"
+                                    Title="Remove File" OnClick="@(() => RemoveFile(context))" />
+                            }
+                        </div>
+                    }
+                    else if (IsEditing)
+                    {
+                        <ApiFileUpload Category="projects" ContextId="@Project.Id" MaximumFileCount="1"
+                                       OnUploadCompleted="@((results) => HandlePoApiUpload(results, context))"
+                                       OnUploadError='(e) => Snackbar.Add($"Upload failed: {e}", Severity.Error)'>
+                            <CustomContent>
+                                <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small"
+                                           StartIcon="@Icons.Material.Filled.CloudUpload">Upload</MudButton>
+                            </CustomContent>
+                        </ApiFileUpload>
+                    }
+                </MudTd>
+                <MudTd>
+                    @if (IsEditing)
+                    {
+                        <MudIconButton Icon="@Icons.Material.Filled.Delete" Color="Color.Error" Size="Size.Small"
+                            OnClick="@(() => RemovePO(context))" />
+                    }
+                </MudTd>
+            </RowTemplate>
+            <FooterContent>
+                <MudTd colspan="5">
+                    @if (IsEditing)
+                    {
+                        <MudButton StartIcon="@Icons.Material.Filled.Add" OnClick="AddPurchaseOrder" Color="Color.Primary">
+                            Add PO</MudButton>
+                    }
+                </MudTd>
+            </FooterContent>
+        </MudTable>
+    </MudItem>
+</MudGrid>
+
+@code {
+    [Parameter] public Project Project { get; set; } = new();
+    private bool IsEditing = false;
+    private bool CanEdit = false;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadPermissions();
+    }
+
+    private async Task LoadPermissions()
+    {
+        var emp = await UserService.GetEmployeeAsync();
+        if (emp != null) CanEdit = emp.HasPermission(AppPermissions.Projects.Edit);
+    }
+
+    private void AddPurchaseOrder()
+    {
+        Project.PurchaseOrders.Add(new ClientPO());
+        AutoSave();
+    }
+
+    private async Task RemovePO(ClientPO po)
+    {
+        bool? result = await DialogService.ShowMessageBoxAsync(
+        "Delete Purchase Order",
+        "Are you sure you want to delete this Purchase Order? This cannot be undone.",
+        yesText: "Delete", cancelText: "Cancel");
+
+        if (result == true)
+        {
+            Project.PurchaseOrders.Remove(po);
+            AutoSave(); // Also save the changes
+            StateHasChanged();
+        }
+    }
+
+    private void RemoveFile(ClientPO po)
+    {
+        po.FilePath = "";
+        po.MimeType = "";
+        AutoSave();
+    }
+
+    private void AutoSave()
+    {
+        Db.Projects.Save(Project);
+    }
+
+    [Inject] private IFileService FileService { get; set; } = default!;
+
+    private void HandlePoApiUpload(List<ApiFileUpload.UploadResult> results, ClientPO po)
+    {
+        var result = results.FirstOrDefault();
+        if (result != null)
+        {
+            po.FilePath = result.FilePath;
+            po.MimeType = result.ContentType;
+            Snackbar.Add("PO File Uploaded", Severity.Success);
+
+            AutoSave();
+            StateHasChanged();
+        }
+    }
+}
+
+

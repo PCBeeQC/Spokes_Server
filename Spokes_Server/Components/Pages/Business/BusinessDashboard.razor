@@ -1,0 +1,652 @@
+@page "/business-dashboard"
+@inject NavigationManager Nav
+@using Spokes_Server.Core.Data
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Components.Shared
+@using MudBlazor
+@inject Database Db
+@inject Spokes_Server.Core.Services.Accounting.FinancialCalculationEngine CalcEngine
+
+@using Spokes_Server.Core.Constants
+@attribute [Authorize(Policy = AppPermissions.Finance.AccessAccounting)]
+<PageTitle>Business Dashboard</PageTitle>
+
+<MudContainer MaxWidth="MaxWidth.ExtraLarge" Class="mt-4 pb-16">
+    <div class="d-flex justify-space-between align-center mb-4">
+        <MudText Typo="Typo.h5"><b>Business Dashboard</b></MudText>
+        <MudText Typo="Typo.subtitle2" Color="Color.Secondary">@DateTime.Now.ToString("MMMM yyyy")</MudText>
+    </div>
+
+    @* --- 1. TOP KPI CARDS --- *@
+    <MudGrid Class="mb-6">
+        <MudItem xs="12" sm="6" md="3">
+            <StatCard Title="Revenue (MTD)" Value="@TotalInvoicedThisMonth.ToString("C0")" Subtitle="Total Sales"
+                Icon="@Icons.Material.Filled.AttachMoney" IconColor="Color.Success"
+                Trend="@(GetGrowth(TotalInvoicedThisMonth, TotalInvoicedLastMonth))"
+                TrendColor="@(TotalInvoicedThisMonth >= TotalInvoicedLastMonth ? Color.Success : Color.Error)" />
+        </MudItem>
+        <MudItem xs="12" sm="6" md="3">
+            <StatCard Title="Accounts Receivable" Value="@TotalARDue.ToString("C0")"
+                Subtitle="@($"{UnpaidInvoicesCount} unpaid invoice(s)")" Icon="@Icons.Material.Filled.Receipt"
+                IconColor="Color.Warning" />
+        </MudItem>
+        <MudItem xs="12" sm="6" md="3">
+            <StatCard Title="Active Projects" Value="@ActiveProjectsCount.ToString()" Subtitle="In Production"
+                Icon="@Icons.Material.Filled.Work" IconColor="Color.Info" />
+        </MudItem>
+        <MudItem xs="12" sm="6" md="3">
+            <StatCard Title="Pipeline Value" Value="@PipelineValue.ToString("C0")"
+                Subtitle="@($"{PendingQuotesCount} pending quote(s)")" Icon="@Icons.Material.Filled.TrendingUp"
+                IconColor="Color.Primary" />
+        </MudItem>
+    </MudGrid>
+
+    @* --- 2. COMPREHENSIVE CASH FLOW ANALYSIS --- *@
+    <MudPaper Elevation="0" Outlined="true" Class="pa-6 mb-6">
+        <div class="d-flex align-center gap-3 mb-6">
+            <MudIcon Icon="@Icons.Material.Filled.Analytics" Size="Size.Large" Color="Color.Primary" />
+            <div>
+                <MudText Typo="Typo.h6"><b>Cash Flow Analysis</b></MudText>
+                <MudText Typo="Typo.caption" Color="Color.Secondary">Comprehensive breakdown for
+                    @DateTime.Now.ToString("MMMM")</MudText>
+            </div>
+            <MudSpacer />
+
+            @* Top Level Summary Stats *@
+            <MudPaper Elevation="0" Class="d-flex gap-6 pa-3"
+                Style="background-color: var(--mud-palette-background-grey); border-radius: 8px;">
+                <div class="d-flex flex-column align-center px-4"
+                    style="border-right: 1px solid var(--mud-palette-divider);">
+                    <MudText Typo="Typo.caption" Style="font-weight:bold; color:var(--mud-palette-success);">TOTAL IN
+                    </MudText>
+                    <MudText Typo="Typo.h6">@MoneyInTotal.ToString("C0")</MudText>
+                </div>
+                <div class="d-flex flex-column align-center px-4"
+                    style="border-right: 1px solid var(--mud-palette-divider);">
+                    <MudText Typo="Typo.caption" Style="font-weight:bold; color:var(--mud-palette-error);">TOTAL OUT
+                        (ACTUAL)</MudText>
+                    <MudText Typo="Typo.h6">@MoneyOutTotal.ToString("C0")</MudText>
+                </div>
+                <div class="d-flex flex-column align-center px-4">
+                    <MudText Typo="Typo.caption" Style="font-weight:bold;">NET FLOW</MudText>
+                    <MudText Typo="Typo.h6" Color="@(NetCashFlow >= 0 ? Color.Success : Color.Error)">
+                        @NetCashFlow.ToString("C0")</MudText>
+                </div>
+            </MudPaper>
+        </div>
+
+        <MudGrid>
+            @* COLUMN 1: MONEY OUT *@
+            <MudItem xs="12" md="6">
+                <MudText Typo="Typo.subtitle1" Class="mb-3"><b>Money Out (Current Month)</b></MudText>
+                <MudPaper Elevation="0" Outlined="true" Class="pa-4">
+                    
+                    @* Recurring & One-Time *@
+                    <div class="d-flex justify-space-between align-center mb-1">
+                        <MudText Typo="Typo.body2"><b>Recurring Bills</b></MudText>
+                        <MudText Typo="Typo.body2"><b>@RecurringBillsThisMonth.ToString("C0")</b></MudText>
+                    </div>
+                    
+                    <div class="d-flex justify-space-between align-center mb-1">
+                        <MudText Typo="Typo.body2"><b>One-Time Bills</b></MudText>
+                        <MudText Typo="Typo.body2"><b>@OneTimeBillsThisMonth.ToString("C0")</b></MudText>
+                    </div>
+
+                    <MudDivider Class="my-3" />
+
+                    @* Standard Bills & Expenses *@
+                    <div class="d-flex justify-space-between align-center mb-1">
+                        <MudText Typo="Typo.body2"><b>Standard Bills</b></MudText>
+                        <MudText Typo="Typo.body2"><b>@StandardBillsThisMonth.ToString("C0")</b></MudText>
+                    </div>
+                    
+                    <div class="d-flex justify-space-between align-center mb-1">
+                        <MudText Typo="Typo.body2"><b>PO Bills</b></MudText>
+                        <MudText Typo="Typo.body2"><b>@PoBillsThisMonth.ToString("C0")</b></MudText>
+                    </div>
+                    
+                    <div class="d-flex justify-space-between align-center mb-1">
+                        <MudText Typo="Typo.body2"><b>Employee Expenses</b></MudText>
+                        <MudText Typo="Typo.body2"><b>@ExpensesThisMonth.ToString("C0")</b></MudText>
+                    </div>
+
+                    <MudDivider Class="my-3" />
+
+                    @* Commissions *@
+                    <div class="d-flex justify-space-between align-center mb-4">
+                        <MudText Typo="Typo.body2"><b>Commissions Payable</b></MudText>
+                        <MudText Typo="Typo.body2"><b>@CommissionsThisMonth.ToString("C0")</b></MudText>
+                    </div>
+
+                    <MudDivider Class="my-3" />
+                    
+                    <div class="d-flex justify-space-between align-center">
+                        <MudText Typo="Typo.body2" Style="font-weight:bold;">Total Projected Out</MudText>
+                        <MudText Typo="Typo.body1" Color="Color.Error"><b>@MoneyOutTotal.ToString("C0")</b></MudText>
+                    </div>
+                </MudPaper>
+            </MudItem>
+
+            @* COLUMN 2: MONEY IN *@
+            <MudItem xs="12" md="6">
+                <MudText Typo="Typo.subtitle1" Class="mb-3"><b>Money In (Current Month)</b></MudText>
+                <MudPaper Elevation="0" Outlined="true" Class="pa-4">
+
+                    @* Received *@
+                    <div class="d-flex align-center gap-3 mb-4">
+                        <MudIcon Icon="@Icons.Material.Filled.CheckCircle" Color="Color.Success" />
+                        <div class="flex-grow-1">
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">RECEIVED</MudText>
+                            <MudText Typo="Typo.h6"><b>@MoneyInReceived.ToString("C0")</b></MudText>
+                        </div>
+                    </div>
+
+                    @* Pending *@
+                    <div class="d-flex align-center gap-3 mb-4">
+                        <MudIcon Icon="@Icons.Material.Filled.AccessTime" Color="Color.Warning" />
+                        <div class="flex-grow-1">
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">PENDING (DUE + OVERDUE)</MudText>
+                            <MudText Typo="Typo.h6"><b>@MoneyInPending.ToString("C0")</b></MudText>
+                        </div>
+                    </div>
+
+                    <MudDivider Class="my-3" />
+                    <div class="d-flex justify-space-between align-center">
+                        <MudText Typo="Typo.body2" Style="font-weight:bold;">Total Projected In</MudText>
+                        <MudText Typo="Typo.body1" Color="Color.Success"><b>@MoneyInTotal.ToString("C0")</b></MudText>
+                    </div>
+
+                </MudPaper>
+            </MudItem>
+        </MudGrid>
+    </MudPaper>
+
+    @* --- 3. ACTION REQUIRED + PROJECT STATUS --- *@
+    <MudGrid Class="mb-6">
+        @* Action Required This Week *@
+        <MudItem xs="12" lg="8">
+            <MudPaper Elevation="0" Outlined="true" Class="pa-4" Style="height: 100%;">
+                <MudText Typo="Typo.h6" Class="mb-4">
+                    <MudIcon Icon="@Icons.Material.Filled.NotificationsActive" Class="mr-2" Size="Size.Small" />
+                    <b>Action Required This Week</b>
+                </MudText>
+
+                @if (!InvoicesDueSoon.Any() && !StaleQuotes.Any() && DraftQuotesCount == 0)
+                {
+                    <MudAlert Severity="Severity.Success" Dense="true" Variant="Variant.Outlined">
+                        <MudIcon Icon="@Icons.Material.Filled.CheckCircle" Class="mr-2" />
+                        All caught up! No immediate actions required.
+                    </MudAlert>
+                }
+                else
+                {
+                    <div class="d-flex flex-column gap-3">
+                        @* Invoices Due Soon *@
+                        @foreach (var inv in InvoicesDueSoon.Take(3))
+                        {
+                            var daysUntilDue = (inv.DueDate - DateTime.Today).Days;
+                            var urgencyColor = daysUntilDue < 0 ? Color.Error : (daysUntilDue <= 3 ? Color.Warning :
+                            Color.Info);
+                            <MudPaper Elevation="0" Class="pa-3 d-flex justify-space-between align-center"
+                                Style="background-color: var(--mud-palette-background-grey); border-radius: 8px;">
+                                <div class="d-flex align-center gap-3">
+                                    <MudIcon Icon="@Icons.Material.Filled.Payment" Color="@urgencyColor" />
+                                    <div>
+                                        <MudText Typo="Typo.body2" Style="font-weight: 500;">@inv.InvoiceNumber</MudText>
+                                        <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                            @GetProjectName(inv.ProjectId) • @inv.BalanceDue.ToString("C0") due
+                                        </MudText>
+                                    </div>
+                                </div>
+                                <div class="d-flex align-center gap-2">
+                                    <MudChip T="string" Size="Size.Small" Color="@urgencyColor" Variant="Variant.Filled">
+                                        @if (daysUntilDue < 0)
+                                        {
+                                            @($"{Math.Abs(daysUntilDue)}d overdue")
+                                        }
+                                        else if (daysUntilDue == 0)
+                                        {
+                                            @("Due today")
+                                        }
+                                        else
+                                        {
+                                            @($"{daysUntilDue}d left")
+                                        }
+                                    </MudChip>
+                                    <MudIconButton Icon="@Icons.Material.Filled.Visibility" Size="Size.Small"
+                                        OnClick="@(() => Nav.NavigateTo($"/projects/{inv.ProjectId}/invoice/{inv.Id}"))" />
+                                </div>
+                            </MudPaper>
+                        }
+
+                        @* Stale Quotes *@
+                        @foreach (var quote in StaleQuotes.Take(2))
+                        {
+                            var daysSinceSent = (DateTime.Today - quote.Date).Days;
+                            <MudPaper Elevation="0" Class="pa-3 d-flex justify-space-between align-center"
+                                Style="background-color: var(--mud-palette-background-grey); border-radius: 8px;">
+                                <div class="d-flex align-center gap-3">
+                                    <MudIcon Icon="@Icons.Material.Filled.Description" Color="Color.Warning" />
+                                    <div>
+                                        <MudText Typo="Typo.body2" Style="font-weight: 500;">@quote.QuoteNumber - @quote.Title
+                                        </MudText>
+                                        <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                            @GetProjectName(quote.ProjectId) • @quote.GrandTotal.ToString("C0")
+                                        </MudText>
+                                    </div>
+                                </div>
+                                <div class="d-flex align-center gap-2">
+                                    <MudChip T="string" Size="Size.Small" Color="Color.Warning" Variant="Variant.Outlined">
+                                        Sent @daysSinceSent days ago
+                                    </MudChip>
+                                    <MudIconButton Icon="@Icons.Material.Filled.Visibility" Size="Size.Small"
+                                        OnClick="@(() => Nav.NavigateTo($"/projects/{quote.ProjectId}/quote/{quote.Id}"))" />
+                                </div>
+                            </MudPaper>
+                        }
+
+                        @* Draft Quotes Summary *@
+                        @if (DraftQuotesCount > 0)
+                        {
+                            <MudPaper Elevation="0" Class="pa-3 d-flex justify-space-between align-center"
+                                Style="background-color: var(--mud-palette-background-grey); border-radius: 8px;">
+                                <div class="d-flex align-center gap-3">
+                                    <MudIcon Icon="@Icons.Material.Filled.Edit" Color="Color.Default" />
+                                    <MudText Typo="Typo.body2"><b>@DraftQuotesCount</b> draft quote(s) need finalization
+                                    </MudText>
+                                </div>
+                                <MudButton Variant="Variant.Outlined" Size="Size.Small" Color="Color.Primary"
+                                    OnClick="@(() => Nav.NavigateTo("/projects"))">Review</MudButton>
+                            </MudPaper>
+                        }
+                    </div>
+                }
+            </MudPaper>
+        </MudItem>
+
+        @* Project Status Overview *@
+        <MudItem xs="12" lg="4">
+            <MudPaper Elevation="0" Outlined="true" Class="pa-4" Style="height: 100%;">
+                <MudText Typo="Typo.h6" Class="mb-4"><b>Project Status</b></MudText>
+                <div class="d-flex flex-wrap gap-2">
+                    @foreach (var status in ProjectStatusCounts)
+                    {
+                        <MudChip T="string" Size="Size.Medium" Variant="Variant.Filled" Color="@GetStatusColor(status.Key)"
+                            OnClick="@(() => Nav.NavigateTo($"/projects"))">
+                            @status.Key: <b>@status.Value</b>
+                        </MudChip>
+                    }
+                </div>
+            </MudPaper>
+        </MudItem>
+    </MudGrid>
+
+    @* --- 4. PROJECTS NEEDING ATTENTION --- *@
+    <MudGrid>
+        @* Projects Needing Attention *@
+        <MudItem xs="12">
+            <MudPaper Elevation="0" Outlined="true" Class="pa-4">
+                <div class="d-flex justify-space-between align-center mb-4">
+                    <MudText Typo="Typo.h6"><b>Projects Needing Attention</b></MudText>
+                    <MudButton Variant="Variant.Text" Color="Color.Primary"
+                        EndIcon="@Icons.Material.Filled.ArrowForward" OnClick="@(() => Nav.NavigateTo("/projects"))">
+                        View All</MudButton>
+                </div>
+
+                @if (!ProjectAlerts.Any())
+                {
+                    <MudAlert Severity="Severity.Success" Dense="true" Variant="Variant.Outlined">
+                        All projects are on track!
+                    </MudAlert>
+                }
+                else
+                {
+                    <MudTable Items="@ProjectAlerts.Take(5)" Dense="true" Hover="true" Elevation="0">
+                        <HeaderContent>
+                            <MudTh>Project</MudTh>
+                            <MudTh>Issue</MudTh>
+                            <MudTh>Action</MudTh>
+                        </HeaderContent>
+                        <RowTemplate>
+                            <MudTd>
+                                <div class="d-flex flex-column">
+                                    <MudText Typo="Typo.body2" Style="font-weight: 500;">@context.ProjectName</MudText>
+                                    <MudText Typo="Typo.caption" Color="Color.Secondary">@context.ClientName</MudText>
+                                </div>
+                            </MudTd>
+                            <MudTd>
+                                <MudChip T="string" Size="Size.Small" Color="@context.Severity" Variant="Variant.Filled">
+                                    @context.Issue
+                                </MudChip>
+                            </MudTd>
+                            <MudTd>
+                                <MudIconButton Icon="@Icons.Material.Filled.Visibility" Size="Size.Small"
+                                    OnClick="@(() => Nav.NavigateTo($"/projects/{context.ProjectId}"))" />
+                            </MudTd>
+                        </RowTemplate>
+                    </MudTable>
+                }
+            </MudPaper>
+        </MudItem>
+    </MudGrid>
+</MudContainer>
+
+@code {
+    // --- KPI Data ---
+    private decimal TotalInvoicedThisMonth = 0;
+    private decimal TotalInvoicedLastMonth = 0;
+    private decimal TotalARDue = 0;
+    private int UnpaidInvoicesCount = 0;
+    private int ActiveProjectsCount = 0;
+    private decimal PipelineValue = 0;
+    private int PendingQuotesCount = 0;
+
+    // --- Action Required ---
+    private List<Invoice> InvoicesDueSoon = new();
+    private List<Quote> StaleQuotes = new();
+    private int DraftQuotesCount = 0;
+
+    // --- Project Status ---
+    private Dictionary<string, int> ProjectStatusCounts = new();
+
+    // --- Projects Needing Attention ---
+    private List<ProjectAlert> ProjectAlerts = new();
+
+    // --- Cash Flow Details ---
+    // Money In
+    private decimal MoneyInReceived = 0;
+    private decimal MoneyInPending = 0;
+    private decimal MoneyInTotal => MoneyInReceived + MoneyInPending;
+
+    // Money Out Details
+    private decimal RecurringBillsThisMonth = 0;
+    private decimal OneTimeBillsThisMonth = 0;
+    private decimal StandardBillsThisMonth = 0;
+    private decimal PoBillsThisMonth = 0;
+    private decimal ExpensesThisMonth = 0;
+    private decimal CommissionsThisMonth = 0;
+
+    // Summary
+    private decimal MoneyOutTotal => RecurringBillsThisMonth + OneTimeBillsThisMonth + StandardBillsThisMonth + PoBillsThisMonth + ExpensesThisMonth + CommissionsThisMonth;
+    private decimal NetCashFlow => MoneyInTotal - MoneyOutTotal;
+
+    // --- Helpers ---
+    private Dictionary<string, string> ProjectNames = new();
+
+    protected override void OnInitialized()
+    {
+        LoadKPIs();
+        LoadActionItems();
+        LoadProjectStatus();
+        LoadProjectAlerts();
+        LoadDetailedCashFlow();
+    }
+
+    private void LoadKPIs()
+    {
+        var now = DateTime.Today;
+        var startOfMonth = new DateTime(now.Year, now.Month, 1);
+        var startOfLastMonth = startOfMonth.AddMonths(-1);
+        var endOfLastMonth = startOfMonth.AddDays(-1);
+
+        var allInvoices = Db.Invoices.GetAll();
+        var allProjects = Db.Projects.GetAll();
+        var allQuotes = Db.Quotes.GetAll();
+
+        // Cache project names
+        ProjectNames = allProjects.ToDictionary(p => p.Id, p => p.Name);
+
+        // Revenue MTD
+        TotalInvoicedThisMonth = allInvoices
+        .Where(i => i.Date >= startOfMonth && i.Status != "Draft" && i.Status != "Void")
+        .Sum(i => i.GrandTotal);
+
+        TotalInvoicedLastMonth = allInvoices
+        .Where(i => i.Date >= startOfLastMonth && i.Date <= endOfLastMonth && i.Status != "Draft" && i.Status != "Void")
+        .Sum(i => i.GrandTotal);
+
+        // AR Due
+        var unpaidInvoices = allInvoices.Where(i => i.Status != "Paid" && i.Status != "Void" && i.BalanceDue > 0).ToList();
+        TotalARDue = unpaidInvoices.Sum(i => i.BalanceDue);
+        UnpaidInvoicesCount = unpaidInvoices.Count;
+
+        // Active Projects
+        ActiveProjectsCount = allProjects.Count(p => p.Status == ProjectStatus.InProduction);
+
+        // Pipeline (Sent quotes not yet accepted)
+        var pendingQuotes = allQuotes.Where(q => q.Status == "Final").ToList();
+        PipelineValue = pendingQuotes.Sum(q => q.GrandTotal);
+        PendingQuotesCount = pendingQuotes.Count;
+    }
+
+    private void LoadActionItems()
+    {
+        var today = DateTime.Today;
+        var sevenDaysFromNow = today.AddDays(7);
+        var thirtyDaysAgo = today.AddDays(-30);
+
+        var allInvoices = Db.Invoices.GetAll();
+        var allQuotes = Db.Quotes.GetAll();
+
+        // Invoices due within 7 days (or overdue) with balance
+        InvoicesDueSoon = allInvoices
+        .Where(i => i.Status != "Paid" && i.Status != "Void" && i.BalanceDue > 0 && i.DueDate <= sevenDaysFromNow)
+        .OrderBy(i => i.DueDate)
+        .ToList();
+
+        // Stale quotes (Sent more than 30 days ago)
+        StaleQuotes = allQuotes
+        .Where(q => q.Status == "Final" && q.Date < thirtyDaysAgo)
+        .OrderBy(q => q.Date)
+        .ToList();
+
+        // Draft quotes count
+        DraftQuotesCount = allQuotes.Count(q => q.Status == "Draft");
+    }
+
+    private void LoadProjectStatus()
+    {
+        var allProjects = Db.Projects.GetAll();
+
+        // Group by common statuses
+        var statusOrder = new[] {
+ProjectStatus.Discovery,
+ProjectStatus.Quoted,
+ProjectStatus.InProduction,
+ProjectStatus.Completed
+};
+
+        ProjectStatusCounts = statusOrder
+        .ToDictionary(
+        s => s.Split('/')[0].Trim(),
+        s => allProjects.Count(p => p.Status == s)
+        )
+        .Where(kvp => kvp.Value > 0)
+        .ToDictionary(kvp => kvp.Key, kvp => kvp.Value);
+    }
+
+    private void LoadProjectAlerts()
+    {
+        var allProjects = Db.Projects.GetAll().Where(p => p.Status == ProjectStatus.InProduction).ToList();
+        var allTimesheets = Db.Timesheets.GetAll();
+        var allInvoices = Db.Invoices.GetAll();
+        var allQuotes = Db.Quotes.GetAll();
+        var today = DateTime.Today;
+        var fourteenDaysAgo = today.AddDays(-14);
+
+        foreach (var project in allProjects)
+        {
+            // Check for Over Budget
+            var projectTimesheets = allTimesheets.SelectMany(t => t.Entries).Where(e => e.ProjectId == project.Id);
+            var actualHours = projectTimesheets.Sum(e => e.Hours);
+            var acceptedQuote = allQuotes.FirstOrDefault(q => q.ProjectId == project.Id && q.Status == "Accepted");
+            var quotedHours = acceptedQuote?.LaborItems.Sum(l => l.Hours) ?? 0;
+
+            if (quotedHours > 0 && actualHours > quotedHours)
+            {
+                var burnPercent = (actualHours / quotedHours) * 100;
+                ProjectAlerts.Add(new ProjectAlert
+                    {
+                        ProjectId = project.Id,
+                        ProjectName = project.Name,
+                        ClientName = project.Client?.BusinessName ?? "",
+                        Issue = $"Labor {burnPercent:N0}% of budget",
+                        Severity = Color.Error
+                    });
+                continue;
+            }
+
+            // Check for Aging AR
+            var projectInvoices = allInvoices.Where(i => i.ProjectId == project.Id && i.Status != "Paid" && i.Status != "Void" &&
+            i.BalanceDue > 0);
+            var oldestUnpaid = projectInvoices.OrderBy(i => i.Date).FirstOrDefault();
+            if (oldestUnpaid != null && (today - oldestUnpaid.Date).Days > 30)
+            {
+                ProjectAlerts.Add(new ProjectAlert
+                    {
+                        ProjectId = project.Id,
+                        ProjectName = project.Name,
+                        ClientName = project.Client?.BusinessName ?? "",
+                        Issue = $"AR aging {(today - oldestUnpaid.Date).Days}d",
+                        Severity = Color.Warning
+                    });
+                continue;
+            }
+
+            // Check for Stalled
+            var recentEntries = allTimesheets
+            .SelectMany(t => t.Entries)
+            .Where(e => e.ProjectId == project.Id && e.Date >= fourteenDaysAgo);
+
+            if (!recentEntries.Any() && actualHours > 0)
+            {
+                ProjectAlerts.Add(new ProjectAlert
+                    {
+                        ProjectId = project.Id,
+                        ProjectName = project.Name,
+                        ClientName = project.Client?.BusinessName ?? "",
+                        Issue = "No activity 14d",
+                        Severity = Color.Default
+                    });
+            }
+        }
+
+        ProjectAlerts = ProjectAlerts
+        .OrderByDescending(a => a.Severity == Color.Error)
+        .ThenByDescending(a => a.Severity == Color.Warning)
+        .ToList();
+    }
+
+    private void LoadDetailedCashFlow()
+    {
+        var now = DateTime.Today;
+        var startOfMonth = new DateTime(now.Year, now.Month, 1);
+        var endOfMonth = startOfMonth.AddMonths(1).AddDays(-1);
+
+        // --- 1. Money In ---
+        var allInvoices = Db.Invoices.GetAll();
+
+        // Received: Paid this month
+        MoneyInReceived = allInvoices
+        .Where(i => i.Status == "Paid" && i.Date >= startOfMonth && i.Date <= endOfMonth)
+        .Sum(i => i.AmountPaid);
+
+        // Pending: Due by end of this month (includes overdue)
+        MoneyInPending = allInvoices
+        .Where(i => i.Status != "Paid" && i.Status != "Void" && i.DueDate <= endOfMonth)
+        .Sum(i => i.BalanceDue);
+
+        // --- 2. Money Out ---
+        RecurringBillsThisMonth = 0;
+        OneTimeBillsThisMonth = 0;
+        StandardBillsThisMonth = 0;
+        PoBillsThisMonth = 0;
+        ExpensesThisMonth = 0;
+        CommissionsThisMonth = 0;
+
+        // 2a. Expense Reports
+        var reports = Db.ExpenseReports.GetAll().Where(x => x.Status != ExpenseReportStatus.Draft
+            && x.DateCreated >= startOfMonth && x.DateCreated <= endOfMonth).ToList();
+        ExpensesThisMonth = reports.Sum(r => r.TotalAmount);
+
+        // 2b. Bills (Standard and POs)
+        var bills = Db.Bills.GetAll().Where(b => b.Date >= startOfMonth && b.Date <= endOfMonth).ToList();
+        foreach (var b in bills)
+        {
+            if (!string.IsNullOrEmpty(b.PurchaseOrderId))
+                PoBillsThisMonth += b.Amount;
+            else
+                StandardBillsThisMonth += b.Amount;
+        }
+
+        // 2c. Recurring and One-Time Expenses (Actual Bills)
+        var allRecurring = Db.RecurringExpenses.GetAll().Where(e => !e.IsEstimate).ToList();
+        foreach (var re in allRecurring)
+        {
+            var billsThisMonth = re.History.Where(h => h.Date >= startOfMonth && h.Date <= endOfMonth);
+            if (re.Frequency == RecurringExpenseFrequency.OneTime)
+                OneTimeBillsThisMonth += billsThisMonth.Sum(h => h.Amount);
+            else
+                RecurringBillsThisMonth += billsThisMonth.Sum(h => h.Amount);
+        }
+
+        // 2d. Commissions (From Ledger)
+        var ledgers = Db.CommissionLedgerRecords.GetAll();
+        foreach (var record in ledgers)
+        {
+            if (record.Status == "Paid" || record.DatePaid.HasValue)
+            {
+                if (record.DatePaid.Value >= startOfMonth && record.DatePaid.Value <= endOfMonth)
+                {
+                    CommissionsThisMonth += record.CommissionAmount;
+                }
+            }
+            else if (record.Status == "Payable")
+            {
+                CommissionsThisMonth += record.CommissionAmount;
+            }
+            else if (record.Status == "Clawback") // Negative amount, deducts from cash out
+            {
+                if (!record.DatePaid.HasValue || (record.DatePaid.Value >= startOfMonth && record.DatePaid.Value <= endOfMonth))
+                {
+                    CommissionsThisMonth += record.CommissionAmount; // CommissionAmount is negative for clawbacks
+                }
+            }
+        }
+    }
+
+    private string GetProjectName(string projectId) => ProjectNames.TryGetValue(projectId, out var name) ? name : "Unknown";
+
+    private string GetGrowth(decimal current, decimal last)
+    {
+        if (last == 0) return current > 0 ? "+100%" : "0%";
+        var growth = ((current - last) / last) * 100;
+        return (growth > 0 ? "+" : "") + growth.ToString("F0") + "%";
+    }
+
+    private Color GetStatusColor(string statusName)
+    {
+        return statusName switch
+        {
+            "Discovery" => Color.Warning,
+            "Quoted" => Color.Info,
+            "Quote Accepted" => Color.Success,
+            "Completed" => Color.Default,
+            _ => Color.Primary
+        };
+    }
+
+    class ProjectAlert
+    {
+        public string ProjectId { get; set; } = "";
+        public string ProjectName { get; set; } = "";
+        public string ClientName { get; set; } = "";
+        public string Issue { get; set; } = "";
+        public Color Severity { get; set; } = Color.Default;
+    }
+}
+

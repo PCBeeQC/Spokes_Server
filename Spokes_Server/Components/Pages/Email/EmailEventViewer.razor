@@ -1,0 +1,165 @@
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Services
+@using Spokes_Server.Components.Dialogs
+@using Spokes_Server.Aggregate
+@using MudBlazor
+@using System.IO
+@using Ical.Net
+@using Ical.Net.CalendarComponents
+@inject EmailService EmailService
+@inject IDialogService DialogService
+@inject Database Db
+@inject ISnackbar Snackbar
+
+<MudCard Variant="Variant.Outlined" Class="mt-4" Style="max-width: 600px; background-color: var(--mud-palette-background-grey);">
+    @if (_event != null)
+    {
+        <MudCardHeader>
+            <CardHeaderAvatar>
+                <MudAvatar Color="Color.Primary" Variant="Variant.Filled">
+                    <MudIcon Icon="@Icons.Material.Filled.Event" />
+                </MudAvatar>
+            </CardHeaderAvatar>
+            <CardHeaderContent>
+                <MudText Typo="Typo.body1"><b>@_event.Title</b></MudText>
+                <MudText Typo="Typo.body2">
+                    @if (_event.IsAllDay)
+                    {
+                        @_event.Start.ToShortDateString() <span> - All Day</span>
+                    }
+                    else
+                    {
+                        @_event.Start.ToString("g") <span> to </span> @_event.End.ToString("t")
+                    }
+                </MudText>
+            </CardHeaderContent>
+            <CardHeaderActions>
+                <MudButton Color="Color.Primary" Variant="Variant.Filled" Size="Size.Small" StartIcon="@Icons.Material.Filled.Add" OnClick="AddToCalendar" Class="mt-2 text-nowrap">
+                    Add to Calendar
+                </MudButton>
+            </CardHeaderActions>
+        </MudCardHeader>
+        <MudCardContent Class="pt-0">
+            @if (!string.IsNullOrWhiteSpace(_event.Location))
+            {
+                <div class="d-flex align-center gap-2 mb-2">
+                    <MudIcon Icon="@Icons.Material.Filled.LocationOn" Size="Size.Small" Color="Color.Default" />
+                    <MudText Typo="Typo.body2">@_event.Location</MudText>
+                </div>
+            }
+            @if (!string.IsNullOrWhiteSpace(_organizer))
+            {
+                <div class="d-flex align-center gap-2 mb-2">
+                    <MudIcon Icon="@Icons.Material.Filled.Person" Size="Size.Small" Color="Color.Default" />
+                    <MudText Typo="Typo.body2">Organizer: @_organizer</MudText>
+                </div>
+            }
+            @if (!string.IsNullOrWhiteSpace(_event.Description))
+            {
+                <MudText Typo="Typo.body2" Class="mt-2" Style="white-space: pre-wrap; word-break: break-word;">@_event.Description</MudText>
+            }
+        </MudCardContent>
+    }
+    else if (_hasError)
+    {
+        <MudCardContent>
+            <MudText Color="Color.Error" Typo="Typo.body2">Could not display calendar event details.</MudText>
+        </MudCardContent>
+    }
+    else
+    {
+        <MudCardContent>
+            <MudProgressCircular Indeterminate="true" Size="Size.Small" Color="Color.Primary" />
+        </MudCardContent>
+    }
+</MudCard>
+
+@code {
+    [Parameter] public EmailAttachmentMeta Attachment { get; set; } = default!;
+    [Parameter] public string MessageId { get; set; } = string.Empty;
+    [Parameter] public string EmployeeId { get; set; } = string.Empty;
+
+    private Spokes_Server.Core.Models.HR.CalendarEvent? _event;
+    private string? _organizer;
+    private bool _hasError;
+    private string? _lastAttachmentId;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (Attachment == null || string.IsNullOrEmpty(EmployeeId)) return;
+        if (Attachment.Id == _lastAttachmentId) return;
+        
+        _lastAttachmentId = Attachment.Id;
+        _event = null;
+        _organizer = null;
+        _hasError = false;
+
+        try
+        {
+            var path = EmailService.GetAttachmentPath(MessageId, Attachment.Id, EmployeeId);
+            if (File.Exists(path))
+            {
+                var icsContent = await File.ReadAllTextAsync(path);
+                var calendar = Calendar.Load(icsContent);
+                var vEvent = calendar.Events.FirstOrDefault();
+
+                if (vEvent != null)
+                {
+                    _event = new Spokes_Server.Core.Models.HR.CalendarEvent
+                    {
+                        Title = vEvent.Summary ?? "Untitled Event",
+                        Location = vEvent.Location ?? string.Empty,
+                        Description = vEvent.Description ?? string.Empty,
+                        Start = vEvent.DtStart?.Value ?? DateTime.Today,
+                        End = vEvent.DtEnd?.Value ?? DateTime.Today.AddHours(1),
+                        IsAllDay = vEvent.IsAllDay,
+                        EmployeeId = EmployeeId
+                    };
+                    
+                    if (vEvent.Organizer != null)
+                    {
+                        var org = vEvent.Organizer.CommonName;
+                        if (string.IsNullOrWhiteSpace(org)) org = vEvent.Organizer.Value?.UserInfo + "@" + vEvent.Organizer.Value?.Host;
+                        _organizer = org;
+                    }
+
+                    _event.ExternalParticipant = _organizer ?? string.Empty;
+
+                    // Convert to local time if it's UTC
+                    if (_event.Start.Kind == DateTimeKind.Utc)
+                        _event.Start = _event.Start.ToLocalTime();
+                    if (_event.End.Kind == DateTimeKind.Utc)
+                        _event.End = _event.End.ToLocalTime();
+                }
+                else
+                {
+                    _hasError = true;
+                }
+            }
+            else
+            {
+                _hasError = true;
+            }
+        }
+        catch (Exception)
+        {
+            _hasError = true;
+        }
+    }
+
+    private async Task AddToCalendar()
+    {
+        if (_event == null) return;
+
+        var parameters = new DialogParameters { ["Event"] = _event, ["IsNew"] = true };
+        var dialog = await DialogService.ShowAsync<CalendarEventDialog>("New Event", parameters);
+        var result = await dialog.Result;
+
+        if (result != null && !result.Canceled && result.Data is Spokes_Server.Core.Models.HR.CalendarEvent resultEvent)
+        {
+            Db.CalendarEvents.Save(resultEvent);
+            Snackbar.Add("Event added to calendar", Severity.Success);
+        }
+    }
+}

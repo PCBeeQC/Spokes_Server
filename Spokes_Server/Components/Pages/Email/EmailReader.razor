@@ -1,0 +1,453 @@
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Components.Dialogs
+@inject IDialogService DialogService
+
+<MudPaper Elevation="0" Class="d-flex flex-column flex-grow-1 custom-scrollbar" Style="height: 100%;">
+    @if (SelectedMessage != null)
+    {
+        <!-- Action Toolbar -->
+        <MudStack Row="true" AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween" Class="px-3 border-b mud-theme-border-color flex-wrap gap-y-2 gap-x-0" Spacing="2">
+            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" Class="flex-wrap gap-y-2">
+                <MudHidden Breakpoint="Breakpoint.MdAndUp">
+                    <MudTooltip Text="Back">
+                        <MudIconButton Icon="@Icons.Material.Filled.ArrowBack" Size="Size.Small" OnClick="OnClose" />
+                    </MudTooltip>
+                </MudHidden>
+
+                @* #23 — Previous/Next navigation *@
+                <MudTooltip Text="Previous">
+                    <MudIconButton Icon="@Icons.Material.Filled.ChevronLeft" Size="Size.Medium" OnClick="OnPreviousMessage"
+                        Disabled="@(!HasPreviousMessage)" />
+                </MudTooltip>
+                <MudTooltip Text="Next">
+                    <MudIconButton Icon="@Icons.Material.Filled.ChevronRight" Size="Size.Medium" OnClick="OnNextMessage"
+                        Disabled="@(!HasNextMessage)" />
+                </MudTooltip>
+
+                <MudHidden Breakpoint="Breakpoint.Xs">
+                    <MudDivider Vertical="true" FlexItem="true" Class="mx-2 my-2" />
+                </MudHidden>
+
+                @* #17 — Reply / Reply All / Forward *@
+                <MudTooltip Text="Reply">
+                    <MudIconButton Icon="@Icons.Material.Filled.Reply" Size="Size.Medium" Color="Color.Primary" OnClick="OnReply" />
+                </MudTooltip>
+                <MudHidden Breakpoint="Breakpoint.SmAndDown">
+                    <MudTooltip Text="Reply All">
+                        <MudIconButton Icon="@Icons.Material.Filled.ReplyAll" Size="Size.Medium" Color="Color.Primary" OnClick="OnReplyAll" />
+                    </MudTooltip>
+                    <MudTooltip Text="Forward">
+                        <MudIconButton Icon="@Icons.Material.Filled.Forward" Size="Size.Medium" Color="Color.Primary" OnClick="OnForward" />
+                    </MudTooltip>
+                </MudHidden>
+
+                <MudHidden Breakpoint="Breakpoint.Xs">
+                    <MudDivider Vertical="true" FlexItem="true" Class="mx-2 my-2" />
+                </MudHidden>
+
+                <MudHidden Breakpoint="Breakpoint.SmAndDown">
+                    <MudTooltip Text="Mark as Unread">
+                        <MudIconButton Icon="@Icons.Material.Filled.MarkEmailUnread" Size="Size.Medium" OnClick="OnMarkAsUnread" />
+                    </MudTooltip>
+                    <MudMenu Icon="@Icons.Material.Filled.DriveFileMove" Title="Move to Folder" Size="Size.Medium" AnchorOrigin="Origin.BottomLeft"
+                        TransformOrigin="Origin.TopLeft">
+                        <div style="min-width: 280px; max-height: 400px; overflow-y: auto;" class="pa-2">
+                            <MudText Typo="Typo.subtitle2" Class="px-2 pb-2">Move to...</MudText>
+                            <MudTreeView T="EmailFolder" Items="_treeItems" Hover="true" Width="100%"
+                                SelectedValueChanged="HandleMoveToFolder">
+                                <ItemTemplate Context="treeItem">
+                                    @{
+                                        var isDisabled = (treeItem as FolderTreeItem)?.IsCurrentFolder == true;
+                                    }
+                                    <MudTreeViewItem @bind-Expanded="@treeItem.Expanded" Items="@treeItem.Children"
+                                        Value="@treeItem.Value">
+                                        <Content>
+                                            <MudIcon Icon="@treeItem.Icon" Class="ml-0 mr-2" Size="Size.Medium"
+                                                Style="@(isDisabled ? "opacity: 0.4;" : "")" />
+                                            <MudText Typo="Typo.body2" Style="@(isDisabled ? "opacity: 0.4;" : "")">
+                                                @treeItem.Value.Name</MudText>
+                                        </Content>
+                                    </MudTreeViewItem>
+                                </ItemTemplate>
+                            </MudTreeView>
+                        </div>
+                    </MudMenu>
+                </MudHidden>
+
+                <MudHidden Breakpoint="Breakpoint.Xs">
+                    <MudDivider Vertical="true" FlexItem="true" Class="mx-2 my-2" />
+                </MudHidden>
+
+                <MudTooltip Text="Delete">
+                    <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Medium" Color="Color.Error" OnClick="OnDelete" />
+                </MudTooltip>
+
+                @if (CanAddToTimeline)
+                {
+                    <MudHidden Breakpoint="Breakpoint.SmAndDown">
+                        <MudTooltip Text="Add to Project Timeline">
+                            <MudIconButton Icon="@Icons.Material.Filled.PlaylistAdd" Size="Size.Medium" Color="Color.Primary" OnClick="OnAddToTimeline" />
+                        </MudTooltip>
+                    </MudHidden>
+                }
+
+                <MudMenu Icon="@Icons.Material.Filled.MoreVert" Size="Size.Medium">
+                    <MudMenuItem Icon="@Icons.Material.Filled.Inventory2" OnClick="OnArchive">Archive</MudMenuItem>
+                    <MudMenuItem Icon="@Icons.Material.Filled.Report" OnClick="OnJunk">Junk</MudMenuItem>
+                    <MudMenuItem Icon="@Icons.Material.Filled.Print" OnClick="OnPrint">Print</MudMenuItem>
+                    
+                    <MudHidden Breakpoint="Breakpoint.MdAndUp">
+                        <MudDivider />
+                        <MudMenuItem Icon="@Icons.Material.Filled.ReplyAll" OnClick="OnReplyAll">Reply All</MudMenuItem>
+                        <MudMenuItem Icon="@Icons.Material.Filled.Forward" OnClick="OnForward">Forward</MudMenuItem>
+                        <MudMenuItem Icon="@Icons.Material.Filled.MarkEmailUnread" OnClick="OnMarkAsUnread">Mark as Unread</MudMenuItem>
+                        @if (CanAddToTimeline)
+                        {
+                            <MudMenuItem Icon="@Icons.Material.Filled.PlaylistAdd" OnClick="OnAddToTimeline">Add to Timeline</MudMenuItem>
+                        }
+                        <div class="px-2 pt-2">
+                            <MudText Typo="Typo.subtitle2" Class="px-2">Move to...</MudText>
+                            <div style="max-height: 250px; overflow-y: auto;">
+                                <MudTreeView T="EmailFolder" Items="_treeItems" Hover="true" Width="100%"
+                                    SelectedValueChanged="HandleMoveToFolder">
+                                    <ItemTemplate Context="treeItem">
+                                        @{
+                                            var isDisabled = (treeItem as FolderTreeItem)?.IsCurrentFolder == true;
+                                        }
+                                        <MudTreeViewItem @bind-Expanded="@treeItem.Expanded" Items="@treeItem.Children"
+                                            Value="@treeItem.Value">
+                                            <Content>
+                                                <MudIcon Icon="@treeItem.Icon" Class="ml-0 mr-2" Size="Size.Medium"
+                                                    Style="@(isDisabled ? "opacity: 0.4;" : "")" />
+                                                <MudText Typo="Typo.body2" Style="@(isDisabled ? "opacity: 0.4;" : "")">
+                                                    @treeItem.Value.Name</MudText>
+                                            </Content>
+                                        </MudTreeViewItem>
+                                    </ItemTemplate>
+                                </MudTreeView>
+                            </div>
+                        </div>
+                    </MudHidden>
+                </MudMenu>
+            </MudStack>
+
+            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="0">
+                <MudTooltip Text="@(SelectedMessage.IsFlagged ? "Remove Flag" : "Flag Message")">
+                    <MudIconButton
+                        Icon="@(SelectedMessage.IsFlagged ? Icons.Material.Filled.Star : Icons.Material.Outlined.StarBorder)"
+                        Size="Size.Medium"
+                        Color="@(SelectedMessage.IsFlagged ? Color.Warning : Color.Default)"
+                        OnClick="@(() => OnToggleFlag.InvokeAsync(SelectedMessage))" />
+                </MudTooltip>
+            </MudStack>
+        </MudStack>
+
+        <!-- Message Header -->
+        <div class="pa-4 border-b mud-theme-border-color">
+            @* #24 — Subject constrained to 2 lines with expand *@
+            <div @onclick="@(() => _subjectExpanded = !_subjectExpanded)" style="cursor: pointer;">
+                <MudText Typo="Typo.h6" Class="mb-2"
+                    Style="@(_subjectExpanded ? "" : "display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;")">
+                    @SelectedMessage.Subject
+                </MudText>
+            </div>
+
+            <div class="d-flex align-center gap-3">
+                <MudAvatar Color="Color.Primary">@(string.IsNullOrWhiteSpace(SelectedMessage.FromName) ? (SelectedMessage.FromAddress.Length > 0 ? SelectedMessage.FromAddress[0] : '?') : SelectedMessage.FromName[0])</MudAvatar>
+                <div>
+                    <MudText Typo="Typo.body1" Class="d-flex align-center gap-1 flex-wrap">
+                        <b>@SelectedMessage.FromName</b>
+                        <MudChip T="string" Size="Size.Small" Variant="Variant.Text"
+                            OnClick="@(() => OpenContactDialog(SelectedMessage.FromAddress, SelectedMessage.FromName))"
+                            Class="cursor-pointer ml-1">
+                            &lt;@SelectedMessage.FromAddress&gt;
+                        </MudChip>
+                    </MudText>
+                    <MudText Typo="Typo.caption" Color="Color.Secondary" Class="d-flex align-center flex-wrap gap-1">
+                        To:
+                        @foreach (var to in SelectedMessage.ToAddresses)
+                        {
+                            <MudChip T="string" Size="Size.Small" Variant="Variant.Text"
+                                OnClick="@(() => OpenContactDialog(to, ""))" Class="cursor-pointer ma-0 px-1">
+                                @to
+                            </MudChip>
+                        }
+                    </MudText>
+
+                    @* #22 — CC/BCC display *@
+                    @if (SelectedMessage.CcAddresses.Any())
+                    {
+                        <MudText Typo="Typo.caption" Color="Color.Secondary" Class="d-flex align-center flex-wrap gap-1">
+                            Cc:
+                            @foreach (var cc in SelectedMessage.CcAddresses)
+                            {
+                                <MudChip T="string" Size="Size.Small" Variant="Variant.Text"
+                                    OnClick="@(() => OpenContactDialog(cc, ""))" Class="cursor-pointer ma-0 px-1">
+                                    @cc
+                                </MudChip>
+                            }
+                        </MudText>
+                    }
+                    @if (SelectedMessage.BccAddresses.Any())
+                    {
+                        <MudText Typo="Typo.caption" Color="Color.Secondary" Class="d-flex align-center flex-wrap gap-1">
+                            Bcc:
+                            @foreach (var bcc in SelectedMessage.BccAddresses)
+                            {
+                                <MudChip T="string" Size="Size.Small" Variant="Variant.Text" Class="ma-0 px-1">
+                                    @bcc
+                                </MudChip>
+                            }
+                        </MudText>
+                    }
+
+                    <MudText Typo="Typo.caption" Color="Color.Secondary" Class="ml-2">@FormatDate(SelectedMessage.Date)
+                    </MudText>
+                </div>
+            </div>
+
+            @* #20 — Attachments with preview support *@
+        @if (SelectedMessage.HasAttachments)
+        {
+            <div class="d-flex flex-wrap gap-2 mt-2">
+                @foreach (var att in SelectedMessage.Attachments)
+                {
+                    <MudChip T="string" Size="Size.Small" Icon="@GetAttachmentIcon(att)"
+                        OnClick="@(() => HandleAttachmentClick(att))">
+                        @att.FileName (@FormatSize(att.Size))
+                    </MudChip>
+                }
+            </div>
+
+        }
+        </div>
+
+        <!-- Body -->
+        <div class="flex-grow-1 overflow-y-auto pa-4 d-flex flex-column">
+            @if (SelectedMessage.HasAttachments)
+            {
+                var icsAtts = SelectedMessage.Attachments.Where(a => IsIcsAttachment(a)).ToList();
+                if (icsAtts.Any())
+                {
+                    <div class="d-flex flex-column gap-2 mb-4 shrink-0">
+                        @foreach (var att in icsAtts)
+                        {
+                            <EmailEventViewer Attachment="att" MessageId="@SelectedMessage.Id" EmployeeId="@EmployeeId" />
+                        }
+                    </div>
+                }
+            }
+
+            @if (IsLoadingBody)
+            {
+                <MudProgressLinear Indeterminate="true" Color="Color.Primary" />
+            }
+            else
+            {
+                <div class="email-body-content" style="height: 100%;">
+                    <EmailContentRenderer HtmlContent="@MessageBody" />
+                </div>
+            }
+        </div>
+    }
+    else
+    {
+        <div class="d-flex flex-column align-center justify-center flex-grow-1">
+            <MudIcon Icon="@Icons.Material.Filled.Email" Size="Size.Large" Color="Color.Tertiary"
+                Style="font-size: 64px;" />
+            <MudText Typo="Typo.h6" Color="Color.Secondary" Class="mt-4">Select a message to read</MudText>
+        </div>
+    }
+</MudPaper>
+
+@code {
+    [Parameter] public EmailMessage? SelectedMessage { get; set; }
+    [Parameter] public string? SelectedMessageId { get; set; }
+    [Parameter] public string? TimeZoneId { get; set; }
+    [Parameter] public string MessageBody { get; set; } = "";
+    [Parameter] public bool IsLoadingBody { get; set; }
+    [Parameter] public List<EmailFolder> Folders { get; set; } = new();
+    [Parameter] public string? CurrentFolderPath { get; set; }
+    [Parameter] public string? EmployeeId { get; set; }
+
+    [Parameter] public EventCallback OnClose { get; set; }
+    [Parameter] public EventCallback<EmailMessage> OnToggleFlag { get; set; }
+    [Parameter] public EventCallback<EmailAttachmentMeta> OnDownloadAttachment { get; set; }
+    [Parameter] public EventCallback OnMarkAsUnread { get; set; }
+    [Parameter] public EventCallback<string> OnMoveTo { get; set; }
+
+    [Parameter] public EventCallback OnReply { get; set; }
+    [Parameter] public EventCallback OnReplyAll { get; set; }
+    [Parameter] public EventCallback OnForward { get; set; }
+    [Parameter] public EventCallback OnDelete { get; set; }
+    [Parameter] public EventCallback OnArchive { get; set; }
+    [Parameter] public EventCallback OnJunk { get; set; }
+    [Parameter] public EventCallback OnPrint { get; set; }
+    [Parameter] public bool CanAddToTimeline { get; set; }
+    [Parameter] public EventCallback OnAddToTimeline { get; set; }
+
+    // #23 — Navigation
+    [Parameter] public bool HasNextMessage { get; set; }
+    [Parameter] public bool HasPreviousMessage { get; set; }
+    [Parameter] public EventCallback OnNextMessage { get; set; }
+    [Parameter] public EventCallback OnPreviousMessage { get; set; }
+
+    private List<TreeItemData<EmailFolder>> _treeItems = new();
+    private bool _subjectExpanded = false;
+
+    protected override void OnParametersSet()
+    {
+        if (Folders != null && Folders.Any())
+        {
+            var filtered = Folders
+            .Where(f => !f.IsDrafts && f.Path != "LocalDrafts")
+            .ToList();
+            _treeItems = BuildTree(filtered);
+        }
+
+        // Reset subject expand when switching messages
+        _subjectExpanded = false;
+    }
+
+    // #20 — Attachment preview
+    private string GetAttachmentIcon(EmailAttachmentMeta att)
+    {
+        if (IsImageAttachment(att)) return Icons.Material.Filled.Image;
+        if (IsPdfAttachment(att)) return Icons.Material.Filled.PictureAsPdf;
+        return Icons.Material.Filled.AttachFile;
+    }
+
+    private bool IsImageAttachment(EmailAttachmentMeta att)
+    {
+        return att.ContentType.StartsWith("image/", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private bool IsPdfAttachment(EmailAttachmentMeta att)
+    {
+        return att.ContentType.Equals("application/pdf", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private bool IsIcsAttachment(EmailAttachmentMeta att)
+    {
+        return att.FileName.EndsWith(".ics", StringComparison.OrdinalIgnoreCase) || 
+               att.ContentType.Equals("text/calendar", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private async Task HandleAttachmentClick(EmailAttachmentMeta att)
+    {
+        if (SelectedMessage == null) return;
+
+        if (IsImageAttachment(att) || IsPdfAttachment(att))
+        {
+            // Open preview dialog — pass content type and filename as query params
+            var url = $"/internal/attachments/email/{SelectedMessage.Id}/{att.Id}?employeeId={Uri.EscapeDataString(EmployeeId ?? "")}&ct={Uri.EscapeDataString(att.ContentType)}&fn={Uri.EscapeDataString(att.FileName)}";
+            var parameters = new DialogParameters
+            {
+                { "Url", url },
+                { "FileName", att.FileName },
+                { "IsImage", IsImageAttachment(att) }
+            };
+            var options = new DialogOptions { MaxWidth = MaxWidth.Large, FullWidth = true, CloseOnEscapeKey = true };
+            await DialogService.ShowAsync<AttachmentPreviewDialog>("Preview", parameters, options);
+        }
+        else
+        {
+            // Fallback: download via existing mechanism
+            await OnDownloadAttachment.InvokeAsync(att);
+        }
+    }
+
+    private async Task HandleMoveToFolder(EmailFolder folder)
+    {
+        if (folder != null && folder.Path != CurrentFolderPath && OnMoveTo.HasDelegate)
+        {
+            await OnMoveTo.InvokeAsync(folder.Path);
+        }
+    }
+
+    private List<TreeItemData<EmailFolder>> BuildTree(List<EmailFolder> folders)
+    {
+        var allPaths = new HashSet<string>(folders.Select(f => f.Path));
+        var roots = folders.Where(f =>
+        string.IsNullOrEmpty(f.ParentPath) || !allPaths.Contains(f.ParentPath)
+        ).OrderByDescending(f => f.IsInbox).ThenBy(f => f.Name).ToList();
+        return roots.Select(r => BuildNode(r, folders)).ToList();
+    }
+
+    private TreeItemData<EmailFolder> BuildNode(EmailFolder folder, List<EmailFolder> allFolders)
+    {
+        var children = allFolders.Where(f => f.ParentPath == folder.Path)
+        .OrderBy(f => f.Name).ToList();
+        return new FolderTreeItem(folder)
+            {
+                Text = folder.Name,
+                Icon = GetFolderIcon(folder),
+                Expanded = true,
+                IsCurrentFolder = folder.Path == CurrentFolderPath,
+                Children = children.Select(c => BuildNode(c, allFolders)).ToList()
+            };
+    }
+
+    private class FolderTreeItem : TreeItemData<EmailFolder>
+    {
+        public bool IsCurrentFolder { get; set; }
+        public FolderTreeItem(EmailFolder folder) : base(folder) { }
+    }
+
+    private string GetFolderIcon(EmailFolder folder)
+    {
+        if (folder.IsInbox) return Icons.Material.Filled.Inbox;
+        if (folder.IsSent) return Icons.Material.Filled.Send;
+        if (folder.IsTrash) return Icons.Material.Filled.Delete;
+        if (folder.IsArchive) return Icons.Material.Filled.Inventory2;
+        if (folder.IsJunk) return Icons.Material.Filled.Report;
+        return Icons.Material.Filled.Folder;
+    }
+
+    private string FormatSize(long bytes)
+    {
+        if (bytes < 1024) return $"{bytes} B";
+        if (bytes < 1024 * 1024) return $"{bytes / 1024} KB";
+        return $"{bytes / 1024 / 1024} MB";
+    }
+
+    private string FormatDate(DateTimeOffset date)
+    {
+        DateTime localDate;
+        if (!string.IsNullOrWhiteSpace(TimeZoneId))
+        {
+            try
+            {
+                localDate = TimeZoneInfo.ConvertTimeBySystemTimeZoneId(date, TimeZoneId).DateTime;
+            }
+            catch
+            {
+                localDate = date.LocalDateTime;
+            }
+        }
+        else
+        {
+            localDate = date.LocalDateTime;
+        }
+
+        return localDate.ToString("g");
+    }
+
+    private async Task OpenContactDialog(string email, string name)
+    {
+        if (string.IsNullOrWhiteSpace(email)) return;
+
+        var options = new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true };
+        var parameters = new DialogParameters
+        {
+            { "Email", email },
+            { "DisplayName", name }
+        };
+
+        await DialogService.ShowAsync<AddContactFromEmailDialog>("Save Contact", parameters, options);
+    }
+}

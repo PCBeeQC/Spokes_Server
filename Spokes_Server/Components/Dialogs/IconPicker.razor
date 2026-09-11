@@ -1,0 +1,114 @@
+@using MudBlazor
+@using System.Reflection
+
+<MudDialog>
+    <DialogContent>
+        <MudTextField @bind-Value="SearchText" Placeholder="Search icons..." Adornment="Adornment.Start"
+            AdornmentIcon="@Icons.Material.Filled.Search" Immediate="true" Class="mb-4" />
+
+        @if (IsLoading)
+        {
+            <MudProgressCircular Indeterminate="true" Color="Color.Primary" />
+        }
+        else
+        {
+            <!-- Virtualized Grid Container -->
+            <div style="height: 400px; overflow-y: auto;">
+                <MudVirtualize Items="@BatchedIcons" Context="row" OverscanCount="5">
+                    <div class="d-flex gap-2 mb-2 justify-center">
+                        @foreach (var icon in row)
+                        {
+                            <MudIconButton Icon="@icon.Value" OnClick="@(() => SelectIcon(icon.Value))" Color="Color.Default"
+                                title="@icon.Key" />
+                        }
+                        @* Spacer for alignment if row is not full? Not strictly needed if centered or left aligned *@
+                    </div>
+                </MudVirtualize>
+            </div>
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Close">Close</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
+
+    private string _searchText = "";
+    private string SearchText
+    {
+        get => _searchText;
+        set
+        {
+            var newVal = value ?? "";
+            if (_searchText != newVal)
+            {
+                _searchText = newVal;
+                UpdateList();
+            }
+        }
+    }
+
+    private bool IsLoading = true;
+    private List<KeyValuePair<string, string>> AllIcons = new();
+    private List<List<KeyValuePair<string, string>>> BatchedIcons = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        // Load icons off-thread to not block UI
+        await Task.Run(() => LoadIcons());
+        IsLoading = false;
+    }
+
+    private void LoadIcons()
+    {
+        var icons = new Dictionary<string, string>();
+
+        // Reflection to get icons from MudBlazor.Icons.Material.Filled/Outlined/Sharp/Rounded/TwoTone
+        // We focus on Filled and Outlined for now to avoid massive list
+
+        AddIconsFromType(typeof(Icons.Material.Filled), icons, "Filled");
+        AddIconsFromType(typeof(Icons.Material.Outlined), icons, "Outlined");
+
+        AllIcons = icons.ToList();
+
+        // Initial List
+        InvokeAsync(UpdateList);
+    }
+
+    private void AddIconsFromType(Type type, Dictionary<string, string> dict, string suffix)
+    {
+        foreach (var field in type.GetFields(BindingFlags.Public | BindingFlags.Static | BindingFlags.FlattenHierarchy))
+        {
+            if (field.IsLiteral && !field.IsInitOnly && field.FieldType == typeof(string))
+            {
+                var val = field.GetValue(null) as string;
+                var key = field.Name + " " + suffix;
+                if (!string.IsNullOrEmpty(val) && !dict.ContainsKey(key))
+                {
+                    dict.Add(key, val);
+                }
+            }
+        }
+    }
+
+    private void UpdateList()
+    {
+        var query = string.IsNullOrWhiteSpace(_searchText)
+        ? (IEnumerable<KeyValuePair<string, string>>)AllIcons
+        : AllIcons.Where(i => i.Key.Contains(_searchText, StringComparison.OrdinalIgnoreCase));
+
+        // Chunk into rows of 6 for mobile friendliness, or 8?
+        // Let's go with 8.
+        BatchedIcons = query.Chunk(8).Select(c => c.ToList()).ToList();
+        StateHasChanged();
+    }
+
+    private void Close() => MudDialog.Cancel();
+
+    private void SelectIcon(string icon)
+    {
+        MudDialog.Close(DialogResult.Ok(icon));
+    }
+}

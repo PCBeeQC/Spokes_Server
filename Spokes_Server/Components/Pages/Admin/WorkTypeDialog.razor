@@ -1,0 +1,211 @@
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Models.HR
+@using MudBlazor
+@using Spokes_Server.Core.Data
+@inject Database Db
+@inject IDialogService DialogService
+
+<MudDialog>
+    <DialogContent>
+        <MudForm @ref="form" @bind-IsValid="@success">
+            <MudTabs @key="tabsKey" Elevation="0" Rounded="true" ApplyEffectsToContainer="true" TabPanelsClass="pt-4">
+                <MudTabPanel Text="MAIN">
+                    <MudTextField @bind-Value="WorkType.Name" Label="Task Name" Required="true" Immediate="true" />
+
+                    <MudGrid Class="mt-2">
+                        <MudItem xs="6">
+                            <MudNumericField @bind-Value="WorkType.CostRate" Label="Internal Cost ($/hr)" Format="N2"
+                                Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.MoneyOff"
+                                HelperText="Used for margin calculations" />
+                        </MudItem>
+                        <MudItem xs="6">
+                            <MudNumericField @bind-Value="WorkType.DefaultRate" Label="Billing Rate ($/hr)" Format="N2"
+                                Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.AttachMoney"
+                                HelperText="Default price for clients" />
+                        </MudItem>
+                        <MudItem xs="12">
+                             <MudSelect T="string" Label="Assigned Teams" MultiSelection="true" @bind-SelectedValues="selectedTeams"
+                                       MultiSelectionTextFunc="@(values => string.Join(", ", AllTeams.Where(t => values.Contains(t.Id)).Select(t => t.Name)))">
+                                @foreach (var team in AllTeams)
+                                {
+                                    <MudSelectItem Value="@team.Id">@team.Name</MudSelectItem>
+                                }
+                            </MudSelect>
+                        </MudItem>
+                        <MudItem xs="12">
+                            <MudText Typo="Typo.subtitle2" Class="mb-2">Sub-Tasks (Reporting Categories)</MudText>
+                            <MudTable Items="@WorkType.SubTasks" Dense="true" Hover="true" FixedHeader="true" Height="250px">
+                                <HeaderContent>
+                                    <MudTh>Sub-Task Name</MudTh>
+                                    <MudTh Style="width: 50px;"></MudTh>
+                                </HeaderContent>
+                                <RowTemplate>
+                                     <MudTd>
+                                        <MudTextField @bind-Value="context.Name" Margin="Margin.Dense" Immediate="true" />
+                                    </MudTd>
+                                    <MudTd>
+                                        <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small" Color="Color.Error" 
+                                        OnClick="@(() => WorkType.SubTasks.Remove(context))" />
+                                    </MudTd>
+                                </RowTemplate>
+                                <FooterContent>
+                                     <MudTd>
+                                        <div class="d-flex gap-2">
+                                            <MudTextField @bind-Value="newSubTaskName" Placeholder="New Sub-Task Name" Margin="Margin.Dense" 
+                                                OnBlur="AddSubTask" OnKeyDown="@(e => { if (e.Key == "Enter" || e.Key == "NumpadEnter") AddSubTask(); })" />
+                                            <MudButton StartIcon="@Icons.Material.Filled.Add" Color="Color.Primary" OnClick="AddSubTask" 
+                                            Disabled="@string.IsNullOrWhiteSpace(newSubTaskName)">Add</MudButton>
+                                        </div>
+                                    </MudTd>
+                                    <MudTd></MudTd>
+                                </FooterContent>
+                            </MudTable>
+                        </MudItem>
+                    </MudGrid>
+
+                    <MudSwitch @bind-Value="WorkType.IsActive" Color="Color.Success" Label="Active" />
+                </MudTabPanel>
+
+                @foreach (var lang in TaskLanguages)
+                {
+                    <MudTabPanel>
+                        <TabContent>
+                            @lang
+                            <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small" OnClick="@(() => ConfirmDeleteLanguage(lang))" Class="ml-2" />
+                        </TabContent>
+                        <ChildContent>
+                            <MudTextField Value="@GetTranslatedTaskName(lang)" ValueChanged="@( (string v) => SetTranslatedTaskName(lang, v) )" Label="Translated Task Name" Immediate="true" />
+                            
+                            <MudText Typo="Typo.subtitle2" Class="mt-4 mb-2">Sub-Tasks Translations</MudText>
+                            <MudTable Items="@WorkType.SubTasks" Dense="true" Hover="true" FixedHeader="true" Height="250px">
+                                <HeaderContent>
+                                    <MudTh>Original Name</MudTh>
+                                    <MudTh>Translated Name</MudTh>
+                                </HeaderContent>
+                                <RowTemplate Context="subTask">
+                                    <MudTd>@subTask.Name</MudTd>
+                                    <MudTd>
+                                        <MudTextField Value="@GetTranslatedSubTaskName(subTask, lang)" ValueChanged="@( (string v) => SetTranslatedSubTaskName(subTask, lang, v) )" Margin="Margin.Dense" Immediate="true" />
+                                    </MudTd>
+                                </RowTemplate>
+                            </MudTable>
+                        </ChildContent>
+                    </MudTabPanel>
+                }
+
+                <MudTabPanel Icon="@Icons.Material.Filled.Add">
+                    <MudText Typo="Typo.subtitle2" Class="ma-4">Add Translation Language</MudText>
+                    <div class="d-flex gap-2 ma-4 align-center">
+                        <MudTextField @bind-Value="newLanguageName" Placeholder="Language Name (e.g. Français)" Margin="Margin.Dense" Variant="Variant.Outlined" Immediate="true" />
+                        <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="AddLanguage" Disabled="@string.IsNullOrWhiteSpace(newLanguageName)">Add Language</MudButton>
+                    </div>
+                </MudTabPanel>
+
+            </MudTabs>
+        </MudForm>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+        <MudButton Color="Color.Primary" OnClick="Submit">Save</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
+    [Parameter] public WorkType WorkType { get; set; } = default!;
+    private MudForm form = default!;
+    private bool success;
+
+    private string newSubTaskName = "";
+    private string newLanguageName = "";
+    private IReadOnlyCollection<string> selectedTeams = new HashSet<string>();
+    private List<Team> AllTeams = new();
+    private List<string> TaskLanguages = new();
+    private CompanyProfile profile;
+    private int tabsKey = 0;
+
+    protected override void OnInitialized()
+    {
+        AllTeams = Db.Teams.GetAll().OrderBy(t => t.Name).ToList();
+        selectedTeams = WorkType.AssignedTeamIds;
+
+        profile = Db.CompanyProfile.Get();
+        TaskLanguages = profile?.TaskTranslationLanguages ?? new List<string>();
+
+        // Ensure at least one subtask exists if empty (though Repo handles this too)
+        if (!WorkType.SubTasks.Any())
+        {
+            WorkType.SubTasks.Add(new SubTask { Name = "General" });
+        }
+    }
+
+    private string GetTranslatedTaskName(string lang) => WorkType.NameTranslations.ContainsKey(lang) ? WorkType.NameTranslations[lang] : "";
+    private void SetTranslatedTaskName(string lang, string val) => WorkType.NameTranslations[lang] = val;
+
+    private string GetTranslatedSubTaskName(SubTask subTask, string lang) => subTask.NameTranslations.ContainsKey(lang) ? subTask.NameTranslations[lang] : "";
+    private void SetTranslatedSubTaskName(SubTask subTask, string lang, string val) => subTask.NameTranslations[lang] = val;
+
+    private async Task ConfirmDeleteLanguage(string lang)
+    {
+        bool? result = await DialogService.ShowMessageBoxAsync(
+            "Delete Language",
+            $"Are you sure you want to delete the '{lang}' translation language globally?",
+            yesText: "Delete", cancelText: "Cancel");
+            
+        if (result == true)
+        {
+            TaskLanguages.Remove(lang);
+            profile.TaskTranslationLanguages = TaskLanguages;
+            Db.CompanyProfile.Save(profile);
+            
+            // Clean up current task translations (optional, but good)
+            if (WorkType.NameTranslations.ContainsKey(lang)) WorkType.NameTranslations.Remove(lang);
+            foreach (var st in WorkType.SubTasks)
+            {
+                if (st.NameTranslations.ContainsKey(lang)) st.NameTranslations.Remove(lang);
+            }
+            tabsKey++;
+        }
+    }
+
+    private void AddLanguage()
+    {
+        if (!string.IsNullOrWhiteSpace(newLanguageName) && !TaskLanguages.Contains(newLanguageName))
+        {
+            TaskLanguages.Add(newLanguageName);
+            profile.TaskTranslationLanguages = TaskLanguages;
+            Db.CompanyProfile.Save(profile);
+            newLanguageName = "";
+            tabsKey++;
+        }
+    }
+
+    private void AddSubTask()
+    {
+        if (string.IsNullOrWhiteSpace(newSubTaskName)) return;
+        WorkType.SubTasks.Add(new SubTask { Name = newSubTaskName });
+        newSubTaskName = "";
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+
+    private void Submit()
+    {
+        form.Validate();
+        if (success)
+        {
+            WorkType.AssignedTeamIds = selectedTeams.ToList();
+
+            // Validate: Must have at least one subtask
+            if (!WorkType.SubTasks.Any())
+            {
+                WorkType.SubTasks.Add(new SubTask { Name = "General" });
+            }
+
+            MudDialog.Close(DialogResult.Ok(WorkType));
+        }
+    }
+}

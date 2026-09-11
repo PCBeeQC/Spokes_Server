@@ -1,0 +1,109 @@
+@using Spokes_Server.Core.Models.HR
+@using MudBlazor
+@using Spokes_Server.Core.Services.Communication
+
+@implements IDisposable
+@inject PresenceStateService PresenceState
+
+@{
+    bool showBadge = false;
+    Color badgeColor = Color.Default;
+
+    if (ShowPresence && Employee != null)
+    {
+        var hasConn = PresenceState.HasActiveConnection(Employee.Id);
+        var isAway = PresenceState.IsGloballyAway(Employee.Id);
+
+        if (hasConn && !isAway)
+        {
+            showBadge = true;
+            badgeColor = Color.Success;
+        }
+        else if (isAway)
+        {
+            showBadge = true;
+            badgeColor = Color.Warning;
+        }
+    }
+    
+    string safeColor = string.IsNullOrEmpty(Employee?.ProfileColor) ? Colors.DeepPurple.Default : Employee.ProfileColor;
+    string overflowStyle = ShowPresence ? "overflow: visible !important;" : "overflow: hidden;";
+    string calculatedFontSize = !string.IsNullOrEmpty(FontSize)
+        ? FontSize
+        : (Size == Size.Small ? "0.8rem" : "inherit");
+}
+
+<MudAvatar Size="@Size" Class="@Class" Style="@($"{overflowStyle} position: relative; vertical-align: middle; font-size: {calculatedFontSize}; background-color: {safeColor}; color: {Colors.Shades.White}; {Style}")">
+    @if (Employee != null)
+    {
+        @if (Employee.HasCustomAvatar)
+        {
+            <div style="width: 100%; height: 100%; border-radius: 50%; overflow: hidden; display: flex; align-items: center; justify-content: center;">
+                <MudImage Src="@($"/spokesapi/Media/Avatar/{Employee.Id}?v={Employee.AvatarVersion}")" ObjectFit="ObjectFit.Cover" Style="width: 100%; height: 100%; display: block;" />
+            </div>
+        }
+        else
+        {
+            <div style="width: 100%; height: 100%; border-radius: 50%; overflow: hidden; display: flex; align-items: center; justify-content: center;">
+                @(string.IsNullOrEmpty(Employee.Initials) ? $"{Employee.FirstName?.FirstOrDefault()}{Employee.LastName?.FirstOrDefault()}" : Employee.Initials)
+            </div>
+        }
+    }
+    @if (showBadge)
+    {
+        var badgeHexColor = badgeColor == Color.Success ? "var(--mud-palette-success)" : "var(--mud-palette-warning)";
+        <div class="presence-dot" style="background-color: @badgeHexColor;"></div>
+    }
+</MudAvatar>
+
+<style>
+    .presence-dot {
+        position: absolute;
+        top: 0;
+        right: 0;
+        /* Proportional scale: forces the badge to always equal ~30% of the avatar's actual dimensions */
+        width: 30%;
+        height: 30%;
+        min-width: 8px;
+        min-height: 8px;
+        border-radius: 50%;
+        /* Translate precisely slightly outwards so the dot rests on the circular rim (angle offset) */
+        transform: translate(25%, -25%);
+        border: 1px solid var(--mud-palette-surface);
+        z-index: 10;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+    }
+</style>
+
+@code {
+    [Parameter] public Employee? Employee { get; set; }
+    [Parameter] public Size Size { get; set; } = Size.Medium;
+    [Parameter] public string Class { get; set; } = "";
+    [Parameter] public string Style { get; set; } = "";
+    [Parameter] public bool ShowPresence { get; set; } = true;
+    [Parameter] public string? FontSize { get; set; }
+
+    protected override void OnInitialized()
+    {
+        if (ShowPresence)
+        {
+            PresenceState.OnUserPresenceChanged += HandlePresenceChanged;
+        }
+    }
+
+    private void HandlePresenceChanged(string userId)
+    {
+        if (Employee != null && userId == Employee.Id)
+        {
+            InvokeAsync(StateHasChanged);
+        }
+    }
+
+    public void Dispose()
+    {
+        if (ShowPresence)
+        {
+            PresenceState.OnUserPresenceChanged -= HandlePresenceChanged;
+        }
+    }
+}

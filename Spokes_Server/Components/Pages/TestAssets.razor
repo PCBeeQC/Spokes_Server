@@ -1,0 +1,14 @@
+@page "/test-assets"
+@using Microsoft.AspNetCore.Components.Web
+@code {
+    protected override void OnInitialized()
+    {
+        Console.WriteLine("---- ASSETS ----");
+        Console.WriteLine("Key 1: " + (Assets["./Components/Pages/Chat/Chat.razor.js"] ?? "NULL"));
+        Console.WriteLine("Key 2: " + (Assets["Components/Pages/Chat/Chat.razor.js"] ?? "NULL"));
+        Console.WriteLine("Key 3: " + (Assets["Spokes_Server/Components/Pages/Chat/Chat.razor.js"] ?? "NULL"));
+        Console.WriteLine("Key 4: " + (Assets["/Components/Pages/Chat/Chat.razor.js"] ?? "NULL"));
+        Console.WriteLine("Key 5: " + (Assets["js/voiceInterop.js"] ?? "NULL"));
+        Console.WriteLine("Key 6: " + (Assets["Spokes_Server.lib.module.js"] ?? "NULL"));
+    }
+}

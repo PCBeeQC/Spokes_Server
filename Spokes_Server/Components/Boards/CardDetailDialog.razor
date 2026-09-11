@@ -1,0 +1,351 @@
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Data
+@using Spokes_Server.Core.Services
+@using Microsoft.AspNetCore.Components.Authorization
+@using MudBlazor
+@inject BoardService BoardService
+@inject AuthenticationStateProvider AuthStateProvider
+@inject UserService UserService
+
+<MudDialog>
+    <DialogContent>
+        <MudStack Spacing="4">
+            <!-- TITLE -->
+            <MudTextField @bind-Value="Card.Title" Label="Title" Variant="Variant.Text" Typo="Typo.h5" OnBlur="Save" />
+
+            <!-- MAIN CONTENT AREA -->
+            <MudGrid>
+                <!-- LEFT COLUMN: Description & Activity -->
+                <MudItem xs="12" md="8">
+                    <MudStack Spacing="4">
+                        <!-- PROPERTIES (Moved to top of left column or separate? Keep simple for now) -->
+                        <MudPaper Class="pa-4 bg-gray-50" Elevation="0" Outlined="true">
+                            <MudStack Spacing="2">
+                                @foreach (var prop in Board.Properties)
+                                {
+                                    <MudStack Row="true" AlignItems="AlignItems.Center">
+                                        <MudIcon Icon="@GetPropertyIcon(prop.Type)" Size="Size.Small" Class="mr-2" Color="Color.Default" />
+                                        <MudText Style="width: 120px; font-weight: 500;">@prop.Name</MudText>
+                                        
+                                        @switch (prop.Type)
+                                        {
+                                            case BoardPropertyType.Text:
+                                            case BoardPropertyType.URL:
+                                            case BoardPropertyType.Email:
+                                            case BoardPropertyType.Phone:
+                                                <MudTextField Value="@GetPropValue(prop.Id)" T="string"
+                                                    ValueChanged="@((v) => SetPropValue(prop.Id, v))" 
+                                                    Placeholder="Empty"
+                                                    Variant="Variant.Outlined" Margin="Margin.Dense" Class="flex-grow-1" />
+                                                break;
+
+                                            case BoardPropertyType.Number:
+                                                <MudTextField Value="@GetPropValue(prop.Id)" T="string"
+                                                    ValueChanged="@((v) => SetPropValue(prop.Id, v))" 
+                                                    InputType="InputType.Number"
+                                                    Placeholder="Empty"
+                                                    Variant="Variant.Outlined" Margin="Margin.Dense" Class="flex-grow-1" />
+                                                break;
+
+                                            case BoardPropertyType.MultiSelect:
+                                                <MudSelect T="string" Values="@GetMultiSelectValue(prop.Id)"
+                                                    ValuesChanged="@((IEnumerable<string> vals) => SetMultiSelectValue(prop.Id, vals))"
+                                                    MultiSelection="true"
+                                                    Variant="Variant.Outlined"
+                                                    Margin="Margin.Dense" Class="flex-grow-1" Clearable="true">
+                                                    @foreach (var opt in prop.Options)
+                                                    {
+                                                        <MudSelectItem Value="@opt.Id">
+                                                            <div class="d-flex align-center gap-2">
+                                                                @if(!string.IsNullOrEmpty(opt.Color))
+                                                                {
+                                                                    <MudIcon Icon="@Icons.Material.Filled.Circle" Size="Size.Small" Style="@($"color: {GetColor(opt.Color)}")" />
+                                                                }
+                                                                @opt.Name
+                                                            </div>
+                                                        </MudSelectItem>
+                                                    }
+                                                </MudSelect>
+                                                break;
+
+                                            case BoardPropertyType.Select:
+                                                <MudSelect T="string" Value="@GetPropValue(prop.Id)"
+                                                    ValueChanged="@((v) => SetPropValue(prop.Id, v))" 
+                                                    Variant="Variant.Outlined"
+                                                    Margin="Margin.Dense" Class="flex-grow-1" Clearable="true">
+                                                    @foreach (var opt in prop.Options)
+                                                    {
+                                                        <MudSelectItem Value="@opt.Id">
+                                                            <div class="d-flex align-center gap-2">
+                                                                @if(!string.IsNullOrEmpty(opt.Color))
+                                                                {
+                                                                    <MudIcon Icon="@Icons.Material.Filled.Circle" Size="Size.Small" Style="@($"color: {GetColor(opt.Color)}")" />
+                                                                }
+                                                                @opt.Name
+                                                            </div>
+                                                        </MudSelectItem>
+                                                    }
+                                                </MudSelect>
+                                                break;
+
+                                            case BoardPropertyType.Person:
+                                                <MudSelect T="string" Value="@GetPropValue(prop.Id)"
+                                                    ValueChanged="@((v) => SetPropValue(prop.Id, v))" 
+                                                    Variant="Variant.Outlined"
+                                                    Margin="Margin.Dense" Class="flex-grow-1" Clearable="true">
+                                                    @foreach (var emp in _employees.Where(x => x.IsActive))
+                                                    {
+                                                        <MudSelectItem Value="@emp.Id">@emp.FirstName @emp.LastName</MudSelectItem>
+                                                    }
+                                                </MudSelect>
+                                                break;
+
+                                            case BoardPropertyType.Project:
+                                                <MudSelect T="string" Value="@GetPropValue(prop.Id)"
+                                                    ValueChanged="@((v) => SetPropValue(prop.Id, v))" 
+                                                    Variant="Variant.Outlined"
+                                                    Margin="Margin.Dense" Class="flex-grow-1" Clearable="true">
+                                                    @foreach (var proj in _projects)
+                                                    {
+                                                        <MudSelectItem Value="@proj.Id">@proj.Name</MudSelectItem>
+                                                    }
+                                                </MudSelect>
+                                                break;
+                                                
+                                            case BoardPropertyType.Date:
+                                                <MudDatePicker Date="@GetDateValue(prop.Id)" 
+                                                    DateChanged="@((d) => SetDateValue(prop.Id, d))"
+                                                    Variant="Variant.Outlined" Margin="Margin.Dense" Class="flex-grow-1" Clearable="true" />
+                                                break;
+
+                                            case BoardPropertyType.Checkbox:
+                                                <MudCheckBox T="bool" Value="@(GetPropValue(prop.Id) == "true")" 
+                                                    ValueChanged="@((v) => SetPropValue(prop.Id, v ? "true" : "false"))"
+                                                    Color="Color.Primary" Dense="true" />
+                                                break;
+
+                                            default:
+                                                <MudText>@prop.Type Not Implemented</MudText>
+                                                break;
+                                        }
+                                    </MudStack>
+                                }
+                            </MudStack>
+                        </MudPaper>
+
+                        <!-- DESCRIPTION -->
+                        <MudStack Spacing="1">
+                             <MudText Typo="Typo.subtitle2" Class="d-flex align-center gap-2">
+                                 <MudIcon Icon="@Icons.Material.Filled.Notes" Size="Size.Small" /> Description
+                             </MudText>
+                             <MudTextField @bind-Value="Card.Content" Label="" Variant="Variant.Outlined" Lines="8"
+                                           Placeholder="Add a description..." OnBlur="Save" />
+                        </MudStack>
+                    </MudStack>
+                </MudItem>
+
+                <!-- RIGHT COLUMN: Comments & Activity -->
+                <MudItem xs="12" md="4">
+                    <MudStack Spacing="3" Class="h-100">
+                        <MudText Typo="Typo.subtitle2" Class="d-flex align-center gap-2">
+                            <MudIcon Icon="@Icons.Material.Filled.Comment" Size="Size.Small" /> Comments
+                        </MudText>
+                        
+                        <!-- NEW COMMENT -->
+                        <MudPaper Elevation="0" Outlined="true" Class="pa-2">
+                            <MudTextField @bind-Value="_newComment" Placeholder="Write a comment..." Variant="Variant.Text" Lines="2" DisableUnderLine="true" />
+                            <div class="d-flex justify-end mt-1">
+                                <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Primary" OnClick="AddComment" Disabled="@string.IsNullOrWhiteSpace(_newComment)">Send</MudButton>
+                            </div>
+                        </MudPaper>
+
+                        <!-- ACTIVITY / COMMENTS LIST -->
+                        <MudStack Spacing="2" Class="flex-grow-1 overflow-y-auto" Style="max-height: 400px;">
+                            @if (Card.Comments.Any() || Card.ActivityLog.Any())
+                            {
+                                var mixedList = GetMixedActivity();
+                                @foreach (var item in mixedList)
+                                {
+                                    if (item is BoardCardComment comment)
+                                    {
+                                        <MudPaper Elevation="0" Class="pa-2 bg-gray-50 rounded">
+                                            <div class="d-flex justify-space-between align-center mb-1">
+                                                <MudText Typo="Typo.caption" Style="font-weight: 600;">@GetUserName(comment.UserId)</MudText>
+                                                <MudText Typo="Typo.caption" Color="Color.Secondary">@comment.CreatedAt.ToShortTimeString()</MudText>
+                                            </div>
+                                            <MudText Typo="Typo.body2">@comment.Text</MudText>
+                                        </MudPaper>
+                                    }
+                                    else if (item is BoardCardActivity activity)
+                                    {
+                                         <div class="d-flex align-center gap-2 px-2 py-1">
+                                             <MudIcon Icon="@Icons.Material.Filled.History" Size="Size.Small" Color="Color.Secondary" Style="font-size: 1rem;" />
+                                             <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                                 <strong>@GetUserName(activity.UserId)</strong> @activity.Details
+                                                 <span class="ml-1 opacity-50">@activity.CreatedAt.ToShortTimeString()</span>
+                                             </MudText>
+                                         </div>
+                                    }
+                                }
+                            }
+                            else
+                            {
+                                <MudText Typo="Typo.caption" Color="Color.Secondary" Class="text-center py-4">No activity yet</MudText>
+                            }
+                        </MudStack>
+                    </MudStack>
+                </MudItem>
+            </MudGrid>
+        </MudStack>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Delete" Color="Color.Error">Delete</MudButton>
+        <MudSpacer />
+        <MudButton OnClick="Close">Close</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
+
+    [Inject] Database Db { get; set; } = default!;
+    [Parameter] public BoardCard Card { get; set; } = default!;
+    [Parameter] public Board Board { get; set; } = default!;
+
+    private List<Employee> _employees = new();
+    private List<Project> _projects = new(); // Assuming Project model existence
+    private string _currentUserId = "u1";
+
+    protected override async Task OnInitializedAsync()
+    {
+        _employees = Db.Employees.GetAll();
+        _projects = Db.Projects.GetAll();
+
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        var emp = UserService.GetEmployee(authState.User);
+        if (emp != null)
+        {
+            _currentUserId = emp.Id;
+        }
+    }
+
+    string GetPropertyIcon(BoardPropertyType type) => type switch
+    {
+        BoardPropertyType.Select => Icons.Material.Filled.ArrowDropDownCircle,
+        BoardPropertyType.MultiSelect => Icons.Material.Filled.ChecklistRtl,
+        BoardPropertyType.Person => Icons.Material.Filled.Person,
+        BoardPropertyType.Date => Icons.Material.Filled.CalendarToday,
+        BoardPropertyType.Checkbox => Icons.Material.Filled.CheckBox,
+        BoardPropertyType.URL => Icons.Material.Filled.Link,
+        BoardPropertyType.Email => Icons.Material.Filled.Email,
+        BoardPropertyType.Number => Icons.Material.Filled.Numbers,
+        BoardPropertyType.Phone => Icons.Material.Filled.Phone,
+        BoardPropertyType.Project => Icons.Material.Filled.AccountTree,
+        _ => Icons.Material.Filled.ShortText
+    };
+
+    string GetColor(string colorName)
+    {
+        // Simple mapping to MudBlazor/HTML colors
+        return colorName switch
+        {
+            "gray" => "var(--mud-palette-grey)",
+            "brown" => "#795548",
+            "orange" => "var(--mud-palette-warning)",
+            "yellow" => "#FBC02D",
+            "green" => "var(--mud-palette-success)",
+            "blue" => "var(--mud-palette-info)",
+            "purple" => "#9C27B0",
+            "pink" => "#E91E63",
+            "red" => "var(--mud-palette-error)",
+            _ => "var(--mud-palette-text-primary)"
+        };
+    }
+
+    DateTime? GetDateValue(string propId)
+    {
+        var val = GetPropValue(propId);
+        if (DateTime.TryParse(val, out var d)) return d;
+        return null;
+    }
+
+    void SetDateValue(string propId, DateTime? date)
+    {
+        SetPropValue(propId, date.HasValue ? date.Value.ToString("O") : "");
+    }
+
+    string GetPropValue(string propId)
+    {
+        if (Card.PropertyValues.TryGetValue(propId, out var val)) return val;
+        return "";
+    }
+
+    void SetPropValue(string propId, string val)
+    {
+        BoardService.UpdateCardProperty(Card.Id, propId, val);
+        // Local update for UI responsiveness if generic UpdateCard is used elsewhere
+        Card.PropertyValues[propId] = val;
+    }
+
+    IEnumerable<string> GetMultiSelectValue(string propId)
+    {
+        var val = GetPropValue(propId);
+        if (string.IsNullOrEmpty(val)) return new List<string>();
+        return val.Split(',', StringSplitOptions.RemoveEmptyEntries);
+    }
+
+    void SetMultiSelectValue(string propId, IEnumerable<string> vals)
+    {
+        var joined = string.Join(",", vals);
+        SetPropValue(propId, joined);
+    }
+
+    private string _newComment = "";
+
+    void AddComment()
+    {
+        if (string.IsNullOrWhiteSpace(_newComment)) return;
+        
+        BoardService.AddComment(Card.Id, _currentUserId, _newComment);
+        _newComment = "";
+        StateHasChanged();
+    }
+    
+    List<object> GetMixedActivity()
+    {
+        var list = new List<object>();
+        list.AddRange(Card.Comments);
+        list.AddRange(Card.ActivityLog);
+        
+        // Sort by date descending
+        return list.OrderByDescending(x => 
+        {
+            if (x is BoardCardComment c) return c.CreatedAt;
+            if (x is BoardCardActivity a) return a.CreatedAt;
+            return DateTime.MinValue;
+        }).ToList();
+    }
+    
+    string GetUserName(string userId)
+    {
+        var emp = _employees.FirstOrDefault(e => e.Id == userId);
+        return emp != null ? emp.FirstName : "System"; // or "Me"
+    }
+
+    void Save()
+    {
+        BoardService.UpdateCard(Card);
+    }
+
+    void Delete()
+    {
+        BoardService.DeleteCard(Card.Id);
+        MudDialog.Close(DialogResult.Ok(true));
+    }
+
+    void Close() => MudDialog.Close(DialogResult.Ok(true));
+}

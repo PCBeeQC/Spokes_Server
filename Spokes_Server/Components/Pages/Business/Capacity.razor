@@ -1,0 +1,444 @@
+@page "/business/capacity"
+@implements IDisposable
+@using Spokes_Server.Core.Data
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Models.HR
+@using MudBlazor
+@using System.Globalization
+@inject Database Db
+@inject NavigationManager Nav
+@using Microsoft.AspNetCore.Components.Authorization
+@inject AuthenticationStateProvider AuthStateProvider
+@using Spokes_Server.Core.Constants
+@attribute [Authorize(Policy = AppPermissions.Finance.TeamCapacity)]
+
+<PageTitle>Team Capacity</PageTitle>
+
+<MudContainer MaxWidth="MaxWidth.ExtraLarge" Class="mt-4">
+    <div class="d-flex justify-space-between align-center mb-4">
+        <MudText Typo="Typo.h5"><b>Team Capacity Dashboard</b></MudText>
+        
+        <div class="d-flex align-center gap-4">
+            <!-- Timeframe Controls -->
+            <MudSelect T="string" Value="@SelectedTimeframe" ValueChanged="OnTimeframeChanged" Variant="Variant.Outlined" Margin="Margin.Dense" Dense="true" Style="min-width: 150px;">
+                <MudSelectItem Value="@("Week")">This Week</MudSelectItem>
+                <MudSelectItem Value="@("Month")">This Month</MudSelectItem>
+                <MudSelectItem Value="@("Quarter")">This Quarter</MudSelectItem>
+                <MudSelectItem Value="@("Year")">This Year</MudSelectItem>
+            </MudSelect>
+
+            <div class="d-flex align-center gap-2">
+                <MudIconButton Icon="@Icons.Material.Filled.ChevronLeft" OnClick="PrevPeriod" />
+                <MudText><b>@PeriodLabel</b></MudText>
+                <MudIconButton Icon="@Icons.Material.Filled.ChevronRight" OnClick="NextPeriod" />
+            </div>
+        </div>
+    </div>
+
+    @if (Loading)
+    {
+        <MudProgressLinear Color="Color.Primary" Indeterminate="true" Class="mb-4" />
+    }
+
+    <MudTabs ActivePanelIndex="activeTabIndex" ActivePanelIndexChanged="UpdateActiveTab" Elevation="0" Outlined="true" Border="true" ApplyEffectsToContainer="true" Rounded="true" TabPanelsClass="pa-4">
+        
+        <!-- TAB 1: TEAM DASHBOARD -->
+        <MudTabPanel Text="Team Overview" Icon="@Icons.Material.Filled.Dashboard">
+            
+            <div class="d-flex flex-column gap-4">
+                
+                <!-- COMPANY DASHBOARD -->
+                @if (CompanyMetrics != null)
+                {
+                    <MudPaper Class="pa-4" Elevation="0" Style="background-color: var(--mud-palette-surface); border: 1px solid var(--mud-palette-primary);">
+                        <MudText Typo="Typo.h6" Class="mb-4" Color="Color.Primary"><b>Company Overview</b></MudText>
+                        
+                        <MudGrid>
+                            <MudItem xs="12" md="3">
+                                <MudText Typo="Typo.subtitle2" Color="Color.Default">Total Capacity</MudText>
+                                <MudText Typo="Typo.h5"><b>@CompanyMetrics.TotalCapacity.ToString("N0") h</b></MudText>
+                            </MudItem>
+                            <MudItem xs="12" md="3">
+                                <MudText Typo="Typo.subtitle2" Color="Color.Primary">Total Planned</MudText>
+                                <MudText Typo="Typo.h5" Color="Color.Primary"><b>@CompanyMetrics.PlannedHours.ToString("N1") h</b></MudText>
+                            </MudItem>
+                            <MudItem xs="12" md="3">
+                                <MudText Typo="Typo.subtitle2" Color="Color.Secondary">Avg Utilization</MudText>
+                                <div class="d-flex align-center gap-2">
+                                    <MudProgressLinear Value="@((double)CompanyMetrics.Utilization)" Color="@CompanyMetrics.UtilizationColor" Rounded="true" Size="Size.Large" Class="my-2" />
+                                    <MudText Typo="Typo.body2">@CompanyMetrics.Utilization.ToString("F0")%</MudText>
+                                </div>
+                            </MudItem>
+                            <MudItem xs="12" md="3">
+                                <MudText Typo="Typo.subtitle2" Color="Color.Warning">Total Backlog</MudText>
+                                <MudText Typo="Typo.h5" Color="Color.Warning"><b>@CompanyMetrics.UnassignedDemand.ToString("N1") h</b></MudText>
+                            </MudItem>
+                        </MudGrid>
+                    </MudPaper>
+                    
+                    <MudDivider Class="my-4" />
+                }
+
+                @foreach (var team in TeamMetrics)
+                {
+                    <MudPaper Class="pa-4" Elevation="0" Outlined="true" Style="background-color: var(--mud-palette-surface);">
+                        <MudText Typo="Typo.h6" Class="mb-4" Style="@($"color:{team.TeamColor}")">@team.TeamName</MudText>
+                        
+                        <MudGrid>
+                            <MudItem xs="12" md="3">
+                                <MudText Typo="Typo.subtitle2" Color="Color.Default">Capacity (@SelectedTimeframe)</MudText>
+                                <MudText Typo="Typo.h5"><b>@team.TotalCapacity.ToString("N0") h</b></MudText>
+                                <MudText Typo="Typo.caption" Color="Color.Default">@team.MemberCount Members</MudText>
+                            </MudItem>
+                            <MudItem xs="12" md="3">
+                                <MudText Typo="Typo.subtitle2" Color="Color.Primary">Planned</MudText>
+                                <MudText Typo="Typo.h5" Color="Color.Primary"><b>@team.PlannedHours.ToString("N1") h</b></MudText>
+                            </MudItem>
+                            <MudItem xs="12" md="3">
+                                <MudText Typo="Typo.subtitle2" Color="Color.Secondary">Utilization</MudText>
+                                <div class="d-flex align-center gap-2">
+                                    <MudProgressLinear Value="@((double)team.Utilization)" Color="@team.UtilizationColor" Rounded="true" Size="Size.Large" Class="my-2" />
+                                    <MudText Typo="Typo.body2">@team.Utilization.ToString("F0")%</MudText>
+                                </div>
+                            </MudItem>
+                            <MudItem xs="12" md="3">
+                                <MudText Typo="Typo.subtitle2" Color="Color.Warning">Backlog (Unassigned)</MudText>
+                                <MudText Typo="Typo.h5" Color="Color.Warning"><b>@team.UnassignedDemand.ToString("N1") h</b></MudText>
+                            </MudItem>
+                        </MudGrid>
+                    </MudPaper>
+                }
+            </div>
+
+        </MudTabPanel>
+
+        <!-- TAB 2: EMPLOYEE DETAILS -->
+        <MudTabPanel Text="Employee Utilization" Icon="@Icons.Material.Filled.Person">
+            <MudTable Items="@FlatPlanList" Dense="true" Striped="true" Outlined="true" Elevation="0" Hover="true" Breakpoint="Breakpoint.Sm" Loading="@Loading">
+                <HeaderContent>
+                    <MudTh>Employee</MudTh>
+                    <MudTh>Team</MudTh>
+                    <MudTh>Total Planned</MudTh>
+                    <MudTh>Utilization</MudTh>
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd>
+                        <MudText Typo="Typo.body2"><b>@context.EmployeeName</b></MudText>
+                    </MudTd>
+                    <MudTd>
+                        <MudChip T="string" Size="Size.Small" Style="@($"background-color:{context.TeamColor}; color:white;")">@context.TeamName</MudChip>
+                    </MudTd>
+                    <MudTd>
+                        <b>@context.TotalHours.ToString("N1") h</b>
+                    </MudTd>
+                    <MudTd>
+                        <MudProgressLinear Value="@((double)(context.UtilizationPercent))" Color="@context.UtilizationColor" Rounded="true" Size="Size.Medium" Style="min-width: 100px;">
+                            <MudText Typo="Typo.subtitle2" Color="Color.Dark">@context.UtilizationPercent.ToString("F0")%</MudText>
+                        </MudProgressLinear>
+                    </MudTd>
+                </RowTemplate>
+            </MudTable>
+        </MudTabPanel>
+
+
+        <!-- TAB 3: SCHEDULE & FINANCE -->
+        <MudTabPanel Text="Schedule & Finance" Icon="@Icons.Material.Filled.CalendarMonth">
+             <Spokes_Server.Components.Pages.Business.CapacityCalendar />
+        </MudTabPanel>
+    </MudTabs>
+
+</MudContainer>
+
+@code {
+    [SupplyParameterFromQuery] public string? Tab { get; set; }
+    private int activeTabIndex = 0;
+
+    protected override void OnParametersSet()
+    {
+        if (!string.IsNullOrEmpty(Tab))
+        {
+            activeTabIndex = Tab.ToLower() switch
+            {
+                "team" => 0,
+                "employees" => 1,
+                "schedule" => 2,
+                _ => 0
+            };
+        }
+    }
+
+    private bool _isDisposed;
+
+    public void Dispose()
+    {
+        _isDisposed = true;
+    }
+
+    private void UpdateActiveTab(int index)
+    {
+        if (_isDisposed) return;
+
+        activeTabIndex = index;
+
+        if (!Nav.Uri.Contains("/business/capacity", StringComparison.OrdinalIgnoreCase))
+            return;
+
+        var tabName = index switch
+        {
+            0 => "team",
+            1 => "employees",
+            2 => "schedule",
+            _ => "team"
+        };
+        
+        try
+        {
+            Nav.NavigateTo(Nav.GetUriWithQueryParameter("tab", tabName), replace: true);
+        }
+        catch (Microsoft.AspNetCore.Components.NavigationException)
+        {
+        }
+    }
+
+    private bool Loading = true;
+    
+    // Timeframe State
+    private string SelectedTimeframe = "Week";
+    private DateOnly StartDate;
+    private DateOnly EndDate;
+    private string PeriodLabel => GetPeriodLabel();
+
+    // Data Models
+    private TeamMetricViewModel? CompanyMetrics;
+    private List<TeamMetricViewModel> TeamMetrics = new();
+    private List<EmployeeUtilizationViewModel> FlatPlanList = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        // Init to current week
+        var today = DateOnly.FromDateTime(DateTime.Today);
+        SetWeek(today);
+        
+        await LoadData();
+    }
+
+    private void SetWeek(DateOnly date)
+    {
+        int diff = (7 + (date.DayOfWeek - DayOfWeek.Monday)) % 7;
+        StartDate = date.AddDays(-1 * diff);
+        EndDate = StartDate.AddDays(6);
+    }
+
+    private void SetMonth(DateOnly date)
+    {
+        StartDate = new DateOnly(date.Year, date.Month, 1);
+        EndDate = StartDate.AddMonths(1).AddDays(-1);
+    }
+    
+    private void SetQuarter(DateOnly date)
+    {
+        int q = (date.Month - 1) / 3 + 1;
+        StartDate = new DateOnly(date.Year, (q - 1) * 3 + 1, 1);
+        EndDate = StartDate.AddMonths(3).AddDays(-1);
+    }
+    
+    private void SetYear(DateOnly date)
+    {
+        StartDate = new DateOnly(date.Year, 1, 1);
+        EndDate = new DateOnly(date.Year, 12, 31);
+    }
+
+    private async Task OnTimeframeChanged(string newValue)
+    {
+        SelectedTimeframe = newValue;
+        var today = DateOnly.FromDateTime(DateTime.Today);
+        if (newValue == "Week") SetWeek(today);
+        else if (newValue == "Month") SetMonth(today);
+        else if (newValue == "Quarter") SetQuarter(today);
+        else if (newValue == "Year") SetYear(today);
+        await LoadData();
+    }
+
+    private async Task PrevPeriod()
+    {
+        if (SelectedTimeframe == "Week") { SetWeek(StartDate.AddDays(-7)); }
+        else if (SelectedTimeframe == "Month") { SetMonth(StartDate.AddMonths(-1)); }
+        else if (SelectedTimeframe == "Quarter") { SetQuarter(StartDate.AddMonths(-3)); }
+        else if (SelectedTimeframe == "Year") { SetYear(StartDate.AddYears(-1)); }
+        await LoadData();
+    }
+
+    private async Task NextPeriod()
+    {
+        if (SelectedTimeframe == "Week") { SetWeek(StartDate.AddDays(7)); }
+        else if (SelectedTimeframe == "Month") { SetMonth(StartDate.AddMonths(1)); }
+        else if (SelectedTimeframe == "Quarter") { SetQuarter(StartDate.AddMonths(3)); }
+        else if (SelectedTimeframe == "Year") { SetYear(StartDate.AddYears(1)); }
+        await LoadData();
+    }
+
+    private string GetPeriodLabel()
+    {
+        if (SelectedTimeframe == "Week") return $"W{ISOWeek.GetWeekOfYear(StartDate.ToDateTime(TimeOnly.MinValue))} ({StartDate:MMM dd} - {EndDate:MMM dd})";
+        if (SelectedTimeframe == "Month") return StartDate.ToString("MMMM yyyy");
+        if (SelectedTimeframe == "Year") return StartDate.Year.ToString();
+        return $"{StartDate.Year} Q{((StartDate.Month - 1) / 3) + 1}";
+    }
+
+    private async Task LoadData()
+    {
+        Loading = true;
+        StateHasChanged();
+        await Task.Delay(50); // UI Refresh (Task.Yield is too fast for SignalR to split payloads on slow clients)
+
+        TeamMetrics.Clear();
+        FlatPlanList.Clear();
+
+        var teams = Db.Teams.GetAll();
+        var allEmployees = Db.Employees.GetAll().Where(e => e.IsActive).ToList();
+        var allQuotes = Db.Quotes.GetAll().Where(q => q.Status == QuoteStatus.Accepted).ToList();
+        var allWorkTypes = Db.WorkTypes.GetAll();
+        
+        // Optimize: Load ALL plan entries once for fast querying
+        var allWeeklyPlans = Db.WeeklyPlans.GetAll();
+        var allPlanEntries = allWeeklyPlans.SelectMany(p => p.Entries).ToList();
+
+        // Helpers to get weeks in range
+        var weeks = GetWeeksInRange(StartDate, EndDate);
+
+        foreach (var team in teams)
+        {
+            var members = allEmployees.Where(e => e.TeamId == team.Id).ToList();
+            
+            // 1. Calculate Capacity (Based on Timeframe)
+            decimal capacity = 0;
+            foreach(var m in members)
+            {
+                capacity += m.WeeklyHours * weeks.Count;
+            }
+
+            // 2. Calculate Planned (Within Timeframe)
+            decimal planned = 0;
+            foreach(var member in members)
+            {
+                decimal empPlanned = 0;
+                foreach(var (year, week) in weeks)
+                {
+                    // Use memory cache of plans instead of querying DB repeatedely if possible, 
+                    // but GetByEmployeeAndWeek is fast cache lookup. 
+                    // Using Db.WeeklyPlans.GetByEmployeeAndWeek logic:
+                    var plan = allWeeklyPlans.FirstOrDefault(p => p.EmployeeId == member.Id && p.Year == year && p.WeekNumber == week);
+                    if (plan != null) empPlanned += plan.TotalHours;
+                }
+                planned += empPlanned;
+
+                // Add to flat list
+                decimal empCapacity = member.WeeklyHours * weeks.Count;
+                decimal util = empCapacity > 0 ? (empPlanned / empCapacity) * 100 : 0;
+                
+                FlatPlanList.Add(new EmployeeUtilizationViewModel
+                {
+                    EmployeeName = member.FullName,
+                    TeamName = team.Name,
+                    TeamColor = team.Color,
+                    TotalHours = empPlanned,
+                    UtilizationPercent = util,
+                    UtilizationColor = util > 100 ? Color.Error : (util > 80 ? Color.Success : Color.Info)
+                });
+            }
+
+            // 3. Calculate Backlog (Unassigned Demand) - True Backlog (Quoted - AllTimeAssigned)
+            decimal backlog = 0;
+            
+            var activeProjects = Db.Projects.GetAll().Where(p => p.Status != ProjectStatus.Archived).Select(p => p.Id).ToHashSet();
+            
+            foreach(var quote in allQuotes.Where(q => activeProjects.Contains(q.ProjectId)))
+            {
+                foreach(var item in quote.LaborItems)
+                {
+                    var wt = allWorkTypes.FirstOrDefault(w => w.Id == item.WorkTypeId);
+                    if (wt != null && wt.AssignedTeamIds.Contains(team.Id))
+                    {
+                        var assigned = allPlanEntries
+                            .Where(e => e.ProjectId == quote.ProjectId && e.WorkTypeId == item.WorkTypeId)
+                            .Sum(e => e.Hours);
+
+                        backlog += Math.Max(0, item.Hours - assigned);
+                    }
+                }
+            }
+            
+            // 4. Utilization
+            decimal teamUtil = capacity > 0 ? (planned / capacity) * 100 : 0;
+
+            TeamMetrics.Add(new TeamMetricViewModel
+            {
+                TeamName = team.Name,
+                TeamColor = team.Color,
+                MemberCount = members.Count,
+                TotalCapacity = capacity,
+                PlannedHours = planned,
+                UnassignedDemand = backlog,
+                Utilization = teamUtil,
+                UtilizationColor = teamUtil > 100 ? Color.Error : (teamUtil > 80 ? Color.Success : Color.Info)
+            });
+        }
+        
+        // Calculate Company Aggregates
+        decimal totalCap = TeamMetrics.Sum(t => t.TotalCapacity);
+        decimal totalPlan = TeamMetrics.Sum(t => t.PlannedHours);
+        decimal totalUtil = totalCap > 0 ? (totalPlan / totalCap) * 100 : 0;
+        
+        CompanyMetrics = new TeamMetricViewModel
+        {
+            TeamName = "Company Overview",
+            TotalCapacity = totalCap,
+            PlannedHours = totalPlan,
+            UnassignedDemand = TeamMetrics.Sum(t => t.UnassignedDemand),
+            Utilization = totalUtil,
+            UtilizationColor = totalUtil > 100 ? Color.Error : (totalUtil > 80 ? Color.Success : Color.Info)
+        };
+        
+        Loading = false;
+        StateHasChanged();
+    }
+
+    private List<(int Year, int Week)> GetWeeksInRange(DateOnly start, DateOnly end)
+    {
+        var list = new List<(int, int)>();
+        var curr = start;
+        while(curr <= end)
+        {
+            list.Add((curr.Year, ISOWeek.GetWeekOfYear(curr.ToDateTime(TimeOnly.MinValue))));
+            curr = curr.AddDays(7);
+        }
+        return list.Distinct().ToList();
+    }
+
+    public class TeamMetricViewModel
+    {
+        public string TeamName { get; set; } = string.Empty;
+        public string TeamColor { get; set; } = string.Empty;
+        public int MemberCount { get; set; }
+        public decimal TotalCapacity { get; set; }
+        public decimal PlannedHours { get; set; }
+        public decimal UnassignedDemand { get; set; }
+        
+        public decimal Utilization { get; set; }
+        public Color UtilizationColor { get; set; }
+    }
+
+    public class EmployeeUtilizationViewModel
+    {
+        public string EmployeeName { get; set; } = string.Empty;
+        public string TeamName { get; set; } = string.Empty;
+        public string TeamColor { get; set; } = string.Empty;
+        public decimal TotalHours { get; set; }
+        public decimal UtilizationPercent { get; set; }
+        public Color UtilizationColor { get; set; }
+    }
+}
+

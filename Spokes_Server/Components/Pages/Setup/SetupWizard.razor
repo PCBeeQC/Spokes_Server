@@ -1,0 +1,815 @@
+@page "/setup"
+@attribute [Microsoft.AspNetCore.Authorization.AllowAnonymous]
+@layout Spokes_Server.Components.Layout.LoginLayout
+@using Spokes_Server.Core.Services.Core
+@using Spokes_Server.Aggregate
+@using Spokes_Server.Core.Models.Core
+@inject CasdoorProvisioningService CasdoorService
+@inject Database Db
+@inject NavigationManager Nav
+@inject IJSRuntime JSRuntime
+@inject ISnackbar Snackbar
+@inject Spokes_Server.Core.Services.Core.IFileService FileService
+@inject Spokes_Server.Core.Services.Licensing.LicenseValidationService LicenseService
+@inject Spokes_Server.Core.Services.Core.AppLabelService AppLabels
+@inject IHttpClientFactory HttpClientFactory
+@inject IDialogService DialogService
+@inject Microsoft.Extensions.Hosting.IHostApplicationLifetime AppLifetime
+
+<PageTitle>Spokes Setup</PageTitle>
+
+<MudContainer MaxWidth="MaxWidth.Medium" Class="mt-16">
+    <MudPaper Class="pa-8" Elevation="0" Outlined="true">
+        <div class="d-flex align-center justify-center mb-4">
+            <img src="/spokes-org-icon.png" alt="Spokes Logo" style="height: 48px;" class="mr-4" />
+            <MudText Typo="Typo.h4" Align="Align.Center" Class="mb-0">Spokes Initial Setup</MudText>
+        </div>
+
+        @if (_step == 1)
+        {
+            <MudText Typo="Typo.body1" Class="mb-6">Welcome to Spokes! Before we begin, please review and accept our End User License Agreement.</MudText>
+            
+            <MudPaper Class="pa-4 mb-6" Elevation="1" Outlined="true">
+                <MudText Typo="Typo.body2">
+                    By continuing with the installation, you agree to the terms outlined in the Spokes End User License Agreement.
+                </MudText>
+                <MudButton Variant="Variant.Text" Color="Color.Primary" Href="https://spokes.sh/eula/" Target="_blank" Class="mt-2 pl-0">
+                    Read the Full EULA Here <MudIcon Icon="@Icons.Material.Filled.OpenInNew" Size="Size.Small" Class="ml-1" />
+                </MudButton>
+            </MudPaper>
+
+            <MudCheckBox @bind-Value="_eulaAcceptedCheckbox" Label="I have read and agree to the End User License Agreement" Color="Color.Primary" />
+
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="AcceptEula" Disabled="!_eulaAcceptedCheckbox" FullWidth="true" Class="mt-6">Continue</MudButton>
+        }
+        else if (_step == 2)
+        {
+            <MudText Typo="Typo.body1" Class="mb-6">Next, let's configure your @AppLabels.Company profile. Leave empty to do later</MudText>
+
+            <MudGrid>
+                <MudItem xs="12" sm="4" Class="d-flex flex-column align-center">
+                    @if (!string.IsNullOrEmpty(_logoBase64))
+                    {
+                        <MudImage Src="@_logoBase64" Alt="Logo" Height="100" Class="mb-4" ObjectFit="ObjectFit.Contain" />
+                    }
+                    else
+                    {
+                        <MudPaper Class="d-flex align-center justify-center mb-4" Width="150px" Height="150px" Outlined="true">
+                            <MudText>No Logo</MudText>
+                        </MudPaper>
+                    }
+
+                    <div class="d-inline-flex">
+                        <MudFileUpload T="IBrowserFile" Accept=".png,.jpg,.jpeg" FilesChanged="HandleLogoUploaded">
+                            <CustomContent>
+                                <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="@context.OpenFilePickerAsync" StartIcon="@Icons.Material.Filled.CloudUpload">Upload Logo</MudButton>
+                            </CustomContent>
+                            <SelectedTemplate></SelectedTemplate>
+                        </MudFileUpload>
+                    </div>
+
+                    <MudDivider Class="my-4" />
+
+                    @if (!string.IsNullOrEmpty(_iconBase64))
+                    {
+                        <MudImage Src="@_iconBase64" Alt="Icon" Height="50" Class="mb-4" ObjectFit="ObjectFit.Contain" />
+                    }
+                    else
+                    {
+                        <MudPaper Class="d-flex align-center justify-center mb-4" Width="50px" Height="50px" Outlined="true">
+                            <MudText Typo="Typo.caption">No Icon</MudText>
+                        </MudPaper>
+                    }
+
+                    <div class="d-inline-flex">
+                        <MudFileUpload T="IBrowserFile" Accept=".png,.jpg,.jpeg,.ico" FilesChanged="HandleIconUploaded">
+                            <CustomContent>
+                                <MudButton Variant="Variant.Outlined" Color="Color.Secondary" OnClick="@context.OpenFilePickerAsync" StartIcon="@Icons.Material.Filled.CloudUpload">Upload Icon</MudButton>
+                            </CustomContent>
+                            <SelectedTemplate></SelectedTemplate>
+                        </MudFileUpload>
+                    </div>
+                </MudItem>
+
+                <MudItem xs="12" sm="8">
+                    <MudTextField Variant="Variant.Outlined" Margin="Margin.Dense" @bind-Value="_companyName" Label="@($"{AppLabels.Company} Name")" Required="true" />
+                </MudItem>
+            </MudGrid>
+
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="SaveProfileConfig" FullWidth="true" Class="mt-6">Continue</MudButton>
+        }
+        else if (_step == 3)
+        {
+            <MudText Typo="Typo.body1" Class="mb-6">Upload your Spokes Pass (.spokes-license) to enable native mobile push notifications, or skip to use the 2-month free trial.</MudText>
+            
+            <MudItem xs="12">
+                <div class="d-inline-flex mt-2 mb-4">
+                    <MudFileUpload T="IBrowserFile" Accept=".spokes-license" FilesChanged="HandleLicenseUploaded">
+                        <CustomContent>
+                            <MudButton Variant="Variant.Outlined" Color="Color.Primary" OnClick="@context.OpenFilePickerAsync" StartIcon="@Icons.Material.Filled.UploadFile">Upload Spokes Pass (.spokes-license)</MudButton>
+                        </CustomContent>
+                        <SelectedTemplate></SelectedTemplate>
+                    </MudFileUpload>
+                </div>
+            </MudItem>
+
+            @if (!string.IsNullOrEmpty(_licensePayload))
+            {
+                var currentValidation = LicenseService.ValidateLicense(_licensePayload, Db.ServerConfigs.GetOrCreateGlobalConfig());
+                @if (currentValidation.Status == Spokes_Server.Core.Services.Licensing.LicenseStatus.Valid)
+                {
+                    <MudAlert Severity="Severity.Success" Class="mb-4">
+                        <b>Spokes Pass Active:</b> Your Spokes instance is enabled for Native Mobile Push Notifications.
+                    </MudAlert>
+                }
+                else if (currentValidation.Status == Spokes_Server.Core.Services.Licensing.LicenseStatus.Expired)
+                {
+                    <MudAlert Severity="Severity.Warning" Class="mb-4">
+                        <b>Spokes Pass Expired:</b> @currentValidation.Message Native mobile push notifications will be disabled until renewed.
+                    </MudAlert>
+                }
+                else
+                {
+                    <MudAlert Severity="Severity.Error" Class="mb-4">
+                        <b>Spokes Pass Invalid:</b> @currentValidation.Message
+                    </MudAlert>
+                }
+
+                Spokes_Server.Core.Services.Licensing.SpokesLicenseFile? license = null;
+                try 
+                { 
+                    var options = new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+                    license = System.Text.Json.JsonSerializer.Deserialize<Spokes_Server.Core.Services.Licensing.SpokesLicenseFile>(_licensePayload, options); 
+                } 
+                catch { }
+                
+                if (license != null)
+                {
+                    <MudPaper Class="pa-4 mb-4" Elevation="0" Outlined="true">
+                        <MudText Typo="Typo.subtitle2" Class="mb-2">License Details</MudText>
+                        <MudGrid>
+                            <MudItem xs="12" sm="4">
+                                <MudText Typo="Typo.caption" Color="Color.Secondary">Registered Email</MudText>
+                                <MudText Typo="Typo.body2">@license.Email</MudText>
+                            </MudItem>
+                            <MudItem xs="12" sm="4">
+                                <MudText Typo="Typo.caption" Color="Color.Secondary">Push Notifications Expiry Date</MudText>
+                                <MudText Typo="Typo.body2">@license.ValidForUpdatesUntil.ToString("yyyy-MM-dd")</MudText>
+                            </MudItem>
+                            <MudItem xs="12" sm="4">
+                                <MudText Typo="Typo.caption" Color="Color.Secondary">Time Until Expiry</MudText>
+                                <MudText Typo="Typo.body2" Color="@((license.ValidForUpdatesUntil - DateTime.UtcNow).TotalDays > 0 ? Color.Success : Color.Error)">
+                                    @GetTimeUntilExpiry(license.ValidForUpdatesUntil)
+                                </MudText>
+                            </MudItem>
+                        </MudGrid>
+                    </MudPaper>
+                }
+
+                var availableEditions = GetAvailableEditions();
+                if (availableEditions.Count > 1)
+                {
+                    <MudSelect ShrinkLabel="true" @bind-Value="_selectedEdition" Label="Active Edition" Variant="Variant.Outlined" Margin="Margin.Dense" Class="mb-4">
+                        @foreach (var edition in availableEditions)
+                        {
+                            <MudSelectItem Value="@edition">@edition Edition</MudSelectItem>
+                        }
+                    </MudSelect>
+                }
+            }
+
+            <MudGrid>
+                <MudItem xs="4">
+                    <MudButton Variant="Variant.Text" OnClick="() => _step = 2" FullWidth="true" Class="mt-6">Back</MudButton>
+                </MudItem>
+                <MudItem xs="4">
+                    <MudButton Variant="Variant.Outlined" Color="Color.Default" OnClick="SkipLicenseConfig" FullWidth="true" Class="mt-6">Skip</MudButton>
+                </MudItem>
+                <MudItem xs="4">
+                    <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="SaveLicenseConfig" FullWidth="true" Class="mt-6" Disabled="@(string.IsNullOrEmpty(_licensePayload))">Continue</MudButton>
+                </MudItem>
+            </MudGrid>
+        }
+        else if (_step == 4)
+        {
+            <MudText Typo="Typo.body1" Class="mb-6">Next, let's configure your server's network settings.</MudText>
+            
+            <MudTextField @bind-Value="_serverPublicUrl" Label="Server Public URL" HelperText="The URL users will use to access Spokes (e.g., https://spokes.mydomain.com)" Required="true" Class="mb-4" Validation="@(new Func<string, string>(ValidateServerUrl))" Immediate="true" />
+            
+            @if (Environment.GetEnvironmentVariable("SPOKES_HOSTING_PROVIDER") != "digitalocean")
+            {
+                <MudText Typo="Typo.subtitle2" Class="mt-6 mb-2">LiveKit Ports</MudText>
+                <MudAlert Severity="Severity.Warning" Class="mb-4">If you modify these ports, you MUST ensure your <b>docker-compose.yml</b> and router are updated to match precisely. These must be mapped 1-to-1-to-1 across your network.</MudAlert>
+                
+                <MudGrid>
+                    <MudItem xs="6">
+                        <MudTextField @bind-Value="_fallbackPort" Label="TCP Fallback Port" Variant="Variant.Outlined" Required="true" />
+                    </MudItem>
+                    <MudItem xs="3">
+                        <MudTextField @bind-Value="_udpStartPort" Label="UDP Start Port" Variant="Variant.Outlined" Required="true" />
+                    </MudItem>
+                    <MudItem xs="3">
+                        <MudTextField @bind-Value="_udpEndPort" Label="UDP End Port" Variant="Variant.Outlined" Required="true" />
+                    </MudItem>
+                </MudGrid>
+            }
+
+            @if (!string.IsNullOrEmpty(Environment.GetEnvironmentVariable("WATCHTOWER_HTTP_API_TOKEN")))
+            {
+                <MudText Typo="Typo.subtitle2" Class="mt-6 mb-2">Automated Management Integrations</MudText>
+                <MudSwitch @bind-Value="_enableAutoUpdate" Color="Color.Primary" Label="Enable Automatic Server Updates" />
+                <MudText Typo="Typo.caption" Color="Color.Secondary" Style="display: block;">When enabled, Spokes will securely update itself when new versions are released.</MudText>
+            }
+
+            <MudGrid>
+                <MudItem xs="6">
+                    <MudButton Variant="Variant.Text" OnClick="() => _step = 3" FullWidth="true" Class="mt-6">Back</MudButton>
+                </MudItem>
+                <MudItem xs="6">
+                    <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="SaveServerConfig" FullWidth="true" Class="mt-6" Disabled="@(ValidateServerUrl(_serverPublicUrl) != null)">Continue</MudButton>
+                </MudItem>
+            </MudGrid>
+        }
+        else if (_step == 5)
+        {
+            <MudText Typo="Typo.body1" Class="mb-3">Next, configure how users will log into your server.</MudText>
+            
+            <MudGrid>
+                <MudItem xs="12" sm="6">
+                    <MudCard @onclick="() => SelectIdp(IdpType.BuiltInCasdoor)" Outlined="true" Class="cursor-pointer hover-effect" Style="height: 100%;">
+                        <MudCardContent>
+                            <MudIcon Icon="@Icons.Material.Filled.Shield" Color="Color.Primary" Size="Size.Large" Class="mb-2" />
+                            <MudText Typo="Typo.h6">Built-in Identity</MudText>
+                            <MudText Typo="Typo.body2">We will automatically configure a secure, embedded Casdoor identity server. Recommended for most users.</MudText>
+                        </MudCardContent>
+                    </MudCard>
+                </MudItem>
+                <MudItem xs="12" sm="6">
+                    <MudCard @onclick="() => SelectIdp(IdpType.External)" Outlined="true" Class="cursor-pointer hover-effect" Style="height: 100%;">
+                        <MudCardContent>
+                            <MudIcon Icon="@Icons.Material.Filled.Public" Color="Color.Secondary" Size="Size.Large" Class="mb-2" />
+                            <MudText Typo="Typo.h6">External Provider</MudText>
+                            <MudText Typo="Typo.body2">Connect your own Authentik, Keycloak or other OpenID Connect server.</MudText>
+                        </MudCardContent>
+                    </MudCard>
+                </MudItem>
+            </MudGrid>
+        }
+        else if (_step == 6 && _selectedType == IdpType.External)
+        {
+            <MudText Typo="Typo.h6" Class="mb-4">Configure External Provider</MudText>
+            <MudTextField @bind-Value="_authority" Label="OpenID Configuration Issuer / Authority URL" HelperText="e.g., https://accounts.google.com , https://auth.yourdomain.ca/application/o/spokes/" Required="true" Class="mb-4" Disabled="@_isValidatingExternal" />
+            <MudTextField @bind-Value="_clientId" Label="Client ID" Required="true" Class="mb-4" Disabled="@_isValidatingExternal" />
+            <MudTextField @bind-Value="_clientSecret" Label="Client Secret" InputType="InputType.Password" Required="true" Class="mb-4" Disabled="@_isValidatingExternal" />
+            
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="SaveExternal" FullWidth="true" Disabled="@_isValidatingExternal">
+                @if (_isValidatingExternal)
+                {
+                    <MudProgressCircular Class="ms-n1" Size="Size.Small" Indeterminate="true" />
+                    <MudText Class="ms-2">Validating...</MudText>
+                }
+                else
+                {
+                    <MudText>Save Configuration</MudText>
+                }
+            </MudButton>
+            <MudButton Variant="Variant.Text" OnClick="() => _step = 5" FullWidth="true" Class="mt-2" Disabled="@_isValidatingExternal">Back</MudButton>
+        }
+        else if (_step == 6 && _selectedType == IdpType.BuiltInCasdoor)
+        {
+            <MudText Typo="Typo.h6" Class="mb-4">Configure Built-in Global Identity</MudText>
+            <MudText Typo="Typo.body2" Class="mb-4">Create a global administrator account for managing the identity system globally. <b>This is Casdoor GlobalAdmin account</b></MudText>
+            
+            <MudTextField @bind-Value="_casdoorUsername" Label="Global Admin Username" ReadOnly="true" Disabled="true" Required="true" Class="mb-4" Variant="Variant.Outlined" />
+            <MudTextField @bind-Value="_casdoorPassword" Label="Global Admin Password" Required="true" Class="mb-4" Variant="Variant.Outlined" HelperText="You can use the suggested secure password or enter your own." />
+            
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="() => _step = 7" FullWidth="true">Next</MudButton>
+            <MudButton Variant="Variant.Text" OnClick="() => _step = 5" FullWidth="true" Class="mt-2">Back</MudButton>
+        }
+        else if (_step == 7 && _selectedType == IdpType.BuiltInCasdoor)
+        {
+            if (_isProvisioning)
+            {
+                <div class="d-flex flex-column align-center">
+                    <MudProgressCircular Color="Color.Primary" Indeterminate="true" Size="Size.Large" Class="mb-4" />
+                    <MudText Typo="Typo.h6">Provisioning Identity Server...</MudText>
+                    <MudText Typo="Typo.body2">This will only take a moment.</MudText>
+                </div>
+            }
+            else
+            {
+                <MudText Typo="Typo.h6" Class="mb-4">Configure Spokes Organization Identity</MudText>
+                <MudText Typo="Typo.body2" Class="mb-4">Create an administrator account for managing users and groups within your Spokes organization. <b>This is your day to day admin account</b></MudText>
+                
+                <MudTextField @bind-Value="_spokesAdminUsername" Label="Spokes Admin Username" Required="true" Class="mb-4" Variant="Variant.Outlined" />
+                <MudTextField @bind-Value="_spokesAdminPassword" Label="Spokes Admin Password" Required="true" Class="mb-4" Variant="Variant.Outlined" HelperText="You can use the suggested secure password or enter your own." />
+                
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="ProvisionCasdoor" FullWidth="true">Provision Server</MudButton>
+                <MudButton Variant="Variant.Text" OnClick="() => _step = 6" FullWidth="true" Class="mt-2">Back</MudButton>
+            }
+        }
+        else if (_step == 8)
+        {
+            <MudText Typo="Typo.h6" Color="Color.Success" Class="mb-4"><MudIcon Icon="@Icons.Material.Filled.CheckCircle" Class="mr-2"/>Setup Complete</MudText>
+            
+            @if (_selectedType == IdpType.BuiltInCasdoor)
+            {
+                <MudAlert Severity="Severity.Error" Class="mb-4">
+                    Please save these credentials securely. <b>THEY WILL NOT BE DISPLAYED AGAIN.</b>
+                </MudAlert>
+
+                <MudText Typo="Typo.subtitle1" Class="mt-4 mb-2"><b>Global Built-in Administrator</b></MudText>
+                <MudTextField Value="_casdoorUsername" Label="Admin Username" ReadOnly="true" Variant="Variant.Outlined" Class="mb-2" />
+                <MudTextField Value="_casdoorPassword" Label="Admin Password" ReadOnly="true" Variant="Variant.Outlined" Class="mb-4" Adornment="Adornment.End" AdornmentIcon="@Icons.Material.Filled.CopyAll" OnAdornmentClick="CopyCasdoorPassword" />
+
+                <MudText Typo="Typo.subtitle1" Class="mt-4 mb-2"><b>Spokes Organization Administrator</b></MudText>
+                <MudTextField Value="_spokesAdminUsername" Label="Admin Username" ReadOnly="true" Variant="Variant.Outlined" Class="mb-2" />
+                <MudTextField Value="_spokesAdminPassword" Label="Admin Password" ReadOnly="true" Variant="Variant.Outlined" Class="mb-4" Adornment="Adornment.End" AdornmentIcon="@Icons.Material.Filled.CopyAll" OnAdornmentClick="CopySpokesPassword" />
+
+                
+
+                <MudText Typo="Typo.body2" >You can access the identity admin panel at: <b>@Nav.BaseUri</b>login</MudText>
+                <MudText Typo="Typo.body2" >Or</MudText>
+                <MudText Typo="Typo.body2" Class="mb-4">You can access the identity admin panel at: <b>@Db.SystemConfigs.Get().ServerPublicUrl</b>/login</MudText>
+
+                <MudText Typo="Typo.body1" Class="mb-6">To apply these changes, the server must be restarted.</MudText>
+                @if (_isRestarting)
+                {
+                    <div class="d-flex flex-column align-center mt-4">
+                        <MudProgressCircular Color="Color.Primary" Indeterminate="true" Size="Size.Medium" Class="mb-2" />
+                        <MudText Typo="Typo.body2">Flushing configuration and restarting server...</MudText>
+                    </div>
+                }
+                else
+                {
+                    <div class="d-flex flex-column align-center">
+                        <MudSwitch @bind-Value="_hasSavedCrendentials" T="bool" Label="I have copied the admin credentials somewhere safe." LabelPlacement="Placement.Start" />
+                        <MudButton Variant="Variant.Filled" Color="Color.Primary" Disabled="!_hasSavedCrendentials" OnClick="RestartServer" FullWidth="true" Size="Size.Large">Restart Server Now</MudButton>
+                    </div>
+                    
+                }
+            }
+            else
+            {
+                <MudText Typo="Typo.body1" Class="mb-6">To apply these changes, the server must be restarted.</MudText>
+                @if (_isRestarting)
+                {
+                    <div class="d-flex flex-column align-center mt-4">
+                        <MudProgressCircular Color="Color.Primary" Indeterminate="true" Size="Size.Medium" Class="mb-2" />
+                        <MudText Typo="Typo.body2">Flushing configuration and restarting server...</MudText>
+                    </div>
+                }
+                else
+                {
+                    <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="RestartServer" FullWidth="true" Size="Size.Large">Restart Server Now</MudButton>
+                
+                }
+            }
+
+            
+        }
+
+    </MudPaper>
+</MudContainer>
+
+<style>
+    .hover-effect {
+        transition: transform 0.2s, box-shadow 0.2s;
+    }
+    .hover-effect:hover {
+        transform: translateY(-5px);
+        box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+        border-color: var(--mud-palette-primary);
+    }
+</style>
+
+@code {
+    private int _step = 1;
+    private IdpType _selectedType = IdpType.None;
+    private bool _isProvisioning = false;
+    private bool _isValidatingExternal = false;
+    private bool _isRestarting = false;
+    private bool _hasSavedCrendentials = false;
+    private bool _eulaAcceptedCheckbox = false;
+    private bool _enableAutoUpdate = false;
+
+    private string _companyName = "";
+    private string _logoBase64 = "";
+    private string _iconBase64 = "";
+
+    private string _licensePayload = "";
+    private string _selectedEdition = "";
+
+    private string _serverPublicUrl = "https://";
+    private int _fallbackPort = 7881;
+    private int _udpStartPort = 30000;
+    private int _udpEndPort = 30499;
+
+    private string _authority = "";
+    private string _clientId = "";
+    private string _clientSecret = "";
+
+    private string _casdoorUsername = "admin";
+    private string _casdoorPassword = "";
+
+    private string _spokesAdminUsername = "admin";
+    private string _spokesAdminPassword = "";
+
+    private bool IsFriendEdition => Db.CompanyProfile.Get()?.Edition == "Family";
+
+    private string ValidateServerUrl(string url)
+    {
+        if (string.IsNullOrWhiteSpace(url))
+            return "Server Public URL is required.";
+            
+        var trimmed = url.Trim();
+        if (!trimmed.StartsWith("http://", StringComparison.OrdinalIgnoreCase) && !trimmed.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+            return "URL must start with http:// or https://";
+            
+        if (!Uri.TryCreate(trimmed, UriKind.Absolute, out _))
+            return "Please enter a valid URL.";
+            
+        return null;
+    }
+
+    protected override void OnInitialized()
+    {
+        var config = Db.SystemConfigs.Get();
+        if (config.IsSetupComplete)
+        {
+            Nav.NavigateTo("/");
+            return;
+        }
+
+        if (config.EulaAccepted)
+        {
+            _step = 2;
+        }
+
+        var profile = Db.CompanyProfile.Get();
+        _companyName = profile.CompanyName ?? "";
+        _logoBase64 = profile.LogoBase64 ?? "";
+        _iconBase64 = profile.IconBase64 ?? "";
+        _licensePayload = profile.LicensePayload ?? "";
+        _selectedEdition = profile.Edition ?? "Family";
+
+        var startPortStr = Environment.GetEnvironmentVariable("Spokes_Voice_UDP_Start_Port");
+        var countStr = Environment.GetEnvironmentVariable("Spokes_VOICE_UDP_PORT_COUNT");
+
+        if (int.TryParse(startPortStr, out var startPort)) _udpStartPort = startPort;
+        if (int.TryParse(countStr, out var count)) _udpEndPort = _udpStartPort + count - 1;
+        
+        var fallbackStr = Environment.GetEnvironmentVariable("Spokes_Voice_Fallback_Port");
+        if (int.TryParse(fallbackStr, out var fallback)) _fallbackPort = fallback;
+        
+        _serverPublicUrl = Nav.BaseUri.TrimEnd('/');
+        
+        _casdoorPassword = Guid.NewGuid().ToString("N").Substring(0, 16);
+        _spokesAdminPassword = Guid.NewGuid().ToString("N").Substring(0, 16);
+    }
+
+    private void AcceptEula()
+    {
+        var config = Db.SystemConfigs.Get();
+        config.EulaAccepted = true;
+        Db.SystemConfigs.Save(config);
+        _step = 2;
+    }
+
+    private void SaveProfileConfig()
+    {
+        if (string.IsNullOrWhiteSpace(_companyName))
+        {
+            Snackbar.Add($"{AppLabels.Company} name is required", Severity.Error);
+            return;
+        }
+
+        var profile = Db.CompanyProfile.Get();
+        profile.CompanyName = _companyName;
+        profile.LogoBase64 = _logoBase64;
+        profile.IconBase64 = _iconBase64;
+        Db.CompanyProfile.Save(profile);
+
+        _step = 3;
+    }
+
+    private void SkipLicenseConfig()
+    {
+        _licensePayload = "";
+        _selectedEdition = "Family";
+        SaveLicenseConfig();
+    }
+
+    private void SaveLicenseConfig()
+    {
+        if (string.IsNullOrEmpty(_licensePayload))
+        {
+            // Optionally allow skipping or force licensing
+            // For now let's just proceed or require it. Let's let them proceed in case they are doing Family Edition without a file?
+            // Actually, Family Edition doesn't strictly need a payload if it's the default, but let's just save whatever is there.
+        }
+
+        var profile = Db.CompanyProfile.Get();
+        profile.LicensePayload = _licensePayload;
+        profile.Edition = _selectedEdition;
+
+        ApplyDefaultServerConfigurations(profile);
+
+        Db.CompanyProfile.Save(profile);
+
+        _step = 4;
+    }
+
+    private void ApplyDefaultServerConfigurations(CompanyProfile profile)
+    {
+        if (profile.PermissionGroups == null)
+        {
+            profile.PermissionGroups = new();
+        }
+
+        if (!profile.PermissionGroups.Any())
+        {
+            if (_selectedEdition == "Family")
+            {
+                var defaults = Spokes_Server.Core.Constants.DefaultPermissionGroups.GetFriendDefaults();
+                profile.PermissionGroups.AddRange(defaults);
+                profile.DefaultPermissionGroupId = "friend_member";
+            }
+            else
+            {
+                var defaults = Spokes_Server.Core.Constants.DefaultPermissionGroups.GetBusinessDefaults();
+                profile.PermissionGroups.AddRange(defaults);
+                profile.DefaultPermissionGroupId = "business_employee";
+            }
+        }
+
+        profile.BackupsEnabled = true;
+        profile.BackupRetentionCount = 5;
+        profile.BackupTimeLocal = "03:00";
+        profile.BackupEmployeeEmails = false;
+        
+        // Chat defaults
+        profile.DefaultPublicChannelSubscription = "All";
+    }
+
+    private void SaveServerConfig()
+    {
+        if (string.IsNullOrWhiteSpace(_serverPublicUrl)) return;
+        
+        var pubUrl = _serverPublicUrl.Trim();
+        if (!pubUrl.StartsWith("http://", StringComparison.OrdinalIgnoreCase) && !pubUrl.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+        {
+            pubUrl = "https://" + pubUrl;
+        }
+
+        _serverPublicUrl = pubUrl;
+
+        var config = Db.SystemConfigs.Get();
+        config.ServerPublicUrl = _serverPublicUrl;
+        config.LiveKitFallbackPort = _fallbackPort;
+        config.LiveKitUdpStartPort = _udpStartPort;
+        config.LiveKitUdpEndPort = _udpEndPort;
+        config.EnableAutoUpdate = _enableAutoUpdate;
+        Db.SystemConfigs.Save(config);
+
+        _step = 5;
+    }
+
+    private void SelectIdp(IdpType type)
+    {
+        _selectedType = type;
+        _step = 6;
+    }
+
+    private async Task ProvisionCasdoor()
+    {
+        if (string.IsNullOrWhiteSpace(_casdoorUsername) || string.IsNullOrWhiteSpace(_casdoorPassword) || string.IsNullOrWhiteSpace(_spokesAdminUsername) || string.IsNullOrWhiteSpace(_spokesAdminPassword)) return;
+
+        _isProvisioning = true;
+        StateHasChanged();
+        await Task.Delay(500); // Give UI time to show spinner
+        
+        var result = await CasdoorService.ProvisionAsync(_serverPublicUrl, _casdoorUsername, _casdoorPassword, _spokesAdminUsername, _spokesAdminPassword);
+        _isProvisioning = false;
+        _step = 8;
+        StateHasChanged();
+    }
+
+    private async Task SaveExternal()
+    {
+        if (string.IsNullOrWhiteSpace(_authority) || string.IsNullOrWhiteSpace(_clientId) || string.IsNullOrWhiteSpace(_clientSecret))
+            return;
+
+        _isValidatingExternal = true;
+        StateHasChanged();
+
+        try
+        {
+            var authUrl = _authority.Trim();
+            if (authUrl.EndsWith("/.well-known/openid-configuration", StringComparison.OrdinalIgnoreCase))
+            {
+                authUrl = authUrl.Substring(0, authUrl.Length - "/.well-known/openid-configuration".Length);
+            }
+            
+            if (!authUrl.StartsWith("http://", StringComparison.OrdinalIgnoreCase) && !authUrl.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+            {
+                authUrl = "https://" + authUrl;
+            }
+            
+            var checkUrl = $"{authUrl.TrimEnd('/')}/.well-known/openid-configuration";
+            var client = HttpClientFactory.CreateClient();
+            client.Timeout = TimeSpan.FromSeconds(10);
+            
+            var response = await client.GetAsync(checkUrl);
+            if (!response.IsSuccessStatusCode)
+            {
+                Snackbar.Add($"Validation failed: Could not reach provider (HTTP {(int)response.StatusCode}). Check the URL.", Severity.Error);
+                return;
+            }
+            
+            var json = await response.Content.ReadAsStringAsync();
+            using var doc = System.Text.Json.JsonDocument.Parse(json);
+            if (!doc.RootElement.TryGetProperty("issuer", out _) || !doc.RootElement.TryGetProperty("authorization_endpoint", out _))
+            {
+                Snackbar.Add("Validation failed: Endpoint reached, but it did not return a valid OpenID configuration.", Severity.Error);
+                return;
+            }
+
+            _authority = authUrl; // Update UI with sanitized value
+            
+            var config = Db.SystemConfigs.Get();
+            config.ProviderType = IdpType.External;
+            config.Authority = _authority;
+            config.ClientId = _clientId;
+            config.ClientSecret = _clientSecret;
+            config.IsSetupComplete = true;
+            
+            Db.SystemConfigs.Save(config);
+
+            _step = 8;
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Validation failed: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _isValidatingExternal = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task RestartServer()
+    {
+        _isRestarting = true;
+        StateHasChanged();
+
+        var targetUrl = string.IsNullOrWhiteSpace(_serverPublicUrl) ? "/" : _serverPublicUrl.TrimEnd('/') + "/";
+        try
+        {
+            await JSRuntime.InvokeVoidAsync("spokesTriggerServerRestart", targetUrl);
+            await Task.Delay(2000);
+            AppLifetime.StopApplication();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[SetupWizard] Error during restart: {ex.Message}");
+            Environment.Exit(0);
+        }
+    }
+
+    private async Task CopyCasdoorPassword()
+    {
+        await JSRuntime.InvokeVoidAsync("spokesCopyText", _casdoorPassword);
+    }
+
+    private async Task CopySpokesPassword()
+    {
+        await JSRuntime.InvokeVoidAsync("spokesCopyText", _spokesAdminPassword);
+    }
+
+    private async Task HandleLogoUploaded(IBrowserFile file)
+    {
+        if (file == null) return;
+        
+        try
+        {
+            using var stream = file.OpenReadStream(10 * 1024 * 1024);
+            using var memoryStream = new MemoryStream();
+            await stream.CopyToAsync(memoryStream);
+            var bytes = memoryStream.ToArray();
+            var base64 = Convert.ToBase64String(bytes);
+            var format = file.Name.EndsWith("png", StringComparison.OrdinalIgnoreCase) ? "png" : "jpeg";
+            _logoBase64 = $"data:image/{format};base64,{base64}";
+            StateHasChanged();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Error processing logo: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private async Task HandleIconUploaded(IBrowserFile file)
+    {
+        if (file == null) return;
+        
+        try
+        {
+            using var stream = file.OpenReadStream(10 * 1024 * 1024);
+            using var memoryStream = new MemoryStream();
+            await stream.CopyToAsync(memoryStream);
+            var bytes = memoryStream.ToArray();
+            var base64 = Convert.ToBase64String(bytes);
+            var format = file.Name.EndsWith("png", StringComparison.OrdinalIgnoreCase) ? "png" : 
+                        file.Name.EndsWith("ico", StringComparison.OrdinalIgnoreCase) ? "x-icon" : "jpeg";
+            _iconBase64 = $"data:image/{format};base64,{base64}";
+            StateHasChanged();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Error processing icon: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private async Task HandleLicenseUploaded(IBrowserFile file)
+    {
+        if (file == null) return;
+        
+        try
+        {
+            using var stream = file.OpenReadStream(10 * 1024 * 1024);
+            using var reader = new StreamReader(stream);
+            var json = await reader.ReadToEndAsync();
+            
+            var config = Db.ServerConfigs.GetOrCreateGlobalConfig();
+            var validationResult = LicenseService.ValidateLicense(json, config);
+
+            if (validationResult.Status == Spokes_Server.Core.Services.Licensing.LicenseStatus.Valid || 
+                validationResult.Status == Spokes_Server.Core.Services.Licensing.LicenseStatus.Tolerated ||
+                validationResult.Status == Spokes_Server.Core.Services.Licensing.LicenseStatus.Expired)
+            {
+                if (validationResult.ParsedLicense != null)
+                {
+                    _licensePayload = json;
+                    
+                    var newEditions = Spokes_Server.Core.Services.Licensing.LicenseValidationService.GetAvailableEditions(validationResult);
+                    if (!newEditions.Contains(_selectedEdition))
+                    {
+                        _selectedEdition = newEditions.FirstOrDefault() ?? "Family";
+                    }
+                    
+                    // Automatically select if only 1 edition is available
+                    if (newEditions.Count == 1)
+                    {
+                        _selectedEdition = newEditions.First();
+                    }
+                    
+                    if (validationResult.Status == Spokes_Server.Core.Services.Licensing.LicenseStatus.Expired)
+                    {
+                        Snackbar.Add($"Expired License Saved: {validationResult.Message}", Severity.Warning);
+                    }
+                    else
+                    {
+                        Snackbar.Add("License Validated Successfully!", Severity.Success);
+                    }
+                }
+                else
+                {
+                    Snackbar.Add("License is valid but could not be parsed.", Severity.Warning);
+                }
+            }
+            else
+            {
+                Snackbar.Add($"Invalid License: {validationResult.Message}", Severity.Error);
+            }
+            
+            StateHasChanged();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Upload Failed: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private string GetTimeUntilExpiry(DateTime expiry)
+    {
+        var span = expiry - DateTime.UtcNow;
+        if (span.TotalDays < 0) return $"Expired {(int)Math.Abs(span.TotalDays)} days ago";
+        
+        int totalDays = (int)span.TotalDays;
+        int years = totalDays / 365;
+        int months = (totalDays % 365) / 30;
+        int days = (totalDays % 365) % 30;
+        
+        if (years > 0) return $"{years} years, {months} months";
+        if (months > 0) return $"{months} months, {days} days";
+        return $"{days} days";
+    }
+
+    private List<string> GetAvailableEditions()
+    {
+        var config = Db.ServerConfigs.GetOrCreateGlobalConfig();
+        var validationResult = LicenseService.ValidateLicense(_licensePayload, config);
+        return Spokes_Server.Core.Services.Licensing.LicenseValidationService.GetAvailableEditions(validationResult);
+    }
+}

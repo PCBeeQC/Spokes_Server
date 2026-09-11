@@ -1,0 +1,238 @@
+@using Spokes_Server.Core.Models.HR
+@using MudBlazor
+@using Spokes_Server.Core.Services
+@implements IDisposable
+
+@inject PresenceStateService PresenceState
+@inject ChatService ChatService
+@inject NavigationManager Nav
+@inject UserService UserService
+@inject Spokes_Server.Aggregate.Database Database
+@inject ISnackbar Snackbar
+
+<MudDialog DisableSidePadding="true">
+    <DialogContent>
+        <div class="d-flex flex-column align-center justify-center pt-8 pb-4">
+            <MudAvatar Size="Size.Large" Style="@($"width: 100px; height: 100px; font-size: 2.5rem; background-color: {(Employee.ProfileColor ?? Colors.DeepPurple.Default)}; color: {Colors.Shades.White};")" Class="mb-4 mud-elevation-2">
+                @if (Employee.HasCustomAvatar)
+                {
+                    <MudImage Src="@($"/spokesapi/Media/Avatar/{Employee.Id}?v={Employee.AvatarVersion}")" ObjectFit="ObjectFit.Cover" />
+                }
+                else
+                {
+                    @Employee.Initials
+                }
+            </MudAvatar>
+            <MudText Typo="Typo.h5" Style="font-weight: 700;">@Employee.FullName</MudText>
+            <MudText Typo="Typo.body1" Color="Color.Primary" Style="font-weight: 500;">@Employee.DisplaySubtitle</MudText>
+            
+                <div class="d-flex align-center mt-2">
+                @{
+                    var hasConnection = PresenceState.HasActiveConnection(Employee.Id);
+                    var isAway = PresenceState.IsGloballyAway(Employee.Id);
+                    var lastSeen = PresenceState.GetLastSeen(Employee.Id);
+                    
+                    string lastSeenText = "Offline";
+                    string dotColor = "var(--mud-palette-action-disabled)"; // Offline Gray
+
+                    if (hasConnection && !isAway)
+                    {
+                        lastSeenText = "Online";
+                        dotColor = "var(--mud-palette-success)"; // Online Green
+                    }
+                    else if (isAway)
+                    {
+                        lastSeenText = "Away";
+                        dotColor = "var(--mud-palette-warning)"; // Away Amber
+                    }
+                    else
+                    {
+                        lastSeenText = PresenceStateService.FormatLastSeen(lastSeen);
+                    }
+                }
+                <div style="width: 10px; height: 10px; border-radius: 50%; background-color: @dotColor; margin-right: 8px;"></div>
+                <MudText Typo="Typo.body2" Color="Color.Secondary" Style="font-weight: 500;">@lastSeenText</MudText>
+            </div>
+        </div>
+
+        <MudDivider />
+
+        <div class="pa-6">
+             <MudGrid Spacing="3">
+                 <MudItem xs="12">
+                     <MudText Typo="Typo.subtitle2" Color="Color.Secondary" Class="mb-1">Contact Information</MudText>
+                 </MudItem>
+                 
+                 @if (Employee.IsEmailPublic)
+                 {
+                     <MudItem xs="12" sm="12">
+                         <div class="d-flex align-center gap-3 mb-2">
+                             <MudIcon Icon="@Icons.Material.Outlined.Email" Color="Color.Secondary" Size="Size.Small" />
+                             <MudLink Href="@($"mailto:{Employee.Email}")" Underline="Underline.Hover">@Employee.Email</MudLink>
+                         </div>
+                     </MudItem>
+                 }
+                 else
+                 {
+                     <MudItem xs="12" sm="12">
+                         <div class="d-flex align-center gap-3 mb-2">
+                             <MudIcon Icon="@Icons.Material.Outlined.Email" Color="Color.Secondary" Size="Size.Small" />
+                             <MudText Typo="Typo.body2" Color="Color.Secondary" Style="font-style: italic;">Email is hidden by user</MudText>
+                         </div>
+                     </MudItem>
+                 }
+
+                 @if (!string.IsNullOrEmpty(Employee.PhoneNumber) && (IsFriendEdition || _currentUser?.IsAdmin == true || _currentUser?.Id == Employee.Id || _currentUser?.HasPermission(Spokes_Server.Core.Constants.AppPermissions.Admin.ManageUsers) == true))
+                 {
+                     <MudItem xs="12" sm="12">
+                         <div class="d-flex align-center gap-3 mb-2">
+                             <MudIcon Icon="@Icons.Material.Outlined.Phone" Color="Color.Secondary" Size="Size.Small" />
+                             <MudLink Href="@($"tel:{Employee.PhoneNumber}")" Underline="Underline.Hover">@Employee.PhoneNumber</MudLink>
+                         </div>
+                     </MudItem>
+                 }
+                 
+                 @if (!string.IsNullOrEmpty(Employee.Address) && (IsFriendEdition || _currentUser?.IsAdmin == true || _currentUser?.Id == Employee.Id || _currentUser?.HasPermission(Spokes_Server.Core.Constants.AppPermissions.Admin.ManageUsers) == true))
+                 {
+                     <MudItem xs="12" sm="12">
+                         <div class="d-flex align-start gap-3 mb-2">
+                             <MudIcon Icon="@Icons.Material.Outlined.LocationOn" Color="Color.Secondary" Size="Size.Small" Class="mt-1" />
+                             <MudText Typo="Typo.body2">@Employee.Address</MudText>
+                         </div>
+                     </MudItem>
+                 }
+
+                 @if (ShowMessageAction)
+                 {
+                     <MudItem xs="12" Class="mt-4 pt-4" Style="border-top: 1px solid var(--mud-palette-lines-default);">
+                         <MudText Typo="Typo.subtitle2" Color="Color.Secondary" Class="mb-3 d-flex align-center gap-2">
+                             <MudIcon Icon="@Icons.Material.Filled.Person" Size="Size.Small" />
+                             User Actions
+                         </MudText>
+                         @{
+                             var isBlocked = _currentUser?.BlockedUserIds.Contains(Employee.Id) == true;
+                         }
+                         <MudButton Color="@(isBlocked ? Color.Default : Color.Error)" Variant="Variant.Outlined" OnClick="ToggleBlock" Size="Size.Small" FullWidth="true" Style="text-transform: none; font-weight: 600;" StartIcon="@(isBlocked ? Icons.Material.Filled.Check : Icons.Material.Filled.Block)">
+                             @(isBlocked ? "Unblock User" : "Block User")
+                         </MudButton>
+                     </MudItem>
+                 }
+
+                 @if (_currentUser?.HasPermission(Spokes_Server.Core.Constants.AppPermissions.Chat.Moderator) == true && !(Employee.IsAdmin || Employee.HasPermission(Spokes_Server.Core.Constants.AppPermissions.Chat.Moderator)))
+                 {
+                     <MudItem xs="12" Class="mt-4 pt-4" Style="border-top: 1px solid var(--mud-palette-lines-default);">
+                         <MudText Typo="Typo.subtitle2" Color="Color.Error" Class="mb-3 d-flex align-center gap-2">
+                             <MudIcon Icon="@Icons.Material.Filled.Shield" Size="Size.Small" />
+                             Moderation Actions
+                         </MudText>
+                         <div class="d-flex flex-column flex-sm-row gap-3">
+                             <MudButton Color="@(Employee.IsSuspended ? Color.Success : Color.Warning)" Variant="Variant.Outlined" OnClick="ToggleSuspend" Size="Size.Small" Class="flex-grow-1" Style="text-transform: none; font-weight: 600;" StartIcon="@Icons.Material.Filled.Gavel">
+                                 @(Employee.IsSuspended ? "Unsuspend User" : "Suspend User")
+                             </MudButton>
+                             <MudButton Color="@(Employee.IsBanned ? Color.Success : Color.Error)" Variant="Variant.Outlined" OnClick="ToggleBan" Size="Size.Small" Class="flex-grow-1" Style="text-transform: none; font-weight: 600;" StartIcon="@Icons.Material.Filled.Block">
+                                 @(Employee.IsBanned ? "Unban User" : "Ban User")
+                             </MudButton>
+                         </div>
+                     </MudItem>
+                 }
+             </MudGrid>
+        </div>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Close" Color="Color.Default">Close</MudButton>
+        @if (ShowMessageAction)
+        {
+            <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="Message" Class="px-4 mx-2" Style="text-transform: none; font-weight: 600;" DisableElevation="true" Disabled="@(_currentUser?.IsSuspended == true)">Message</MudButton>
+        }
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [Parameter]
+    public Employee Employee { get; set; } = new();
+
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = null!;
+
+    private bool ShowMessageAction = false;
+    private Employee? _currentUser;
+    private bool IsFriendEdition => Database.CompanyProfile.Get()?.Edition == "Family";
+
+    protected override async Task OnInitializedAsync()
+    {
+        _currentUser = await UserService.GetEmployeeAsync();
+        if (_currentUser != null && _currentUser.Id != Employee.Id)
+        {
+            ShowMessageAction = true;
+        }
+
+        if (PresenceState != null)
+        {
+            PresenceState.OnUserPresenceChanged += HandlePresenceChanged;
+        }
+    }
+
+    private void HandlePresenceChanged(string userId)
+    {
+        if (userId == Employee.Id)
+        {
+            InvokeAsync(StateHasChanged);
+        }
+    }
+
+    public void Dispose()
+    {
+        if (PresenceState != null)
+        {
+            PresenceState.OnUserPresenceChanged -= HandlePresenceChanged;
+        }
+    }
+
+    private void Close()
+    {
+        MudDialog.Cancel();
+    }
+
+    private async Task ToggleBlock()
+    {
+        if (_currentUser == null) return;
+        
+        if (_currentUser.BlockedUserIds.Contains(Employee.Id))
+            _currentUser.BlockedUserIds.Remove(Employee.Id);
+        else
+            _currentUser.BlockedUserIds.Add(Employee.Id);
+            
+        Database.Employees.Save(_currentUser);
+        StateHasChanged();
+    }
+
+    private async Task Message()
+    {
+        if (_currentUser == null) return;
+        try
+        {
+            var channel = await ChatService.CreateDirectMessageChannelAsync(_currentUser.Id, Employee.Id, false);
+            MudDialog.Close();
+            Nav.NavigateTo($"/chat/{channel.Id}");
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to open chat: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private void ToggleSuspend()
+    {
+        Employee.IsSuspended = !Employee.IsSuspended;
+        Database.Employees.Save(Employee);
+        Snackbar.Add(Employee.IsSuspended ? "User suspended." : "User unsuspended.", Severity.Success);
+        StateHasChanged();
+    }
+
+    private void ToggleBan()
+    {
+        Employee.IsBanned = !Employee.IsBanned;
+        Database.Employees.Save(Employee);
+        Snackbar.Add(Employee.IsBanned ? "User banned." : "User unbanned.", Severity.Success);
+        StateHasChanged();
+    }
+}

@@ -1,0 +1,106 @@
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Services
+@using MudBlazor
+@inject IDialogService DialogService
+@inject BoardService BoardService
+
+<MudDialog>
+    <DialogContent>
+        <MudList T="string" Dense="true">
+            @foreach (var prop in Board.Properties)
+            {
+                <MudListItem>
+                    <div class="d-flex align-center gap-3 w-100">
+                        <MudIcon Icon="@GetPropertyIcon(prop.Type)" Size="Size.Small" Color="Color.Default" />
+                        <MudText Class="flex-grow-1">@prop.Name</MudText>
+                        <MudIconButton Icon="@Icons.Material.Filled.Edit" Size="Size.Small" OnClick="@(() => EditProperty(prop))" />
+                        <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small" Color="Color.Error" OnClick="@(() => DeleteProperty(prop))" />
+                    </div>
+                </MudListItem>
+                <MudDivider />
+            }
+        </MudList>
+        
+        <MudButton Variant="Variant.Outlined" FullWidth="true" StartIcon="@Icons.Material.Filled.Add" Class="mt-3" OnClick="AddProperty">
+            New Property
+        </MudButton>
+
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Close">Close</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
+    
+    [Parameter] public Board Board { get; set; } = default!;
+    
+    // We notify parent to refresh
+    [Parameter] public EventCallback OnChange { get; set; } // Simplified refresh Trigger
+
+    async Task AddProperty()
+    {
+         var dialog = await DialogService.ShowAsync<EditPropertyDialog>("New Property");
+         var result = await dialog.Result;
+         if (!result.Canceled && result.Data is BoardProperty newProp)
+         {
+             Board.Properties.Add(newProp);
+             Save();
+         }
+    }
+
+    async Task EditProperty(BoardProperty prop)
+    {
+         var parameters = new DialogParameters { ["Property"] = prop };
+         var dialog = await DialogService.ShowAsync<EditPropertyDialog>("Edit Property", parameters);
+         var result = await dialog.Result;
+         if (!result.Canceled && result.Data is BoardProperty updatedProp)
+         {
+             // Update the existing property instance
+             var index = Board.Properties.IndexOf(prop);
+             if (index != -1)
+             {
+                 Board.Properties[index] = updatedProp;
+                 Save();
+             }
+         }
+    }
+
+    async Task DeleteProperty(BoardProperty prop)
+    {
+        var confirm = await DialogService.ShowMessageBoxAsync("Delete Property?", $"Are you sure you want to delete '{prop.Name}'? This will lose data for this property on all cards.", yesText: "Delete", cancelText: "Cancel");
+        if (confirm == true)
+        {
+            Board.Properties.Remove(prop);
+            Save();
+        }
+    }
+
+    void Save()
+    {
+        BoardService.UpdateBoard(Board);
+        OnChange.InvokeAsync();
+        StateHasChanged();
+    }
+
+    void Close() => MudDialog.Close(DialogResult.Ok(true));
+    
+    string GetPropertyIcon(BoardPropertyType type) => type switch
+    {
+        BoardPropertyType.Select => Icons.Material.Filled.ArrowDropDownCircle,
+        BoardPropertyType.Person => Icons.Material.Filled.Person,
+        BoardPropertyType.Date => Icons.Material.Filled.CalendarToday,
+        BoardPropertyType.Checkbox => Icons.Material.Filled.CheckBox,
+        BoardPropertyType.URL => Icons.Material.Filled.Link,
+        BoardPropertyType.Email => Icons.Material.Filled.Email,
+        BoardPropertyType.Number => Icons.Material.Filled.Numbers,
+        BoardPropertyType.Phone => Icons.Material.Filled.Phone,
+        _ => Icons.Material.Filled.ShortText
+    };
+}
+

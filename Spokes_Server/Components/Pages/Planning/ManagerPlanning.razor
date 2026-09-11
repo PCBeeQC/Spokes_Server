@@ -1,0 +1,588 @@
+@page "/planning/manager"
+@implements IDisposable
+@using Spokes_Server.Core.Data
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Models.HR
+@using MudBlazor
+@using System.Globalization
+@inject Database Db
+@inject NavigationManager Nav
+@inject ISnackbar Snackbar
+@inject IDialogService DialogService
+@inject AuthenticationStateProvider AuthStateProvider
+@attribute [Authorize]
+@inject UserService UserService
+
+<PageTitle>Team Planning</PageTitle>
+
+<MudContainer MaxWidth="MaxWidth.ExtraLarge" Class="mt-4">
+    <div class="d-flex justify-space-between align-center mb-4">
+        <MudText Typo="Typo.h5"><b>Team Planning</b></MudText>
+        <div class="d-flex align-center gap-2">
+            <MudIconButton Icon="@Icons.Material.Filled.ChevronLeft" OnClick="PrevWeek" />
+            <MudText><b>W@(CurrentWeek) - @CurrentYear</b></MudText>
+            <MudIconButton Icon="@Icons.Material.Filled.ChevronRight" OnClick="NextWeek" />
+            @if (IsSaving)
+            {
+                <MudText Typo="Typo.caption" Color="Color.Warning" Class="ml-2">Saving...</MudText>
+            }
+            else
+            {
+                <MudText Typo="Typo.caption" Color="Color.Success" Class="ml-2">Saved</MudText>
+            }
+        </div>
+    </div>
+
+    @if (MyTeams.Count == 0 && !Loading)
+    {
+        <MudAlert Severity="Severity.Info">You are not assigned as a Leader of any Team, and have no direct reports.</MudAlert>
+    }
+    else
+    {
+        <MudTabs ActivePanelIndex="activeTabIndex" ActivePanelIndexChanged="UpdateActiveTab" Elevation="0" Outlined="true" Rounded="true" ApplyEffectsToContainer="true" TabPanelsClass="pa-4">
+            @foreach (var team in MyTeams)
+            {
+                var demand = GetTeamDemand(team.Id);
+                var metrics = GetTeamMetrics(team.Id, demand);
+
+                <MudTabPanel Text="@team.Name">
+                    
+                    <!-- TEAM DASHBOARD -->
+                    <MudPaper Class="pa-4 mb-4" Elevation="0" Outlined="true" Style="background-color: var(--mud-palette-surface);">
+                        <MudGrid>
+                             <MudItem xs="12" md="3">
+                                <MudText Typo="Typo.subtitle2" Color="Color.Default">Capacity (Weekly)</MudText>
+                                <MudText Typo="Typo.h5"><b>@metrics.Capacity.ToString("N0") h</b></MudText>
+                            </MudItem>
+                            <MudItem xs="12" md="3">
+                                <MudText Typo="Typo.subtitle2" Color="Color.Primary">Planned (This Week)</MudText>
+                                <MudText Typo="Typo.h5" Color="Color.Primary"><b>@metrics.Planned.ToString("N1") h</b></MudText>
+                            </MudItem>
+                            <MudItem xs="12" md="3">
+                                <MudText Typo="Typo.subtitle2" Color="Color.Secondary">Utilization</MudText>
+                                <div class="d-flex align-center gap-2">
+                                    <MudProgressLinear Value="@((double)metrics.Utilization)" Color="@metrics.UtilizationColor" Rounded="true" Size="Size.Large" Class="my-2" />
+                                    <MudText Typo="Typo.body2">@metrics.Utilization.ToString("F0")%</MudText>
+                                </div>
+                            </MudItem>
+                            <MudItem xs="12" md="3">
+                                <MudText Typo="Typo.subtitle2" Color="Color.Warning">Backlog (Unassigned)</MudText>
+                                <MudText Typo="Typo.h5" Color="Color.Warning"><b>@metrics.Backlog.ToString("N1") h</b></MudText>
+                            </MudItem>
+                        </MudGrid>
+                    </MudPaper>
+
+                    <MudGrid>
+                        <!-- DEMAND (Left) -->
+                        <MudItem xs="12" md="4">
+                            <MudPaper Class="pa-4" Elevation="0" Outlined="true" Style="height: 100%; background-color: var(--mud-palette-background-grey);">
+                                <MudText Typo="Typo.h6" Class="mb-4">Work Queue / Demand</MudText>
+                                
+                                @if (!demand.Any())
+                                {
+                                    <MudText Typo="Typo.caption">No active allocations for this team.</MudText>
+                                }
+                                else
+                                {
+                                    <div class="d-flex flex-column gap-2">
+                                        @foreach (var item in demand)
+                                        {
+                                            <MudPaper Class="pa-3" Elevation="0" Outlined="true">
+                                                <div class="d-flex justify-space-between">
+                                                    <MudText Typo="Typo.subtitle2"><b>@item.ProjectName</b></MudText>
+                                                    @if(item.Deadline.HasValue)
+                                                    {
+                                                        <MudChip T="string" Size="Size.Small" Color="@(item.Deadline.Value < DateOnly.FromDateTime(DateTime.Today.AddDays(7)) ? Color.Error : Color.Default)">
+                                                            Due @item.Deadline.Value.ToString("MM/dd")
+                                                        </MudChip>
+                                                    }
+                                                </div>
+                                                <MudText Typo="Typo.body2">@item.TaskName @(string.IsNullOrEmpty(item.Description) ? "" : $"- {item.Description}")</MudText>
+                                                <div class="d-flex justify-space-between align-center mt-2">
+                                                    <div class="d-flex flex-column">
+                                                        <MudText Typo="Typo.caption">Quoted: <b>@item.QuotedHours.ToString("N1") h</b></MudText>
+                                                        <MudText Typo="Typo.caption" Color="@(item.AssignedHours >= item.QuotedHours ? Color.Success : Color.Warning)">
+                                                            Assigned: <b>@item.AssignedHours.ToString("N1") h</b>
+                                                        </MudText>
+                                                    </div>
+                                                    <MudButton Variant="Variant.Outlined" Size="Size.Small" Color="Color.Primary" 
+                                                               OnClick="@(() => OpenAllocateDialog(team, item))">Allocate</MudButton>
+                                                </div>
+                                            </MudPaper>
+                                        }
+                                    </div>
+                                }
+                            </MudPaper>
+                        </MudItem>
+
+                        <!-- SUPPLY (Right) -->
+                        <MudItem xs="12" md="8">
+                            <MudText Typo="Typo.h6" Class="mb-4">Team Schedule (@team.Name)</MudText>
+                            <MudExpansionPanels MultiExpansion="true">
+                                @foreach (var report in GetTeamMemberPlans(team.Id))
+                                {
+                                    <MudExpansionPanel Text="@($"{report.Employee.FirstName} {report.Employee.LastName}")">
+                                        <TitleContent>
+                                            <div class="d-flex align-center justify-space-between w-100 pr-4">
+                                                <MudText><b>@report.Employee.FirstName @report.Employee.LastName</b></MudText>
+                                                @{
+                                                    var h = report.Plan.TotalHours;
+                                                    var cap = report.Employee.WeeklyHours;
+                                                    var c = h > cap ? Color.Error : (h > (cap * 0.85m) ? Color.Success : Color.Warning);
+                                                }
+                                                <MudText Color="@c">@h.ToString("F1")h / @cap.ToString("F0")h</MudText>
+                                            </div>
+                                        </TitleContent>
+                                        <ChildContent>
+                                             <MudTable Items="@report.Plan.Entries" Dense="true" Hover="true" Elevation="0">
+                                                <HeaderContent>
+                                                    <MudTh>Project</MudTh>
+                                                    <MudTh>Hours</MudTh>
+                                                    <MudTh>Notes</MudTh>
+                                                    <MudTh Style="width: 50px;"></MudTh>
+                                                </HeaderContent>
+                                                <RowTemplate>
+                                                    <MudTd>
+                                                        <MudAutocomplete T="string" Value="@context.ProjectName" ValueChanged="@((name) => UpdateProjectByName(report.Plan, context, name))"
+                                                            SearchFunc="@SearchProjects" Variant="Variant.Text" Margin="Margin.Dense" ResetValueOnEmptyText="true" CoerceText="true" />
+                                                    </MudTd>
+                                                    <MudTd>
+                                                        <MudNumericField Value="@context.Hours" ValueChanged="@((decimal v) => UpdateHours(report.Plan, context, v))"
+                                                            Min="0" Max="100" Step="0.5M" Margin="Margin.Dense" HideSpinButtons="true" />
+                                                    </MudTd>
+                                                    <MudTd>
+                                                        <MudTextField Value="@context.Note" ValueChanged="@((string v) => UpdateNote(report.Plan, context, v))" Placeholder="..." Margin="Margin.Dense" DisableUnderLine="true" DebounceInterval="500" />
+                                                    </MudTd>
+                                                    <MudTd>
+                                                        <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small" Color="Color.Error" OnClick="@(() => RemoveEntry(report.Plan, context))" />
+                                                    </MudTd>
+                                                </RowTemplate>
+                                            </MudTable>
+                                            <div class="d-flex justify-end gap-2 mt-2">
+                                                <MudButton StartIcon="@Icons.Material.Filled.Add" OnClick="@(() => AddEntry(report.Plan))"
+                                                    Variant="Variant.Text" Size="Size.Small" Color="Color.Primary">Add Activity</MudButton>
+                                            </div>
+                                        </ChildContent>
+                                    </MudExpansionPanel>
+                                }
+                            </MudExpansionPanels>
+                        </MudItem>
+                    </MudGrid>
+                </MudTabPanel>
+            }
+            
+
+        </MudTabs>
+    }
+
+    <MudPaper Class="pa-4 mt-4" Elevation="0" Outlined="true">
+        <MudText Typo="Typo.h5"><b>Employee Timesheets</b></MudText>
+        <MudText Typo="Typo.body1" Class="mb-4">Select an employee to view or edit their timesheet.</MudText>
+
+        <MudGrid>
+            <MudItem xs="12" md="6">
+                <EmployeeAutocomplete Label="Find Employee"
+                                      Employees="@AllAccessibleEmployees"
+                                      @bind-Value="SelectedEmployee"
+                                      Margin="Margin.Dense" />
+            </MudItem>
+            <MudItem xs="12" md="6" Class="d-flex align-center">
+                <MudButton Variant="Variant.Outlined" Color="Color.Primary" Disabled="@(SelectedEmployee == null)"
+                           OnClick="@OpenTimesheet">
+                    Open Timesheet
+                </MudButton>
+            </MudItem>
+        </MudGrid>
+
+        <MudDivider Class="my-6" />
+
+        <MudText Typo="Typo.h5" GutterBottom="true">Your Team</MudText>
+        @if (DirectReports.Any())
+        {
+            <MudTable Dense="true" Striped="true" Outlined="true" Elevation="0" Items="@DirectReports" Hover="true" Breakpoint="Breakpoint.Sm" Loading="@_loading"
+                      LoadingProgressColor="Color.Info">
+                <HeaderContent>
+                    <MudTh>Name</MudTh>
+                    <MudTh>Position</MudTh>
+                    <MudTh>Email</MudTh>
+                    <MudTh>Action</MudTh>
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd DataLabel="Name">
+                        <div class="d-flex align-center">
+                            <MudIcon Icon="@Icons.Material.Filled.Person" Class="mr-2" />
+                            <MudText Typo="Typo.body1">@context.FullName</MudText>
+                        </div>
+                    </MudTd>
+                    <MudTd DataLabel="Position">@context.Position</MudTd>
+                    <MudTd DataLabel="Email">@context.Email</MudTd>
+                    <MudTd DataLabel="Action">
+                        <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="Color.Primary"
+                                   OnClick="@(() => OpenTimesheetFor(context))">View Timesheet</MudButton>
+                    </MudTd>
+                </RowTemplate>
+            </MudTable>
+        }
+        else
+        {
+            <MudAlert Severity="Severity.Info">You have no direct reports found in the system.</MudAlert>
+        }
+    </MudPaper>
+
+    
+
+</MudContainer>
+
+@code {
+    // --- STATE ---
+    private int CurrentYear = DateTime.Today.Year;
+    private int CurrentWeek;
+    private bool Loading = true;
+    private bool IsSaving = false;
+    
+    // --- DATA ---
+    private Employee CurrentUser;
+    private List<Team> MyTeams = new();
+    private List<Project> ActiveProjects = new();
+    
+    // --- VIEW MODELS ---
+    private List<EmployeePlanViewModel> AllEmployeePlans = new(); // Cache of all loaded plans
+
+    [SupplyParameterFromQuery] public int? Tab { get; set; }
+    private int activeTabIndex = 0;
+
+    protected override void OnParametersSet()
+    {
+        if (Tab.HasValue)
+        {
+            activeTabIndex = Tab.Value;
+        }
+    }
+
+    private bool _isDisposed;
+
+    public void Dispose()
+    {
+        _isDisposed = true;
+    }
+
+    private void UpdateActiveTab(int index)
+    {
+        if (_isDisposed) return;
+
+        activeTabIndex = index;
+
+        if (!Nav.Uri.Contains("/planning/manager", StringComparison.OrdinalIgnoreCase))
+            return;
+
+        try
+        {
+            Nav.NavigateTo(Nav.GetUriWithQueryParameter("tab", index), replace: true);
+        }
+        catch (Microsoft.AspNetCore.Components.NavigationException)
+        {
+        }
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        // Redirect if feature is disabled
+        var profile = Db.CompanyProfile.GetAll().FirstOrDefault();
+        if (!(profile?.TimesheetConfig?.EnableWeeklyPlan ?? true))
+        {
+            Snackbar.Add("Weekly Plan is disabled for your organization", Severity.Info);
+            Nav.NavigateTo("/my-timesheet");
+            return;
+        }
+
+        CurrentWeek = ISOWeek.GetWeekOfYear(DateTime.Today);
+
+        CurrentUser = await UserService.GetEmployeeAsync();
+
+        ActiveProjects = Db.Projects.GetAll()
+            .Where(p => (p.Status != ProjectStatus.Archived && p.Status != ProjectStatus.Draft) || p.IsInternal)
+            .OrderBy(p => p.DisplayName).ToList();
+
+        LoadData();
+
+        var currentUser = await UserService.GetEmployeeAsync();
+        if (currentUser != null)
+        {
+            var all = Db.Employees.GetAll().Where(e => e.IsActive).ToList();
+            var teams = Db.Teams.GetAll();
+            var myTeams = teams.Where(t => t.LeaderId == currentUser.Id).ToList();
+
+            // Helper Logic:
+            // Accessible: Members of my teams, or recursive down?
+            // For simplified "Team Leader" logic: I access anyone in my team.
+            // If we want recursive (Leader of leaders), we need more complex logic.
+            // Assuming "ManagerTimesheets" is primarily for direct team management.
+
+            // Admin gets everyone
+            if (currentUser.IsAdmin)
+            {
+                AllAccessibleEmployees = all.OrderBy(e => e.FullName).ToList();
+                DirectReports = AllAccessibleEmployees.Where(e => myTeams.Any(t => t.Id == e.TeamId)).ToList();
+            }
+            else
+            {
+                // Managers get their team members
+                AllAccessibleEmployees = all.Where(e => myTeams.Any(t => t.Id == e.TeamId)).OrderBy(e => e.FullName).ToList();
+                DirectReports = AllAccessibleEmployees;
+            }
+        }
+        _loading = false;
+    }
+
+    private void LoadData()
+    {
+        if (CurrentUser == null) return;
+        Loading = true;
+        AllEmployeePlans.Clear();
+        // DirectReportPlans.Clear(); // REMOVED
+
+        // 1. Find Teams I lead
+        MyTeams = Db.Teams.GetAll().Where(t => t.LeaderId == CurrentUser.Id).ToList();
+
+        // 2. Load Plans for ALL team members
+        var relevantEmployees = new HashSet<string>();
+
+        foreach(var team in MyTeams)
+        {
+            var members = Db.Employees.GetAll().Where(e => e.TeamId == team.Id && e.IsActive);
+            foreach(var m in members) relevantEmployees.Add(m.Id);
+            
+            // Should always be true since MyTeams filtered by LeaderId == CurrentUser.Id, 
+            // but good for completeness if logic changes.
+            if (!string.IsNullOrEmpty(team.LeaderId))
+            {
+                relevantEmployees.Add(team.LeaderId);
+            }
+        }
+
+        foreach (var empId in relevantEmployees)
+        {
+             var emp = Db.Employees.GetAll().FirstOrDefault(e => e.Id == empId);
+             if (emp == null) continue;
+
+             var plan = Db.WeeklyPlans.GetByEmployeeAndWeek(emp.Id, CurrentYear, CurrentWeek);
+             plan.EmployeeName = emp.FullName; // Ensure Name
+
+             // Fix Project Names
+             foreach (var entry in plan.Entries)
+             {
+                 if (string.IsNullOrEmpty(entry.ProjectName))
+                 {
+                     var p = ActiveProjects.FirstOrDefault(x => x.Id == entry.ProjectId);
+                     if (p != null) entry.ProjectName = p.DisplayName;
+                 }
+             }
+
+             var vm = new EmployeePlanViewModel { Employee = emp, Plan = plan };
+             AllEmployeePlans.Add(vm);
+        }
+
+        Loading = false;
+    }
+
+    // --- HELPERS ---
+    private List<DemandViewModel> GetTeamDemand(string teamId)
+    {
+        var demand = new List<DemandViewModel>();
+        
+        // 1. Get accepted quotes for active projects
+        var activeProjectIds = ActiveProjects.Select(p => p.Id).ToHashSet();
+        var quotes = Db.Quotes.GetAll()
+            .Where(q => q.Status == QuoteStatus.Accepted && activeProjectIds.Contains(q.ProjectId))
+            .ToList();
+
+        // 2. Iterate labor items
+        foreach (var quote in quotes)
+        {
+            var proj = ActiveProjects.FirstOrDefault(p => p.Id == quote.ProjectId);
+            if (proj == null) continue;
+
+            foreach (var item in quote.LaborItems)
+            {
+                // 3. Check if Work Type is assigned to this team
+                var workType = Db.WorkTypes.GetAll().FirstOrDefault(w => w.Id == item.WorkTypeId);
+                if (workType != null && workType.AssignedTeamIds.Contains(teamId))
+                {
+                    // Calculate already assigned hours for this project + task
+                    // FIX: Sum from ALL weekly plans, not just current week!
+                    var assigned = Db.WeeklyPlans.GetAll()
+                        .SelectMany(p => p.Entries)
+                        .Where(e => e.ProjectId == proj.Id && e.WorkTypeId == item.WorkTypeId)
+                        .Sum(e => e.Hours);
+
+                    demand.Add(new DemandViewModel
+                    {
+                        ProjectName = proj.DisplayName,
+                        ProjectId = proj.Id,
+                        TaskName = workType.Name,
+                        WorkTypeId = item.WorkTypeId,
+                        QuotedHours = item.Hours,
+                        AssignedHours = assigned,
+                        Description = $"From Quote #{quote.QuoteNumber}",
+                        Deadline = quote.Deadline // Use Quote Deadline
+                    });
+                }
+            }
+        }
+        return demand;
+    }
+
+    private TeamDashboardMetrics GetTeamMetrics(string teamId, List<DemandViewModel> demand)
+    {
+        var plans = GetTeamMemberPlans(teamId);
+        
+        decimal capacity = plans.Sum(p => p.Employee.WeeklyHours);
+        decimal planned = plans.Sum(p => p.Plan.TotalHours);
+        decimal backlog = demand.Sum(d => Math.Max(0, d.QuotedHours - d.AssignedHours)); // Only count positive backlog
+
+        decimal utilization = capacity > 0 ? (planned / capacity) * 100 : 0;
+        
+        return new TeamDashboardMetrics
+        {
+            Capacity = capacity,
+            Planned = planned,
+            Backlog = backlog,
+            Utilization = utilization,
+            UtilizationColor = utilization > 100 ? Color.Error : (utilization > 80 ? Color.Success : Color.Info)
+        };
+    }
+
+    private List<EmployeePlanViewModel> GetTeamMemberPlans(string teamId)
+    {
+        var team = MyTeams.FirstOrDefault(t => t.Id == teamId);
+        if (team == null) return new();
+
+        return AllEmployeePlans.Where(p => 
+            p.Employee.TeamId == teamId || 
+            (p.Employee.Id == team.LeaderId)
+        ).ToList();
+    }
+
+    // --- AUTO SAVE ---
+    // (Same as before)
+    private void UpdateProjectByName(WeeklyPlan plan, PlanEntry entry, string projectName)
+    {
+        entry.ProjectName = projectName;
+        var proj = ActiveProjects.FirstOrDefault(p => p.DisplayName == projectName);
+        if (proj != null) entry.ProjectId = proj.Id;
+        _ = AutoSave(plan);
+    }
+    private void UpdateHours(WeeklyPlan plan, PlanEntry entry, decimal val) { entry.Hours = val; _ = AutoSave(plan); }
+    private void UpdateNote(WeeklyPlan plan, PlanEntry entry, string val) { entry.Note = val; _ = AutoSave(plan); }
+    private void AddEntry(WeeklyPlan plan) { plan.Entries.Add(new PlanEntry { Hours = 4 }); _ = AutoSave(plan); }
+    private void RemoveEntry(WeeklyPlan plan, PlanEntry entry) { plan.Entries.Remove(entry); _ = AutoSave(plan); }
+    
+    private async Task AutoSave(WeeklyPlan plan)
+    {
+        IsSaving = true; StateHasChanged();
+        Db.WeeklyPlans.Save(plan);
+        IsSaving = false; StateHasChanged();
+    }
+    
+    // --- NAV ---
+    private void PrevWeek() { CurrentWeek--; if (CurrentWeek < 1) { CurrentYear--; CurrentWeek = 52; } LoadData(); }
+    private void NextWeek() { CurrentWeek++; if (CurrentWeek > 52) { CurrentYear++; CurrentWeek = 1; } LoadData(); }
+    
+    // --- SEARCH ---
+    private async Task<IEnumerable<string>> SearchProjects(string value, CancellationToken token)
+    {
+        if (string.IsNullOrEmpty(value)) return ActiveProjects.Select(x => x.DisplayName);
+        return ActiveProjects.Where(x => x.DisplayName.Contains(value, StringComparison.InvariantCultureIgnoreCase)).Select(x => x.DisplayName);
+    }
+
+    // --- ALLOCATION DIALOG ---
+    private async Task OpenAllocateDialog(Team team, DemandViewModel item)
+    {
+         var members = GetTeamMemberPlans(team.Id).Select(vm => vm.Employee).ToList();
+         
+         var parameters = new DialogParameters();
+         parameters.Add("Members", members);
+         parameters.Add("ProjectName", item.ProjectName);
+         parameters.Add("TaskName", item.TaskName);
+         
+         var dialog = await DialogService.ShowAsync<AllocateDialog>("Allocate Work", parameters);
+         var result = await dialog.Result;
+
+         if (!result.Canceled && result.Data is AllocationResult res)
+         {
+             // Add entry to the chosen employee
+             var vm = AllEmployeePlans.FirstOrDefault(p => p.Employee.Id == res.EmployeeId);
+             if (vm != null)
+             {
+                 vm.Plan.Entries.Add(new PlanEntry
+                 {
+                     ProjectId = item.ProjectId,
+                     ProjectName = item.ProjectName,
+                     WorkTypeId = item.WorkTypeId, 
+                     Note = $"{item.TaskName}: {res.Note}",
+                     Hours = res.Hours
+                 });
+                 _ = AutoSave(vm.Plan);
+                 Snackbar.Add($"Allocated {res.Hours}h to {vm.Employee.FirstName}", Severity.Success);
+             }
+         }
+    }
+
+    // --- MODELS ---
+    public class EmployeePlanViewModel { public Employee Employee { get; set; } public WeeklyPlan Plan { get; set; } }
+    
+    public class DemandViewModel
+    {
+        public string ProjectName { get; set; }
+        public string ProjectId { get; set; }
+        public string TaskName { get; set; }
+        public string WorkTypeId { get; set; }
+        public decimal QuotedHours { get; set; }
+        public decimal AssignedHours { get; set; }
+        public string Description { get; set; }
+        public DateOnly? Deadline { get; set; }
+    }
+
+    public class TeamDashboardMetrics
+    {
+        public decimal Capacity { get; set; }
+        public decimal Planned { get; set; }
+        public decimal Backlog { get; set; }
+        public decimal Utilization { get; set; }
+        public Color UtilizationColor { get; set; }
+    }
+
+
+    //Team timesheet 
+    private Employee? SelectedEmployee;
+    private List<Employee> DirectReports = new();
+    private List<Employee> AllAccessibleEmployees = new();
+    private bool _loading = true;
+
+    // Unused helper removed or simplified?
+    // The previous CanManage was recursive based on ManagerId.
+    // If we only stick to "Team Members", we don't need recursion unless we have sub-teams.
+    // Let's remove CanManage if it's not used elsewhere. It IS used in line 88 of original, but I replaced the logic.
+    // So we can remove it.
+
+
+
+    private void OpenTimesheet()
+    {
+        if (SelectedEmployee != null)
+        {
+            Nav.NavigateTo($"/timesheet/{SelectedEmployee.Id}");
+        }
+    }
+
+    private void OpenTimesheetFor(Employee emp)
+    {
+        Nav.NavigateTo($"/timesheet/{emp.Id}");
+    }
+}
+
+
+

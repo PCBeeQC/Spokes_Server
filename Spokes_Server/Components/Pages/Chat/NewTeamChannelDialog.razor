@@ -1,0 +1,89 @@
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Models.HR
+
+<MudDialog>
+    <TitleContent>
+        <MudText Typo="Typo.h6">
+            <MudIcon Icon="@Icons.Material.Filled.Groups" Class="mr-2" />
+            Create @Label Channel
+        </MudText>
+    </TitleContent>
+    <DialogContent>
+        <TeamAutocomplete Label="@($"Select {Label}")" Teams="@Teams"
+            ExcludedIds="@_selectedTeams.Select(t => t.Id)" ValueChanged="AddTeam"
+            ResetOnSelect="true" ShowProgressIndicator="true" Class="mb-4" />
+
+        @if (_selectedTeams.Any())
+        {
+            <div class="d-flex flex-wrap gap-2 mb-4">
+                @foreach (var team in _selectedTeams)
+                {
+                    <TeamChip Team="@team" OnClose="@(() => RemoveTeam(team))" Color="Color.Primary" Variant="Variant.Filled" />
+                }
+            </div>
+
+            <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-2">
+                @GetMemberSummary()
+            </MudText>
+        }
+
+        <MudSwitch @bind-Value="_isEncrypted" Color="Color.Success" Label="Enable Channel Encryption" />
+        @if (_isEncrypted)
+        {
+            <MudText Typo="Typo.caption" Color="Color.Secondary" Class="d-block mt-1">
+                This will encrypt the channel on the server's disk. All members will need a vault password.
+            </MudText>
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="Submit" Disabled="!_selectedTeams.Any()">
+            Create Channel
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
+
+    [Parameter] public List<Team> Teams { get; set; } = new();
+    [Parameter] public List<Employee> Employees { get; set; } = new();
+    [Parameter] public string? CurrentUserId { get; set; }
+    [Parameter] public string Label { get; set; } = "Team";
+
+    private List<Team> _selectedTeams = new();
+    private bool _isEncrypted = false;
+
+    private void AddTeam(Team? team)
+    {
+        if (team != null && !_selectedTeams.Any(t => t.Id == team.Id))
+        {
+            _selectedTeams.Add(team);
+        }
+    }
+
+    private void RemoveTeam(Team team)
+    {
+        _selectedTeams.RemoveAll(t => t.Id == team.Id);
+    }
+
+    private string GetMemberSummary()
+    {
+        var teamIds = _selectedTeams.Select(t => t.Id).ToHashSet();
+        var memberCount = Employees.Count(e => e.IsActive && teamIds.Contains(e.TeamId));
+        return $"{memberCount} member{(memberCount != 1 ? "s" : "")} across {_selectedTeams.Count} {(_selectedTeams.Count > 1 ? Label + "s" : Label).ToLower()}";
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+
+    private void Submit()
+    {
+        if (_selectedTeams.Any())
+        {
+            var teamIds = _selectedTeams.Select(t => t.Id).ToList();
+            MudDialog.Close(DialogResult.Ok((teamIds, _isEncrypted)));
+        }
+    }
+}

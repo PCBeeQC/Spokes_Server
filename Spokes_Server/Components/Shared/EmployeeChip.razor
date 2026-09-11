@@ -1,0 +1,91 @@
+@using Spokes_Server.Core.Models.HR
+@using MudBlazor
+@inject Spokes_Server.Aggregate.Database Db
+
+@{
+    var emp = Employee ?? (!string.IsNullOrEmpty(UserId) ? Db.Employees.GetById(UserId) : null);
+    var displayName = emp?.FullName ?? Text ?? "Unknown";
+    var avatarFontSize = Size switch
+    {
+        Size.Small => "0.625rem",
+        Size.Medium => "0.75rem",
+        Size.Large => "1rem",
+        _ => "0.625rem"
+    };
+    var avatarSize = Size switch
+    {
+        Size.Large => Size.Medium,
+        _ => Size.Small
+    };
+}
+
+@if (OnClose.HasDelegate)
+{
+    <MudChip T="string"
+             Size="@Size"
+             Color="@Color"
+             Variant="@Variant"
+             OnClose="@HandleClose"
+             Disabled="@Disabled"
+             Class="@Class"
+             Style="@Style"
+             Value="@(emp?.Id ?? UserId ?? displayName)">
+        <AvatarContent>
+            @if (emp != null)
+            {
+                <EmployeeAvatar Employee="@emp"
+                                Size="@avatarSize"
+                                FontSize="@avatarFontSize"
+                                ShowPresence="false" />
+            }
+        </AvatarContent>
+        <ChildContent>
+            @displayName
+        </ChildContent>
+    </MudChip>
+}
+else
+{
+    <MudChip T="string"
+             Size="@Size"
+             Color="@Color"
+             Variant="@Variant"
+             Disabled="@Disabled"
+             Class="@Class"
+             Style="@Style"
+             Value="@(emp?.Id ?? UserId ?? displayName)">
+        <AvatarContent>
+            @if (emp != null)
+            {
+                <EmployeeAvatar Employee="@emp"
+                                Size="@avatarSize"
+                                FontSize="@avatarFontSize"
+                                ShowPresence="false" />
+            }
+        </AvatarContent>
+        <ChildContent>
+            @displayName
+        </ChildContent>
+    </MudChip>
+}
+
+@code {
+    [Parameter] public Employee? Employee { get; set; }
+    [Parameter] public string? UserId { get; set; }
+    [Parameter] public string? Text { get; set; }
+    [Parameter] public Size Size { get; set; } = Size.Small;
+    [Parameter] public Color Color { get; set; } = Color.Default;
+    [Parameter] public Variant Variant { get; set; } = Variant.Filled;
+    [Parameter] public EventCallback OnClose { get; set; }
+    [Parameter] public bool Disabled { get; set; } = false;
+    [Parameter] public string Class { get; set; } = "";
+    [Parameter] public string Style { get; set; } = "";
+
+    private async Task HandleClose(MudChip<string> chip)
+    {
+        if (OnClose.HasDelegate)
+        {
+            await OnClose.InvokeAsync();
+        }
+    }
+}

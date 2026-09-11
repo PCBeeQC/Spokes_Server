@@ -1,0 +1,40 @@
+@page "/mobile-login-success"
+@layout Spokes_Server.Components.Layout.LoginLayout
+@using Microsoft.AspNetCore.Authorization
+@attribute [Authorize]
+@inject Spokes_Server.Aggregate.Database Db
+
+<MudContainer MaxWidth="MaxWidth.False" Class="d-flex align-center justify-center mud-width-full" Style="height: 100vh; background-color: var(--mud-palette-background-grey);">
+    <MudPaper Elevation="3" Class="pa-8 d-flex flex-column align-center" Width="100%" MaxWidth="500px">
+        <MudIcon Icon="@Icons.Material.Filled.CheckCircle" Color="Color.Success" Style="font-size: 5rem;" Class="mb-4" />
+        
+        <MudText Typo="Typo.h4" Align="Align.Center" GutterBottom="true">
+            Login Successful
+        </MudText>
+        
+        <button onclick="ReturnToAppJS()" class="mud-button-root mud-button mud-button-filled mud-button-filled-primary mud-button-filled-size-large mud-width-full py-3" type="button" style="font-weight: 500; font-family: Roboto, sans-serif; letter-spacing: .02857em; text-transform: uppercase;">
+            <span class="mud-button-label">
+                <span class="mud-button-icon-start mud-button-icon-size-medium">
+                    <svg class="mud-icon-root mud-svg-icon mud-icon-size-medium" focusable="false" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"></path></svg>
+                </span>
+                Return to Spokes
+            </span>
+        </button>
+    </MudPaper>
+</MudContainer>
+
+@code {
+    [SupplyParameterFromQuery(Name = "link")]
+    public string? Link { get; set; }
+
+    private string SafeLink => !string.IsNullOrEmpty(Link) && Link.StartsWith("spokes://", StringComparison.OrdinalIgnoreCase)
+        ? Link
+        : "spokes://auth-callback?error=invalid_link";
+}
+
+<script>
+    function ReturnToAppJS() {
+        var finalizeUrl = '/sso/mobile-finalize?link=' + encodeURIComponent('@SafeLink');
+        window.location.href = finalizeUrl;
+    }
+</script>

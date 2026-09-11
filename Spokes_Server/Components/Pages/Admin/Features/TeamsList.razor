@@ -1,0 +1,256 @@
+@using Spokes_Server.Core.Data
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Models.HR
+@using MudBlazor
+@using Spokes_Server.Components.Pages.Admin
+@using Spokes_Server.Components.Shared
+@inject Database Db
+@inject IDialogService DialogService
+@inject ISnackbar Snackbar
+@inject Spokes_Server.Core.Services.Core.AppLabelService AppLabels
+@inject NavigationManager Nav
+@inject UserService UserService
+
+<div class="d-flex flex-wrap gap-4 align-center mb-6">
+    <MudTextField @bind-Value="searchString" Placeholder="@($"Search {AppLabels.Teams}")" Variant="Variant.Outlined" Margin="Margin.Dense" Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search" IconSize="Size.Medium" Class="flex-grow-1" Style="max-width: 600px; background-color: var(--mud-palette-surface);" />
+    <MudSpacer />
+    @if (_isAdminOrManager)
+    {
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.GroupAdd" OnClick="AddTeam">
+            Create @AppLabels.Team
+        </MudButton>
+    }
+</div>
+
+<MudGrid Spacing="3">
+    @foreach (var context in TeamList.Where(FilterFunc))
+    {
+        <MudItem xs="12" sm="6" md="4" lg="3">
+            <MudCard Elevation="0" Outlined="true" Class="h-100 d-flex flex-column directory-card" Style="border-radius: 16px;">
+                <MudCardContent Class="pa-4 flex-grow-1 cursor-pointer" @onclick="@(() => ViewTeam(context))">
+                    <div class="d-flex gap-4">
+                        <TeamAvatar Team="@context" Size="Size.Large" Style="width: 56px; height: 56px; font-size: 1.5rem; flex-shrink: 0;" />
+                        <div class="d-flex flex-column justify-center" style="min-width: 0; flex: 1;">
+                            <div class="d-flex align-center gap-1" style="width: 100%;">
+                                <MudText Typo="Typo.subtitle1" Class="flex-grow-1 text-truncate" Style="font-weight: 700;">@context.Name</MudText>
+                            </div>
+                            <MudText Typo="Typo.body2" Color="Color.Secondary" Class="text-truncate" Style="width: 100%;">@(GetEmployeeName(context.LeaderId)) (Leader)</MudText>
+                            
+                            <div class="d-flex align-center mt-2">
+                                <MudIcon Icon="@Icons.Material.Filled.Group" Size="Size.Small" Color="Color.Secondary" Class="mr-1" Style="font-size: 16px;" />
+                                <MudText Typo="Typo.caption" Color="Color.Secondary" Style="font-weight: 500;">
+                                    @GetMemberCount(context) Members
+                                </MudText>
+                            </div>
+                        </div>
+                        
+                        <div class="d-flex flex-column justify-start align-end ml-n2">
+                            @if (_isAdminOrManager)
+                            {
+                                <MudMenu Icon="@Icons.Material.Filled.MoreVert" Size="Size.Small" AnchorOrigin="Origin.BottomRight" TransformOrigin="Origin.TopRight" Dense="true" @onclick:stopPropagation="true">
+                                    <MudMenuItem Icon="@Icons.Material.Filled.Edit" OnClick="@(() => EditTeam(context))">Edit</MudMenuItem>
+                                    <MudMenuItem Icon="@Icons.Material.Filled.Delete" IconColor="Color.Error" OnClick="@(() => DeleteTeam(context))">Delete</MudMenuItem>
+                                </MudMenu>
+                            }
+                        </div>
+                    </div>
+                </MudCardContent>
+                <MudCardActions Class="px-4 pb-4 pt-0 d-flex justify-space-between align-center">
+                    <MudButton Variant="Variant.Text" Color="Color.Primary" Size="Size.Small" OnClick="@(() => ViewTeam(context))">View @AppLabels.Team</MudButton>
+                    <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small" Class="rounded-pill px-4" Style="text-transform: none; font-weight: 600;" DisableElevation="true" OnClick="@(() => InitiateTeamMessage(context))">Message</MudButton>
+                </MudCardActions>
+            </MudCard>
+        </MudItem>
+    }
+</MudGrid>
+
+<style>
+    .directory-card {
+        transition: transform 0.2s ease, box-shadow 0.2s ease;
+        border: 1px solid var(--mud-palette-lines-default);
+        min-height: 180px; /* guarantees all cards are the same height */
+    }
+    .directory-card:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(0,0,0,0.08) !important;
+        border-color: var(--mud-palette-primary-hover);
+    }
+</style>
+
+@code {
+    private List<Team> TeamList = new();
+    private List<Employee> Employees = new();
+    private string searchString = "";
+    private Employee? _currentUser;
+    private bool _isAdminOrManager => _currentUser?.IsAdmin == true || _currentUser?.HasPermission(Spokes_Server.Core.Constants.AppPermissions.Admin.ManageUsers) == true;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _currentUser = await UserService.GetEmployeeAsync();
+        Employees = Db.Employees.GetAll().Where(e => e.IsActive).ToList();
+        RefreshList();
+    }
+
+    private bool FilterFunc(Team element)
+    {
+        if (string.IsNullOrWhiteSpace(searchString)) return true;
+        if (element.Name.Contains(searchString, StringComparison.OrdinalIgnoreCase)) return true;
+        
+        var leaderName = GetEmployeeName(element.LeaderId);
+        if (leaderName.Contains(searchString, StringComparison.OrdinalIgnoreCase)) return true;
+        
+        return false;
+    }
+
+    private void RefreshList()
+    {
+        TeamList = Db.Teams.GetAll().OrderBy(t => t.Name).ToList();
+    }
+
+    private string GetEmployeeName(string id)
+    {
+        var e = Employees.FirstOrDefault(x => x.Id == id);
+        return e?.FullName ?? "-";
+    }
+
+    private int GetMemberCount(Team team)
+    {
+        int count = Employees.Count(e => e.TeamId == team.Id);
+        // Include leader if they are not explicitly a member
+        if (!string.IsNullOrEmpty(team.LeaderId))
+        {
+            var leader = Employees.FirstOrDefault(e => e.Id == team.LeaderId);
+            if (leader != null && leader.TeamId != team.Id)
+            {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    private async Task AddTeam()
+    {
+        var t = new Team();
+        var result = await ShowDialog(t, ($"Create New {AppLabels.Team}"));
+        if (result != null)
+        {
+            Db.Teams.Save(result.Team);
+
+            // Channel creation is now manual via Chat Sidebar
+            // Db.ChatChannels.GetOrCreateTeamChannel(t.Id, t.Name);
+
+            UpdateMembers(result.Team.Id, result.MemberIds);
+
+            RefreshList();
+        }
+    }
+
+    private async Task ViewTeam(Team team)
+    {
+        var parameters = new DialogParameters();
+        parameters.Add("Team", team);
+        
+        var leader = Employees.FirstOrDefault(e => e.Id == team.LeaderId);
+        parameters.Add("Leader", leader);
+        
+        var members = Employees.Where(e => e.TeamId == team.Id).ToList();
+        if (leader != null && !members.Any(m => m.Id == leader.Id))
+        {
+            members.Add(leader);
+        }
+        parameters.Add("Members", members);
+
+        var options = new DialogOptions { CloseButton = true, MaxWidth = MaxWidth.Small, FullWidth = true };
+        await DialogService.ShowAsync<TeamProfileDialog>("", parameters, options);
+    }
+
+    private async Task EditTeam(Team team)
+    {
+        // Clone to avoid live edit
+        var clone = System.Text.Json.JsonSerializer.Deserialize<Team>(System.Text.Json.JsonSerializer.Serialize(team));
+        var result = await ShowDialog(clone, "Edit Team");
+        if (result != null)
+        {
+            Db.Teams.Save(result.Team);
+            UpdateMembers(result.Team.Id, result.MemberIds);
+            RefreshList();
+        }
+    }
+
+    private void UpdateMembers(string teamId, List<string> newMemberIds)
+    {
+        // 1. Find existing members of this team
+        var currentMembers = Employees.Where(e => e.TeamId == teamId).ToList();
+
+        // 2. Remove those who are NO LONGER in the list
+        foreach (var member in currentMembers)
+        {
+            if (!newMemberIds.Contains(member.Id))
+            {
+                member.TeamId = string.Empty;
+                Db.Employees.Save(member);
+            }
+        }
+
+        // 3. Add those who are NEW to the list
+        foreach (var id in newMemberIds)
+        {
+            var emp = Employees.FirstOrDefault(e => e.Id == id);
+            if (emp != null && emp.TeamId != teamId)
+            {
+                emp.TeamId = teamId;
+                Db.Employees.Save(emp);
+            }
+        }
+    }
+
+    private async Task DeleteTeam(Team team)
+    {
+        var parameters = new DialogParameters
+        {
+            { "ContentText", $"Are you sure you want to delete {team.Name}? Members will need to be reassigned." },
+            { "ButtonText", "Delete" },
+            { "Color", Color.Error }
+        };
+
+        var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Small };
+        var dialog = await DialogService.ShowAsync<ConfirmDialog>("Delete Team?", parameters, options);
+        var result = await dialog.Result;
+
+        if (!result.Canceled)
+        {
+            Db.Teams.Delete(team.Id);
+            RefreshList();
+            Snackbar.Add("Team deleted", Severity.Success);
+        }
+    }
+
+    private async Task<TeamDialog.TeamDialogResult?> ShowDialog(Team team, string title)
+    {
+        var parameters = new DialogParameters();
+        parameters.Add("Team", team);
+        parameters.Add("Employees", Employees);
+
+        var dialog = await DialogService.ShowAsync<TeamDialog>(title, parameters);
+        var result = await dialog.Result;
+
+        if (!result.Canceled && result.Data is TeamDialog.TeamDialogResult data)
+        {
+            return data;
+        }
+        return null;
+    }
+
+    private void InitiateTeamMessage(Team team)
+    {
+        var channel = Db.ChatChannels.GetOrCreateTeamChannel(team.Id, team.Name);
+        if (channel != null)
+        {
+            Nav.NavigateTo($"/chat/{channel.Id}");
+        }
+    }
+}
+

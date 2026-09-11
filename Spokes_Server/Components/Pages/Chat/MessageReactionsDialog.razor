@@ -1,0 +1,132 @@
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Models.HR
+@using MudBlazor
+
+<MudDialog>
+    <TitleContent>
+        <div class="d-flex align-center gap-2">
+            <MudIcon Icon="@(IsReadReceiptMode ? Icons.Material.Filled.DoneAll : Icons.Material.Filled.People)" Size="Size.Small" />
+            <MudText Typo="Typo.h6">@(IsReadReceiptMode ? "Read Receipts" : "Message Reactions")</MudText>
+        </div>
+    </TitleContent>
+    <DialogContent>
+        <div class="d-flex flex-column gap-3 pb-2" style="max-height: 50vh; overflow-y: auto;">
+            @if (_reactionGroups != null && _reactionGroups.Any())
+            {
+                foreach (var group in _reactionGroups)
+                {
+                    <MudCard Elevation="0" Class="pa-0" Style="border-radius: 12px; overflow: hidden; border: 1px solid var(--mud-palette-divider);">
+                        <div class="d-flex align-center justify-space-between px-4 py-3" style="background-color: var(--mud-palette-background-grey);">
+                            <div class="d-flex align-center gap-2">
+                                @if (IsReadReceiptMode)
+                                {
+                                    <MudIcon Icon="@Icons.Material.Filled.Visibility" Size="Size.Small" Color="Color.Secondary" />
+                                    <MudText Typo="Typo.subtitle1" Style="font-weight: 600;">@group.Key</MudText>
+                                }
+                                else
+                                {
+                                    <MudText Typo="Typo.h5" Class="mr-2">@group.Key Reaction</MudText>
+                                }
+                            </div>
+                            <MudChip T="string" Size="Size.Small" Color="Color.Primary" Variant="Variant.Outlined">
+                                @group.Value.Count @(group.Value.Count == 1 ? (IsReadReceiptMode ? "person" : "reaction") : (IsReadReceiptMode ? "people" : "reactions"))
+                            </MudChip>
+                        </div>
+                        <MudDivider />
+                        <MudList T="string" Dense="true" Class="px-2 py-2">
+                            @foreach (var emp in group.Value)
+                            {
+                                <div class="d-flex align-center gap-3 py-2 px-2 rounded hover-bg">
+                                    <EmployeeAvatar Employee="@emp" Size="Size.Medium" />
+                                    <div class="d-flex flex-column">
+                                        <MudText Typo="Typo.body1" Style="font-weight: 600;">@emp.FullName</MudText>
+                                        @if (!string.IsNullOrWhiteSpace(emp.Position))
+                                        {
+                                            <MudText Typo="Typo.caption" Color="Color.Secondary">@emp.Position</MudText>
+                                        }
+                                    </div>
+                                </div>
+                            }
+                        </MudList>
+                    </MudCard>
+                }
+            }
+            else
+            {
+                <MudText Typo="Typo.body2" Color="Color.Secondary" Class="text-center pa-4">
+                    @(IsReadReceiptMode ? "No read receipts found." : "No reactions found.")
+                </MudText>
+            }
+        </div>
+    </DialogContent>
+</MudDialog>
+
+<style>
+    .hover-bg {
+        transition: background-color 0.2s;
+    }
+    .hover-bg:hover {
+        background-color: var(--mud-palette-action-default-hover);
+    }
+</style>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
+    [Parameter] public ChatMessage Message { get; set; } = new();
+    [Parameter] public List<Employee> Employees { get; set; } = new();
+    
+    [Parameter] public bool IsReadReceiptMode { get; set; }
+    [Parameter] public List<string> ReadReceiptUserIds { get; set; } = new();
+
+    private Dictionary<string, List<Employee>> _reactionGroups = new();
+
+    protected override void OnInitialized()
+    {
+        var groups = new Dictionary<string, List<Employee>>();
+        
+        if (IsReadReceiptMode)
+        {
+            var readers = new List<Employee>();
+            foreach (var userId in ReadReceiptUserIds)
+            {
+                if (userId == Message.SenderId) continue; // Exclude the sender
+                
+                var emp = Employees.FirstOrDefault(e => e.Id == userId);
+                if (emp != null)
+                {
+                    readers.Add(emp);
+                }
+            }
+            if (readers.Any())
+            {
+                groups["Seen By"] = readers.OrderBy(e => e.FullName).ToList();
+            }
+        }
+        else
+        {
+            foreach (var react in Message.Reactions)
+            {
+                var parts = react.Split(':');
+                if (parts.Length == 2)
+                {
+                    var emoji = parts[0];
+                    var userId = parts[1];
+                    
+                    var emp = Employees.FirstOrDefault(e => e.Id == userId);
+                    if (emp != null)
+                    {
+                        if (!groups.ContainsKey(emoji))
+                        {
+                            groups[emoji] = new List<Employee>();
+                        }
+                        groups[emoji].Add(emp);
+                    }
+                }
+            }
+        }
+        
+        // Sort by most reacted emojis first
+        _reactionGroups = groups.OrderByDescending(g => g.Value.Count)
+                                .ToDictionary(g => g.Key, g => g.Value.OrderBy(e => e.FullName).ToList());
+    }
+}

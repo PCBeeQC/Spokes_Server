@@ -1,0 +1,34 @@
+@using MudBlazor
+
+<MudDialog>
+    <DialogContent>
+        <MudText Typo="Typo.body1" Class="mb-4">@Message</MudText>
+        <MudDatePicker @bind-Date="DatePaid" Label="Payment Date" DisableToolbar="true" />
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Close">Close</MudButton>
+        <MudButton Color="Color.Success" Variant="Variant.Filled" OnClick="Submit">Confirm Payment</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
+
+    [Parameter] public string Message { get; set; } = "Please confirm the date of payment.";
+    [Parameter] public DateTime? InitialDate { get; set; }
+
+    private DateTime? DatePaid;
+
+    protected override void OnInitialized()
+    {
+        DatePaid = InitialDate ?? DateTime.Today;
+    }
+
+    private void Close() => MudDialog.Cancel();
+
+    private void Submit()
+    {
+        if (DatePaid == null) return;
+        MudDialog.Close(DialogResult.Ok(DatePaid.Value));
+    }
+}

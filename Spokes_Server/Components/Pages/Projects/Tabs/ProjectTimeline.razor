@@ -1,0 +1,429 @@
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Data
+@using Spokes_Server.Components.Dialogs
+@using Spokes_Server.Components.Pages.Email
+@using Spokes_Server.Core.Services.Communication
+@using MudBlazor
+@using Markdig
+@inject Database Db
+@inject IDialogService DialogService
+@inject ISnackbar Snackbar
+@inject IJSRuntime JS
+@inject AuthenticationStateProvider AuthStateProvider
+@inject Spokes_Server.Core.Services.Core.IFileService FileService
+@inject IConfiguration Configuration
+@inject Spokes_Server.Core.Services.Core.MarkdownSanitizerService MarkdownSanitizer
+
+<div class="d-flex flex-column gap-4 mb-4">
+    <div class="d-flex justify-space-between align-center">
+        <MudText Typo="Typo.h6">Project Timeline & Notes</MudText>
+        <div class="d-flex gap-2">
+             <MudButton Variant="Variant.Outlined" Color="Color.Secondary" OnClick="ExpandAll">Expand All</MudButton>
+             <MudButton Variant="Variant.Outlined" Color="Color.Secondary" OnClick="CollapseAll">Collapse All</MudButton>
+             <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Add" OnClick="AddNote">Add Note</MudButton>
+        </div>
+    </div>
+    
+    <!-- Year Navigation -->
+    @if (Years.Any())
+    {
+        <MudPaper Class="pa-2 d-flex gap-2 align-center mud-theme-primary overflow-x-auto" Elevation="0" Style="background-color: var(--mud-palette-background-grey);">
+            <MudText Typo="Typo.caption" Style="font-weight:bold;">Jump to:</MudText>
+            @foreach (var y in Years)
+            {
+                <MudChip T="string" Size="Size.Small" Variant="Variant.Filled" Color="@GetYearColor(y)" OnClick="@(() => ScrollToYear(y))">@y</MudChip>
+            }
+        </MudPaper>
+    }
+</div>
+
+@if (!Notes.Any())
+{
+    <MudAlert Severity="Severity.Info" Variant="Variant.Outlined">No notes recorded for this project yet.</MudAlert>
+}
+else
+{
+    <MudTimeline TimelinePosition="TimelinePosition.Start">
+        @foreach (var note in Notes)
+        {
+            var isExpanded = ExpandedNotes.Contains(note.Id);
+            
+            <MudTimelineItem Color="@GetCategoryColor(note.Category)" style="@GetTimelineItemDotStyle(note.Category)" Size="Size.Small" Elevation="1" id="@($"note-{note.Id}")">
+                <ItemOpposite>
+                     <MudText Typo="Typo.body2" Color="Color.Secondary">@note.Date.ToShortDateString()</MudText>
+                     <MudText Typo="Typo.caption" Color="Color.Secondary" Class="d-block">@note.CreatedBy</MudText>
+                </ItemOpposite>
+                <ItemContent>
+                    <MudPaper Elevation="0" Outlined="true" Class="mb-4 overflow-hidden" Style="background-color: var(--mud-palette-surface);">
+                        
+                        <!-- Header (Visible when collapsed) -->
+                        <div class="pa-3 d-flex justify-space-between align-center cursor-pointer" style="background-color: var(--mud-palette-background-grey);" @onclick="@(() => ToggleExpand(note))">
+                            <div class="d-flex align-center gap-3 overflow-hidden">
+                                <MudIcon Icon="@(isExpanded ? Icons.Material.Filled.KeyboardArrowDown : Icons.Material.Filled.KeyboardArrowRight)" />
+                                <MudChip T="string" Label="true" Size="Size.Small" 
+                                    Color="@GetCategoryColor(note.Category)" 
+                                    Style="@GetChipStyle(note.Category)"
+                                    Variant="@(Project.NoteCategoryColors.ContainsKey(note.Category) ? Variant.Filled : Variant.Text)" 
+                                    Class="mr-0">@note.Category.ToUpper()</MudChip>
+                                
+                                <div class="d-flex flex-column" style="overflow: hidden;">
+                                    <MudText Typo="Typo.subtitle1" Style="font-weight: 600;" Class="text-truncate">
+                                        @(string.IsNullOrEmpty(note.Title) ? "Untitled Note" : note.Title)
+                                    </MudText>
+                                    <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                        @note.Date.ToShortDateString() - <span style="opacity: 0.7;">@(isExpanded ? "Click to collapse" : "Click to expand")</span>
+                                    </MudText>
+                                </div>
+                            </div>
+                            
+                            <div class="d-flex" @onclick:stopPropagation="true" @onclick="@(() => {})">
+                                 @if (!note.IsEmail && !note.IsSystemEvent)
+                                 {
+                                     <MudIconButton Icon="@Icons.Material.Filled.Edit" Size="Size.Small" OnClick="@(() => EditNote(note))" />
+                                 }
+                                 <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small" Color="Color.Error" OnClick="@(() => DeleteNote(note))" />
+                            </div>
+                        </div>
+
+                        @if (isExpanded)
+                        {
+                            <MudDivider />
+                            <div class="pa-4">
+                                @if (note.IsEmail && !string.IsNullOrEmpty(note.EmailHtmlPath))
+                                {
+                                    @if (!string.IsNullOrWhiteSpace(note.Content))
+                                    {
+                                        <div class="markdown-content px-4 mb-3">
+                                            @RenderMarkdown(note.Content)
+                                        </div>
+                                        <MudDivider Class="mb-3" />
+                                    }
+                                    <div class="email-body-content pa-2" style="max-height: 500px; overflow-y: auto;">
+                                        <EmailContentRenderer HtmlContent="@GetEmailBody(note)" />
+                                    </div>
+                                }
+                                else
+                                {
+                                    <div class="markdown-content px-4">
+                                        @RenderMarkdown(note.Content)
+                                    </div>
+                                }
+
+                                @if (note.Attachments != null && note.Attachments.Any())
+                                {
+                                    <MudDivider Class="my-3"/>
+                                    <MudText Typo="Typo.caption" Class="mb-1" Color="Color.Secondary">Attachments:</MudText>
+                                    <div class="d-flex flex-wrap gap-2">
+                                        @foreach(var att in note.Attachments)
+                                        {
+                                            <MudChip T="string" Icon="@Icons.Material.Filled.AttachFile" Size="Size.Small" OnClick="@(() => OpenAttachment(att))">
+                                                @att.FileName
+                                            </MudChip>
+                                        }
+                                    </div>
+                                }
+                            </div>
+                        }
+                    </MudPaper>
+                </ItemContent>
+            </MudTimelineItem>
+        }
+    </MudTimeline>
+    <style>
+        .markdown-content h1 {
+            font-size: 1.5rem !important;
+            font-weight: bold !important;
+            margin: 0 !important;
+            padding-bottom: 0.3rem !important;
+            border-bottom: 1px solid var(--mud-palette-lines-default) !important;
+            display: block !important;
+        }
+
+        .markdown-content h2 {
+            font-size: 1.25rem !important;
+            font-weight: bold !important;
+            margin: 0 !important;
+            padding-bottom: 0.2rem !important;
+            display: block !important;
+        }
+
+        .markdown-content h3 {
+            font-size: 1.1rem !important;
+            font-weight: bold !important;
+            margin: 0 !important;
+            display: block !important;
+        }
+
+        .markdown-content h4 {
+            font-size: 1rem !important;
+            font-weight: bold !important;
+            margin: 0 !important;
+            display: block !important;
+        }
+
+        .markdown-content p {
+            margin: 0 !important;
+            line-height: 1.4;
+        }
+
+        .markdown-content ul {
+            list-style-type: disc !important;
+            padding-left: 1.5rem !important;
+            margin-bottom: 0 !important;
+        }
+
+        .markdown-content ol {
+            list-style-type: decimal !important;
+            padding-left: 1.5rem !important;
+            margin-bottom: 0 !important;
+        }
+
+        .markdown-content li {
+            display: list-item !important;
+        }
+    </style>
+}
+
+@code {
+    [Parameter] public string ProjectId { get; set; } = string.Empty;
+    [Parameter] public Project Project { get; set; } = default!;
+
+    private List<ProjectNote> Notes = new();
+    private List<int> Years = new();
+    private HashSet<string> ExpandedNotes = new();
+    private string CurrentUser = "Unknown";
+    private Dictionary<string, string> _emailBodyCache = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadUser();
+        Refresh();
+    }
+
+    private async Task LoadUser()
+    {
+         var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+         var user = authState.User;
+         if (user.Identity?.IsAuthenticated == true)
+         {
+             CurrentUser = user.Identity.Name ?? "Unknown";
+         }
+    }
+
+    private void Refresh()
+    {
+        Notes = Db.ProjectNotes.GetByProject(ProjectId);
+        Years = Notes.Select(n => n.Date.Year).Distinct().OrderByDescending(y => y).ToList();
+    }
+
+    private string GetChipStyle(string category)
+    {
+        if (Project.NoteCategoryColors != null && Project.NoteCategoryColors.TryGetValue(category, out var hex))
+        {
+            return $"background-color: {hex} !important; color: white !important;";
+        }
+        return "";
+    }
+
+    private string GetTimelineItemDotStyle(string category)
+    {
+        if (Project.NoteCategoryColors != null && Project.NoteCategoryColors.TryGetValue(category, out var hex))
+        {
+            // Override the 'Info' color variable which we use as a placeholder for custom colors
+            return $"--mud-palette-info: {hex};";
+        }
+        return "";
+    }
+
+    private Color GetCategoryColor(string category)
+    {
+        if (Project.NoteCategoryColors != null && Project.NoteCategoryColors.ContainsKey(category))
+        {
+            return Color.Info; // We overwrite Info color in Style
+        }
+        var hash = category.GetHashCode();
+        var colors = new[] { Color.Primary, Color.Secondary, Color.Tertiary, Color.Info, Color.Success, Color.Warning, Color.Error };
+        return colors[Math.Abs(hash) % colors.Length];
+    }
+
+    private Color GetYearColor(int year)
+    {
+        // different color for each year based on year number
+        var colors = new[] { Color.Primary, Color.Secondary, Color.Tertiary, Color.Info, Color.Success, Color.Warning, Color.Error, Color.Dark };
+        return colors[year % colors.Length];
+    }
+    
+    private async Task ToggleExpand(ProjectNote note)
+    {
+        if (ExpandedNotes.Contains(note.Id))
+        {
+            ExpandedNotes.Remove(note.Id);
+        }
+        else
+        {
+            // Pre-load email body into cache BEFORE rendering
+            if (note.IsEmail && !_emailBodyCache.ContainsKey(note.Id))
+            {
+                await LoadEmailBodyAsync(note);
+            }
+            ExpandedNotes.Add(note.Id);
+        }
+    }
+    
+    private async Task ExpandAll()
+    {
+        // Pre-load all email bodies
+        foreach (var note in Notes.Where(n => n.IsEmail && !_emailBodyCache.ContainsKey(n.Id)))
+        {
+            await LoadEmailBodyAsync(note);
+        }
+        ExpandedNotes = Notes.Select(n => n.Id).ToHashSet();
+    }
+    
+    private void CollapseAll()
+    {
+        ExpandedNotes.Clear();
+    }
+
+    private async Task ScrollToYear(int year)
+    {
+        // Find the first note of that year
+        var note = Notes.FirstOrDefault(n => n.Date.Year == year);
+        if (note != null)
+        {
+            await JS.InvokeVoidAsync("document.getElementById", $"note-{note.Id}").AsTask().ContinueWith(t => 
+            {
+                 if (t.IsCompletedSuccessfully)
+                 {
+                     JS.InvokeVoidAsync("eval", $"document.getElementById('note-{note.Id}').scrollIntoView({{behavior: 'smooth', block: 'center'}})");
+                 }
+            });
+        }
+    }
+
+    private MarkupString RenderMarkdown(string text)
+    {
+        if (string.IsNullOrEmpty(text)) return new MarkupString("");
+        try
+        {
+            var html = MarkdownSanitizer.RenderSanitizedHtml(text);
+            return new MarkupString(html);
+        }
+        catch (Exception ex)
+        {
+            return new MarkupString(System.Net.WebUtility.HtmlEncode(text));
+        }
+    }
+
+
+    private async Task AddNote()
+    {
+        var note = new ProjectNote 
+        { 
+            ProjectId = ProjectId, 
+            Date = DateTime.Today,
+            CreatedBy = CurrentUser,
+            Category = Project.NoteCategories.FirstOrDefault() ?? "General"
+        };
+        await OpenDialog(note, "Add Note");
+    }
+
+    private async Task EditNote(ProjectNote note)
+    {
+        await OpenDialog(note, "Edit Note");
+    }
+
+    private async Task OpenDialog(ProjectNote note, string title)
+    {
+        var json = System.Text.Json.JsonSerializer.Serialize(note);
+        var copy = System.Text.Json.JsonSerializer.Deserialize<ProjectNote>(json);
+        if (copy == null) return;
+        
+        var parameters = new DialogParameters { ["Note"] = copy, ["Project"] = Project };
+        var options = new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true };
+
+        var dialog = await DialogService.ShowAsync<ProjectNoteDialog>(title, parameters, options);
+        var result = await dialog.Result;
+
+        if (result != null && !result.Canceled && result.Data is ProjectNote savedNote)
+        {
+            Db.ProjectNotes.Save(savedNote);
+            Refresh();
+            Snackbar.Add("Note Saved", Severity.Success);
+            
+            // Auto-expand edited/new note
+            ExpandedNotes.Add(savedNote.Id);
+        }
+    }
+
+    private async Task DeleteNote(ProjectNote note)
+    {
+        var result = await DialogService.ShowMessageBoxAsync("Delete Note?", "Are you sure you want to delete this note irreversibly?", yesText:"Delete", cancelText:"Cancel");
+        if (result == true)
+        {
+            Db.ProjectNotes.Delete(note.Id);
+            Refresh();
+            Snackbar.Add("Note Deleted", Severity.Success);
+        }
+    }
+
+    private async Task OpenAttachment(NoteAttachment att)
+    {
+        if (!string.IsNullOrEmpty(att.FilePath))
+        {
+            await JS.InvokeVoidAsync("window.open", att.FilePath, "_blank");
+        }
+    }
+
+    /// <summary>
+    /// Returns the cached email body HTML. Must be pre-loaded via LoadEmailBodyAsync.
+    /// </summary>
+    private string GetEmailBody(ProjectNote note)
+    {
+        return _emailBodyCache.TryGetValue(note.Id, out var cached) ? cached : "";
+    }
+
+    /// <summary>
+    /// Asynchronously loads the email body from the .eml file into cache.
+    /// Called before expanding a note to avoid blocking the sync context.
+    /// </summary>
+    private async Task LoadEmailBodyAsync(ProjectNote note)
+    {
+        if (string.IsNullOrEmpty(note.EmailHtmlPath))
+        {
+            _emailBodyCache[note.Id] = "";
+            return;
+        }
+
+        try
+        {
+            // Parse the upload URL: /spokesapi/files/{category}/{contextId}/{fileName}
+            var parts = note.EmailHtmlPath.TrimStart('/').Split('/');
+            if (parts.Length >= 5)
+            {
+                var category = parts[2]; // "projectemails"
+                var contextId = parts[3]; // project ID
+                var fileName = parts[4]; // filename.eml
+                var physicalPath = FileService.GetPhysicalPath(category, contextId, fileName);
+
+                if (System.IO.File.Exists(physicalPath))
+                {
+                    var body = await EmailService.ExtractBodyFromMimeAsync(physicalPath);
+                    _emailBodyCache[note.Id] = body;
+                    return;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[ProjectTimeline] Failed to extract email body for note {note.Id}: {ex.Message}");
+        }
+
+        _emailBodyCache[note.Id] = "";
+    }
+}
+

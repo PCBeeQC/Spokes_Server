@@ -1,0 +1,323 @@
+@page "/projects/{Id}"
+@implements IDisposable
+<PageTitle>@Project?.Name - Details</PageTitle>
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Data
+@using Spokes_Server.Core.Constants
+@inject Database Db
+@inject ISnackbar Snackbar
+@inject IDialogService DialogService
+@inject NavigationManager Nav
+@using Spokes_Server.Core.Services
+@inject UserService UserService
+
+@if (Project == null)
+{
+    <MudAlert Severity="Severity.Error">Project not found.</MudAlert>
+}
+else
+{
+    <MudPaper Class="pt-4 px-6 pb-2 mb-4" Outlined="true" Elevation="0">
+        <div class="d-flex justify-space-between align-center mb-2">
+            <div>
+                <div class="d-flex align-center gap-2">
+                    <MudText Typo="Typo.h4" Color="Color.Primary">@Project.DisplayName</MudText>
+                    @if (!string.IsNullOrEmpty(Project.ProjectGroupId))
+                    {
+                        <MudChip T="string" Color="Color.Secondary" Size="Size.Small" 
+                                 Href="@($"/project-groups/{Project.ProjectGroupId}")" Icon="@Icons.Material.Filled.FolderSpecial">
+                            Grouped
+                        </MudChip>
+                    }
+                </div>
+                <MudText Typo="Typo.subtitle1" Color="Color.Secondary">@Project.Client.BusinessName</MudText>
+            </div>
+            <div class="text-right d-flex flex-column align-end">
+                <MudSelect T="string" Value="@Project.Status" ValueChanged="UpdateStatus" Variant="Variant.Outlined" 
+                    Margin="Margin.Dense" Dense="true" Style="width: 200px;" Disabled="@(!CanEdit)">
+                    @foreach (var status in AvailableStatuses)
+                    {
+                        <MudSelectItem Value="@status.Name">@status.Name</MudSelectItem>
+                    }
+                </MudSelect>
+                <MudText Typo="Typo.caption" Class="d-block mt-1">Created @Project.CreatedAt.ToLocalTime().ToString("MMM dd, yyyy")</MudText>
+            </div>
+
+        </div>
+        
+        @if (!string.IsNullOrEmpty(Project.Description))
+        {
+            <MudDivider Class="my-3" />
+            <MudText Typo="Typo.body1" Style="white-space: pre-line; color: var(--mud-palette-text-secondary);">
+                @Project.Description
+            </MudText>
+        }
+    </MudPaper>
+
+    <MudTabs ActivePanelIndex="activeTabIndex" ActivePanelIndexChanged="UpdateActiveTab" Outlined="true" Elevation="0" Border="true" Rounded="true" TabPanelsClass="pa-4">
+
+        <MudTabPanel Text="Dashboard" Icon="@Icons.Material.Filled.Dashboard">
+            <Spokes_Server.Components.Pages.Projects.Tabs.ProjectOverview ProjectId="@Id" />
+        </MudTabPanel>
+
+        <MudTabPanel Text="Timeline" Icon="@Icons.Material.Filled.Timeline">
+             <Spokes_Server.Components.Pages.Projects.Tabs.ProjectTimeline ProjectId="@Id" Project="@Project" />
+        </MudTabPanel>
+
+        @if (!Project.IsInternal)
+        {
+            <MudTabPanel Text="Quote & Invoices" Icon="@Icons.Material.Filled.RequestQuote">
+                <Spokes_Server.Components.Pages.Projects.Tabs.QuoteList ProjectId="@Id" />
+            </MudTabPanel>
+
+            @* <MudTabPanel Text="Purchase Orders" Icon="@Icons.Material.Filled.AttachFile">
+                <Spokes_Server.Components.Pages.Projects.Tabs.ActivePurchaseOrders Project="@Project" />
+            </MudTabPanel> *@
+
+            @* <MudTabPanel Text="Invoices" Icon="@Icons.Material.Filled.Receipt">
+                <Spokes_Server.Components.Pages.Projects.Tabs.InvoiceList ProjectId="@Id" />
+            </MudTabPanel> *@
+
+            <MudTabPanel Text="Documents" Icon="@Icons.Material.Filled.Description">
+                <Spokes_Server.Components.Pages.Projects.Tabs.ProjectDocuments ProjectId="@Id" Project="@Project" />
+            </MudTabPanel>
+
+            <MudTabPanel Text="Labor" Icon="@Icons.Material.Filled.Construction">
+                <Spokes_Server.Components.Pages.Projects.Tabs.LaborProgress ProjectId="@Id" />
+            </MudTabPanel>
+        }
+        else
+        {
+            <MudTabPanel Text="Documents" Icon="@Icons.Material.Filled.Description">
+                <Spokes_Server.Components.Pages.Projects.Tabs.ProjectDocuments ProjectId="@Id" Project="@Project" />
+            </MudTabPanel>
+        }
+
+
+
+        <MudTabPanel Text="Settings" Icon="@Icons.Material.Filled.Settings">
+            <MudCard Elevation="0">
+                <MudText Typo="Typo.h5" Class="mb-4">Project Administration</MudText>
+                <div class="d-flex gap-4">
+                    @if (CanEdit)
+                    {
+                        <MudButton OnClick="EditProject" Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.Edit" Color="Color.Primary">Edit Project Details</MudButton>
+                        
+                        @if (Project.Status != ProjectStatus.Archived)
+                        {
+                            <MudButton OnClick="@(() => UpdateStatus(ProjectStatus.Archived))" Variant="Variant.Outlined" Color="Color.Warning" StartIcon="@Icons.Material.Filled.Archive">Archive Project</MudButton>
+                        }
+                        else
+                        {
+                            <MudButton OnClick="@(() => UpdateStatus(ProjectStatus.Draft))" Variant="Variant.Outlined" Color="Color.Success" StartIcon="@Icons.Material.Filled.Unarchive">Restore Project</MudButton>
+                        }
+                        
+                        @if (CanDelete)
+                        {
+                            <MudButton OnClick="DeleteProject" Variant="Variant.Filled" Color="Color.Error" StartIcon="@Icons.Material.Filled.Delete">Delete Project</MudButton>
+                        }
+                    }
+                    else
+                    {
+                        <MudAlert Severity="Severity.Info">You do not have permission to edit this project.</MudAlert>
+                    }
+                </div>
+            </MudCard>
+
+        </MudTabPanel>
+
+    </MudTabs>
+}
+
+@code {
+    [Parameter] public string Id { get; set; }
+
+    // Catch the ?tab= parameter from the URL
+    [SupplyParameterFromQuery] public string? Tab { get; set; }
+
+    private Project? Project;
+    private int activeTabIndex = 0;
+    private List<ProjectStatusConfig> AvailableStatuses = new();
+
+    [Inject] AuthenticationStateProvider AuthStateProvider { get; set; }
+    private bool CanEdit = false;
+    private bool CanDelete = false;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Project = Db.Projects.GetById(Id);
+        
+        if (Project != null && !await UserService.CanViewProjectAsync(Project))
+        {
+            Nav.NavigateTo("/projects");
+            return;
+        }
+
+        var profile = Db.CompanyProfile.Get();
+        AvailableStatuses = profile.ProjectStatuses;
+        await LoadPermissions();
+    }
+
+    private async Task LoadPermissions()
+    {
+        var emp = await UserService.GetEmployeeAsync();
+        if (emp != null) 
+        {
+            CanEdit = emp.HasPermission(AppPermissions.Projects.Edit);
+            CanDelete = emp.HasPermission(AppPermissions.Projects.Delete);
+        }
+    }
+
+
+    private Color GetStatusColor(string status)
+    {
+        var match = AvailableStatuses.FirstOrDefault(s => s.Name.Equals(status, StringComparison.InvariantCultureIgnoreCase));
+        if (match != null && Enum.TryParse<Color>(match.Color, out var c))
+        {
+            return c;
+        }
+        return Color.Default;
+    }
+
+    // Logic to switch tabs based on URL
+    protected override void OnParametersSet()
+    {
+        if (!string.IsNullOrEmpty(Tab))
+        {
+            var tabName = Tab.ToLower();
+            if (Project != null && Project.IsInternal)
+            {
+                activeTabIndex = tabName switch
+                {
+                    "dashboard" => 0,
+                    "timeline" => 1,
+                    "documents" => 2,
+                    "settings" => 3,
+                    _ => 0
+                };
+            }
+            else
+            {
+                activeTabIndex = tabName switch
+                {
+                    "dashboard" => 0,
+                    "timeline" => 1,
+                    "quote" => 2,
+                    "invoices" => 2,
+                    "documents" => 3,
+                    "labor" => 4,
+                    "settings" => 5,
+                    _ => 0
+                };
+            }
+        }
+    }
+
+    private void UpdateStatus(string newStatus)
+    {
+        if (Project != null)
+        {
+            Project.Status = newStatus;
+
+            // Auto-archive if needed
+            var statusConfig = AvailableStatuses.FirstOrDefault(s => string.Equals(s.Name, newStatus, StringComparison.OrdinalIgnoreCase));
+            bool isArchived = statusConfig?.SystemMapping == SystemStatusMappings.Archived;
+
+            if (isArchived) Project.IsActive = false;
+            else Project.IsActive = true;
+
+            Db.Projects.Save(Project);
+            TimelineEventHelper.EvaluateProjectCommissions(Db, Project.Id);
+            
+            Snackbar.Add($"Status manual update: {newStatus}", Severity.Success);
+            
+        }
+    }
+
+    private async Task EditProject()
+    {
+        // Re-use your existing ProjectDialog
+        var options = new DialogOptions { MaxWidth = MaxWidth.Large, FullWidth = true };
+        var dialog = await DialogService.ShowAsync<ProjectDialog>("Edit Project", new DialogParameters { ["Project"] = Project }, options);
+        var result = await dialog.Result;
+        if (!result.Canceled)
+        {
+            Db.Projects.Save((Project)result.Data);
+            TimelineEventHelper.EvaluateProjectCommissions(Db, Project.Id);
+            StateHasChanged(); // Refresh UI
+        }
+    }
+
+    private async Task DeleteProject()
+    {
+        var result = await DialogService.ShowMessageBoxAsync(
+            "Delete Project", 
+            $"Are you sure you want to delete '{Project.Name}'? This action cannot be undone and will delete all associated data.", 
+            yesText: "Delete", cancelText: "Cancel");
+
+        if (result == true)
+        {
+            Db.Projects.Delete(Project.Id);
+            Nav.NavigateTo("/projects");
+            Snackbar.Add("Project deleted", Severity.Success);
+        }
+    }
+
+    private bool _isDisposed;
+
+    public void Dispose()
+    {
+        _isDisposed = true;
+    }
+
+    private void UpdateActiveTab(int index)
+    {
+        if (_isDisposed) return;
+
+        activeTabIndex = index;
+
+        if (!Nav.Uri.Contains("/projects/", StringComparison.OrdinalIgnoreCase))
+            return;
+
+        var tabName = "";
+        
+        if (Project != null && Project.IsInternal)
+        {
+            tabName = index switch
+            {
+                0 => "dashboard",
+                1 => "timeline",
+                2 => "documents",
+                3 => "settings",
+                _ => "dashboard"
+            };
+        }
+        else
+        {
+            tabName = index switch
+            {
+                0 => "dashboard",
+                1 => "timeline",
+                2 => "quote",
+                3 => "documents",
+                4 => "labor",
+                5 => "settings",
+                _ => "dashboard"
+            };
+        }
+        
+        try
+        {
+            Nav.NavigateTo(Nav.GetUriWithQueryParameter("tab", tabName), replace: true);
+        }
+        catch (Microsoft.AspNetCore.Components.NavigationException)
+        {
+        }
+    }
+
+}
+

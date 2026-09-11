@@ -1,0 +1,922 @@
+@page "/business/accounting"
+@inject Spokes_Server.Core.Services.Accounting.FinancialCalculationEngine CalcEngine
+@implements IDisposable
+@attribute [Authorize(Policy = AppPermissions.Finance.AccessAccounting)]
+<PageTitle>Accounting Dashboard</PageTitle>
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Data
+@using Spokes_Server.Components.Pages.Expenses
+@using Spokes_Server.Components.Pages.Projects
+@using Spokes_Server.Components.Pages.Business.Tabs
+@using Spokes_Server.Components.Dialogs
+@using Spokes_Server.Components.Shared
+@using MudBlazor
+@inject Database Db
+@inject IDialogService DialogService
+@inject ISnackbar Snackbar
+@inject NavigationManager Nav
+@inject AuthenticationStateProvider AuthStateProvider
+@using Microsoft.AspNetCore.Components.Authorization
+@using Spokes_Server.Core.Constants
+@using Spokes_Server.Core.Services
+@inject IFileService FileService
+
+<div class="d-flex flex-column h-100" style="min-height: 0;">
+    <MudText Class="mt-4 flex-shrink-0" Typo="Typo.h4" GutterBottom="true">Accounting Dashboard</MudText>
+
+<div class="d-flex flex-wrap gap-4 mb-6 flex-shrink-0">
+    <div style="flex: 1; min-width: 200px;">
+        <StatCard Title="Total Outstanding Payable" 
+                  Value="@TotalOutstandingPayable.ToString("C0")" 
+                  Icon="@Icons.Material.Filled.MoneyOff" 
+                  IconColor="Color.Error" />
+    </div>
+    <div style="flex: 1; min-width: 200px;">
+        <StatCard Title="Due or Past Due Payable" 
+                  Value="@DuePastDuePayable.ToString("C0")" 
+                  Icon="@Icons.Material.Filled.Warning" 
+                  IconColor="Color.Error" 
+                  Subtitle="@($"{DuePastDuePayableCount} item(s)")" />
+    </div>
+    <div style="flex: 1; min-width: 200px;">
+        <StatCard Title="Outstanding Receivable" 
+                  Value="@OutstandingReceivable.ToString("C0")" 
+                  Icon="@Icons.Material.Filled.AttachMoney" 
+                  IconColor="Color.Success" />
+    </div>
+    <div style="flex: 1; min-width: 200px;">
+        <StatCard Title="Overdue Receivable" 
+                  Value="@OverdueReceivable.ToString("C0")" 
+                  Icon="@Icons.Material.Filled.AssignmentLate" 
+                  IconColor="Color.Warning" 
+                  Subtitle="@($"{OverdueReceivableCount} invoice(s) past due")" />
+    </div>
+    <div style="flex: 1; min-width: 200px;">
+        <StatCard Title="Net Cash Flow (30 Days)" 
+                  Value="@NetCashFlow30Days.ToString("C0")" 
+                  Icon="@Icons.Material.Filled.Timeline" 
+                  IconColor="@(NetCashFlow30Days >= 0 ? Color.Success : Color.Error)" 
+                  Subtitle="Expected AR - AP" />
+    </div>
+</div>
+
+<MudTabs ActivePanelIndex="activeTabIndex" ActivePanelIndexChanged="UpdateActiveTab" Elevation="0" Border="true" Outlined="true" Rounded="true" Class="flex-grow-1 d-flex flex-column" Style="min-height: 0;" TabPanelsClass="pa-4 d-flex flex-column flex-grow-1 overflow-auto">
+    <!-- RECEIVABLES TAB (Money In - Invoices) -->
+    <MudTabPanel ToolTip="Client Invoices">
+        <TabContent>
+            <MudIcon Icon="@Icons.Material.Filled.AttachMoney" Class="mr-2" />
+            <MudHidden Breakpoint="Breakpoint.SmAndDown">Receivables</MudHidden>
+        </TabContent>
+        <ChildContent>
+        <MudTable Items="@ReceivableItems" Dense="true" Striped="true" Outlined="true" Elevation="0" Hover="true" Filter="new Func<AccountingItem, bool>(FilterFuncReceivables)">
+            <ToolBarContent>
+                <MudText Typo="Typo.h6">Client Invoices</MudText>
+                <MudSpacer />
+                <MudTextField @bind-Value="searchReceivables" Placeholder="Search Number, Client, Project..."
+                    Adornment="Adornment.Start" Margin="Margin.Dense" Variant="Variant.Outlined" AdornmentIcon="@Icons.Material.Filled.Search" IconSize="Size.Medium"
+                    Class="mt-0"></MudTextField>
+            </ToolBarContent>
+            <HeaderContent>
+                <MudTh>Invoice #</MudTh>
+                <MudHidden Breakpoint="Breakpoint.SmAndDown"><MudTh>Date</MudTh></MudHidden>
+                <MudTh>Client</MudTh>
+                <MudHidden Breakpoint="Breakpoint.SmAndDown"><MudTh>Project</MudTh></MudHidden>
+                <MudTh>Total</MudTh>
+                <MudTh>Balance</MudTh>
+                <MudTh>Due Date</MudTh>
+                <MudTh>Status</MudTh>
+                <MudHidden Breakpoint="Breakpoint.SmAndDown"><MudTh>Paid Date</MudTh></MudHidden>
+                <MudTh>Actions</MudTh>
+            </HeaderContent>
+            <RowTemplate>
+                <MudTd><b>@context.Number</b></MudTd>
+                <MudHidden Breakpoint="Breakpoint.SmAndDown"><MudTd>@context.Date.ToShortDateString()</MudTd></MudHidden>
+                <MudTd>
+                    <MudStack Spacing="0">
+                        <MudText>@context.ClientName</MudText>
+                        <MudHidden Breakpoint="Breakpoint.MdAndUp">
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">Proj: @context.ProjectName</MudText>
+                        </MudHidden>
+                    </MudStack>
+                </MudTd>
+                <MudHidden Breakpoint="Breakpoint.SmAndDown"><MudTd>@context.ProjectName</MudTd></MudHidden>
+                <MudTd>@context.Total.ToString("C")</MudTd>
+                <MudTd>
+                    @if (context.Balance > 0)
+                    {
+                        <MudText Color="Color.Error"><b>@context.Balance.ToString("C")</b></MudText>
+                    }
+                    else
+                    {
+                        <MudText Color="Color.Success">Paid</MudText>
+                    }
+                </MudTd>
+                <MudTd>
+                    @if (context.DueDate.HasValue && context.DueDate < DateTime.Today && context.Balance > 0)
+                    {
+                        <div class="d-flex align-center gap-1">
+                            <MudIcon Icon="@Icons.Material.Filled.Warning" Color="Color.Error" Size="Size.Small" />
+                            <MudText Color="Color.Error" Style="font-weight:bold;">@context.DueDate?.ToShortDateString()
+                            </MudText>
+                        </div>
+                    }
+                    else
+                    {
+                        @context.DueDate?.ToShortDateString()
+                    }
+                </MudTd>
+                <MudTd>
+                    <StatusChip Status="@context.Status" />
+                </MudTd>
+                <MudHidden Breakpoint="Breakpoint.SmAndDown"><MudTd>@(context.DatePaid.HasValue ? context.DatePaid.Value.ToShortDateString() : "-")</MudTd></MudHidden>
+                    <MudTd>
+                        @* <MudTooltip Text="View Invoice">
+                            <MudIconButton Icon="@Icons.Material.Filled.Visibility" Color="Color.Primary"
+                                OnClick="@(() => OpenItem(context))" />
+                        </MudTooltip> *@
+                        <MudButton Variant="Variant.Outlined" Size="Size.Small" StartIcon="@Icons.Material.Filled.Visibility" OnClick="@(() => OpenItem(context))">View</MudButton>
+                        @if (context.Status != "Paid")
+                        {
+                            <MudButton Class="ml-1" Variant="Variant.Outlined" Color="Color.Info" Size="Size.Small" OnClick="@(() => MarkPaid(context))">Mark Paid</MudButton>
+                            @* <MudTooltip Text="Mark Paid">
+                                <MudIconButton Icon="@Icons.Material.Filled.PriceCheck" Color="Color.Success"
+                                               OnClick="@(() => MarkPaid(context))" />
+                            </MudTooltip> *@
+                            @* <MudButton Variant="Variant.Filled" Color="Color.Success" Size="Size.Small"
+                                       OnClick="@(() => MarkPaid(context))">Mark Paid</MudButton> *@
+                        }
+                    </MudTd>
+                    
+            </RowTemplate>
+            <PagerContent>
+                <MudTablePager />
+            </PagerContent>
+        </MudTable>
+        </ChildContent>
+    </MudTabPanel>
+
+    <!-- PAYABLES TAB (Money Out) -->
+    <MudTabPanel ToolTip="Outstanding Bills & Expenses">
+        <TabContent>
+            <MudIcon Icon="@Icons.Material.Filled.MoneyOff" Class="mr-2" />
+            <MudHidden Breakpoint="Breakpoint.SmAndDown">Payables</MudHidden>
+        </TabContent>
+        <ChildContent>
+        <MudTable Items="@PayableItems" Dense="true" Striped="true" Outlined="true" Elevation="0" Hover="true" Filter="new Func<AccountingItem, bool>(FilterFuncPayables)">
+            <ToolBarContent>
+                <MudText Typo="Typo.h6">Outstanding Payables</MudText>
+                <MudSpacer />
+                <MudTextField @bind-Value="searchPayables" Placeholder="Search..." Adornment="Adornment.Start" Variant="Variant.Outlined" Margin="Margin.Dense"
+                              AdornmentIcon="@Icons.Material.Filled.Search" IconSize="Size.Medium" Class="mt-0"></MudTextField>
+            </ToolBarContent>
+            <HeaderContent>
+                <MudHidden Breakpoint="Breakpoint.SmAndDown"><MudTh>Type</MudTh></MudHidden>
+                <MudHidden Breakpoint="Breakpoint.SmAndDown"><MudTh>Number</MudTh></MudHidden>
+                <MudTh>Entity</MudTh>
+                <MudHidden Breakpoint="Breakpoint.SmAndDown"><MudTh>Date</MudTh></MudHidden>
+                <MudTh>Due Date</MudTh>
+                <MudTh>Balance / Total</MudTh>
+                <MudTh>Actions</MudTh>
+            </HeaderContent>
+            <RowTemplate>
+                <MudHidden Breakpoint="Breakpoint.SmAndDown">
+                    <MudTd>
+                        <MudChip T="string" Size="Size.Small" Color="@GetTypeColor(context.Type)">@context.Type</MudChip>
+                    </MudTd>
+                </MudHidden>
+                <MudHidden Breakpoint="Breakpoint.SmAndDown"><MudTd>@context.Number</MudTd></MudHidden>
+                <MudTd>
+                    <MudStack Spacing="0">
+                        <MudText>@context.Entity</MudText>
+                        <MudHidden Breakpoint="Breakpoint.MdAndUp">
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">@context.Type - @context.Number</MudText>
+                        </MudHidden>
+                    </MudStack>
+                </MudTd>
+                <MudHidden Breakpoint="Breakpoint.SmAndDown"><MudTd>@context.Date.ToShortDateString()</MudTd></MudHidden>
+                <MudTd>
+                    @if (context.DueDate.HasValue && context.DueDate < DateTime.Today && context.Balance > 0)
+                    {
+                        <MudText Color="Color.Error">@context.DueDate?.ToShortDateString()</MudText>
+                    }
+                    else
+                    {
+                        @context.DueDate?.ToShortDateString()
+                    }
+                </MudTd>
+                <MudTd>
+                    @if (context.Balance > 0 && context.Balance < context.Total)
+                    {
+                        <MudText Color="Color.Warning"><b>@context.Balance.ToString("C")</b> / @context.Total.ToString("C")</MudText>
+                    }
+                    else if (context.Balance > 0)
+                    {
+                        <MudText Color="Color.Error"><b>@context.Balance.ToString("C")</b> / @context.Total.ToString("C")</MudText>
+                    }
+                    else
+                    {
+                        <MudText Color="Color.Success">Paid</MudText>
+                    }
+                </MudTd>
+                <MudTd>
+                        @if (context.Type == "Recurring" || context.Type == "One-Time")
+                        {
+                            @if (context.RecurringRecord != null && !string.IsNullOrEmpty(context.RecurringRecord.AttachmentPath))
+                            {
+                                <MudLink Href="@context.RecurringRecord.AttachmentPath" Target="_blank" Class="mr-2">
+                                    <MudIconButton Icon="@Icons.Material.Filled.AttachFile" Size="Size.Small" Color="Color.Secondary" Title="View Attachment" />
+                                </MudLink>
+                            }
+                            else
+                            {
+                                <div class="d-inline-flex mr-2 mt-0">
+                                    <ApiFileUpload 
+                                        Category="recurringcosts" 
+                                        ContextId="@((context.OriginalItem as RecurringExpense)?.Id ?? "temp")" 
+                                        OnUploadCompleted="@(results => HandleBillUploadCompleted(context, results))">
+                                        <CustomContent>
+                                            <MudButton Variant="Variant.Outlined" Color="Color.Info" Size="Size.Small" StartIcon="@Icons.Material.Filled.CloudUpload">
+                                                Upload File
+                                            </MudButton>
+                                        </CustomContent>
+                                    </ApiFileUpload>
+                                </div>
+                            }
+                        
+                            @* <MudButton Variant="Variant.Filled" Color="Color.Success" Size="Size.Small"
+                                   OnClick="@(() => MarkRecurringPaid(context))">Mark Paid</MudButton> *@
+                            @* <MudTooltip Text="Mark Paid">
+                                <MudIconButton Icon="@Icons.Material.Filled.PriceCheck" Color="Color.Success"
+                                               OnClick="@(() => MarkRecurringPaid(context))" />
+                            </MudTooltip> *@
+                            <MudButton Variant="Variant.Outlined" Color="Color.Success" Size="Size.Small" OnClick="@(() => MarkRecurringPaid(context))">Mark Paid</MudButton>
+                        }
+                        else
+                        {
+                            @if (context.Type == "Bill" && context.OriginalItem is Bill bill && !string.IsNullOrEmpty(bill.PurchaseOrderId))
+                            {
+                                <MudButton Variant="Variant.Outlined" Size="Size.Small" Class="mr-2" StartIcon="@Icons.Material.Filled.Assignment" OnClick="@(() => ViewPo(bill.PurchaseOrderId))">View PO</MudButton>
+                            }
+                            <MudButton Variant="Variant.Outlined" Size="Size.Small" StartIcon="@Icons.Material.Filled.Visibility" OnClick="@(() => OpenItem(context))">View Bill</MudButton>
+                            <MudTooltip Text="Mark Paid">
+                                <MudIconButton Icon="@Icons.Material.Filled.PriceCheck" Color="Color.Success"
+                                               OnClick="@(() => MarkPaid(context))" />
+                            </MudTooltip>
+                        }
+                    
+                </MudTd>
+            </RowTemplate>
+            <PagerContent>
+                <MudTablePager />
+            </PagerContent>
+        </MudTable>
+        </ChildContent>
+    </MudTabPanel>
+
+    <!-- PAYABLES HISTORY -->
+    <MudTabPanel>
+        <TabContent>
+            <MudIcon Icon="@Icons.Material.Filled.History" Class="mr-2" />
+            <MudHidden Breakpoint="Breakpoint.SmAndDown">Paid History</MudHidden>
+        </TabContent>
+        <ChildContent>
+        <MudTable Items="@PaidPayableItems" Dense="true" Striped="true" Outlined="true" Elevation="0" Hover="true" Filter="new Func<AccountingItem, bool>(FilterFuncHistory)">
+            <ToolBarContent>
+                <MudText Typo="Typo.h6">Paid Bills & Expenses</MudText>
+                <MudSpacer />
+                <MudTextField @bind-Value="searchHistory" Placeholder="Search..." Adornment="Adornment.Start" Variant="Variant.Outlined" Margin="Margin.Dense"
+                    AdornmentIcon="@Icons.Material.Filled.Search" IconSize="Size.Medium" Class="mt-0"></MudTextField>
+            </ToolBarContent>
+            <HeaderContent>
+                <MudHidden Breakpoint="Breakpoint.SmAndDown"><MudTh><MudTableSortLabel SortBy="new Func<AccountingItem, object>(x => x.Type)">Type</MudTableSortLabel></MudTh></MudHidden>
+                <MudHidden Breakpoint="Breakpoint.SmAndDown"><MudTh><MudTableSortLabel SortBy="new Func<AccountingItem, object>(x => x.Number)">Number</MudTableSortLabel></MudTh></MudHidden>
+                <MudTh><MudTableSortLabel SortBy="new Func<AccountingItem, object>(x => x.Entity)">Entity</MudTableSortLabel></MudTh>
+                <MudTh><MudTableSortLabel InitialDirection="SortDirection.Descending" SortBy="new Func<AccountingItem, object>(x => x.DatePaid ?? x.Date)">Date Paid</MudTableSortLabel></MudTh>
+                <MudTh><MudTableSortLabel SortBy="new Func<AccountingItem, object>(x => x.Total)">Total</MudTableSortLabel></MudTh>
+                <MudTh>Actions</MudTh>
+            </HeaderContent>
+            <RowTemplate>
+                <MudHidden Breakpoint="Breakpoint.SmAndDown">
+                    <MudTd>
+                        <MudChip T="string" Size="Size.Small" Color="@GetTypeColor(context.Type)">@context.Type</MudChip>
+                    </MudTd>
+                </MudHidden>
+                <MudHidden Breakpoint="Breakpoint.SmAndDown"><MudTd>@context.Number</MudTd></MudHidden>
+                <MudTd>
+                    <MudStack Spacing="0">
+                        <MudText>@context.Entity</MudText>
+                        <MudHidden Breakpoint="Breakpoint.MdAndUp">
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">@context.Type - @context.Number</MudText>
+                        </MudHidden>
+                    </MudStack>
+                </MudTd>
+                <MudTd>@context.DatePaid?.ToShortDateString()</MudTd>
+                <MudTd>@context.Total.ToString("C")</MudTd>
+                <MudTd>
+                    @* <MudTooltip Text="View Details">
+                        <MudIconButton Icon="@Icons.Material.Filled.Visibility" OnClick="@(() => OpenItem(context))" />
+                    </MudTooltip> *@
+                        <MudButton Variant="Variant.Outlined" Size="Size.Small" StartIcon="@Icons.Material.Filled.Visibility" OnClick="@(() => OpenItem(context))">View</MudButton>
+                </MudTd>
+            </RowTemplate>
+            <PagerContent>
+                <MudTablePager />
+            </PagerContent>
+        </MudTable>
+        </ChildContent>
+    </MudTabPanel>
+
+    <!-- ADD BILLS TAB (Manage Actual Profiles) -->
+    <MudTabPanel ToolTip="Add or Import Actual Bills">
+        <TabContent>
+            <MudIcon Icon="@Icons.Material.Filled.NoteAdd" Class="mr-2" />
+            <MudHidden Breakpoint="Breakpoint.SmAndDown">Manage Bills</MudHidden>
+        </TabContent>
+        <ChildContent>
+            <AddBillsTab OnChanged="Refresh" />
+        </ChildContent>
+    </MudTabPanel>
+</MudTabs>
+</div>
+
+@code {
+    public class AccountingItem
+    {
+        public string Id { get; set; } = string.Empty;
+        public string Type { get; set; } = string.Empty; // "Expense", "Bill", "Invoice"
+        public string Number { get; set; } = string.Empty;
+        public string Entity { get; set; } = string.Empty; // For Payables, this is who we pay.
+        public string ClientName { get; set; } = string.Empty; // For Receivables
+        public string ProjectName { get; set; } = string.Empty; // For Receivables
+        public DateTime Date { get; set; }
+        public DateTime? DueDate { get; set; }
+        public decimal Total { get; set; }
+        public decimal Balance { get; set; }
+        public string Status { get; set; } = string.Empty;
+        public DateTime? DatePaid { get; set; }
+        public object OriginalItem { get; set; } = default!;
+        public RecurringBillRecord? RecurringRecord { get; set; }
+    }
+
+    private List<AccountingItem> Payables = new(); // Outstanding Bills/Expenses
+    private List<AccountingItem> PaidPayables = new(); // History
+    private List<AccountingItem> Receivables = new(); // Invoices (Sent/Paid/Partial)
+
+    private IEnumerable<AccountingItem> PayableItems => Payables.OrderBy(i => i.DueDate);
+    private IEnumerable<AccountingItem> ReceivableItems => Receivables.OrderByDescending(i => i.Date);
+    private IEnumerable<AccountingItem> PaidPayableItems => PaidPayables.OrderByDescending(i => i.DatePaid ?? i.Date);
+
+    private string searchPayables = "";
+    private string searchReceivables = "";
+    private string searchHistory = "";
+
+    // --- Dashboard Metrics ---
+    private decimal TotalOutstandingPayable = 0;
+    private decimal DuePastDuePayable = 0;
+    private int DuePastDuePayableCount = 0;
+    private decimal OutstandingReceivable = 0;
+    
+    private decimal OverdueReceivable = 0;
+    private int OverdueReceivableCount = 0;
+    
+    private decimal NetCashFlow30Days = 0;
+
+    private List<ChartSeries<double>> CashFlowSeries = new List<ChartSeries<double>>();
+    private string[] CashFlowLabels = new string[0];
+    private ChartOptions CashFlowChartOptions = new ChartOptions
+    {
+        ChartPalette = new[] { Colors.Green.Default, Colors.Red.Default }
+    };
+
+    protected override async Task OnInitializedAsync()
+    {
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        var user = authState.User;
+
+        // Permission check handled by [Authorize] attribute
+        Refresh();
+    }
+
+    private void ViewPo(string id)
+    {
+        Nav.NavigateTo($"/purchases/po/{id}");
+    }
+
+    private void Refresh()
+    {
+        Payables.Clear();
+        PaidPayables.Clear();
+        Receivables.Clear();
+
+        // 1. Expense Reports
+        var reports = Db.ExpenseReports.GetAll().Where(x => x.Status != ExpenseReportStatus.Draft).ToList();
+        foreach (var r in reports)
+        {
+            var isPaid = r.DatePaid.HasValue || r.Status == ExpenseReportStatus.Paid;
+            var item = new AccountingItem
+                {
+                    Id = r.Id,
+                    Type = "Expense",
+                    Number = r.ReportNumber,
+                    Entity = r.EmployeeName,
+                    Date = r.DateCreated,
+                    DueDate = r.DateSubmitted,
+                    Total = r.TotalAmount,
+                    Balance = isPaid ? 0 : r.TotalAmount,
+                    Status = isPaid ? "Paid" : "Unpaid",
+                    DatePaid = r.DatePaid ?? r.DateSubmitted ?? r.DateCreated,
+                    OriginalItem = r
+                };
+
+            if (isPaid) PaidPayables.Add(item); else Payables.Add(item);
+        }
+
+        // 2. Bills (and POs)
+        var bills = Db.Bills.GetAll();
+        foreach (var b in bills)
+        {
+            var isPaid = b.BalanceDue <= 0;
+            var isPo = !string.IsNullOrEmpty(b.PurchaseOrderId);
+
+            var item = new AccountingItem
+                {
+                    Id = b.Id,
+                    Type = "Bill", // Always Bill, avoids PO confusion
+                    Number = string.IsNullOrWhiteSpace(b.Description) ? (isPo ? $"Bill for PO {b.PurchaseOrderId}" : "Bill") : b.Description,
+                    Entity = b.SupplierName,
+                    Date = b.Date,
+                    DueDate = b.DueDate,
+                    Total = b.Amount,
+                    Balance = b.BalanceDue,
+                    Status = isPaid ? "Paid" : (b.AmountPaid > 0 ? "Partially Paid" : b.Status),
+                    DatePaid = b.DatePaid ?? b.Date,
+                    OriginalItem = b
+                };
+
+            if (isPaid) PaidPayables.Add(item); else Payables.Add(item);
+        }
+
+        // 3. Recurring Expenses (All Unpaid Actual Bills for Payables List)
+        var allRecurring = Db.RecurringExpenses.GetAll().Where(e => !e.IsEstimate).ToList();
+
+        foreach (var re in allRecurring)
+        {
+            var unpaidRecords = re.History.Where(h => h.BalanceDue > 0).ToList();
+            foreach (var record in unpaidRecords)
+            {
+                var typeStr = re.Frequency == RecurringExpenseFrequency.OneTime ? "One-Time" : "Recurring";
+                var entityStr = string.IsNullOrEmpty(re.Supplier) ? (typeStr == "One-Time" ? "One-Time Expense" : "Recurring Bill") : re.Supplier;
+                
+                Payables.Add(new AccountingItem
+                {
+                    Id = record.Id,
+                    Type = typeStr,
+                    Number = re.Name,
+                    Entity = entityStr,
+                    Date = record.Date,
+                    DueDate = record.DueDate ?? record.Date,
+                    Total = record.Amount,
+                    Balance = record.BalanceDue,
+                    Status = record.AmountPaid > 0 ? "Partially Paid" : "Unpaid",
+                    OriginalItem = re,
+                    RecurringRecord = record
+                });
+            }
+        }
+
+        // 5. PAID HISTORY from Recurring & One-Time Expenses
+        foreach (var re in allRecurring)
+        {
+            foreach (var historyItem in re.History.Where(h => h.BalanceDue <= 0))
+            {
+                PaidPayables.Add(new AccountingItem
+                    {
+                        Id = historyItem.Id,
+                        Type = re.Frequency == RecurringExpenseFrequency.OneTime ? "One-Time" : "Recurring",
+                        Number = re.Name,
+                        Entity = string.IsNullOrEmpty(re.Supplier) ? (re.Frequency == RecurringExpenseFrequency.OneTime ? "One-Time Expense" :
+                    "Recurring Bill") : re.Supplier,
+                        Date = historyItem.Date,
+                        DueDate = historyItem.Date,
+                        Total = historyItem.Amount,
+                        Balance = 0,
+                        Status = "Paid",
+                        DatePaid = historyItem.DatePaid ?? historyItem.Date,
+                        OriginalItem = re // Identify as the parent expense
+                    });
+            }
+        }
+
+        // 6. Invoices (Receivables)
+        var invoices = Db.Invoices.GetAll();
+        foreach (var inv in invoices)
+        {
+            if (inv.Status == "Draft" || inv.Status == "Void") continue;
+
+            var proj = Db.Projects.GetById(inv.ProjectId);
+
+            Receivables.Add(new AccountingItem
+                {
+                    Id = inv.Id,
+                    Type = "Invoice",
+                    Number = inv.InvoiceNumber,
+                    Entity = proj?.Client?.BusinessName ?? "Unknown", // Fallback for Search
+                    ClientName = proj?.Client?.BusinessName ?? "-",
+                    ProjectName = proj?.DisplayName ?? "-",
+                    Date = inv.Date,
+                    DueDate = inv.DueDate,
+                    Total = inv.GrandTotal,
+                    Balance = inv.BalanceDue,
+                    Status = inv.BalanceDue <= 0 ? "Paid" : (inv.AmountPaid > 0 ? "Partially Paid" : inv.Status),
+                    DatePaid = inv.DatePaid ?? (inv.BalanceDue <= 0 ? inv.Date : null),
+                    OriginalItem = inv
+                });
+        }
+
+        // 7. Commissions from Ledger
+        var ledgerRecords = Db.CommissionLedgerRecords.GetAll();
+        foreach (var record in ledgerRecords)
+        {
+            var isPaid = record.Status == "Paid" || record.DatePaid.HasValue;
+            var proj = Db.Projects.GetById(record.ProjectId);
+            
+            var item = new AccountingItem
+            {
+                Id = record.Id,
+                Type = record.Status == "Clawback" ? "Clawback" : "Commission",
+                Number = proj?.ProjectNumber ?? "-",
+                Entity = record.BeneficiaryName,
+                ClientName = proj?.Client?.BusinessName ?? "-",
+                ProjectName = proj?.DisplayName ?? "-",
+                Date = record.DateGenerated,
+                DueDate = record.DateGenerated,
+                Total = record.CommissionAmount,
+                Balance = isPaid ? 0 : record.CommissionAmount,
+                Status = record.Status,
+                DatePaid = record.DatePaid ?? record.DateGenerated,
+                OriginalItem = record
+            };
+            
+            if (isPaid) PaidPayables.Add(item); else Payables.Add(item);
+        }
+
+        ComputeDashboardMetrics();
+    }
+
+    private void ComputeDashboardMetrics()
+    {
+        TotalOutstandingPayable = Payables.Sum(x => x.Balance);
+        
+        var duePayables = Payables.Where(x => x.DueDate.HasValue && x.DueDate.Value.Date <= DateTime.Today.Date).ToList();
+        DuePastDuePayable = duePayables.Sum(x => x.Balance);
+        DuePastDuePayableCount = duePayables.Count;
+
+        OutstandingReceivable = Receivables.Where(x => x.Balance > 0).Sum(x => x.Balance);
+
+        var overdueReceivables = Receivables.Where(x => x.Balance > 0 && x.DueDate.HasValue && x.DueDate.Value.Date < DateTime.Today.Date).ToList();
+        OverdueReceivable = overdueReceivables.Sum(x => x.Balance);
+        OverdueReceivableCount = overdueReceivables.Count;
+
+        var thirtyDaysFromNow = DateTime.Today.AddDays(30);
+        var comingAR30Days = Receivables.Where(x => x.Balance > 0 && (!x.DueDate.HasValue || x.DueDate.Value.Date <= thirtyDaysFromNow)).Sum(x => x.Balance);
+        var comingAP30Days = Payables.Where(x => x.Balance > 0 && (!x.DueDate.HasValue || x.DueDate.Value.Date <= thirtyDaysFromNow)).Sum(x => x.Balance);
+        NetCashFlow30Days = comingAR30Days - comingAP30Days;
+
+        // Compute Weekly Chart (Next 4 Weeks)
+        var today = DateTime.Today;
+        CashFlowLabels = new string[4];
+        var arData = new double[4];
+        var apData = new double[4];
+
+        for (int i = 0; i < 4; i++)
+        {
+            var weekStart = today.AddDays(i * 7);
+            var weekEnd = weekStart.AddDays(7).AddSeconds(-1);
+            
+            if (i == 0) CashFlowLabels[i] = "This Week";
+            else if (i == 1) CashFlowLabels[i] = "Next Week";
+            else CashFlowLabels[i] = $"In {i} Weeks";
+
+            // If it's the first week, we also include everything past due
+            var arSum = Receivables.Where(x => x.Balance > 0 && x.DueDate.HasValue && 
+                (i == 0 ? x.DueDate.Value <= weekEnd : (x.DueDate.Value > weekStart && x.DueDate.Value <= weekEnd))).Sum(x => x.Balance);
+                
+            var apSum = Payables.Where(x => x.Balance > 0 && x.DueDate.HasValue && 
+                (i == 0 ? x.DueDate.Value <= weekEnd : (x.DueDate.Value > weekStart && x.DueDate.Value <= weekEnd))).Sum(x => x.Balance);
+
+            arData[i] = (double)arSum;
+            apData[i] = (double)apSum;
+        }
+
+        CashFlowSeries = new List<ChartSeries<double>>()
+        {
+            new ChartSeries<double>() { Name = "Receivables (AR)", Data = arData },
+            new ChartSeries<double>() { Name = "Payables (AP)", Data = apData }
+        };
+    }
+
+    private Color GetTypeColor(string type) => type switch
+    {
+        "Expense" => Color.Info,
+        "Bill" => Color.Warning,
+        "PO" => Color.Secondary,
+        "Invoice" => Color.Primary,
+        "Commission" => Color.Secondary,
+        "Recurring" => Color.Tertiary,
+        "One-Time" => Color.Dark,
+        _ => Color.Default
+    };
+
+    private async Task OpenItem(AccountingItem item)
+    {
+        if (item.Type == "Expense")
+        {
+            var r = (ExpenseReport)item.OriginalItem;
+            var parameters = new DialogParameters { ["Report"] = r, ["IsReadOnly"] = true };
+            await DialogService.ShowAsync<ExpenseReportDialog>("Expense Report", parameters, new DialogOptions
+                {
+                    MaxWidth =
+                MaxWidth.Medium,
+                    FullWidth = true
+                });
+        }
+        else if (item.Type == "Bill")
+        {
+            var b = (Bill)item.OriginalItem;
+            var parameters = new DialogParameters { ["Bill"] = b };
+            var dialog = await DialogService.ShowAsync<BillEditorDialog>("Bill Details", parameters, new DialogOptions
+                {
+                    MaxWidth = MaxWidth.ExtraExtraLarge,
+                    FullWidth = true,
+                    CloseButton = true
+                });
+            var result = await dialog.Result;
+            if (result != null && !result.Canceled && result.Data is Bill bResult) { Db.Bills.Save(bResult); Refresh(); }
+        }
+        else if (item.Type == "PO")
+        {
+            var b = (Bill)item.OriginalItem;
+            Nav.NavigateTo($"/purchases/{b.PurchaseOrderId}");
+        }
+        else if (item.Type == "Invoice")
+        {
+            // Invoices need ProjectID to construct URL
+            var inv = (Invoice)item.OriginalItem;
+            Nav.NavigateTo($"/projects/{inv.ProjectId}/invoices/{inv.Id}");
+        }
+        else if (item.Type == "Commission" || item.Type == "Clawback")
+        {
+            var record = (CommissionLedgerRecord)item.OriginalItem;
+            Nav.NavigateTo($"/projects/{record.ProjectId}");
+        }
+    }
+
+    private async Task MarkPaid(AccountingItem item)
+    {
+        if (item.Type == "Expense" || item.Type == "Commission" || item.Type == "Clawback")
+        {
+            var parameters = new DialogParameters<ConfirmPaymentDateDialog>
+            {
+                { x => x.Message, $"Are you sure you want to mark this {item.Type} ({item.Number}) as paid?" }
+            };
+            var dialog = await DialogService.ShowAsync<ConfirmPaymentDateDialog>("Confirm Payment", parameters);
+            var result = await dialog.Result;
+
+            if (!result.Canceled && result.Data is DateTime datePaid)
+            {
+                if (item.Type == "Expense")
+                {
+                    var r = (ExpenseReport)item.OriginalItem;
+                    r.DatePaid = datePaid;
+                    Db.ExpenseReports.Save(r);
+                }
+                else
+                {
+                    var record = (CommissionLedgerRecord)item.OriginalItem;
+                    record.Status = "Paid";
+                    record.DatePaid = datePaid;
+                    Db.CommissionLedgerRecords.Save(record);
+                }
+                Snackbar.Add($"{item.Type} marked as paid on {datePaid.ToShortDateString()}", Severity.Success);
+                Refresh();
+            }
+        }
+        else
+        {
+            List<PaymentRecord>? existingPayments = null;
+            if (item.OriginalItem is Bill b) existingPayments = b.Payments;
+            else if (item.OriginalItem is Invoice inv) existingPayments = inv.Payments;
+
+            var parameters = new DialogParameters<RecordPaymentDialog>
+            {
+                { x => x.Message, $"Record payment for {item.Type} ({item.Number})" },
+                { x => x.MaxAmount, item.Balance },
+                { x => x.ExistingPayments, existingPayments }
+            };
+            var dialog = await DialogService.ShowAsync<RecordPaymentDialog>("Record Payment", parameters);
+            var result = await dialog.Result;
+
+            if (!result.Canceled && result.Data is PaymentRecord payment)
+            {
+                if (item.Type == "Bill" || item.Type == "PO")
+                {
+                    var bill = (Bill)item.OriginalItem;
+                    bill.Payments.Add(payment);
+                    if (bill.BalanceDue <= 0)
+                    {
+                        bill.Status = "Paid";
+                        bill.DatePaid = payment.Date;
+                    }
+                    Db.Bills.Save(bill);
+                }
+                else if (item.Type == "Invoice")
+                {
+                    var inv = (Invoice)item.OriginalItem;
+                    var oldStatus = inv.Status;
+                    inv.Payments.Add(payment);
+                    if (inv.BalanceDue <= 0)
+                    {
+                        inv.Status = "Paid";
+                        inv.DatePaid = payment.Date;
+                    }
+                    Db.Invoices.Save(inv);
+                    if (inv.Status == "Paid" && oldStatus != "Paid")
+                    {
+                        Spokes_Server.Core.Services.Projects.TimelineEventHelper.ProcessInvoiceStatusChange(Db, inv, oldStatus, "Paid", null);
+                    }
+                }
+                Snackbar.Add($"Payment of {payment.Amount:C} recorded on {payment.Date.ToShortDateString()}", Severity.Success);
+                Refresh();
+            }
+        }
+    }
+
+    private bool FilterFuncPayables(AccountingItem element) => FilterFunc(element, searchPayables);
+    private bool FilterFuncReceivables(AccountingItem element) => FilterFunc(element, searchReceivables);
+    private bool FilterFuncHistory(AccountingItem element) => FilterFunc(element, searchHistory);
+
+    private bool FilterFunc(AccountingItem element, string searchString)
+    {
+        if (string.IsNullOrWhiteSpace(searchString)) return true;
+        if (element.Number?.Contains(searchString, StringComparison.OrdinalIgnoreCase) ?? false) return true;
+        if (element.Entity?.Contains(searchString, StringComparison.OrdinalIgnoreCase) ?? false) return true;
+        if (element.ClientName?.Contains(searchString, StringComparison.OrdinalIgnoreCase) ?? false) return true;
+        if (element.ProjectName?.Contains(searchString, StringComparison.OrdinalIgnoreCase) ?? false) return true;
+        return false;
+    }
+
+    // --- Recurring Expense Helpers ---
+    private DateTime GetCurrentPeriodStart(RecurringExpense expense)
+    {
+        var start = expense.CreatedDate;
+        var today = DateTime.Today;
+        var current = start;
+
+        while (true)
+        {
+            var next = GetNextPeriodDate(expense, current);
+            if (next > today) return current;
+            current = next;
+        }
+    }
+
+    private DateTime GetNextPeriodDate(RecurringExpense expense, DateTime current) => expense.Frequency switch
+    {
+        RecurringExpenseFrequency.Weekly => current.AddDays(7),
+        RecurringExpenseFrequency.BiWeekly => current.AddDays(14),
+        RecurringExpenseFrequency.Monthly => current.AddMonths(1),
+        RecurringExpenseFrequency.Yearly => current.AddYears(1),
+        _ => current.AddMonths(1)
+    };
+
+    private async Task UploadRecurringBill(AccountingItem item)
+    {
+        if (item.OriginalItem is not RecurringExpense expense) return;
+
+        var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Medium, FullWidth = true };
+        var parameters = new DialogParameters<Spokes_Server.Components.Pages.BusinessExpenses.RecurringExpenseDialog>
+{
+{ x => x.Expense, expense },
+{ x => x.IsNew, false },
+{ x => x.ActiveTabIndex, 1 }
+};
+
+        var dialog = await DialogService.ShowAsync<Spokes_Server.Components.Pages.BusinessExpenses.RecurringExpenseDialog>(
+        "Upload Bill - " + expense.Name, parameters, options);
+        var result = await dialog.Result;
+
+        if (result != null && !result.Canceled && result.Data is RecurringExpense updated)
+        {
+            Db.RecurringExpenses.Save(updated);
+            Snackbar.Add("Bill uploaded", Severity.Success);
+            Refresh();
+        }
+    }
+
+    private async Task MarkRecurringPaid(AccountingItem item)
+    {
+        if (item.OriginalItem is not RecurringExpense expense || item.RecurringRecord == null) return;
+
+        var parameters = new DialogParameters<RecordPaymentDialog>
+        {
+            { x => x.Message, $"Record payment for recurring bill '{expense.Name}'?" },
+            { x => x.MaxAmount, item.Balance },
+            { x => x.ExistingPayments, item.RecurringRecord.Payments }
+        };
+        var dialog = await DialogService.ShowAsync<RecordPaymentDialog>("Record Payment", parameters);
+        var result = await dialog.Result;
+
+        if (!result.Canceled && result.Data is PaymentRecord payment)
+        {
+            item.RecurringRecord.Payments.Add(payment);
+            if (item.RecurringRecord.BalanceDue <= 0)
+            {
+                item.RecurringRecord.IsPaid = true;
+                item.RecurringRecord.DatePaid = payment.Date;
+            }
+
+            Db.RecurringExpenses.Save(expense);
+            Snackbar.Add($"Payment of {payment.Amount:C} recorded", Severity.Success);
+            Refresh();
+        }
+    }
+
+
+
+    private void HandleBillUploadCompleted(AccountingItem item, List<ApiFileUpload.UploadResult> results)
+    {
+        if (results == null || results.Count == 0 || item.OriginalItem is not RecurringExpense expense || item.RecurringRecord == null) return;
+        
+        try
+        {
+            var result = results.First();
+            item.RecurringRecord.AttachmentPath = $"/spokesapi/files/download/{result.FilePath}";
+            item.RecurringRecord.AttachmentName = result.FileName;
+            
+            Db.RecurringExpenses.Save(expense);
+            Snackbar.Add("File uploaded successfully", Severity.Success);
+            Refresh();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Upload failed: {ex.Message}", Severity.Error);
+        }
+    }
+
+    [SupplyParameterFromQuery] public string? Tab { get; set; }
+    private int activeTabIndex = 0;
+
+    protected override void OnParametersSet()
+    {
+        if (!string.IsNullOrEmpty(Tab))
+        {
+            activeTabIndex = Tab.ToLower() switch
+            {
+                "manage" => 0,
+                "payables" => 1,
+                "receivables" => 2,
+                "history" => 3,
+                _ => 1 // Default to payables if unknown or empty
+            };
+        }
+    }
+
+    private bool _isDisposed;
+
+    public void Dispose()
+    {
+        _isDisposed = true;
+    }
+
+    private void UpdateActiveTab(int index)
+    {
+        if (_isDisposed) return;
+
+        activeTabIndex = index;
+
+        if (!Nav.Uri.Contains("/business/accounting", StringComparison.OrdinalIgnoreCase))
+            return;
+
+        var tabName = index switch
+        {
+            0 => "manage",
+            1 => "payables",
+            2 => "receivables",
+            3 => "history",
+            _ => "payables"
+        };
+        
+        try
+        {
+            Nav.NavigateTo(Nav.GetUriWithQueryParameter("tab", tabName), replace: true);
+        }
+        catch (Microsoft.AspNetCore.Components.NavigationException)
+        {
+        }
+    }
+}
+

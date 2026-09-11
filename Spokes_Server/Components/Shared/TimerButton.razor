@@ -1,0 +1,306 @@
+@using Spokes_Server.Core.Data
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Services
+@inject Database Db
+@inject TimerService TimerService
+@inject UserService UserService
+@inject ISnackbar Snackbar
+@implements IDisposable
+
+@if (_currentUser != null)
+{
+    @if (_state.IsRunning)
+    {
+        <div class="d-flex align-center gap-2 mx-2" style="cursor: pointer;" @onclick="StopTimer">
+            <MudIcon Icon="@Icons.Material.Filled.FiberManualRecord" Color="Color.Error" Size="Size.Small"
+                Class="timer-pulse" />
+            <MudText Typo="Typo.body2" Color="Color.Inherit" Style="font-family: monospace; font-weight: 600;">
+                @_elapsed.ToString(@"hh\:mm\:ss")
+            </MudText>
+            <MudTooltip Text="Stop Timer">
+                <MudIconButton Icon="@Icons.Material.Filled.Stop" Color="Color.Error" Size="Size.Small" OnClick="StopTimer" />
+            </MudTooltip>
+            <MudTooltip Text="Cancel Timer">
+                <MudIconButton Icon="@Icons.Material.Filled.Close" Color="Color.Default" Size="Size.Small"
+                    OnClick="CancelTimer" />
+            </MudTooltip>
+        </div>
+    }
+    else
+    {
+        <MudTooltip Text="Start Timer">
+            <MudIconButton Icon="@Icons.Material.Filled.PlayArrow" Color="Color.Inherit" OnClick="TogglePopover" />
+        </MudTooltip>
+    }
+
+    <MudPopover Open="_popoverOpen" AnchorOrigin="Origin.BottomCenter" TransformOrigin="Origin.TopCenter" Class="pa-4"
+        Style="min-width: 320px;">
+        <MudStack Spacing="3">
+            <MudText Typo="Typo.subtitle1"><b>Start Timer</b></MudText>
+
+            <MudAutocomplete T="string" Value="_selectedProjectId" ValueChanged="OnProjectChanged" Label="Project"
+                Variant="Variant.Outlined" Dense="true" Required="true" AnchorOrigin="Origin.BottomCenter"
+                SearchFunc="SearchProjects" ToStringFunc="GetProjectName" ResetValueOnEmptyText="true" CoerceText="false"
+                MaxItems="null" />
+
+            <MudSelect T="string" @bind-Value="_selectedWorkTypeId" Label="Task" Variant="Variant.Outlined" Dense="true"
+                Required="true" Disabled="@(string.IsNullOrEmpty(_selectedProjectId))">
+                @foreach (var wt in _filteredWorkTypes)
+                {
+                    <MudSelectItem Value="@wt.Id">@wt.Name</MudSelectItem>
+                }
+            </MudSelect>
+
+            @if (_subTasks.Any())
+            {
+                <MudSelect T="string" @bind-Value="_selectedSubTaskId" Label="Sub-Task" Variant="Variant.Outlined" Dense="true"
+                    Clearable="true">
+                    @foreach (var st in _subTasks)
+                    {
+                        <MudSelectItem Value="@st.Id">@st.Name</MudSelectItem>
+                    }
+                </MudSelect>
+            }
+
+            <MudTextField T="string" @bind-Value="_note" Label="Note (optional)" Variant="Variant.Outlined" Dense="true"
+                Lines="2" Placeholder="What are you working on?" />
+
+            <div class="d-flex justify-end gap-2">
+                <MudButton Variant="Variant.Text" OnClick="ClosePopover">Cancel</MudButton>
+                <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                    Disabled="@(string.IsNullOrEmpty(_selectedProjectId) || string.IsNullOrEmpty(_selectedWorkTypeId))"
+                    OnClick="StartTimer">
+                    <MudIcon Icon="@Icons.Material.Filled.PlayArrow" Class="mr-1" /> Start
+                </MudButton>
+            </div>
+        </MudStack>
+    </MudPopover>
+}
+
+<style>
+    .timer-pulse {
+        animation: pulse 1.5s infinite;
+    }
+
+    @@keyframes pulse {
+        0% {
+            opacity: 1;
+        }
+
+        50% {
+            opacity: 0.3;
+        }
+
+        100% {
+            opacity: 1;
+        }
+    }
+</style>
+
+@code {
+    private Employee? _currentUser;
+    private TimerState _state = new();
+    private TimeSpan _elapsed;
+    private System.Timers.Timer? _uiTimer;
+
+    private bool _popoverOpen;
+    private string _selectedProjectId = string.Empty;
+    private string _selectedWorkTypeId = string.Empty;
+    private string? _selectedSubTaskId;
+    private string _note = string.Empty;
+
+    private List<Project> _projects = new();
+    private List<WorkType> _allWorkTypes = new();
+    private List<WorkType> _filteredWorkTypes = new();
+    private List<SubTask> _subTasks => string.IsNullOrEmpty(_selectedWorkTypeId)
+    ? new()
+    : _filteredWorkTypes.FirstOrDefault(w => w.Id == _selectedWorkTypeId)?.SubTasks ?? new();
+
+    private void OnProjectChanged(string projectId)
+    {
+        _selectedProjectId = projectId;
+        _selectedWorkTypeId = string.Empty;
+        _selectedSubTaskId = null;
+
+        // Filter work types by project's approved list (matching timesheet logic)
+        if (!string.IsNullOrEmpty(projectId))
+        {
+            var project = _projects.FirstOrDefault(p => p.Id == projectId);
+            if (project != null && project.ApprovedWorkTypeIds.Any())
+            {
+                _filteredWorkTypes = _allWorkTypes.Where(w => project.ApprovedWorkTypeIds.Contains(w.Id)).ToList();
+            }
+            else
+            {
+                _filteredWorkTypes = _allWorkTypes; // Fallback: show all
+            }
+        }
+        else
+        {
+            _filteredWorkTypes = _allWorkTypes;
+        }
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        _currentUser = await UserService.GetEmployeeAsync();
+        if (_currentUser == null) return;
+
+        _state = TimerService.GetState(_currentUser.Id);
+
+        // Load DB data asynchronously so it doesn't block
+        _ = LoadTimerDataAsync();
+
+        TimerService.OnTimerChanged += OnExternalTimerChanged;
+
+        if (_state.IsRunning)
+        {
+            StartUiTimer();
+        }
+    }
+
+    private async Task LoadTimerDataAsync()
+    {
+        try
+        {
+            await Task.Yield();
+            LoadProjects();
+            _allWorkTypes = Db.WorkTypes.GetAll().Where(w => w.IsActive).OrderBy(w => w.Name).ToList();
+            await InvokeAsync(StateHasChanged);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[TimerButton] Error loading timer data: {ex.Message}");
+        }
+    }
+
+    private void LoadProjects()
+    {
+        if (_currentUser == null) return;
+
+        if (_currentUser.IsAdmin)
+        {
+            _projects = Db.Projects.GetAll()
+            .Where(p => p.IsActive || p.Status != ProjectStatus.Archived)
+            .OrderBy(p => p.DisplayName)
+            .ToList();
+            return;
+        }
+
+        _projects = Db.Projects.GetAll()
+        .Where(p => (p.IsActive || p.Status != ProjectStatus.Archived) &&
+        (p.AccessPolicy == "Public" ||
+        (p.AllowedUserIds != null && p.AllowedUserIds.Contains(_currentUser.Id)) ||
+        (!string.IsNullOrEmpty(_currentUser.TeamId) && p.AllowedTeamIds != null &&
+        p.AllowedTeamIds.Contains(_currentUser.TeamId))))
+        .OrderBy(p => p.DisplayName)
+        .ToList();
+    }
+
+    private Task<IEnumerable<string>> SearchProjects(string value, CancellationToken token)
+    {
+        var matching = string.IsNullOrEmpty(value)
+        ? _projects
+        : _projects.Where(p => p.DisplayName.Contains(value, StringComparison.InvariantCultureIgnoreCase));
+
+        return Task.FromResult(matching.Select(p => p.Id));
+    }
+
+    private string GetProjectName(string id)
+    {
+        var p = _projects.FirstOrDefault(x => x.Id == id);
+        return p?.DisplayName ?? "";
+    }
+
+    private void TogglePopover() => _popoverOpen = !_popoverOpen;
+    private void ClosePopover() => _popoverOpen = false;
+
+    private void StartTimer()
+    {
+        if (_currentUser == null || string.IsNullOrEmpty(_selectedProjectId) || string.IsNullOrEmpty(_selectedWorkTypeId))
+            return;
+
+        TimerService.Start(_currentUser.Id, _selectedProjectId, _selectedWorkTypeId, _selectedSubTaskId, _note);
+        _state = TimerService.GetState(_currentUser.Id);
+        _popoverOpen = false;
+        _note = string.Empty;
+        StartUiTimer();
+    }
+
+    private void StopTimer()
+    {
+        if (_currentUser == null) return;
+
+        var elapsed = TimerService.Stop(_currentUser.Id);
+        _state = TimerService.GetState(_currentUser.Id);
+        StopUiTimer();
+
+        if (elapsed.TotalMinutes >= 1)
+        {
+            Snackbar.Add($"Logged {elapsed.Hours}h {elapsed.Minutes}m to your timesheet", Severity.Success);
+        }
+        else
+        {
+            Snackbar.Add("Timer was less than 1 minute — not logged", Severity.Warning);
+        }
+    }
+
+    private void CancelTimer()
+    {
+        if (_currentUser == null) return;
+        TimerService.Cancel(_currentUser.Id);
+        _state = TimerService.GetState(_currentUser.Id);
+        StopUiTimer();
+        Snackbar.Add("Timer cancelled", Severity.Info);
+    }
+
+    private void StartUiTimer()
+    {
+        _uiTimer?.Dispose();
+        _uiTimer = new System.Timers.Timer(1000);
+        _uiTimer.Elapsed += (_, _) =>
+        {
+            if (_state.IsRunning && _state.StartedAt.HasValue)
+            {
+                _elapsed = DateTime.UtcNow - _state.StartedAt.Value;
+                InvokeAsync(StateHasChanged);
+            }
+        };
+        _uiTimer.Start();
+        // Initial tick
+        if (_state.StartedAt.HasValue)
+            _elapsed = DateTime.UtcNow - _state.StartedAt.Value;
+    }
+
+    private void StopUiTimer()
+    {
+        _uiTimer?.Stop();
+        _uiTimer?.Dispose();
+        _uiTimer = null;
+        _elapsed = TimeSpan.Zero;
+    }
+
+    private void OnExternalTimerChanged()
+    {
+        if (_currentUser == null) return;
+        _state = TimerService.GetState(_currentUser.Id);
+
+        if (_state.IsRunning)
+            StartUiTimer();
+        else
+            StopUiTimer();
+
+        InvokeAsync(StateHasChanged);
+    }
+
+    public void Dispose()
+    {
+        TimerService.OnTimerChanged -= OnExternalTimerChanged;
+        _uiTimer?.Dispose();
+    }
+}
+

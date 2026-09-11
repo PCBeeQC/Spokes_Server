@@ -1,0 +1,129 @@
+@using MudBlazor
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Services.Core
+@using Spokes_Server.Core.Data
+@using Spokes_Server.Components.Shared
+@inject Database Db
+@inject ISnackbar Snackbar
+
+<MudDialog>
+    <TitleContent>
+        <MudText Typo="Typo.h6">
+            <MudIcon Icon="@(IsNew ? Icons.Material.Filled.Add : Icons.Material.Filled.Edit)" Class="mr-3 mb-n1" />
+            @(IsNew ? "Create Standard Document" : $"Edit {Document.Name}")
+        </MudText>
+    </TitleContent>
+    <DialogContent>
+        <MudForm @ref="form">
+            <MudTextField @bind-Value="Document.Name" Label="Document Name" Required="true"
+                Placeholder="e.g. NDA - English" Class="mb-4" />
+
+            <div class="d-flex align-center mb-4">
+                <MudTextField @bind-Value="Document.Description" Label="Description (Internal)"
+                    Placeholder="Briefly describe when to use this document" Class="flex-grow-1 mr-4" />
+                <MudSwitch @bind-Value="Document.IsConfidential" Label="Confidential Footer" Color="Color.Error" />
+            </div>
+
+            <MudText Typo="Typo.subtitle2" Class="mb-2 mt-4">Document Blocks</MudText>
+            <DocumentBlocksEditor Blocks="Document.Blocks"
+                BlocksChanged="@(b => { Document.Blocks = b; RefreshTags(); })"
+                OnBlockAdded="OnBlockAdded"
+                OnBlockRenamed="OnBlockRenamed" />
+
+            <MudText Typo="Typo.subtitle2" Class="mb-2 mt-6">Document Body (Markdown)</MudText>
+            <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-2 d-block">
+                Type <b>@@</b> to see available context tags for dynamic content.
+            </MudText>
+            <MarkdownEditor @bind-Value="Document.Body" AvailableTags="_tags" />
+        </MudForm>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="Save">Save</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
+    [Parameter] public StandardDocument Document { get; set; } = new();
+    [Parameter] public bool IsNew { get; set; } = false;
+
+    private MudForm form = default!;
+    private List<ContextTagDefinition> _tags = new();
+
+    protected override void OnInitialized()
+    {
+        base.OnInitialized();
+        RefreshTags();
+    }
+
+    private void RefreshTags()
+    {
+        var baseTags = ContextTagRegistry.GetAvailableTags();
+        var blockTags = Document.Blocks
+        .Where(b => !string.IsNullOrWhiteSpace(b.Name))
+        .Select(b => new ContextTagDefinition
+            {
+                Tag = $"@Block.{b.Name}",
+                Description = $"Renders the {b.Type} block",
+                Category = "Document Blocks"
+            })
+        .ToList();
+
+        // Keep standard tags but prepend the block tags
+        _tags = blockTags.Concat(baseTags).ToList();
+        StateHasChanged();
+    }
+
+    private void OnBlockAdded(string blockName)
+    {
+        var tag = $"@Block.{blockName}";
+        if (!Document.Body.Contains(tag))
+        {
+            Document.Body = string.IsNullOrWhiteSpace(Document.Body)
+                ? tag
+                : Document.Body + "\n\n" + tag;
+        }
+    }
+
+    private void OnBlockRenamed((string OldName, string NewName) rename)
+    {
+        var oldTag = $"@Block.{rename.OldName}";
+        var newTag = $"@Block.{rename.NewName}";
+        Console.WriteLine($"[BlockRename] Old: '{oldTag}' New: '{newTag}'");
+        Console.WriteLine($"[BlockRename] Body contains old tag: {Document.Body.Contains(oldTag)}");
+        Console.WriteLine($"[BlockRename] Body snippet: ...{Document.Body[Math.Max(0, Document.Body.Length - 100)..]}");
+        if (Document.Body.Contains(oldTag))
+        {
+            Document.Body = Document.Body.Replace(oldTag, newTag);
+            Console.WriteLine($"[BlockRename] Replaced successfully");
+        }
+        else
+        {
+            Console.WriteLine($"[BlockRename] WARNING: Old tag not found in body!");
+        }
+        RefreshTags();
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+
+    private async Task Save()
+    {
+        await form.Validate();
+        if (form.IsValid)
+        {
+            try
+            {
+                Document.UpdatedAt = DateTime.UtcNow;
+                Db.StandardDocuments.Save(Document);
+
+                Snackbar.Add("Standard document saved successfully", Severity.Success);
+                MudDialog.Close(DialogResult.Ok(Document));
+            }
+            catch (Exception ex)
+            {
+                Snackbar.Add($"Error saving document: {ex.Message}", Severity.Error);
+            }
+        }
+    }
+}

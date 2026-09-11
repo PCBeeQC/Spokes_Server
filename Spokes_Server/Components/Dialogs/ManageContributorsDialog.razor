@@ -1,0 +1,150 @@
+@using Spokes_Server.Core.Models.HR
+@using MudBlazor
+@using Spokes_Server.Components.Shared
+@inject Spokes_Server.Core.Services.Core.AppLabelService AppLabels
+
+<MudDialog>
+    <TitleContent>
+        <div class="d-flex align-center gap-2">
+            <MudIcon Icon="@Icons.Material.Filled.PeopleAlt" Size="Size.Small" />
+            <MudText Typo="Typo.h6">Manage Contributors</MudText>
+        </div>
+    </TitleContent>
+    <DialogContent>
+        <div class="d-flex flex-column gap-3 pb-2">
+            <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-2">
+                Contributors can upload their own media, delete their own media, and share this album to new channels.
+            </MudText>
+
+            <MudTextField @bind-Value="searchString" Placeholder="@($"Search {AppLabels.Employees.ToLower()}...")" Variant="Variant.Outlined" Margin="Margin.Dense" Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search" Clearable="true" Immediate="true" />
+
+            @if (Employees != null && Employees.Any())
+            {
+                <div style="position: relative;">
+                    <MudCard Elevation="0" Class="pa-0" Style="border-radius: 12px; border: 1px solid var(--mud-palette-divider); overflow: hidden;">
+                        <div class="contributor-scroll-area" style="max-height: 45vh; overflow-y: auto;">
+                            <MudList T="string" Dense="true" Class="pa-0">
+                                @foreach (var emp in FilteredEmployees)
+                                {
+                                    var isSelected = SelectedUserIds.Contains(emp.Id);
+                                    <div class="d-flex align-center gap-3 py-2 px-3 hover-bg" style="border-bottom: 1px solid var(--mud-palette-divider);" @onclick="() => SetUserSelection(emp.Id, !isSelected)">
+                                        <MudCheckBox T="bool" Value="isSelected" ValueChanged="@((val) => SetUserSelection(emp.Id, val))" Color="Color.Primary" Class="ma-0 pa-0" @onclick:stopPropagation="true" />
+                                        <EmployeeAvatar Employee="@emp" Size="Size.Small" />
+                                        <div class="d-flex flex-column">
+                                            <MudText Typo="Typo.body1" Style="font-weight: 600;">@emp.FullName</MudText>
+                                            @if (!string.IsNullOrWhiteSpace(emp.Position))
+                                            {
+                                                <MudText Typo="Typo.caption" Color="Color.Secondary">@emp.Position</MudText>
+                                            }
+                                        </div>
+                                    </div>
+                                }
+                                @if (!FilteredEmployees.Any())
+                                {
+                                    <div class="pa-4 text-center">
+                                        <MudText Typo="Typo.body2" Color="Color.Secondary">No matching @AppLabels.Employees.ToLower() found.</MudText>
+                                    </div>
+                                }
+                            </MudList>
+                        </div>
+                        <div class="scroll-fade-indicator"></div>
+                    </MudCard>
+                </div>
+            }
+            else
+            {
+                <MudText Typo="Typo.body2" Color="Color.Secondary" Class="text-center pa-4">
+                    No users available.
+                </MudText>
+            }
+        </div>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Close">Close</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="Save">Save Changes</MudButton>
+    </DialogActions>
+</MudDialog>
+
+<style>
+    .hover-bg {
+        transition: background-color 0.2s;
+        cursor: pointer;
+    }
+    .hover-bg:hover {
+        background-color: var(--mud-palette-action-default-hover);
+    }
+    .contributor-scroll-area::-webkit-scrollbar {
+        width: 8px;
+    }
+    .contributor-scroll-area::-webkit-scrollbar-track {
+        background: var(--mud-palette-background-grey);
+    }
+    .contributor-scroll-area::-webkit-scrollbar-thumb {
+        background-color: var(--mud-palette-action-disabled);
+        border-radius: 4px;
+    }
+    .scroll-fade-indicator {
+        position: absolute;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        height: 24px;
+        background: linear-gradient(transparent, var(--mud-palette-surface));
+        pointer-events: none;
+        border-bottom-left-radius: 12px;
+        border-bottom-right-radius: 12px;
+        border-bottom: 1px solid var(--mud-palette-divider);
+    }
+</style>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
+    
+    [Parameter] public List<Employee> Employees { get; set; } = new();
+    [Parameter] public HashSet<string> InitialSelectedUserIds { get; set; } = new();
+
+    private HashSet<string> SelectedUserIds { get; set; } = new();
+    private string searchString = "";
+
+    private IEnumerable<Employee> ActiveEmployees => Employees.Where(e => 
+        (e.IsActive && !e.IsBanned && !e.IsSuspended && !e.FullName.Equals("Deleted User", StringComparison.OrdinalIgnoreCase)) 
+        || InitialSelectedUserIds.Contains(e.Id)
+    );
+
+    private IEnumerable<Employee> FilteredEmployees
+    {
+        get
+        {
+            var active = ActiveEmployees;
+            if (string.IsNullOrWhiteSpace(searchString))
+                return active;
+
+            return active.Where(e => e.FullName.Contains(searchString, StringComparison.OrdinalIgnoreCase) 
+                                     || (e.Position != null && e.Position.Contains(searchString, StringComparison.OrdinalIgnoreCase)));
+        }
+    }
+
+    protected override void OnInitialized()
+    {
+        SelectedUserIds = new HashSet<string>(InitialSelectedUserIds);
+    }
+
+    private void SetUserSelection(string userId, bool isSelected)
+    {
+        if (isSelected)
+        {
+            SelectedUserIds.Add(userId);
+        }
+        else
+        {
+            SelectedUserIds.Remove(userId);
+        }
+    }
+
+    private void Close() => MudDialog.Cancel();
+    
+    private void Save()
+    {
+        MudDialog.Close(DialogResult.Ok(SelectedUserIds.ToList()));
+    }
+}

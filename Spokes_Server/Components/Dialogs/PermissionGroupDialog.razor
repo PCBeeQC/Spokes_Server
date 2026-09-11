@@ -1,0 +1,99 @@
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Constants
+@using MudBlazor
+@using Spokes_Server.Core.Data
+@inject Database Db
+
+<MudDialog>
+    <DialogContent>
+        <MudForm @ref="form" @bind-IsValid="@success">
+            <MudGrid>
+                <MudItem xs="12">
+                    <MudTextField @bind-Value="Group.Name" Label="Group Name" Required="true" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                </MudItem>
+
+                <MudItem xs="12">
+                    <MudDivider Class="my-2" />
+                    <MudText Typo="Typo.subtitle2">Permissions</MudText>
+
+                    <MudGrid Class="mt-2">
+                        @foreach (var category in AppPermissions.GetAll())
+                        {
+                            if (IsFriendEdition && IsBusinessCategory(category.Key))
+                                continue;
+
+                            <MudItem xs="12" sm="6" md="4">
+                                <MudPaper Elevation="0" Outlined="true" Class="pa-3 h-100">
+                                    <MudText Typo="Typo.subtitle2" Class="mb-3 text-primary">@category.Key</MudText>
+                                    <div class="d-flex flex-column gap-1 align-start">
+                                        @foreach (var perm in category.Value)
+                                        {
+                                            <MudTooltip Text="@AppPermissions.GetDescription(perm)" Delay="300" Placement="Placement.Top">
+                                                <MudCheckBox T="bool" Value="@HasPerm(perm)"
+                                                             ValueChanged="@((v) => TogglePerm(perm, v))" Label="@GetShortPermName(category.Key, perm)" Dense="true"
+                                                             Color="Color.Primary" />
+                                            </MudTooltip>
+                                        }
+                                    </div>
+                                </MudPaper>
+                            </MudItem>
+                        }
+                    </MudGrid>
+                </MudItem>
+            </MudGrid>
+        </MudForm>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Close">Close</MudButton>
+        <MudButton Color="Color.Primary" OnClick="Submit">Save Changes</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
+    [Parameter] public PermissionGroup Group { get; set; } = new();
+
+    private MudForm form = default!;
+    private bool success;
+    private bool IsFriendEdition = false;
+
+    protected override void OnInitialized()
+    {
+        IsFriendEdition = Db.CompanyProfile.Get()?.Edition == "Family";
+    }
+
+    private void Close() => MudDialog.Cancel();
+
+    private void Submit()
+    {
+        form.Validate();
+        if (success)
+        {
+            MudDialog.Close(DialogResult.Ok(Group));
+        }
+    }
+
+    private bool HasPerm(string p) => Group.Permissions.Contains(p);
+
+    private string GetShortPermName(string category, string perm)
+    {
+        return perm.StartsWith(category + ".") ? perm.Substring(category.Length + 1) : perm;
+    }
+
+    private void TogglePerm(string p, bool hasIt)
+    {
+        if (hasIt && !Group.Permissions.Contains(p))
+            Group.Permissions.Add(p);
+        else if (!hasIt && Group.Permissions.Contains(p))
+            Group.Permissions.Remove(p);
+    }
+
+    private bool IsBusinessCategory(string categoryKey)
+    {
+        var businessCategories = new[] { 
+            "Projects", "Email", "Address Book", "Finance", 
+            "Purchases", "Timesheets", "Business Documents", "My Week" 
+        };
+        return businessCategories.Contains(categoryKey);
+    }
+}

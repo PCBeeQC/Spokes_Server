@@ -1,0 +1,46 @@
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Models.HR
+@using MudBlazor
+
+<MudDialog>
+    <DialogContent>
+        <MudTextField @bind-Value="_viewName" Label="View Name" Variant="Variant.Outlined" AutoFocus="true" />
+
+        <MudText Class="mt-4 mb-2">View Type</MudText>
+        <MudRadioGroup @bind-Value="_viewType">
+            <MudRadio Value="@BoardViewType.Kanban" Color="Color.Primary">Kanban</MudRadio>
+            <MudRadio Value="@BoardViewType.Table" Color="Color.Primary">Table</MudRadio>
+            <MudRadio Value="@BoardViewType.Gallery" Color="Color.Primary">Gallery</MudRadio>
+            <MudRadio Value="@BoardViewType.Calendar" Color="Color.Primary">Calendar</MudRadio>
+        </MudRadioGroup>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+        <MudButton Color="Color.Primary" OnClick="Submit" Disabled="@string.IsNullOrWhiteSpace(_viewName)">Create</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
+
+    // We can pass BoardId to prepopulate visible columns if we want to get fancy later
+    [Parameter] public string? BoardId { get; set; }
+
+    private string _viewName = "New View";
+    private BoardViewType _viewType = BoardViewType.Kanban;
+
+    void Submit()
+    {
+        var view = new BoardView
+        {
+            Name = _viewName,
+            Type = _viewType
+        };
+        MudDialog.Close(DialogResult.Ok(view));
+    }
+
+    void Cancel() => MudDialog.Cancel();
+}

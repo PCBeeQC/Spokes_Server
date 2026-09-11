@@ -1,0 +1,187 @@
+@using Microsoft.AspNetCore.Components.Authorization
+@using Spokes_Server.Core.Data
+@using Spokes_Server.Core.Services
+@using Spokes_Server.Core.Constants
+@using Spokes_Server.Core.Models.Core
+@inject Database Db
+@inject Microsoft.Extensions.Configuration.IConfiguration Config
+@inject UserService UserService
+@inject AuthenticationStateProvider AuthStateProvider
+@inject ChatNotificationService ChatNotifications
+@inject EmailNotificationService EmailNotifications
+@inject Spokes_Server.Core.Services.Core.AppLabelService AppLabels
+@inject Spokes_Server.Core.Services.Core.StartupTimingService StartupTimings
+@inject IJSRuntime JS
+@implements IDisposable
+
+<MudNavMenu>
+    @foreach (var href in _availableLinks)
+    {
+        var meta = GetLinkMetadata(href);
+        <MudNavLink Href="@href" Match="@(href == "" ? NavLinkMatch.All : NavLinkMatch.Prefix)" Icon="@meta.Icon">
+            <div class="d-flex align-center" style="width: 100%;">
+                <span style="flex: 1;">@meta.Title</span>
+                
+                @if (href == "chat" && _unreadCount > 0)
+                {
+                    <span style="display: inline-flex; align-items: center; justify-content: center; min-width: 20px; height: 20px; padding: 0 6px; margin-right: 8px; border-radius: 10px; background: var(--mud-palette-error); color: white; font-size: 11px; font-weight: 700;">@_unreadCount</span>
+                }
+                else if (href == "email" && _unreadEmailCount > 0)
+                {
+                    <span class="d-inline-flex align-center justify-center rounded-pill px-2 py-0 mr-2" style="min-width: 20px; height: 20px; background: var(--mud-palette-error); color: white; font-size: 11px; font-weight: 700;">@_unreadEmailCount</span>
+                }
+                
+                @if (_isEditingFavorites)
+                {
+                    <span @onclick:stopPropagation="true" @onclick:preventDefault="true" class="d-flex">
+                        <MudIconButton Icon="@Icons.Material.Filled.ArrowUpward" Color="Color.Default" Size="Size.Small" OnClick="@(() => MoveFavoriteUp(href))" />
+                        <MudIconButton Icon="@Icons.Material.Filled.ArrowDownward" Color="Color.Default" Size="Size.Small" OnClick="@(() => MoveFavoriteDown(href))" />
+                    </span>
+                }
+            </div>
+        </MudNavLink>
+    }
+</MudNavMenu>
+
+@code {
+    [Parameter] public bool _isEditingFavorites { get; set; } = false;
+    [Parameter] public bool drawerOpen { get; set; } = true;
+    
+    private Employee? _currentUser;
+    private int _unreadCount = 0;
+    private int _unreadEmailCount = 0;
+    private List<string> _availableLinks = new();
+
+    private (string Title, string Icon) GetLinkMetadata(string href) => href switch
+    {
+        "" => ("Home", Icons.Material.Filled.Home),
+        "chat" => ("Chat", Icons.Material.Filled.Chat),
+        "email" => ("Email", Icons.Material.Filled.Email),
+        "planning/calendar" => ("Calendar", Icons.Material.Filled.CalendarMonth),
+        "organization" => ($"{AppLabels.Employees} & {AppLabels.Teams}", @Icons.Material.Filled.People),
+        "admin/definitions" => ("Task Definitions", Icons.Material.Filled.ListAlt),
+        "admin/standard-documents" => ("Standard Documents", Icons.Material.Filled.Description),
+        "admin/settings" => ("Settings", Icons.Material.Filled.Settings),
+        "admin/demo-settings" => ("Demo Settings", Icons.Material.Filled.Build),
+        "admin/moderation" => ("Moderation", Icons.Material.Filled.Security),
+        "albums" => ("Albums", @Icons.Material.Filled.PhotoLibrary),
+        _ => ("Unknown", Icons.Material.Filled.Link)
+    };
+
+    private void MoveFavoriteUp(string href)
+    {
+        if (_currentUser == null) return;
+        var index = _availableLinks.IndexOf(href);
+        if (index > 0)
+        {
+            _availableLinks.RemoveAt(index);
+            _availableLinks.Insert(index - 1, href);
+            
+            // Save order to profile
+            _currentUser.FavoriteLinks = _availableLinks.ToList();
+            Db.Employees.Save(_currentUser);
+            StateHasChanged();
+        }
+    }
+
+    private void MoveFavoriteDown(string href)
+    {
+        if (_currentUser == null) return;
+        var index = _availableLinks.IndexOf(href);
+        if (index >= 0 && index < _availableLinks.Count - 1)
+        {
+            _availableLinks.RemoveAt(index);
+            _availableLinks.Insert(index + 1, href);
+            
+            // Save order to profile
+            _currentUser.FavoriteLinks = _availableLinks.ToList();
+            Db.Employees.Save(_currentUser);
+            StateHasChanged();
+        }
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        StartupTimings.Add("Server: NavMenu_Friend OnInitializedAsync Start");
+        _currentUser = await UserService.GetEmployeeAsync();
+        if (_currentUser != null)
+        {
+            // 1. Determine which links the user has available based on permissions
+            // This explicitly overrides whatever "favorites" are in their profile for the family menu.
+            var allowed = new List<string>(); // Home is hidden in friend edition
+            
+            if (HasPerm(AppPermissions.Chat.Use)) allowed.Add("chat");
+            //if (HasPerm(AppPermissions.Email.Use)) allowed.Add("email");
+            if (HasPerm(AppPermissions.Calendar.View)) allowed.Add("planning/calendar");
+            if (HasPerm(AppPermissions.Albums.View)) allowed.Add("albums");
+            
+            allowed.Add("organization"); // Everyone in Friend edition should also see Members List
+            
+            if (HasPerm(AppPermissions.Chat.Moderator))
+            {
+                allowed.Add("admin/moderation");
+            }
+            if (HasPerm(AppPermissions.Admin.ManageSettings))
+            {
+                allowed.Add("admin/settings");
+                if (Config.GetValue<bool>("Spokes_DemoSetup"))
+                {
+                    allowed.Add("admin/demo-settings");
+                }
+            }
+            
+            
+            // 2. Friend edition uses the standard defined allowed list order (Chat, Calendar, Albums, Organization, etc.)
+            _availableLinks = allowed;
+
+            // 3. Sync the canonical order back to profile if it differs
+            if (!_currentUser.FavoriteLinks.SequenceEqual(_availableLinks))
+            {
+                _currentUser.FavoriteLinks = _availableLinks.ToList();
+                Db.Employees.Save(_currentUser);
+            }
+
+            // Initialize chat and email notifications
+            await ChatNotifications.InitializeAsync(_currentUser.Id);
+            await EmailNotifications.InitializeAsync(_currentUser.Id);
+
+            ChatNotifications.OnUnreadCountChanged += UpdateUnreadCount;
+            EmailNotifications.OnUnreadCountChanged += UpdateUnreadEmailCount;
+            _unreadCount = ChatNotifications.TotalUnreadCount;
+            _unreadEmailCount = EmailNotifications.TotalUnreadCount;
+            UpdateUnreadCount();
+        }
+        StartupTimings.Add($"Server: NavMenu_Friend OnInitializedAsync Done (+{sw.ElapsedMilliseconds}ms)");
+    }
+
+    private bool HasPerm(string perm) => _currentUser?.HasPermission(perm) ?? false;
+
+    private void UpdateUnreadCount()
+    {
+        _unreadCount = ChatNotifications.TotalUnreadCount;
+        InvokeAsync(async () =>
+        {
+            StateHasChanged();
+            await Task.Delay(250);
+            try { await JS.InvokeVoidAsync("pushNotifications.updateBadge", _unreadCount + _unreadEmailCount); } catch { }
+        });
+    }
+
+    private void UpdateUnreadEmailCount()
+    {
+        _unreadEmailCount = EmailNotifications.TotalUnreadCount;
+        InvokeAsync(async () =>
+        {
+            StateHasChanged();
+            await Task.Delay(250);
+            try { await JS.InvokeVoidAsync("pushNotifications.updateBadge", _unreadCount + _unreadEmailCount); } catch { }
+        });
+    }
+
+    public void Dispose()
+    {
+        ChatNotifications.OnUnreadCountChanged -= UpdateUnreadCount;
+        EmailNotifications.OnUnreadCountChanged -= UpdateUnreadEmailCount;
+    }
+}

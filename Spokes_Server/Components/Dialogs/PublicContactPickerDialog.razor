@@ -1,0 +1,67 @@
+@using Spokes_Server.Core.Data
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Models.HR
+@using MudBlazor
+@inject Database Db
+
+<MudDialog>
+    <DialogContent>
+        <MudTable Items="@_publicContacts" MultiSelection="true" @bind-SelectedItems="_selectedContacts" Hover="true"
+            Striped="true" Filter="new Func<ContactPerson,bool>(FilterFunc)">
+            <ToolBarContent>
+                <MudText Typo="Typo.h6">Select Public Contacts</MudText>
+                <MudSpacer />
+                <MudTextField @bind-Value="_searchString" Placeholder="Search..." Adornment="Adornment.Start"
+                    AdornmentIcon="@Icons.Material.Filled.Search" IconSize="Size.Medium" Class="mt-0"></MudTextField>
+            </ToolBarContent>
+            <HeaderContent>
+                <MudTh>Name</MudTh>
+                <MudTh>Email</MudTh>
+                <MudTh>Title</MudTh>
+                <MudTh>Phone</MudTh>
+            </HeaderContent>
+            <RowTemplate>
+                <MudTd DataLabel="Name">@($"{context.Prefix} {context.Name}".Trim())</MudTd>
+                <MudTd DataLabel="Email">@context.Email</MudTd>
+                <MudTd DataLabel="Title">@context.Title</MudTd>
+                <MudTd DataLabel="Phone">@context.Phone</MudTd>
+            </RowTemplate>
+            <PagerContent>
+                <MudTablePager />
+            </PagerContent>
+        </MudTable>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Close">Close</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="Submit">Add Selected
+            (@_selectedContacts.Count)</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
+
+    private string _searchString = "";
+    private HashSet<ContactPerson> _selectedContacts = new();
+    private List<ContactPerson> _publicContacts = new();
+
+    protected override void OnInitialized()
+    {
+        _publicContacts = Db.PublicContacts.GetAll().OrderBy(c => c.Name).ToList();
+    }
+
+    private bool FilterFunc(ContactPerson element)
+    {
+        if (string.IsNullOrWhiteSpace(_searchString)) return true;
+        if (element.Name.Contains(_searchString, StringComparison.OrdinalIgnoreCase)) return true;
+        if (element.Email.Contains(_searchString, StringComparison.OrdinalIgnoreCase)) return true;
+        return false;
+    }
+
+    private void Submit() => MudDialog.Close(DialogResult.Ok(_selectedContacts.ToList()));
+    private void Close() => MudDialog.Cancel();
+}
+

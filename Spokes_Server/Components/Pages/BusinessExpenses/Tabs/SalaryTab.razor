@@ -1,0 +1,667 @@
+@using Spokes_Server.Core.Data
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Models.HR
+@inject Database Db
+@inject ISnackbar Snackbar
+
+<MudGrid>
+    <!-- 1. Employee Salary Grid (Full Width) -->
+    <MudItem xs="12">
+        <MudPaper Class="pa-4 mb-4" Elevation="0" Outlined="true">
+            <MudText Typo="Typo.h6" Class="mb-4">Employee Salaries & Costs (Forward Looking)</MudText>
+            <MudTable Items="@Employees" Dense="true" Striped="true" Outlined="true" Elevation="0" Hover="true">
+                <HeaderContent>
+                    <MudTh>Employee</MudTh>
+                    <MudTh>Position</MudTh>
+                    <MudTh>Weekly Hours</MudTh>
+                    <MudTh>Hourly Cost</MudTh>
+                    <MudTh>Biweekly</MudTh>
+                    <MudTh>Yearly</MudTh>
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd DataLabel="Employee">@context.FullName</MudTd>
+                    <MudTd DataLabel="Position">@context.Position</MudTd>
+                    <MudTd DataLabel="Weekly Hours">
+                        <MudNumericField @bind-Value="context.WeeklyHours" @bind-Value:after="() => OnFieldChanged(context)"
+                            Variant="Variant.Outlined" Adornment="Adornment.End" AdornmentText="h" 
+                            Margin="Margin.Dense" Style="max-width: 120px;" />
+                    </MudTd>
+                    <MudTd DataLabel="Hourly Cost">
+                        <MudNumericField @bind-Value="context.HourlyRate" @bind-Value:after="() => OnFieldChanged(context)"
+                            Variant="Variant.Outlined" Adornment="Adornment.End" AdornmentText="$/h" 
+                            Margin="Margin.Dense" Style="max-width: 120px;" />
+                    </MudTd>
+                    <MudTd DataLabel="Bi-Weekly Gross">
+                        <MudText Typo="Typo.body2">@((context.HourlyRate * context.WeeklyHours * 2).ToString("C2"))
+                        </MudText>
+                    </MudTd>
+                    <MudTd DataLabel="Yearly Gross">
+                        <MudText>@((context.HourlyRate * context.WeeklyHours * 52).ToString("C0"))</MudText>
+                        </MudTd>
+                    </RowTemplate>
+                </MudTable>
+            </MudPaper>
+        </MudItem>
+
+        <!-- 2. Employer Contributions Management (Full Width) -->
+        <MudItem xs="12">
+        <MudPaper Class="pa-4" Elevation="0" Outlined="true">
+                <div class="d-flex justify-space-between align-center mb-4">
+                    <div>
+                        <MudText Typo="Typo.h6">Employer Contributions Configuration</MudText>
+                        <MudText Typo="Typo.caption">Manage taxes, insurance, and other fees added on top of salary.
+                        </MudText>
+                    </div>
+                    <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="OpenAddContributionDialog">Add
+                        Contribution</MudButton>
+                </div>
+
+            <MudTable Items="@Contributions" Dense="true" Striped="true" Outlined="true" Elevation="0" Hover="true">
+                    <HeaderContent>
+                        <MudTh>Name</MudTh>
+                        <MudTh>Type</MudTh>
+                        <MudTh>Value</MudTh>
+                        <MudTh>Scope</MudTh>
+                        <MudTh>Actions</MudTh>
+                    </HeaderContent>
+                    <RowTemplate>
+                        <MudTd>@context.Name</MudTd>
+                        <MudTd>@context.Type</MudTd>
+                        <MudTd>
+                            @(context.Type == EmployerContributionType.Percentage ? $"{context.Value}%" :
+                            $"{context.Value:C2}")
+                    </MudTd>
+                    <MudTd>
+                        <MudChip T="string" Size="Size.Small" Color="@GetScopeColor(context.Scope)">@context.Scope
+                        </MudChip>
+                        @if (context.Scope != EmployerContributionScope.Global)
+                        {
+                            <MudText Typo="Typo.caption">(@context.TargetIds.Count targets)</MudText>
+                        }
+                    </MudTd>
+                    <MudTd>
+                        <MudIconButton Icon="@Icons.Material.Filled.Edit" Color="Color.Primary" Size="Size.Small"
+                            OnClick="@(() => EditContribution(context))" />
+                        <MudIconButton Icon="@Icons.Material.Filled.Delete" Color="Color.Error" Size="Size.Small"
+                            OnClick="@(() => DeleteContribution(context))" />
+                    </MudTd>
+                </RowTemplate>
+            </MudTable>
+
+            @if (_showAddForm)
+            {
+                <MudDivider Class="my-4" />
+                <MudPaper Class="pa-4 grey lighten-5" Elevation="0">
+                    <MudText Typo="Typo.subtitle1" Class="mb-2">@(_isEditing ? "Edit Contribution Rule" : "New Contribution Rule")</MudText>
+                    <MudGrid>
+                        <MudItem xs="12" sm="6">
+                            <MudTextField @bind-Value="NewContribution.Name" Label="Fee Name (e.g. QPP)"
+                                Variant="Variant.Outlined" Margin="Margin.Dense" />
+                        </MudItem>
+                        <MudItem xs="12" sm="3">
+                            <MudSelect @bind-Value="NewContribution.Type" Label="Type" Variant="Variant.Outlined"
+                                Margin="Margin.Dense">
+                                <MudSelectItem Value="@EmployerContributionType.Percentage">Percentage (%)</MudSelectItem>
+                                <MudSelectItem Value="@EmployerContributionType.FixedAmount">Fixed Amount ($)
+                                </MudSelectItem>
+                            </MudSelect>
+                        </MudItem>
+                        <MudItem xs="12" sm="3">
+                            <MudNumericField @bind-Value="NewContribution.Value" 
+                                Label="@(NewContribution.Type == EmployerContributionType.Percentage ? "Percentage" : "Yearly Amount")" 
+                                Variant="Variant.Outlined" Margin="Margin.Dense"
+                                Adornment="Adornment.End" 
+                                AdornmentText="@(NewContribution.Type == EmployerContributionType.Percentage ? "%" : "$")" />
+                        </MudItem>
+
+                        <MudItem xs="12">
+                            <MudSelect T="string" Label="Apply To" @bind-Value="NewContribution.Scope"
+                                Variant="Variant.Outlined" Margin="Margin.Dense">
+                                <MudSelectItem Value="@EmployerContributionScope.Global">All Employees</MudSelectItem>
+                                <MudSelectItem Value="@EmployerContributionScope.Team">Specific Teams</MudSelectItem>
+                                <MudSelectItem Value="@EmployerContributionScope.Employee">Specific Employees
+                                </MudSelectItem>
+                            </MudSelect>
+                        </MudItem>
+
+                        @if (NewContribution.Scope == EmployerContributionScope.Team)
+                        {
+                            <MudItem xs="12">
+                                <MudText Typo="Typo.subtitle2" Class="mb-1">Select Teams</MudText>
+                                <TeamAutocomplete Label="Add Team" Teams="@Teams" ExcludedIds="@SelectedTeamIds"
+                                    ValueChanged="AddTeam" ResetOnSelect="true" Margin="Margin.Dense" />
+                                <div class="d-flex flex-wrap gap-1 mt-2">
+                                    @foreach (var teamId in SelectedTeamIds)
+                                    {
+                                        var team = Teams.FirstOrDefault(t => t.Id == teamId);
+                                        if (team != null)
+                                        {
+                                            <TeamChip Team="@team" OnClose="@(() => RemoveTeam(teamId))" Size="Size.Small" />
+                                        }
+                                    }
+                                </div>
+                            </MudItem>
+                        }
+                        @if (NewContribution.Scope == EmployerContributionScope.Employee)
+                        {
+                            <MudItem xs="12">
+                                <MudText Typo="Typo.subtitle2" Class="mb-1">Select Employees</MudText>
+                                <EmployeeAutocomplete Label="Add Employee" Employees="@Employees" ExcludedIds="@SelectedEmployeeIds"
+                                    ValueChanged="AddEmployee" ResetOnSelect="true" Margin="Margin.Dense" />
+                                <div class="d-flex flex-wrap gap-1 mt-2">
+                                    @foreach (var empId in SelectedEmployeeIds)
+                                    {
+                                        var emp = Employees.FirstOrDefault(e => e.Id == empId);
+                                        if (emp != null)
+                                        {
+                                            <EmployeeChip Employee="@emp" OnClose="@(() => RemoveEmployee(empId))" Size="Size.Small" />
+                                        }
+                                    }
+                                </div>
+                            </MudItem>
+                        }
+
+                        <MudItem xs="12" Class="d-flex justify-end gap-2">
+                            <MudButton OnClick="@(() => { _showAddForm = false; _isEditing = false; })">Cancel</MudButton>
+                            <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="SaveContribution">
+                                @(_isEditing ? "Save Changes" : "Save Rule")
+                            </MudButton>
+                        </MudItem>
+                    </MudGrid>
+                </MudPaper>
+            }
+
+        </MudPaper>
+    </MudItem>
+
+    <!-- 3. Overall Stats (Full Width) -->
+    <MudItem xs="12">
+        <MudPaper Class="pa-4 teal lighten-5" Elevation="0" Outlined="true">
+            <MudText Typo="Typo.h6" Class="mb-4">Payroll Estimates (Annual)</MudText>
+            <MudGrid>
+                <MudItem xs="12" sm="4">
+                    <MudText>Total Gross Salary / Yr</MudText>
+                    <MudText Style="font-weight:bold" Typo="Typo.h5">@TotalYearlyGross.ToString("C0")</MudText>
+                </MudItem>
+                <MudItem xs="12" sm="4">
+                    <MudText>Total Employer Fees / Yr</MudText>
+                    <MudText Style="font-weight:bold" Color="Color.Error" Typo="Typo.h5">
+                        @TotalYearlyContributions.ToString("C0")</MudText>
+                </MudItem>
+                <MudItem xs="12" sm="4">
+                    <MudText>Total Cost / Yr</MudText>
+                    <MudText Style="font-weight:bold" Color="Color.Primary" Typo="Typo.h4">
+                        @TotalYearlyCost.ToString("C0")</MudText>
+                </MudItem>
+            </MudGrid>
+        </MudPaper>
+    </MudItem>
+
+    <!-- 4. Granular Cost Analysis (Full Width) -->
+    <MudItem xs="12">
+        <MudPaper Class="pa-4" Elevation="0" Outlined="true">
+            <MudText Typo="Typo.h6" Class="mb-4">Cost Analysis Tool</MudText>
+            
+            <!-- Filter Row -->
+            <MudGrid Class="mb-2">
+                <MudItem xs="12" sm="4">
+                    <MudText Typo="Typo.subtitle2" Class="mb-1">Filter by Teams</MudText>
+                    <TeamAutocomplete Label="Add Team" Teams="@Teams" ExcludedIds="@_analysisTeamIds"
+                        ValueChanged="AddAnalysisTeam" ResetOnSelect="true" Margin="Margin.Dense" />
+                    <div class="d-flex flex-wrap gap-1 mt-1" style="min-height: 32px;">
+                        @foreach (var teamId in _analysisTeamIds)
+                        {
+                            var team = Teams.FirstOrDefault(t => t.Id == teamId);
+                            if (team != null)
+                            {
+                                <TeamChip Team="@team" OnClose="@(() => RemoveAnalysisTeam(teamId))" Size="Size.Small" />
+                            }
+                        }
+                        @if (!_analysisTeamIds.Any())
+                        {
+                            <MudText Typo="Typo.caption" Class="mud-text-secondary">All teams</MudText>
+                        }
+                    </div>
+                </MudItem>
+                <MudItem xs="12" sm="4">
+                    <MudText Typo="Typo.subtitle2" Class="mb-1">Filter by Contributions</MudText>
+                    <MudAutocomplete @ref="_analysisContribAutocomplete" T="EmployerContribution" Label="Add Contribution" Value="@_analysisAutoCompleteContribValue" ValueChanged="AddAnalysisContrib"
+                        SearchFunc="SearchAnalysisContribs" ToStringFunc="@(c => c?.Name ?? "")" Clearable="true"
+                        Variant="Variant.Outlined" Margin="Margin.Dense" />
+                    <div class="d-flex flex-wrap gap-1 mt-1" style="min-height: 32px;">
+                        @foreach (var contribId in _analysisContribIds)
+                        {
+                            var contrib = Contributions.FirstOrDefault(c => c.Id == contribId);
+                            if (contrib != null)
+                            {
+                                <MudChip T="string" Text="@contrib.Name" OnClose="@(() => RemoveAnalysisContrib(contribId))" 
+                                    Size="Size.Small" />
+                            }
+                        }
+                        @if (!_analysisContribIds.Any())
+                        {
+                            <MudText Typo="Typo.caption" Class="mud-text-secondary">All contributions</MudText>
+                        }
+                    </div>
+                </MudItem>
+                <MudItem xs="12" sm="4">
+                    <MudText Typo="Typo.subtitle2" Class="mb-1">Period</MudText>
+                    <MudSelect T="string" Label="Select Period" @bind-Value="_analysisPeriodType"
+                        Variant="Variant.Outlined" Margin="Margin.Dense">
+                        <MudSelectItem Value="@("Weekly")">Weekly (7 days)</MudSelectItem>
+                        <MudSelectItem Value="@("Biweekly")">Biweekly (14 days)</MudSelectItem>
+                        <MudSelectItem Value="@("Monthly")">Monthly (30 days)</MudSelectItem>
+                        <MudSelectItem Value="@("Yearly")">Yearly (365 days)</MudSelectItem>
+                        <MudSelectItem Value="@("Custom")">Custom Date Range</MudSelectItem>
+                    </MudSelect>
+                    @if (_analysisPeriodType == "Custom")
+                    {
+                        <MudDateRangePicker @bind-DateRange="_analysisDateRange" Variant="Variant.Outlined"
+                            Margin="Margin.Dense" Class="mt-2" />
+                    }
+                    else
+                    {
+                        <div style="min-height: 32px;" class="mt-1">
+                            <MudText Typo="Typo.caption" Class="mud-text-secondary">@GetPeriodDescription()</MudText>
+                        </div>
+                    }
+                </MudItem>
+            </MudGrid>
+            
+            <div class="d-flex justify-end mt-2">
+                <MudButton OnClick="RunAnalysis" Variant="Variant.Filled" Color="Color.Secondary">
+                    Calculate
+                </MudButton>
+            </div>
+
+            @if (_analysisResult != null)
+            {
+                <MudDivider Class="my-4" />
+                <MudText Typo="Typo.subtitle1" Class="mb-2">Analysis Results (@_analysisDays days)</MudText>
+                <MudGrid>
+                    <MudItem xs="12" md="6">
+                        <MudList T="string" Dense="true">
+                            <MudListItem>
+                                <div class="d-flex justify-space-between">
+                                    <MudText><b>Total Cost for Period:</b></MudText>
+                                    <MudText Color="Color.Primary"><b>@_analysisResult.TotalCost.ToString("C2")</b>
+                                    </MudText>
+                                </div>
+                            </MudListItem>
+                            <MudListItem>
+                                <div class="d-flex justify-space-between">
+                                    <MudText>Gross Salary:</MudText>
+                                    <MudText>@_analysisResult.GrossSalary.ToString("C2")</MudText>
+                                </div>
+                            </MudListItem>
+                            <MudListItem>
+                                <div class="d-flex justify-space-between">
+                                    <MudText>Employer Contributions:</MudText>
+                                    <MudText>@_analysisResult.TotalContributions.ToString("C2")</MudText>
+                                </div>
+                            </MudListItem>
+                        </MudList>
+                    </MudItem>
+
+                    <MudItem xs="12" md="6">
+                        <MudText Typo="Typo.subtitle2">Breakdown by Team</MudText>
+                        <MudList T="string" Dense="true">
+                            @foreach (var kvp in @_analysisResult.CostByTeam)
+                            {
+                                <MudListItem>
+                                    <div class="d-flex justify-space-between">
+                                        <MudText>@(string.IsNullOrEmpty(kvp.Key) ? "Unassigned" :
+                                           Teams.FirstOrDefault(t => t.Id == kvp.Key)?.Name)</MudText>
+                                            <MudText>@kvp.Value.ToString("C2")</MudText>
+                                        </div>
+                                    </MudListItem>
+                            }
+                        </MudList>
+                    </MudItem>
+                </MudGrid>
+            }
+        </MudPaper>
+    </MudItem>
+
+</MudGrid>
+
+
+@code {
+    private List<Employee> Employees = new();
+    private List<EmployerContribution> Contributions = new();
+    private List<Team> Teams = new();
+
+    private MudAutocomplete<EmployerContribution>? _analysisContribAutocomplete;
+    private EmployerContribution? _analysisAutoCompleteContribValue;
+
+    // Config
+    private string? _nullString = null;
+    private bool _showAddForm = false;
+    private bool _isEditing = false;
+    private EmployerContribution NewContribution = new();
+    private IEnumerable<string> SelectedTeamIds { get; set; } = new HashSet<string>();
+    private IEnumerable<string> SelectedEmployeeIds { get; set; } = new HashSet<string>();
+
+    // Analysis
+    private IEnumerable<string> _analysisTeamIds { get; set; } = new HashSet<string>();
+    private IEnumerable<string> _analysisContribIds { get; set; } = new HashSet<string>();
+    private string _analysisPeriodType { get; set; } = "Monthly";
+    private DateRange _analysisDateRange { get; set; } = new DateRange(DateTime.Today, DateTime.Today.AddMonths(1));
+    private AnalysisResult? _analysisResult;
+    
+    private int _analysisDays => _analysisPeriodType switch
+    {
+        "Weekly" => 7,
+        "Biweekly" => 14,
+        "Monthly" => 30,
+        "Yearly" => 365,
+        "Custom" => _analysisDateRange.Start.HasValue && _analysisDateRange.End.HasValue
+            ? (_analysisDateRange.End.Value - _analysisDateRange.Start.Value).Days + 1
+            : 0,
+        _ => 30
+    };
+    
+    private string GetPeriodDescription() => _analysisPeriodType switch
+    {
+        "Weekly" => "From today, 7 days forward",
+        "Biweekly" => "From today, 14 days forward",
+        "Monthly" => "From today, 30 days forward",
+        "Yearly" => "From today, 365 days forward",
+        _ => ""
+    };
+    
+    // Analysis chip helpers
+    private void AddAnalysisTeam(Team? team)
+    {
+        if (team != null)
+        {
+            var list = _analysisTeamIds.ToList();
+            if (!list.Contains(team.Id))
+            {
+                list.Add(team.Id);
+                _analysisTeamIds = list;
+            }
+        }
+    }
+    
+    private void RemoveAnalysisTeam(string teamId)
+    {
+        var list = _analysisTeamIds.ToList();
+        list.Remove(teamId);
+        _analysisTeamIds = list;
+    }
+    
+    private async Task AddAnalysisContrib(EmployerContribution? contrib)
+    {
+        if (contrib != null)
+        {
+            var list = _analysisContribIds.ToList();
+            if (!list.Contains(contrib.Id))
+            {
+                list.Add(contrib.Id);
+                _analysisContribIds = list;
+            }
+        }
+        if (_analysisContribAutocomplete != null)
+        {
+            await _analysisContribAutocomplete.ClearAsync();
+        }
+    }
+
+    private Task<IEnumerable<EmployerContribution>> SearchAnalysisContribs(string value, CancellationToken ct)
+    {
+        var available = Contributions.Where(c => !_analysisContribIds.Contains(c.Id));
+        if (string.IsNullOrWhiteSpace(value)) return Task.FromResult(available.AsEnumerable());
+        return Task.FromResult(available.Where(c => c.Name.Contains(value, StringComparison.OrdinalIgnoreCase)).Take(10));
+    }
+    
+    private void RemoveAnalysisContrib(string contribId)
+    {
+        var list = _analysisContribIds.ToList();
+        list.Remove(contribId);
+        _analysisContribIds = list;
+    }
+
+    protected override void OnInitialized()
+    {
+        Employees = Db.Employees.GetAll().Where(e => e.IsActive).ToList();
+        Contributions = Db.EmployerContributions.GetAll();
+        Teams = Db.Teams.GetAll();
+    }
+
+    private void OnFieldChanged(Employee item)
+    {
+        Db.Employees.Save(item);
+        Snackbar.Add("Salary updated", Severity.Success);
+        StateHasChanged();
+    }
+
+    private void OpenAddContributionDialog()
+    {
+        NewContribution = new EmployerContribution();
+        SelectedTeamIds = new HashSet<string>();
+        SelectedEmployeeIds = new HashSet<string>();
+        _isEditing = false;
+        _showAddForm = true;
+    }
+
+    private void EditContribution(EmployerContribution contribution)
+    {
+        NewContribution = new EmployerContribution
+        {
+            Id = contribution.Id,
+            Name = contribution.Name,
+            Type = contribution.Type,
+            Value = contribution.Value,
+            Scope = contribution.Scope,
+            TargetIds = new List<string>(contribution.TargetIds)
+        };
+        
+        // Set the appropriate selector based on scope
+        if (contribution.Scope == EmployerContributionScope.Team)
+        {
+            SelectedTeamIds = new HashSet<string>(contribution.TargetIds);
+            SelectedEmployeeIds = new HashSet<string>();
+        }
+        else if (contribution.Scope == EmployerContributionScope.Employee)
+        {
+            SelectedEmployeeIds = new HashSet<string>(contribution.TargetIds);
+            SelectedTeamIds = new HashSet<string>();
+        }
+        else
+        {
+            SelectedTeamIds = new HashSet<string>();
+            SelectedEmployeeIds = new HashSet<string>();
+        }
+        
+        _isEditing = true;
+        _showAddForm = true;
+    }
+
+    private void SaveContribution()
+    {
+        if (string.IsNullOrWhiteSpace(NewContribution.Name)) return;
+
+        // Set TargetIds based on scope
+        if (NewContribution.Scope == EmployerContributionScope.Team)
+            NewContribution.TargetIds = SelectedTeamIds.ToList();
+        else if (NewContribution.Scope == EmployerContributionScope.Employee)
+            NewContribution.TargetIds = SelectedEmployeeIds.ToList();
+        else
+            NewContribution.TargetIds = new List<string>();
+
+        Db.EmployerContributions.Save(NewContribution);
+        
+        if (_isEditing)
+        {
+            // Replace in list
+            var idx = Contributions.FindIndex(c => c.Id == NewContribution.Id);
+            if (idx >= 0) Contributions[idx] = NewContribution;
+            Snackbar.Add("Contribution rule updated", Severity.Success);
+        }
+        else
+        {
+            Contributions.Add(NewContribution);
+            Snackbar.Add("Contribution rule added", Severity.Success);
+        }
+
+        _showAddForm = false;
+        _isEditing = false;
+    }
+
+    // Chip selector helpers
+    private void AddTeam(Team? team)
+    {
+        if (team != null)
+        {
+            var list = SelectedTeamIds.ToList();
+            if (!list.Contains(team.Id))
+            {
+                list.Add(team.Id);
+                SelectedTeamIds = list;
+            }
+        }
+    }
+
+    private void RemoveTeam(string teamId)
+    {
+        var list = SelectedTeamIds.ToList();
+        list.Remove(teamId);
+        SelectedTeamIds = list;
+    }
+
+    private void AddEmployee(Employee? emp)
+    {
+        if (emp != null)
+        {
+            var list = SelectedEmployeeIds.ToList();
+            if (!list.Contains(emp.Id))
+            {
+                list.Add(emp.Id);
+                SelectedEmployeeIds = list;
+            }
+        }
+    }
+
+    private void RemoveEmployee(string empId)
+    {
+        var list = SelectedEmployeeIds.ToList();
+        list.Remove(empId);
+        SelectedEmployeeIds = list;
+    }
+
+    private void DeleteContribution(EmployerContribution contribution)
+    {
+        Db.EmployerContributions.Delete(contribution.Id);
+        Contributions.Remove(contribution);
+        Snackbar.Add("Contribution removed", Severity.Success);
+    }
+
+    private Color GetScopeColor(string scope) => scope switch
+    {
+        EmployerContributionScope.Global => Color.Success,
+        EmployerContributionScope.Team => Color.Info,
+        EmployerContributionScope.Employee => Color.Warning,
+        _ => Color.Default
+    };
+
+    // --- Calculations ---
+
+    private decimal CalculateEmployeeContributions(Employee emp, List<EmployerContribution>? scopedContribs = null)
+    {
+        decimal weeklyGross = emp.WeeklyHours * emp.HourlyRate;
+        decimal yearlyGross = weeklyGross * 52;
+        decimal totalContrib = 0;
+
+        var sourceList = scopedContribs ?? Contributions;
+
+        foreach (var c in sourceList)
+        {
+            bool applies = false;
+            if (c.Scope == EmployerContributionScope.Global) applies = true;
+            else if (c.Scope == EmployerContributionScope.Employee && c.TargetIds.Contains(emp.Id)) applies = true;
+            else if (c.Scope == EmployerContributionScope.Team && !string.IsNullOrEmpty(emp.TeamId) &&
+            c.TargetIds.Contains(emp.TeamId)) applies = true;
+
+            if (applies)
+            {
+                if (c.Type == EmployerContributionType.Percentage)
+                {
+                    totalContrib += yearlyGross * (c.Value / 100m);
+                }
+                else // Fixed (Yearly amount)
+                {
+                    totalContrib += c.Value;
+                }
+            }
+        }
+        return totalContrib;
+    }
+
+    private decimal CalculateYearlyTotal(Employee emp)
+    {
+        decimal weeklyGross = emp.WeeklyHours * emp.HourlyRate;
+        decimal yearlyGross = weeklyGross * 52;
+        return yearlyGross + CalculateEmployeeContributions(emp);
+    }
+
+    private decimal TotalYearlyGross => Employees.Sum(e => e.WeeklyHours * e.HourlyRate * 52);
+    private decimal TotalYearlyContributions => Employees.Sum(e => CalculateEmployeeContributions(e, null));
+    private decimal TotalYearlyCost => TotalYearlyGross + TotalYearlyContributions;
+
+    // --- Analysis Logic ---
+
+    private void RunAnalysis()
+    {
+        if (_analysisDays <= 0) return;
+
+        var result = new AnalysisResult();
+        double ratio = (double)_analysisDays / 365.0; // Simple pro-rata for forward looking
+
+        // Filter valid employees (by team selection)
+        var targetEmployees = Employees.Where(e =>
+        !_analysisTeamIds.Any() || // No filter
+        (_analysisTeamIds.Contains(e.TeamId) || (string.IsNullOrEmpty(e.TeamId) && _analysisTeamIds.Contains("unassigned")))
+        ).ToList();
+
+        // Filter valid contributions
+        var targetContribs = Contributions.Where(c =>
+        !_analysisContribIds.Any() || _analysisContribIds.Contains(c.Id)
+        ).ToList();
+
+        foreach (var emp in targetEmployees)
+        {
+            // Gross Salary
+            decimal yearlyGross = emp.WeeklyHours * emp.HourlyRate * 52;
+            decimal periodGross = yearlyGross * (decimal)ratio;
+
+            result.GrossSalary += periodGross;
+
+            // Contributions (Scoped to filter)
+            decimal yearlyContrib = CalculateEmployeeContributions(emp, targetContribs);
+            decimal periodContrib = yearlyContrib * (decimal)ratio;
+
+            result.TotalContributions += periodContrib;
+
+            // Team Breakdown
+            string tId = emp.TeamId ?? "";
+            if (!result.CostByTeam.ContainsKey(tId)) result.CostByTeam[tId] = 0;
+            result.CostByTeam[tId] += (periodGross + periodContrib);
+        }
+
+        result.TotalCost = result.GrossSalary + result.TotalContributions;
+        _analysisResult = result;
+    }
+
+    public class AnalysisResult
+    {
+        public decimal TotalCost { get; set; }
+        public decimal GrossSalary { get; set; }
+        public decimal TotalContributions { get; set; }
+        public Dictionary<string, decimal> CostByTeam { get; set; } = new();
+    }
+}
+

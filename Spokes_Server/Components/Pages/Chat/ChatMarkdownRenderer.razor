@@ -1,0 +1,225 @@
+@using Markdig
+@using System.Text.RegularExpressions
+@using Spokes_Server.Core.Services.Core
+@using Spokes_Server.Core.Services.Security
+@inject MarkdownSanitizerService MarkdownSanitizer
+@inject FileTokenService FileTokens
+@inject ScopedKeystoreService ScopedKeystore
+
+@* Render markdown content as sanitized HTML, with @mention support *@
+<div class="chat-markdown">
+    @((MarkupString)_cachedHtml)
+</div>
+
+@code {
+    [Parameter] public string Content { get; set; } = "";
+    [Parameter] public string? FullContent { get; set; }
+    [Parameter] public string? CurrentUserId { get; set; }
+    [Parameter] public string? ChannelId { get; set; }
+    [Parameter] public string? SessionId { get; set; }
+    [Parameter] public List<Employee> Employees { get; set; } = new();
+    [Parameter] public bool IsEdited { get; set; }
+    [Parameter]
+    public string? ChannelKey { get; set; }
+
+    private string _cachedHtml = "";
+    private string _lastContent = "";
+    private bool _lastIsEdited;
+
+    protected override void OnParametersSet()
+    {
+        // Re-render markdown only if the content or edit status changes
+        if (_lastContent != Content || _lastIsEdited != IsEdited)
+        {
+            _cachedHtml = RenderMarkdown(Content);
+            _lastContent = Content;
+            _lastIsEdited = IsEdited;
+        }
+    }
+
+
+
+    // Matches @[Display Name] mention tokens (simple format, no ID)
+    private static readonly Regex MentionRegex = new(@"@\[([^\]]+)\]", RegexOptions.Compiled);
+    // Matches @everyone
+    private static readonly Regex EveryoneMentionRegex = new(@"@everyone\b", RegexOptions.Compiled);
+    // Matches #[Title](type:Id)
+    private static readonly Regex EntityTagRegex = new(@"#\[([^\]]+)\]\(([a-zA-Z0-9_-]+):[^\)]+\)", RegexOptions.Compiled);
+    // Matches ANY image to parse optional #ar= fragment for skeleton loading, and checks for klipy
+    private static readonly Regex ImgRegex = new(@"<img([^>]+)src=""([^""]+)""([^>]*)>", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+    // Matches [code]...[/code] and [code=language]...[/code]
+    private static readonly Regex CodeBlockRegex = new(@"\[code(?:=([^\]]+))?\](.*?)\[/code\]", RegexOptions.Compiled | RegexOptions.Singleline | RegexOptions.IgnoreCase);
+
+    private string RenderMarkdown(string content)
+    {
+        if (string.IsNullOrWhiteSpace(content))
+            return string.Empty;
+
+        try
+        {
+            var codeMap = new Dictionary<string, string>();
+            int matchIndex = 0;
+            System.Text.RegularExpressions.MatchCollection fullMatches = null;
+            if (!string.IsNullOrEmpty(FullContent))
+            {
+                fullMatches = CodeBlockRegex.Matches(FullContent);
+            }
+
+            // Replace [code]...[/code] with robust 10-backtick Markdown fences
+            var processed = CodeBlockRegex.Replace(content, match =>
+            {
+                var language = match.Groups[1].Success && !string.IsNullOrWhiteSpace(match.Groups[1].Value) ? match.Groups[1].Value : "csharp";
+                
+                // Extract full code content if available, otherwise use truncated content
+                var codeContent = (fullMatches != null && matchIndex < fullMatches.Count) 
+                    ? fullMatches[matchIndex].Groups[2].Value 
+                    : match.Groups[2].Value;
+                matchIndex++;
+
+                // Use a deterministic hash based on the code content so the cache can hit
+                using var md5 = System.Security.Cryptography.MD5.Create();
+                var hashBytes = md5.ComputeHash(System.Text.Encoding.UTF8.GetBytes(codeContent));
+                var id = BitConverter.ToString(hashBytes).Replace("-", "").ToLowerInvariant();
+                
+                codeMap[id] = codeContent;
+
+                // Add a newline before and after to ensure it is treated as a block.
+                // Insert a unique marker so we can inject the raw code into the copy button later.
+                return $"\n``````````{language}\nSPOKES_MARKER_{id}\n{match.Groups[2].Value}\n``````````\n";
+            });
+
+            // Replace @[Name] mention tokens with styled spans
+            processed = MentionRegex.Replace(processed, match =>
+            {
+                var displayName = match.Groups[1].Value;
+                // Look up the employee by display name to check if it's the current user
+                var employee = Employees.FirstOrDefault(e =>
+    e.FullName.Equals(displayName, StringComparison.OrdinalIgnoreCase));
+                var isSelf = employee != null && employee.Id == CurrentUserId;
+
+                // Check if it's a team mention (no matching employee)
+                var isTeam = employee == null;
+
+                string cssClass;
+                if (isSelf) cssClass = "mention mention-self";
+                else if (isTeam) cssClass = "mention mention-team";
+                else cssClass = "mention";
+
+                return $"<span class=\"{cssClass}\">@{System.Net.WebUtility.HtmlEncode(displayName)}</span>";
+            });
+
+            // Replace @everyone with highlighted span
+            processed = EveryoneMentionRegex.Replace(processed,
+            "<span class=\"mention mention-special\">@everyone</span>");
+
+            // Replace #[Title](type:Id) with styled pill
+            processed = EntityTagRegex.Replace(processed, match =>
+            {
+                var title = System.Net.WebUtility.HtmlEncode(match.Groups[1].Value);
+                var type = match.Groups[2].Value.ToLowerInvariant();
+                
+                if (type == "album" || type == "event")
+                {
+                    return string.Empty;
+                }
+                
+                string icon = type switch
+                {
+                    "project" => "📁",
+                    "quote" => "📄",
+                    "invoice" => "🧾",
+                    _ => "📎"
+                };
+
+                return $"<span class=\"mention\" style=\"background-color: color-mix(in srgb, var(--mud-palette-info) 15%, transparent); color: var(--mud-palette-info);\">{icon} {title}</span>";
+            });
+
+            var html = MarkdownSanitizer.RenderSanitizedHtml(processed);
+
+            // Apply GIF Aspect Ratio Skeletons and Klipy Watermarks
+            html = ImgRegex.Replace(html, match =>
+            {
+                var beforeSrc = match.Groups[1].Value;
+                var rawUrl = match.Groups[2].Value;
+                var afterSrc = match.Groups[3].Value;
+                
+                var fileMatch = Regex.Match(rawUrl, @"/spokesapi/files/(chat)/([^/]+)/([^?#]+)");
+                if (fileMatch.Success && CurrentUserId != null)
+                {
+                    var category = fileMatch.Groups[1].Value;
+                    var contextId = fileMatch.Groups[2].Value;
+                    var fileName = System.Net.WebUtility.UrlDecode(fileMatch.Groups[3].Value);
+                    
+                    var token = FileTokens.GenerateAccessToken(category, contextId, fileName, ChannelKey);
+                    rawUrl = rawUrl.Contains("?") ? $"{rawUrl}&t={token}" : $"{rawUrl}?t={token}";
+                }
+
+                bool isKlipy = rawUrl.Contains("klipy.com", StringComparison.OrdinalIgnoreCase) || rawUrl.Contains("klipy.co", StringComparison.OrdinalIgnoreCase);
+                string watermarkHtml = isKlipy ? @"<img src=""/Klipy/KLIPY Light with logo.svg"" class=""klipy-watermark"" style=""position: absolute; bottom: 8px; left: 8px; width: 60px; height: auto; opacity: 0.9; pointer-events: none; border-radius: 0; margin: 0; padding: 0; box-shadow: none;"" alt=""Klipy Watermark"" />" : "";
+
+                var fragmentMatch = Regex.Match(rawUrl, @"#ar=([0-9.]+)");
+                if (fragmentMatch.Success)
+                {
+                    var arStr = fragmentMatch.Groups[1].Value;
+                    var cleanUrl = rawUrl.Replace(fragmentMatch.Value, "");
+                    return $@"<span class=""gif-container"" style=""position: relative; display: inline-block; width: 100%; max-width: 350px; aspect-ratio: {arStr}; background-color: var(--mud-palette-background-grey); border-radius: 8px; overflow: hidden;""><img{beforeSrc}src=""{cleanUrl}""{afterSrc} style=""position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity 0.3s ease-in-out;"" onload=""this.style.opacity='1'; this.parentElement.style.backgroundColor='transparent';"">{watermarkHtml}</span>";
+                }
+                else if (isKlipy)
+                {
+                    // Fallback for legacy klipy GIFs without aspect ratio
+                    return $@"<span class=""klipy-gif-container"" style=""position: relative; display: inline-block; width: fit-content;""><img{beforeSrc}src=""{rawUrl}""{afterSrc}>{watermarkHtml}</span>";
+                }
+
+                return $@"<img{beforeSrc}src=""{rawUrl}""{afterSrc}>";
+            });
+
+            // Wrap <pre> blocks with a modern container and a Copy button
+            html = Regex.Replace(html, @"<pre>(.*?)</pre>", match =>
+            {
+                var preContent = match.Groups[1].Value;
+                var markerMatch = Regex.Match(preContent, @"SPOKES_MARKER_([a-zA-Z0-9]+)");
+                string rawCode = "";
+                if (markerMatch.Success)
+                {
+                    var id = markerMatch.Groups[1].Value;
+                    if (codeMap.TryGetValue(id, out var mappedCode))
+                    {
+                        rawCode = mappedCode;
+                    }
+                    // Remove the marker and any optional trailing ColorCode span/newline so it's invisible
+                    preContent = Regex.Replace(preContent, $@"<span[^>]*>SPOKES_MARKER_{id}</span>\r?\n?", "");
+                    preContent = Regex.Replace(preContent, $@"SPOKES_MARKER_{id}\r?\n?", "");
+                }
+
+                var encodedData = System.Net.WebUtility.HtmlEncode(rawCode);
+                
+                return $@"<div class=""code-block-wrapper"">
+                <button class=""copy-code-btn"" onclick=""var code = this.getAttribute('data-raw-code'); if(!code) {{ var target = this.parentElement.querySelector('code') || this.parentElement.querySelector('pre'); code = target ? target.textContent : ''; }} if (window.spokesCopyText) {{ window.spokesCopyText(code); }} else {{ navigator.clipboard.writeText(code); }} var originalText = this.innerHTML; this.innerHTML = '<svg style=\'width:14px;height:14px;margin-right:4px;fill:currentColor;\' viewBox=\'0 0 24 24\'><path d=\'M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z\'/></svg>Copied!'; setTimeout(() => this.innerHTML = originalText, 2000);"" data-raw-code=""{encodedData}"">
+                    <svg style=""width:14px;height:14px;margin-right:4px;fill:currentColor;"" viewBox=""0 0 24 24""><path d=""M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z""/></svg>Copy
+                </button><pre>{preContent}</pre></div>";
+            }, RegexOptions.Singleline);
+
+            if (IsEdited)
+            {
+                var insertHtml = @" <span class=""edited-tag"" style=""font-size: 0.65rem; color: var(--mud-palette-text-disabled); user-select: none; margin-left: 4px;"">(edited)</span>";
+                html = html.TrimEnd();
+                if (html.EndsWith("</p>"))
+                {
+                    html = html.Substring(0, html.Length - 4) + insertHtml + "</p>";
+                }
+                else
+                {
+                    html += insertHtml;
+                }
+            }
+
+            return html;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[ChatMarkdownRenderer] ERROR rendering markdown: {ex.Message}\n{ex.StackTrace}");
+            return System.Net.WebUtility.HtmlEncode(content);
+        }
+    }
+}

@@ -1,0 +1,769 @@
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Data
+@using MudBlazor
+@inject ISnackbar Snackbar
+@inject Database Db
+@inject Spokes_Server.Core.Services.Accounting.FinancialCalculationEngine CalcEngine
+
+<MudDialog>
+    <DialogContent>
+        <MudForm>
+            <MudGrid Class="mb-4">
+                <MudItem xs="4">
+                    <MudTextField @bind-Value="Quote.QuoteNumber" Label="Quote #" Required="true" ReadOnly="true"
+                        Variant="Variant.Outlined" Margin="Margin.Dense" />
+                </MudItem>
+                <MudItem xs="4">
+                     <MudDatePicker @bind-Date="QuoteDate" Label="Date" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                </MudItem>
+                 <MudItem xs="4">
+                    <MudSelect @bind-Value="Quote.Status" Label="Status" Variant="Variant.Outlined"
+                        Margin="Margin.Dense" Dense="true">
+                        <MudSelectItem Value="@("Draft")">Draft</MudSelectItem>
+                        <MudSelectItem Value="@("Final")">Final</MudSelectItem>
+                        <MudSelectItem Value="@("Accepted")">Accepted</MudSelectItem>
+                        <MudSelectItem Value="@("Rejected")">Rejected</MudSelectItem>
+                    </MudSelect>
+                </MudItem>
+
+                <MudItem xs="4">
+                     <MudDatePicker @bind-Date="QuoteStartDate" Label="Start Date" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                </MudItem>
+                <MudItem xs="4">
+                     <MudDatePicker @bind-Date="QuoteDeadline" Label="Deadline" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                </MudItem>
+                <MudItem xs="4">
+                    <MudTextField @bind-Value="Quote.Title" Label="Title" Variant="Variant.Outlined"
+                        Margin="Margin.Dense" />
+                </MudItem>
+            </MudGrid>
+
+
+            <MudTabs Elevation="2" Rounded="true" ApplyEffectsToContainer="true" TabPanelsClass="pa-4">
+
+                <MudTabPanel Text="Estimation (Costs)" Icon="@Icons.Material.Filled.Calculate">
+                    <MudText Typo="Typo.h6" Color="Color.Primary" Class="mt-2">Time / Labor</MudText>
+                    <MudTable Items="@Quote.LaborItems" Dense="true" Hover="true" Elevation="0">
+                        <HeaderContent>
+                            <MudTh>Task</MudTh>
+                            <MudTh Style="width: 100px;">Rate ($/h)</MudTh>
+                            <MudTh Style="width: 100px;">Hours</MudTh>
+                            <MudTh Style="width: 130px;">Total</MudTh>
+                            <MudTh Style="width: 140px;"></MudTh>
+                        </HeaderContent>
+                        <RowTemplate>
+                            <MudTd>
+                                <MudGrid Spacing="1">
+                                    <MudItem xs="6">
+                                        <MudAutocomplete T="WorkTypeSearchItem"
+                                                         Value="GetSearchItemForTask(context)"
+                                                         ValueChanged="@((item) => UpdateFromSearch(context, item))"
+                                                         SearchFunc="SearchWorkTypes"
+                                                         ToStringFunc="@(e => e == null ? null : e.DisplayText)"
+                                                         Dense="true" Margin="Margin.Dense" DisableUnderLine="true" 
+                                                         Label="Task" 
+                                                         ResetValueOnEmptyText="true"
+                                                         CoerceText="false" />
+                                    </MudItem>
+                                    <MudItem xs="6">
+                                        @{
+                                            var currentTask = WorkTypes.FirstOrDefault(t => t.Id == context.WorkTypeId);
+                                        }
+                                        <MudSelect T="string" Value="@context.SubTaskId"
+                                            ValueChanged="@((id) => UpdateSubTask(context, id))"
+                                            Dense="true" Margin="Margin.Dense" DisableUnderLine="true" 
+                                            Label="Sub-Task" Disabled="@(currentTask == null)">
+                                            @if (currentTask != null)
+                                            {
+                                                @foreach (var st in currentTask.SubTasks)
+                                                {
+                                                            <MudSelectItem Value="@st.Id">@st.Name</MudSelectItem>
+                                                }
+                                            }
+                                        </MudSelect>
+                                    </MudItem>
+                                </MudGrid>
+                            </MudTd>
+                            <MudTd>
+                                <MudNumericField Value="@context.Rate" ValueChanged="@((decimal v) => UpdateLaborRate(context, v))" Format="N2" Margin="Margin.Dense"
+                                    HideSpinButtons="true" />
+                            </MudTd>
+                            <MudTd>
+                                <MudNumericField Value="@context.Hours" ValueChanged="@((decimal v) => UpdateLaborHours(context, v))" Format="N1" Margin="Margin.Dense"
+                                    HideSpinButtons="true" />
+                            </MudTd>
+                            <MudTd>@context.Total.ToString("C")</MudTd>
+                            <MudTd>
+                                <div class="d-flex">
+                                    <MudIconButton Icon="@Icons.Material.Filled.ArrowUpward" Size="Size.Small"
+                                                   OnClick="@(() => MoveLaborUp(context))" Disabled="@(Quote.LaborItems.IndexOf(context) == 0)" />
+                                    <MudIconButton Icon="@Icons.Material.Filled.ArrowDownward" Size="Size.Small"
+                                                   OnClick="@(() => MoveLaborDown(context))" Disabled="@(Quote.LaborItems.IndexOf(context) == Quote.LaborItems.Count - 1)" />
+                                    <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small"
+                                                   Color="Color.Error" OnClick="@(() => RemoveLabor(context))" />
+                                </div>
+                            </MudTd>
+                        </RowTemplate>
+                        <FooterContent>
+                            <MudTd colspan="5">
+                                <MudButton StartIcon="@Icons.Material.Filled.Add" OnClick="AddLabor" Size="Size.Small">
+                                    Add Time Row</MudButton>
+                            </MudTd>
+                        </FooterContent>
+                    </MudTable>
+
+                    <MudDivider Class="my-4" />
+
+                    <MudText Typo="Typo.h6" Color="Color.Secondary">Hardware & Items</MudText>
+                    <MudTable Items="@Quote.ItemRows" Dense="true" Hover="true" Elevation="0">
+                        <HeaderContent>
+                            <MudTh>Description</MudTh>
+                            <MudTh Style="width: 100px;">Client Bought</MudTh>
+                            <MudTh Style="width: 150px;">Unit Cost</MudTh>
+                            <MudTh Style="width: 80px;">Markup %</MudTh>
+                            <MudTh Style="width: 150px;">Unit Price</MudTh>
+                            <MudTh Style="width: 70px;">Qty</MudTh>
+                            <MudTh Style="width: 130px;">Total</MudTh>
+                            <MudTh Style="width: 140px;"></MudTh>
+                        </HeaderContent>
+                        <RowTemplate>
+                            <MudTd>
+                                <MudTextField @bind-Value="context.Description" Margin="Margin.Dense"
+                                    Placeholder="Item Name" />
+                            </MudTd>
+                            <MudTd>
+                                <MudCheckBox T="bool" Value="@context.IsClientBought" ValueChanged="@((bool v) => UpdateIsClientBought(context, v))" Size="Size.Small" Color="Color.Info" Dense="true" />
+                            </MudTd>
+                            <MudTd>
+                                <MudNumericField Value="@context.UnitCost"
+                                    ValueChanged="@((decimal v) => UpdateItemCost(context, v))" Format="N2"
+                                    Margin="Margin.Dense" HideSpinButtons="true" />
+                            </MudTd>
+                            <MudTd>
+                                <MudNumericField Value="@context.MarkupPercentage"
+                                    ValueChanged="@((decimal v) => UpdateItemMarkup(context, v))" Format="N2"
+                                    Margin="Margin.Dense" HideSpinButtons="true" />
+                            </MudTd>
+                            <MudTd>
+                                <MudNumericField Value="@context.UnitPrice"
+                                    ValueChanged="@((decimal v) => UpdateItemPrice(context, v))" Format="N2"
+                                    Margin="Margin.Dense" HideSpinButtons="true" ReadOnly="true" Disabled="true" />
+                            </MudTd>
+                            <MudTd>
+                                <MudNumericField Value="@context.Quantity"
+                                    ValueChanged="@((decimal v) => UpdateItemQty(context, v))" Format="N0"
+                                    Margin="Margin.Dense" HideSpinButtons="true" />
+                            </MudTd>
+                            <MudTd>@context.Total.ToString("C")</MudTd>
+                            <MudTd>
+                                <div class="d-flex">
+                                    <MudIconButton Icon="@Icons.Material.Filled.ArrowUpward" Size="Size.Small"
+                                                   OnClick="@(() => MoveItemUp(context))" Disabled="@(Quote.ItemRows.IndexOf(context) == 0)" />
+                                    <MudIconButton Icon="@Icons.Material.Filled.ArrowDownward" Size="Size.Small"
+                                                   OnClick="@(() => MoveItemDown(context))" Disabled="@(Quote.ItemRows.IndexOf(context) == Quote.ItemRows.Count - 1)" />
+                                    <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small"
+                                                   Color="Color.Error" OnClick="@(() => RemoveItem(context))" />
+                                </div>
+                            </MudTd>
+                        </RowTemplate>
+                        <FooterContent>
+                            <MudTd colspan="8">
+                                <MudButton StartIcon="@Icons.Material.Filled.Add" OnClick="AddItem" Size="Size.Small">
+                                    Add Item Row</MudButton>
+                            </MudTd>
+                        </FooterContent>
+                    </MudTable>
+
+                    <MudPaper Class="pa-4 mt-4 d-flex flex-column align-end gap-1" Elevation="0" Outlined="true"
+                        Style="background-color: var(--mud-palette-background-grey);">
+                        <div class="d-flex gap-4">
+                            <MudText>Labor: <b>@Quote.TotalLabor.ToString("C")</b></MudText>
+                            <MudText>Items (Contract): <b>@Quote.TotalItems.ToString("C")</b></MudText>
+                        </div>
+                        
+                        <MudDivider Class="my-1" Width="100%" />
+                        <div class="d-flex gap-4" style="min-width: 200px; justify-content: space-between;">
+                            <MudText>Subtotal:</MudText>
+                            <MudText><b>@Quote.SubTotal.ToString("C")</b></MudText>
+                        </div>
+
+
+                        <div class="d-flex justify-end my-1">
+                             <MudSwitch T="bool" Value="@Quote.ShowTax" ValueChanged="@(UpdateShowTax)" Label="Apply Tax" Color="Color.Primary" Dense="true" Size="Size.Small" />
+                        </div>
+
+                        @if (Quote.ShowTax)
+                        {
+                                <div class="d-flex gap-4" style="min-width: 200px; justify-content: space-between;">
+                                    <MudText>Tax Rate:</MudText>
+                                    <div style="width: 100px;">
+                                        <MudNumericField Value="@(Quote.TaxRate * 100)" ValueChanged="@((decimal v) => UpdateTaxRate(v / 100))" Format="N3" Margin="Margin.Dense" HideSpinButtons="true" Adornment="Adornment.End" AdornmentIcon="@Icons.Material.Filled.Percent" />
+                                    </div>
+                                </div>
+                                <div class="d-flex gap-4" style="min-width: 200px; justify-content: space-between;">
+                                    <MudText>Tax Amount:</MudText>
+                                    <MudText><b>@Quote.TaxAmount.ToString("C")</b></MudText>
+                                </div>
+                        }
+                        
+                        <MudDivider Class="my-1" Width="100%" />
+
+                        <div class="d-flex gap-4 mt-1" style="min-width: 200px; justify-content: space-between;">
+                            <MudText Typo="Typo.h6" Color="Color.Primary"><b>Contract Subtotal:</b></MudText>
+                            <MudText Typo="Typo.h6" Color="Color.Primary"><b>@Quote.GrandTotal.ToString("C")</b>
+                            </MudText>
+                        </div>
+
+                        @if(Quote.TotalClientBought > 0)
+                        {
+                            <div class="d-flex gap-4 mt-1" style="min-width: 200px; justify-content: space-between;">
+                                <MudText Color="Color.Info" Typo="Typo.body1"><b>Client Bought Items:</b></MudText>
+                                <MudText Color="Color.Info" Typo="Typo.body1"><b>@Quote.TotalClientBought.ToString("C")</b></MudText>
+                            </div>
+                        }
+
+                        <div class="d-flex gap-4 mt-1" style="min-width: 200px; justify-content: space-between;">
+                            <MudText Typo="Typo.h6" Color="Color.Success"><b>Budget Total:</b></MudText>
+                            <MudText Typo="Typo.h6" Color="Color.Success"><b>@Quote.TotalProjectBudget.ToString("C")</b>
+                            </MudText>
+                        </div>
+                    </MudPaper>
+                </MudTabPanel>
+
+                <MudTabPanel Text="Payment Terms" Icon="@Icons.Material.Filled.Schedule">
+                    <MudText Typo="Typo.h6" Color="Color.Secondary" Class="mb-2">Payment Millestones</MudText>
+                    <MudAlert Severity="Severity.Info" Class="my-2" Dense="true">
+                        Define payment milestones here. Percentages are based on the Grand Total (inc. Tax).
+                    </MudAlert>
+
+                    <MudTable Items="@Quote.PaymentTerms" Dense="true" Hover="true" Elevation="0">
+                        <HeaderContent>
+                            <MudTh>Description</MudTh>
+                            <MudTh Style="width: 120px;">%</MudTh>
+                            <MudTh Style="width: 150px;">Amount</MudTh>
+                            <MudTh Style="width: 50px;"></MudTh>
+                        </HeaderContent>
+                        <RowTemplate>
+                            <MudTd>
+                                <MudTextField @bind-Value="context.Description" Margin="Margin.Dense"
+                                    Placeholder="e.g. Deposit" />
+                            </MudTd>
+                            <MudTd>
+                                <MudNumericField Value="@context.Percentage"
+                                    ValueChanged="@((decimal v) => UpdateTermPercent(context, v))" Format="N0"
+                                    Margin="Margin.Dense" HideSpinButtons="true" Adornment="Adornment.End"
+                                    AdornmentText="%" />
+                            </MudTd>
+                            <MudTd>@context.Amount.ToString("C")</MudTd>
+                            <MudTd>
+                                <MudIconButton Icon="@Icons.Material.Filled.Delete" Color="Color.Error"
+                                    Size="Size.Small" OnClick="@(() => Quote.PaymentTerms.Remove(context))" />
+                            </MudTd>
+                        </RowTemplate>
+                        <FooterContent>
+                            <MudTd colspan="4">
+                                <MudButton StartIcon="@Icons.Material.Filled.Add" OnClick="AddTerm" Size="Size.Small">
+                                    Add Milestone</MudButton>
+                            </MudTd>
+                        </FooterContent>
+                    </MudTable>
+
+
+                    <MudText Typo="Typo.h6" Color="Color.Secondary" Class="mt-4 mb-2">Monthly Payments (Remaining Balance)</MudText>
+                    <MudAlert Severity="Severity.Info" Class="mb-2" Dense="true">
+                        Display approximate monthly payments for the remaining balance not covered by milestones above.
+                    </MudAlert>
+
+                    <MudGrid>
+                        <MudItem xs="12">
+                            <MudSwitch @bind-Value="Quote.ShowMonthlyPayments" Color="Color.Primary"
+                                Label="Show Monthly Payments on Quote" />
+                        </MudItem>
+
+                        @if (Quote.ShowMonthlyPayments)
+                        {
+                            <MudItem xs="4">
+                                <MudNumericField @bind-Value="Quote.MonthlyPaymentMonths" Label="Number of Months"
+                                    Variant="Variant.Outlined" Margin="Margin.Dense" Min="1" />
+                            </MudItem>
+                            <MudItem xs="8">
+                                <MudTextField @bind-Value="Quote.MonthlyPaymentDescription" Label="Description Text"
+                                    Variant="Variant.Outlined" Margin="Margin.Dense"
+                                    HelperText="Use {0} for months, {1} for monthly amount, {2} for remaining %" />
+                            </MudItem>
+                            <MudItem xs="12">
+                                <MudPaper Class="pa-3" Elevation="0" Outlined="true" Style="background-color: var(--mud-palette-background-grey);">
+                                    <MudText Typo="Typo.caption" Color="Color.Secondary">Preview:</MudText>
+                                    <MudText>@GetMonthlyPaymentPreview()</MudText>
+                                    <MudText Typo="Typo.body2" Class="mt-1">
+                                        <b>Remaining:</b> @GetRemainingPercentage()% (@GetRemainingAmount().ToString("C")) |
+                                        <b>Per Month:</b> @GetMonthlyAmount().ToString("C")
+                                    </MudText>
+                                </MudPaper>
+                            </MudItem>
+                        }
+                    </MudGrid>
+
+                    <MudText Typo="Typo.h6" Color="Color.Secondary" Class="mt-4 mb-2">Total Payments allocated</MudText>
+                    @{
+                        var milestonesPercent = Quote.PaymentTerms.Sum(x => x.Percentage);
+                        var isFullyAllocated = milestonesPercent == 100 || (Quote.ShowMonthlyPayments && Quote.MonthlyPaymentMonths > 0);
+                        var displayPercent = isFullyAllocated ? 100 : milestonesPercent;
+                    }
+                    <MudPaper Class="pa-4 mt-4 d-flex justify-end gap-4 align-center" Elevation="0" Outlined="true">
+                        <MudText>Total Terms:</MudText>
+                        <MudText Typo="Typo.h6"><b>@Quote.PaymentTerms.Sum(x => x.Amount).ToString("C")</b></MudText>
+                        @if (Quote.ShowMonthlyPayments && Quote.MonthlyPaymentMonths > 0 && milestonesPercent < 100)
+                        {
+                            <MudText>+ @GetRemainingPercentage()% monthly</MudText>
+                        }
+                        <MudChip T="string"
+                                 Color="@(isFullyAllocated ? Color.Success : Color.Warning)"
+                                 Size="Size.Small">
+                            @displayPercent% allocated
+                        </MudChip>
+                    </MudPaper>
+                </MudTabPanel>
+
+                <MudTabPanel Text="Presentation" Icon="@Icons.Material.Filled.PhotoCamera">
+                    <MudGrid>
+                        <MudItem xs="12">
+                            <MudText Typo="Typo.subtitle2" Class="mb-2">Project Rendering / Main Image</MudText>
+                            @if (!string.IsNullOrEmpty(Quote.MainImageBase64))
+                            {
+                                    <MudImage Src="@Quote.MainImageBase64" Height="200" ObjectFit="ObjectFit.Cover"
+                                        Class="rounded-lg mb-2" Style="width:100%;" />
+                                    <MudButton Variant="Variant.Outlined" Color="Color.Error" Size="Size.Small"
+                                        OnClick="@(() => Quote.MainImageBase64 = "")">Remove Image</MudButton>
+                            }
+                            else
+                            {
+                                    <MudPaper Class="d-flex align-center justify-center pa-4" Height="200px" Outlined="true"
+                                        Style="background-color: var(--mud-palette-background-grey);">
+                                        <div class="d-inline-flex">
+                                            <ApiFileUpload 
+                                                Category="temp" 
+                                                ContextId="@Guid.NewGuid().ToString()" 
+                                                OnUploadCompleted="HandleImageUploaded">
+                                                <CustomContent>
+                                                    <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.CloudUpload">
+                                                        Upload Rendering
+                                                    </MudButton>
+                                                </CustomContent>
+                                            </ApiFileUpload>
+                                        </div>
+                                    </MudPaper>
+                            }
+                        </MudItem>
+
+
+                        
+                        <MudItem xs="12">
+                             <MudSelect @bind-Value="Quote.TemplateId" Label="Document Template" Variant="Variant.Outlined" Margin="Margin.Dense"
+                                 HelperText="Leave empty to use Project/System default">
+                                 <MudSelectItem Value="@((string?)null)">Default</MudSelectItem>
+                                 @foreach (var t in Templates)
+                                 {
+                                     <MudSelectItem Value="@t.Id">@t.Name</MudSelectItem>
+                                 }
+                             </MudSelect>
+                        </MudItem>
+
+                        <MudItem xs="12">
+                            <MudSwitch @bind-Value="Quote.IsConfidential" Color="Color.Error"
+                                Label="Mark as Confidential" />
+
+                            <MudSwitch @bind-Value="Quote.SignatureRequired" Color="Color.Primary"
+                                Label="Show Signature Block (End of Document)" />
+
+                            <MudSwitch @bind-Value="Quote.ShowIntermediateSignature" Color="Color.Primary"
+                                Label="Show Intermediate Signature Block (After Budget)" />
+                        </MudItem>
+
+                        <MudItem xs="12">
+                            <Spokes_Server.Components.Shared.MarkdownEditor @bind-Value="Quote.ScopeOfWork" />
+                        </MudItem>
+
+                        <MudItem xs="12">
+                             <MudText Typo="Typo.subtitle2" Class="mb-2">Signature Details</MudText>
+                             <MudGrid>
+                                 <MudItem xs="12" sm="6">
+                                     <MudTextField @bind-Value="Quote.ClientRepresentativeName" Label="Client Representative Name" 
+                                         HelperText="Overrides the default sign-off name" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                                 </MudItem>
+                                 <MudItem xs="12" sm="6">
+                                     <MudTextField @bind-Value="Quote.CompanyRepresentativeName" Label="Company Representative Name" 
+                                         HelperText="Overrides the default sign-off name" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                                 </MudItem>
+                             </MudGrid>
+                        </MudItem>
+                    </MudGrid>
+                </MudTabPanel>
+
+                <MudTabPanel Text="Terms & Conditions" Icon="@Icons.Material.Filled.Gavel">
+                    <Spokes_Server.Components.Shared.MarkdownEditor @bind-Value="Quote.TermsAndConditions" />
+                </MudTabPanel>
+            </MudTabs>
+
+        </MudForm>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="Submit">Save Quote</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; }
+    [Parameter] public Quote Quote { get; set; }
+    [Parameter] public string ProjectId { get; set; }
+
+    private List<WorkType> WorkTypes = new();
+    private List<WorkTypeSearchItem> SearchItems = new();
+    private List<DocumentTemplate> Templates = new();
+    private Project Project;
+    private RateCard? ProjectRateCard;
+
+    protected override void OnInitialized()
+    {
+        Project = Db.Projects.GetById(ProjectId);
+        Templates = Db.DocumentTemplates.GetAll();
+
+        var allWorkTypes = Db.WorkTypes.GetAll().Where(x => x.IsActive).ToList();
+
+        WorkTypes = allWorkTypes;
+
+        SearchItems.Clear();
+        foreach (var task in WorkTypes)
+        {
+            SearchItems.Add(new WorkTypeSearchItem 
+            { 
+                WorkTypeId = task.Id, 
+                WorkTypeName = task.Name, 
+                DisplayText = task.Name 
+            });
+
+            foreach (var st in task.SubTasks)
+            {
+                SearchItems.Add(new WorkTypeSearchItem 
+                { 
+                    WorkTypeId = task.Id, 
+                    WorkTypeName = task.Name, 
+                    SubTaskId = st.Id, 
+                    SubTaskName = st.Name, 
+                    DisplayText = $"{task.Name} - {st.Name}" 
+                });
+            }
+        }
+
+        if (Project != null && !string.IsNullOrEmpty(Project.RateCardId))
+        {
+            ProjectRateCard = Db.RateCards.GetById(Project.RateCardId);
+        }
+    }
+
+    public class WorkTypeSearchItem
+    {
+        public string WorkTypeId { get; set; } = string.Empty;
+        public string WorkTypeName { get; set; } = string.Empty;
+        public string? SubTaskId { get; set; }
+        public string? SubTaskName { get; set; }
+        public string DisplayText { get; set; } = string.Empty;
+
+        public override bool Equals(object? obj)
+        {
+            if (obj is WorkTypeSearchItem other)
+            {
+                return WorkTypeId == other.WorkTypeId && SubTaskId == other.SubTaskId;
+            }
+            return false;
+        }
+
+        public override int GetHashCode()
+        {
+            return HashCode.Combine(WorkTypeId, SubTaskId);
+        }
+    }
+
+    private Task<IEnumerable<WorkTypeSearchItem>> SearchWorkTypes(string value, CancellationToken token)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            // By default, only return Tasks (no subtasks)
+            return Task.FromResult(SearchItems.Where(x => string.IsNullOrEmpty(x.SubTaskId)));
+        }
+
+        var matches = SearchItems.Where(x => x.DisplayText.Contains(value, StringComparison.OrdinalIgnoreCase));
+        return Task.FromResult(matches);
+    }
+
+    private WorkTypeSearchItem? GetSearchItemForTask(QuoteLaborItem item)
+    {
+        if (string.IsNullOrEmpty(item.WorkTypeId)) return null;
+        return SearchItems.FirstOrDefault(x => x.WorkTypeId == item.WorkTypeId && string.IsNullOrEmpty(x.SubTaskId));
+    }
+
+    private void UpdateFromSearch(QuoteLaborItem item, WorkTypeSearchItem? searchItem)
+    {
+        if (searchItem == null)
+        {
+            item.WorkTypeId = string.Empty;
+            item.WorkTypeName = string.Empty;
+            item.SubTaskId = string.Empty;
+            item.SubTaskName = string.Empty;
+            item.Rate = 0;
+            return;
+        }
+
+        item.SubTaskId = string.Empty; // Clear it so UpdateTaskType will set the default if needed
+        UpdateTaskType(item, searchItem.WorkTypeId);
+
+        if (!string.IsNullOrEmpty(searchItem.SubTaskId))
+        {
+            UpdateSubTask(item, searchItem.SubTaskId);
+        }
+    }
+
+    // --- ESTIMATION LOGIC ---
+    private void AddLabor() => Quote.LaborItems.Add(new QuoteLaborItem { Hours = 0, Rate = 0 });
+    private void AddItem() => Quote.ItemRows.Add(new QuoteItemRow { UnitPrice = 0, Quantity = 1 });
+
+    private void UpdateTaskType(QuoteLaborItem item, string workTypeId)
+    {
+        item.WorkTypeId = workTypeId;
+        var task = WorkTypes.FirstOrDefault(x => x.Id == workTypeId);
+        if (task != null)
+        {
+            item.WorkTypeName = task.Name;
+            item.Rate = Project.GetEffectiveRate(task.Id, task.DefaultRate, ProjectRateCard);
+
+            // Set default sub-task if none selected
+            if (string.IsNullOrEmpty(item.SubTaskId) && task.SubTasks.Any())
+            {
+                var st = task.SubTasks.First();
+                item.SubTaskId = st.Id;
+                item.SubTaskName = st.Name;
+            }
+            RecalculateTerms();
+        }
+    }
+
+    private void UpdateSubTask(QuoteLaborItem item, string subTaskId)
+    {
+        item.SubTaskId = subTaskId;
+        var task = WorkTypes.FirstOrDefault(x => x.Id == item.WorkTypeId);
+        if (task != null)
+        {
+            var st = task.SubTasks.FirstOrDefault(s => s.Id == subTaskId);
+            item.SubTaskName = st?.Name ?? "";
+        }
+    }
+
+    // --- PAYMENT TERMS LOGIC ---
+    private void AddTerm()
+    {
+        var currentTotal = Quote.PaymentTerms.Sum(t => t.Percentage);
+        var remaining = 100 - currentTotal;
+        if (remaining < 0) remaining = 0;
+
+        var term = new PaymentTerm { Description = "Milestone", Percentage = remaining };
+        UpdateTermPercent(term, remaining);
+        Quote.PaymentTerms.Add(term);
+    }
+
+    private void UpdateTermPercent(PaymentTerm term, decimal percent)
+    {
+        term.Percentage = percent;
+        // IMPORTANT: Milestones are based on Grand Total (Inc Tax)
+        term.Amount = Quote.GrandTotal * (percent / 100m);
+    }
+
+    // --- MARKUP & COST LOGIC ---
+    private void UpdateItemCost(QuoteItemRow item, decimal cost)
+    {
+        item.UnitCost = cost;
+        // Cost changed, keep Markup %, update Price
+        item.UnitPrice = item.UnitCost * (1 + (item.MarkupPercentage / 100m));
+        RecalculateTerms();
+    }
+
+    private void UpdateItemMarkup(QuoteItemRow item, decimal markup)
+    {
+        item.MarkupPercentage = markup;
+        // Markup changed, update Price
+        item.UnitPrice = item.UnitCost * (1 + (item.MarkupPercentage / 100m));
+        RecalculateTerms();
+    }
+
+    private void UpdateItemPrice(QuoteItemRow item, decimal price)
+    {
+        item.UnitPrice = price;
+        // Price changed manually, back-calculate Markup %
+        if (item.UnitCost != 0)
+        {
+            item.MarkupPercentage = ((item.UnitPrice / item.UnitCost) - 1) * 100m;
+        }
+        RecalculateTerms();
+    }
+
+    private void UpdateItemQty(QuoteItemRow item, decimal qty)
+    {
+        item.Quantity = qty;
+        RecalculateTerms();
+    }
+
+    private void RemoveItem(QuoteItemRow item)
+    {
+        Quote.ItemRows.Remove(item);
+        RecalculateTerms();
+    }
+
+    private void MoveLaborUp(QuoteLaborItem item)
+    {
+        var index = Quote.LaborItems.IndexOf(item);
+        if (index > 0)
+        {
+            Quote.LaborItems.RemoveAt(index);
+            Quote.LaborItems.Insert(index - 1, item);
+        }
+    }
+
+    private void MoveLaborDown(QuoteLaborItem item)
+    {
+        var index = Quote.LaborItems.IndexOf(item);
+        if (index < Quote.LaborItems.Count - 1)
+        {
+            Quote.LaborItems.RemoveAt(index);
+            Quote.LaborItems.Insert(index + 1, item);
+        }
+    }
+
+    private void UpdateLaborRate(QuoteLaborItem item, decimal rate)
+    {
+        item.Rate = rate;
+        RecalculateTerms();
+    }
+
+    private void UpdateLaborHours(QuoteLaborItem item, decimal hours)
+    {
+        item.Hours = hours;
+        RecalculateTerms();
+    }
+
+    private void RemoveLabor(QuoteLaborItem item)
+    {
+        Quote.LaborItems.Remove(item);
+        RecalculateTerms();
+    }
+
+    private void UpdateIsClientBought(QuoteItemRow item, bool isClientBought)
+    {
+        item.IsClientBought = isClientBought;
+        RecalculateTerms();
+    }
+
+    private void UpdateShowTax(bool showTax)
+    {
+        Quote.ShowTax = showTax;
+        RecalculateTerms();
+    }
+
+    private void MoveItemUp(QuoteItemRow item)
+    {
+        var index = Quote.ItemRows.IndexOf(item);
+        if (index > 0)
+        {
+            Quote.ItemRows.RemoveAt(index);
+            Quote.ItemRows.Insert(index - 1, item);
+        }
+    }
+
+    private void MoveItemDown(QuoteItemRow item)
+    {
+        var index = Quote.ItemRows.IndexOf(item);
+        if (index < Quote.ItemRows.Count - 1)
+        {
+            Quote.ItemRows.RemoveAt(index);
+            Quote.ItemRows.Insert(index + 1, item);
+        }
+    }
+
+    private void UpdateTaxRate(decimal rate)
+    {
+        Quote.TaxRate = rate;
+        RecalculateTerms();
+    }
+
+    [Inject] private Spokes_Server.Core.Services.Core.IFileService FileService { get; set; } = default!;
+
+    private void HandleImageUploaded(List<ApiFileUpload.UploadResult> results)
+    {
+        if (results == null || results.Count == 0) return;
+        
+        var result = results.First();
+        var parts = result.FilePath.Substring("/spokesapi/files/".Length).Split('/');
+        if (parts.Length != 3) return;
+        var fullPath = FileService.GetPhysicalPath(parts[0], parts[1], parts[2]);
+        
+        if (File.Exists(fullPath))
+        {
+            try
+            {
+                var bytes = File.ReadAllBytes(fullPath);
+                var base64 = Convert.ToBase64String(bytes);
+                var format = result.FileName?.EndsWith("png", StringComparison.OrdinalIgnoreCase) == true ? "png" : "jpeg";
+                Quote.MainImageBase64 = $"data:image/{format};base64,{base64}";
+                FileService.CleanTempContext(parts[1]);
+                StateHasChanged();
+            }
+            catch (Exception ex)
+            {
+                Snackbar.Add($"Error processing image: {ex.Message}", Severity.Error);
+                FileService.CleanTempContext(parts[1]);
+            }
+        }
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+    private void Submit() => MudDialog.Close(DialogResult.Ok(Quote));
+
+    // --- RECALCULATION ---
+    private void RecalculateTerms()
+    {
+        // When GrandTotal changes, update the amounts of all payment terms
+        foreach (var term in Quote.PaymentTerms)
+        {
+            term.Amount = Quote.GrandTotal * (term.Percentage / 100m);
+        }
+        StateHasChanged();
+    }
+
+    private DateTime? QuoteDate { get => Quote.Date; set => Quote.Date = value ?? DateTime.Today; }
+    private DateTime? QuoteStartDate { get => Quote.StartDate?.ToDateTime(TimeOnly.MinValue); set => Quote.StartDate = value.HasValue ? DateOnly.FromDateTime(value.Value) : null; }
+    private DateTime? QuoteDeadline { get => Quote.Deadline?.ToDateTime(TimeOnly.MinValue); set => Quote.Deadline = value.HasValue ? DateOnly.FromDateTime(value.Value) : null; }
+
+    // --- MONTHLY PAYMENTS ---
+    private decimal GetRemainingPercentage() => 100 - Quote.PaymentTerms.Sum(x => x.Percentage);
+    private decimal GetRemainingAmount() => Quote.GrandTotal * (GetRemainingPercentage() / 100m);
+    private decimal GetMonthlyAmount() => Quote.MonthlyPaymentMonths > 0 ? GetRemainingAmount() / Quote.MonthlyPaymentMonths : 0;
+
+    private string GetMonthlyPaymentPreview()
+    {
+        try
+        {
+            return string.Format(Quote.MonthlyPaymentDescription, 
+                Quote.MonthlyPaymentMonths, 
+                GetMonthlyAmount().ToString("C"), 
+                GetRemainingPercentage());
+        }
+        catch
+        {
+            return Quote.MonthlyPaymentDescription;
+        }
+    }
+}
+

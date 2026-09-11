@@ -1,0 +1,393 @@
+@using Markdig
+@using Spokes_Server.Core.Services.Core
+@inject IJSRuntime JS
+@inject MarkdownSanitizerService MarkdownSanitizer
+
+<div class="markdown-editor-container" style="border: 1px solid var(--mud-palette-lines-default); border-radius: 4px;">
+    <!-- Toolbar -->
+    @if (!PreviewMode)
+    {
+        <div class="d-flex gap-1 pa-2"
+            style="background-color: var(--mud-palette-background-grey); border-bottom: 1px solid var(--mud-palette-lines-default);">
+            <MudTooltip Text="Bold">
+                <MudIconButton Icon="@Icons.Material.Filled.FormatBold" Size="Size.Small"
+                    OnClick="@(() => WrapSelection("**", "**"))" />
+            </MudTooltip>
+            <MudTooltip Text="Italic">
+                <MudIconButton Icon="@Icons.Material.Filled.FormatItalic" Size="Size.Small"
+                    OnClick="@(() => WrapSelection("*", "*"))" />
+            </MudTooltip>
+            <MudTooltip Text="Underline">
+                <MudIconButton Icon="@Icons.Material.Filled.FormatUnderlined" Size="Size.Small"
+                    OnClick="@(() => WrapSelection("<u>", "</u>"))" />
+            </MudTooltip>
+            <MudDivider Vertical="true" FlexItem="true" Class="mx-2" />
+            <MudTooltip Text="Heading 1">
+                <MudIconButton Icon="@Icons.Material.Filled.LooksOne" Size="Size.Small"
+                    OnClick="@(() => InsertTextAtStart("# "))" />
+            </MudTooltip>
+            <MudTooltip Text="Heading 2">
+                <MudIconButton Icon="@Icons.Material.Filled.LooksTwo" Size="Size.Small"
+                    OnClick="@(() => InsertTextAtStart("## "))" />
+            </MudTooltip>
+            <MudTooltip Text="Heading 3">
+                <MudIconButton Icon="@Icons.Material.Filled.Looks3" Size="Size.Small"
+                    OnClick="@(() => InsertTextAtStart("### "))" />
+            </MudTooltip>
+            <MudTooltip Text="Heading 4">
+                <MudIconButton Icon="@Icons.Material.Filled.Looks4" Size="Size.Small"
+                    OnClick="@(() => InsertTextAtStart("#### "))" />
+            </MudTooltip>
+            <MudDivider Vertical="true" FlexItem="true" Class="mx-2" />
+            <MudTooltip Text="Unordered List">
+                <MudIconButton Icon="@Icons.Material.Filled.FormatListBulleted" Size="Size.Small"
+                    OnClick="@(() => InsertTextAtStart("- "))" />
+            </MudTooltip>
+            <MudTooltip Text="Ordered List">
+                <MudIconButton Icon="@Icons.Material.Filled.FormatListNumbered" Size="Size.Small"
+                    OnClick="@(() => InsertTextAtStart("1. "))" />
+            </MudTooltip>
+            <MudTooltip Text="Link">
+                <MudIconButton Icon="@Icons.Material.Filled.Link" Size="Size.Small"
+                    OnClick="@(() => WrapSelection("[", "](url)"))" />
+            </MudTooltip>
+            <MudDivider Vertical="true" FlexItem="true" Class="mx-2" />
+            <MudTooltip Text="Add Empty Line">
+                <MudIconButton Icon="@Icons.Material.Filled.VerticalDistribute" Size="Size.Small"
+                    OnClick="@(() => InsertTextAtStart("&nbsp;"))" />
+            </MudTooltip>
+            <MudTooltip Text="Page Break">
+                <MudIconButton Icon="@Icons.Material.Filled.InsertPageBreak" Size="Size.Small"
+                    OnClick="@(() => InsertTextAtStart("\n<!-- pagebreak -->\n"))" />
+            </MudTooltip>
+            <MudSpacer />
+            <MudButton Variant="Variant.Text" Color="Color.Primary" Size="Size.Small"
+                StartIcon="@Icons.Material.Filled.Preview" OnClick="@(() => PreviewMode = true)">Preview</MudButton>
+        </div>
+
+        <!-- Editor -->
+        <div style="background-color: var(--mud-palette-background);">
+            <textarea id="@ElementId"
+                style="width: 100%; height: 350px; padding: 12px; border: none; outline: none; resize: vertical; background: transparent; color: var(--mud-palette-text-primary); font-family: 'Roboto Mono', monospace; font-size: 0.9rem;"
+            @bind:get="Value" @bind:set="OnValueChange" @bind:event="oninput" @onkeydown="OnKeyDown"
+            @onkeydown:preventDefault="ShowTagPicker && _blockTextareaKeys"></textarea>
+        </div>
+
+        <!-- Tag panel (always visible when tags available) -->
+        @if (AvailableTags != null && AvailableTags.Any())
+        {
+            <div style="border-top: 1px solid var(--mud-palette-lines-default); background-color: var(--mud-palette-background-grey); border-radius: 0 0 4px 4px;">
+                @if (ShowTagPicker)
+                {
+                    var filtered = FilteredTags().ToList();
+                    <div class="d-flex align-center px-3 pt-2 pb-1">
+                        <MudIcon Icon="@Icons.Material.Filled.Lightbulb" Size="Size.Small" Color="Color.Info" Class="mr-2" />
+                        <MudText Typo="Typo.caption" Style="font-weight: bold; color: var(--mud-palette-primary);">Suggestions
+                            (Filter: @TagFilter)</MudText>
+                        <MudSpacer />
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">Use <b>↑↓</b> to navigate, <b>Enter/Tab</b> to
+                            insert, <b>Esc</b> to close</MudText>
+                    </div>
+                    <div id="@($"{ElementId}-panel")" style="max-height: 180px; overflow-y: auto; padding: 0 4px 4px 4px;">
+                        <MudList T="ContextTagDefinition" Dense="true" Clickable="true">
+                            @{
+                                int index = 0;
+                                foreach (var group in filtered.GroupBy(t => t.Category))
+                                {
+                                    <MudListSubheader>@group.Key</MudListSubheader>
+                                    foreach (var tag in group)
+                                    {
+                                        var currentIndex = index++;
+                                        <MudListItem id="@($"{ElementId}-item-{currentIndex}")" T="ContextTagDefinition"
+                                            OnClick="@(() => InsertTag(tag))"
+                                            Style="@(currentIndex == _selectedTagIndex ? "background-color: var(--mud-palette-primary-hover);" : "")">
+                                            <div class="d-flex justify-space-between align-center">
+                                                <MudText Typo="Typo.body2"
+                                                    Style="@(currentIndex == _selectedTagIndex ? "font-weight: bold;" : "")">@tag.Tag</MudText>
+                                                <MudText Typo="Typo.caption" Color="Color.Secondary">@tag.Description</MudText>
+                                            </div>
+                                        </MudListItem>
+                                    }
+                                }
+                            }
+                        </MudList>
+                    </div>
+                }
+                else
+                {
+                    <div class="d-flex align-center px-3 py-2">
+                        <MudIcon Icon="@Icons.Material.Filled.Code" Size="Size.Small" Color="Color.Secondary" Class="mr-2" />
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">Type <b>@@</b> in the editor to insert context tags</MudText>
+                    </div>
+                }
+            </div>
+        }
+    }
+    else
+    {
+        <!-- Preview Toolbar -->
+        <div class="d-flex justify-end pa-2"
+            style="background-color: var(--mud-palette-background-grey); border-bottom: 1px solid var(--mud-palette-lines-default);">
+            <MudButton Variant="Variant.Text" Color="Color.Secondary" Size="Size.Small"
+                StartIcon="@Icons.Material.Filled.Edit" OnClick="@(() => PreviewMode = false)">Back to Edit</MudButton>
+        </div>
+
+        <!-- Preview Content -->
+        <div class="pa-4 markdown-content" style="height: 350px; overflow-y: auto;">
+            @if (string.IsNullOrWhiteSpace(Value))
+            {
+                <MudText Typo="Typo.body2" Color="Color.Secondary" Style="font-style: italic;">Nothing to preview</MudText>
+            }
+            else
+            {
+                @RenderMarkdown(Value)
+            }
+        </div>
+    }
+</div>
+
+<style>
+    .markdown-editor-container .markdown-content h1 {
+        font-size: 1.5rem !important;
+        font-weight: bold !important;
+        margin: 0 !important;
+        padding-bottom: 0.3rem !important;
+        border-bottom: 1px solid var(--mud-palette-lines-default) !important;
+        display: block !important;
+    }
+
+    .markdown-editor-container .markdown-content h2 {
+        font-size: 1.25rem !important;
+        font-weight: bold !important;
+        margin: 0 !important;
+        padding-bottom: 0.2rem !important;
+        display: block !important;
+    }
+
+    .markdown-editor-container .markdown-content h3 {
+        font-size: 1.1rem !important;
+        font-weight: bold !important;
+        margin: 0 !important;
+        display: block !important;
+    }
+
+    .markdown-editor-container .markdown-content h4 {
+        font-size: 1rem !important;
+        font-weight: bold !important;
+        margin: 0 !important;
+        display: block !important;
+    }
+
+    .markdown-editor-container .markdown-content p {
+        margin: 0 !important;
+        line-height: 1.4;
+    }
+
+    .markdown-editor-container .markdown-content ul {
+        list-style-type: disc !important;
+        padding-left: 1.5rem !important;
+        margin-bottom: 0.5rem !important;
+    }
+
+    .markdown-editor-container .markdown-content ol {
+        list-style-type: decimal !important;
+        padding-left: 1.5rem !important;
+        margin-bottom: 0.5rem !important;
+    }
+
+    .markdown-editor-container .markdown-content li {
+        display: list-item !important;
+    }
+
+    .context-tag-chip {
+        background-color: var(--mud-palette-primary-hover);
+        color: var(--mud-palette-primary-text);
+        padding: 2px 6px;
+        border-radius: 12px;
+        font-size: 0.85rem;
+        font-weight: 500;
+        display: inline-block;
+        border: 1px solid var(--mud-palette-primary);
+        line-height: 1;
+        margin: 0 2px;
+    }
+</style>
+
+@code {
+    [Parameter] public string Value { get; set; } = "";
+    [Parameter] public EventCallback<string> ValueChanged { get; set; }
+    [Parameter] public List<ContextTagDefinition>? AvailableTags { get; set; }
+
+    private string ElementId = "md-editor-" + Guid.NewGuid();
+    private bool PreviewMode = false;
+
+    // Tag Autocomplete
+    private bool ShowTagPicker = false;
+    private string TagFilter = "";
+    private int TagStartIndex = -1;
+    private int _selectedTagIndex = 0;
+    private bool _blockTextareaKeys = false;
+
+    private IEnumerable<ContextTagDefinition> FilteredTags()
+    {
+        if (AvailableTags == null) return Enumerable.Empty<ContextTagDefinition>();
+        if (string.IsNullOrWhiteSpace(TagFilter)) return AvailableTags;
+        return AvailableTags.Where(t => t.Tag.Contains(TagFilter, StringComparison.OrdinalIgnoreCase) ||
+        t.Description.Contains(TagFilter, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private async Task OnValueChange(string v)
+    {
+        Value = v;
+        await ValueChanged.InvokeAsync(Value);
+
+        if (AvailableTags != null)
+        {
+            await CheckForTagTrigger();
+        }
+    }
+
+    private async Task OnKeyDown(KeyboardEventArgs e)
+    {
+        _blockTextareaKeys = false;
+        if (ShowTagPicker)
+        {
+            var filtered = FilteredTags().ToList();
+            if (e.Key == "Escape")
+            {
+                ShowTagPicker = false;
+            }
+            else if (e.Key == "ArrowDown")
+            {
+                _selectedTagIndex = (_selectedTagIndex + 1) % Math.Max(1, filtered.Count);
+                _blockTextareaKeys = true;
+                _ = ScrollSelectedIntoView();
+            }
+            else if (e.Key == "ArrowUp")
+            {
+                _selectedTagIndex = (_selectedTagIndex - 1 + filtered.Count) % Math.Max(1, filtered.Count);
+                _blockTextareaKeys = true;
+                _ = ScrollSelectedIntoView();
+            }
+            else if (e.Key == "Enter" || e.Key == "Tab")
+            {
+                if (filtered.Count > _selectedTagIndex)
+                {
+                    await InsertTag(filtered[_selectedTagIndex]);
+                    _blockTextareaKeys = true;
+                }
+            }
+            StateHasChanged();
+        }
+    }
+
+    private async Task ScrollSelectedIntoView()
+    {
+        try
+        {
+            await JS.InvokeVoidAsync("window.scrollElementIntoView", $"{ElementId}-panel", $"{ElementId}-item-{_selectedTagIndex}");
+        }
+        catch { } // Ignore if JS not immediately ready
+    }
+
+    private async Task CheckForTagTrigger()
+    {
+        var pos = await JS.InvokeAsync<int>("getCursorPosition", ElementId);
+        var liveValue = await JS.InvokeAsync<string>("getTextAreaValue", ElementId);
+        if (pos > 0 && !string.IsNullOrEmpty(liveValue) && pos <= liveValue.Length)
+        {
+            var textUpToCursor = liveValue.Substring(0, pos);
+            var lastAt = textUpToCursor.LastIndexOf('@');
+
+            if (lastAt >= 0)
+            {
+                var slice = textUpToCursor.Substring(lastAt);
+                if (!slice.Contains(" ") && !slice.Contains("\n"))
+                {
+                    if (!ShowTagPicker)
+                    {
+                        _selectedTagIndex = 0;
+                    }
+
+                    ShowTagPicker = true;
+                    TagFilter = slice.Substring(1);
+                    TagStartIndex = lastAt;
+                    StateHasChanged();
+                    return;
+                }
+            }
+        }
+
+        if (ShowTagPicker)
+        {
+            ShowTagPicker = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task InsertTag(ContextTagDefinition tag)
+    {
+        // Read the live textarea value from the DOM to avoid stale Blazor state
+        var liveValue = await JS.InvokeAsync<string>("getTextAreaValue", ElementId);
+        var pos = await JS.InvokeAsync<int>("getCursorPosition", ElementId);
+
+        // Guard against out-of-range indices
+        var safeStart = Math.Min(TagStartIndex, liveValue.Length);
+        var safePos = Math.Min(pos, liveValue.Length);
+
+        var beforeTag = liveValue.Substring(0, safeStart);
+        var afterTag = liveValue.Substring(safePos);
+
+        Value = beforeTag + tag.Tag + afterTag;
+        ShowTagPicker = false;
+        await ValueChanged.InvokeAsync(Value);
+
+        // Manually update the textarea value and cursor position via JS
+        await JS.InvokeVoidAsync("setTextAreaValue", ElementId, Value, safeStart + tag.Tag.Length);
+    }
+
+    private async Task InsertTextAtStart(string text)
+    {
+        // This is a simplification, ideally we check cursor line start
+        var newVal = await JS.InvokeAsync<string>("insertTextAtCursor", ElementId, text);
+        // Update local value to match
+        Value = newVal;
+        await ValueChanged.InvokeAsync(Value);
+    }
+
+    private async Task WrapSelection(string start, string end)
+    {
+        var newVal = await JS.InvokeAsync<string>("wrapSelection", ElementId, start, end);
+        // Update local value to match
+        Value = newVal;
+        await ValueChanged.InvokeAsync(Value);
+    }
+
+    // ... RenderMarkdown ...
+    private MarkupString RenderMarkdown(string text)
+    {
+        if (string.IsNullOrEmpty(text)) return new MarkupString("");
+        try
+        {
+            // Replace tags with chip spans BEFORE markdown parsing so they are treated as HTML
+            if (AvailableTags != null)
+            {
+                foreach (var tag in AvailableTags)
+                {
+                    var chipHtml = $"<span class=\"context-tag-chip\">{tag.Tag}</span>";
+                    text = text.Replace(tag.Tag, chipHtml, StringComparison.OrdinalIgnoreCase);
+                }
+            }
+
+            // Convert page break markers to visual indicator for preview
+            text = text.Replace("<!-- pagebreak -->", "\n---\n**[ PAGE BREAK ]**\n---\n");
+
+            var html = MarkdownSanitizer.RenderSanitizedHtml(text);
+            return new MarkupString(html);
+        }
+        catch (Exception ex)
+        {
+            return new MarkupString(System.Net.WebUtility.HtmlEncode(text));
+        }
+    }
+}

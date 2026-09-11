@@ -1,0 +1,183 @@
+@using Spokes_Server.Core.Data
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Services
+@inject Database Db
+@inject BoardService BoardService
+@inject UserService UserService
+
+<MudPaper Class="pa-4" Style="width: 450px; max-height: 500px; overflow-y: auto;" @onclick:stopPropagation="true">
+    <MudText Typo="Typo.subtitle2" Class="mb-2">Filters</MudText>
+
+    @if (View == null || View.Filters == null || View.Filters.Count == 0)
+    {
+        <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-4">No filters applied</MudText>
+    }
+    else
+    {
+        <MudStack Spacing="2" Class="mb-4">
+            @foreach (var filter in View.Filters)
+            {
+                var prop = Board.Properties.FirstOrDefault(p => p.Id == filter.PropertyId);
+
+                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+                    <span @onclick:stopPropagation="true">
+                        <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small"
+                            OnClick="@(() => RemoveFilter(filter))" />
+                    </span>
+
+                    <MudText Typo="Typo.body2" Style="min-width: 40px;">Where</MudText>
+
+                    <!-- PROPERTY SELECTOR -->
+                    <MudSelect T="string" Value="@filter.PropertyId" ValueChanged="@((val) => UpdateFilterProp(filter, val))"
+                        Margin="Margin.Dense" Dense="true" Variant="Variant.Outlined" Style="width: 120px;">
+                        @foreach (var p in Board.Properties)
+                        {
+                            <MudSelectItem Value="@p.Id">@p.Name</MudSelectItem>
+                        }
+                    </MudSelect>
+
+                    <!-- OPERATOR SELECTOR -->
+                    <MudSelect T="BoardFilterOperator" @bind-Value="filter.Operator" @bind-Value:after="NotifyChange" Margin="Margin.Dense" Dense="true"
+                        Variant="Variant.Outlined" Style="width: 100px;">
+                        @foreach (var op in Enum.GetValues<BoardFilterOperator>())
+                        {
+                            <MudSelectItem Value="@op">@op</MudSelectItem>
+                        }
+                    </MudSelect>
+
+                    <!-- VALUE INPUT (CONTEXTUAL) -->
+                    @if (prop != null)
+                    {
+                        if (prop.Type == BoardPropertyType.Select || prop.Type == BoardPropertyType.MultiSelect)
+                        {
+                            <MudSelect T="string" @bind-Value="filter.Value" @bind-Value:after="NotifyChange" Margin="Margin.Dense" Dense="true"
+                                Variant="Variant.Outlined" Style="flex-grow: 1;">
+                                @foreach (var opt in prop.Options)
+                                {
+                                    <MudSelectItem Value="@opt.Id">@opt.Name</MudSelectItem>
+                                }
+                            </MudSelect>
+                        }
+                        else if (prop.Type == BoardPropertyType.Person)
+                        {
+                            <MudSelect T="string" @bind-Value="filter.Value" @bind-Value:after="NotifyChange" Margin="Margin.Dense" Dense="true"
+                                Variant="Variant.Outlined" Style="flex-grow: 1;">
+                                @foreach (var emp in _employees)
+                                {
+                                    <MudSelectItem Value="@emp.Id">@emp.Name</MudSelectItem>
+                                }
+                            </MudSelect>
+                        }
+                        else if (prop.Type == BoardPropertyType.Project)
+                        {
+                            <MudSelect T="string" @bind-Value="filter.Value" @bind-Value:after="NotifyChange" Margin="Margin.Dense" Dense="true"
+                                Variant="Variant.Outlined" Style="flex-grow: 1;">
+                                @foreach (var proj in _projects)
+                                {
+                                    <MudSelectItem Value="@proj.Id">@proj.Name</MudSelectItem>
+                                }
+                            </MudSelect>
+                        }
+                        else if (prop.Type == BoardPropertyType.Date)
+                        {
+                            <MudDatePicker Date="@(DateTime.TryParse(filter.Value, out var d) ? d : null)"
+                                DateChanged="@((d) => { filter.Value = d?.ToString("O") ?? ""; NotifyChange(); })" Margin="Margin.Dense"
+                                Variant="Variant.Outlined" Style="flex-grow: 1;" />
+                        }
+                        else
+                        {
+                            <MudTextField @bind-Value="filter.Value" @bind-Value:after="NotifyChange" Margin="Margin.Dense" Variant="Variant.Outlined"
+                                Placeholder="Value" Style="flex-grow: 1;" />
+                        }
+                    }
+                </MudStack>
+            }
+        </MudStack>
+    }
+
+    <span @onclick:stopPropagation="true">
+        <MudButton StartIcon="@Icons.Material.Filled.Add" OnClick="AddFilter" Size="Size.Small" Color="Color.Primary">
+            Add Filter
+        </MudButton>
+    </span>
+
+</MudPaper>
+
+@code {
+    [Parameter] public Board Board { get; set; } = default!;
+    [Parameter] public BoardView View { get; set; } = default!;
+    [Parameter] public EventCallback OnChange { get; set; }
+
+    private record MinimalItem(string Id, string Name);
+    private List<MinimalItem> _employees = new();
+    private List<MinimalItem> _projects = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        var currentUser = await UserService.GetEmployeeAsync();
+        
+        _employees = Db.Employees.GetAll()
+            .Where(e => e.IsActive)
+            .Select(e => new MinimalItem(e.Id, $"{e.FirstName} {e.LastName}"))
+            .ToList();
+
+        var allProjects = Db.Projects.GetAll();
+        var visibleProjects = new List<MinimalItem>();
+        foreach(var p in allProjects)
+        {
+            if (await UserService.CanViewProjectAsync(p))
+            {
+                visibleProjects.Add(new MinimalItem(p.Id, p.Name));
+            }
+        }
+        _projects = visibleProjects;
+    }
+
+    void AddFilter()
+    {
+        var firstProp = Board?.Properties?.FirstOrDefault();
+        if (firstProp != null && View != null)
+        {
+            lock (Board)
+            {
+                var filters = View.Filters?.ToList() ?? new List<BoardViewFilter>();
+                filters.Add(new BoardViewFilter
+                {
+                    PropertyId = firstProp.Id,
+                    Operator = BoardFilterOperator.Contains
+                });
+                View.Filters = filters;
+            }
+            NotifyChange();
+        }
+    }
+
+    void RemoveFilter(BoardViewFilter filter)
+    {
+        if (View == null || Board == null) return;
+        lock (Board)
+        {
+            var filters = View.Filters?.ToList() ?? new List<BoardViewFilter>();
+            filters.RemoveAll(f => f.Id == filter.Id);
+            View.Filters = filters;
+        }
+        NotifyChange();
+    }
+
+    void UpdateFilterProp(BoardViewFilter filter, string propId)
+    {
+        filter.PropertyId = propId;
+        filter.Value = ""; // Reset value on prop change
+        NotifyChange();
+    }
+
+    void NotifyChange()
+    {
+        BoardService.UpdateBoard(Board);
+        OnChange.InvokeAsync();
+    }
+}

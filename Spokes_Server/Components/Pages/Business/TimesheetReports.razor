@@ -1,0 +1,418 @@
+@page "/business/timesheet-reports"
+@attribute [Authorize(Policy = AppPermissions.Timesheets.ViewReport)]
+@using Spokes_Server.Core.Data
+@using Spokes_Server.Core.Constants
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Services.HR
+@using Spokes_Server.Core.Helpers
+@using Microsoft.AspNetCore.Components.Authorization
+@inject Database Db
+@inject NavigationManager NavManager
+@inject ISnackbar Snackbar
+@inject IJSRuntime JS
+@inject AuthenticationStateProvider AuthStateProvider
+
+<MudContainer MaxWidth="MaxWidth.ExtraLarge" Class="mt-6">
+    <MudText Typo="Typo.h4" Class="mb-4">Timesheet Reports</MudText>
+
+    @if (_loading)
+    {
+        <MudProgressCircular Color="Color.Primary" Indeterminate="true" />
+    }
+    else
+    {
+        <!-- Filters Section -->
+        <MudPaper Elevation="0" Outlined="true" Class="pa-4 mb-6 rounded-lg" Style="background: var(--mud-palette-surface);">
+            <MudGrid>
+                <MudItem xs="12" md="4" lg="3">
+                    <MudDateRangePicker @bind-DateRange="_dateRange" @bind-DateRange:after="ApplyFilters" Label="Date Range" PickerVariant="PickerVariant.Dialog" Color="Color.Primary" DateFormat="dd MMM yyyy" Clearable="true" PickerClosed="ApplyFilters" />
+                </MudItem>
+                <MudItem xs="12" md="4" lg="3">
+                    <MudSelect T="string" Label="Employee" MultiSelection="true" SelectAll="true" SelectAllText="Select All" MultiSelectionTextFunc="@GetEmployeeSelectionText" SelectedValues="_selectedEmployees" SelectedValuesChanged="@(v => { _selectedEmployees = v; ApplyFilters(); })" OnClose="ApplyFilters" Clearable="true">
+                        @foreach (var emp in _allEmployees)
+                        {
+                            <MudSelectItem Value="@emp.Id">@emp.FullName</MudSelectItem>
+                        }
+                    </MudSelect>
+                </MudItem>
+                <MudItem xs="12" md="4" lg="3">
+                    <MudSelect T="string" Label="Team" MultiSelection="true" SelectAll="true" SelectAllText="Select All" MultiSelectionTextFunc="@GetTeamSelectionText" SelectedValues="_selectedTeams" SelectedValuesChanged="@(v => { _selectedTeams = v; ApplyFilters(); })" OnClose="ApplyFilters" Clearable="true">
+                        @foreach (var team in _allTeams)
+                        {
+                            <MudSelectItem Value="@team.Id">@team.Name</MudSelectItem>
+                        }
+                    </MudSelect>
+                </MudItem>
+                <MudItem xs="12" md="4" lg="3">
+                    <MudSelect T="string" Label="Project Group" MultiSelection="true" SelectAll="true" SelectAllText="Select All" MultiSelectionTextFunc="@GetProjectGroupSelectionText" SelectedValues="_selectedProjectGroups" SelectedValuesChanged="@(v => { _selectedProjectGroups = v; ApplyFilters(); })" OnClose="ApplyFilters" Clearable="true">
+                        @foreach (var pg in _allProjectGroups)
+                        {
+                            <MudSelectItem Value="@pg.Id">@pg.Name</MudSelectItem>
+                        }
+                    </MudSelect>
+                </MudItem>
+                <MudItem xs="12" md="4" lg="3">
+                    <MudSelect T="string" Label="Client" MultiSelection="true" SelectAll="true" SelectAllText="Select All" MultiSelectionTextFunc="@GetClientSelectionText" SelectedValues="_selectedClients" SelectedValuesChanged="@(v => { _selectedClients = v; ApplyFilters(); })" OnClose="ApplyFilters" Clearable="true">
+                        @foreach (var client in _allClients)
+                        {
+                            <MudSelectItem Value="@client">@client</MudSelectItem>
+                        }
+                    </MudSelect>
+                </MudItem>
+                <MudItem xs="12" md="4" lg="3">
+                    <MudSelect T="string" Label="Project" MultiSelection="true" SelectAll="true" SelectAllText="Select All" MultiSelectionTextFunc="@GetProjectSelectionText" SelectedValues="_selectedProjects" SelectedValuesChanged="@(v => { _selectedProjects = v; ApplyFilters(); })" OnClose="ApplyFilters" Clearable="true">
+                        @foreach (var proj in _allProjects)
+                        {
+                            <MudSelectItem Value="@proj.Id">@proj.DisplayName</MudSelectItem>
+                        }
+                    </MudSelect>
+                </MudItem>
+                <MudItem xs="12" md="4" lg="3">
+                    <MudSelect T="string" Label="Task" MultiSelection="true" SelectAll="true" SelectAllText="Select All" MultiSelectionTextFunc="@GetTaskSelectionText" SelectedValues="_selectedTasks" SelectedValuesChanged="@(v => { _selectedTasks = v; ApplyFilters(); })" OnClose="ApplyFilters" Clearable="true">
+                        @foreach (var task in _allTasks)
+                        {
+                            <MudSelectItem Value="@task.Id">@task.Name</MudSelectItem>
+                        }
+                    </MudSelect>
+                </MudItem>
+            </MudGrid>
+        </MudPaper>
+
+        <!-- Summary Section -->
+        <MudGrid Class="mb-6">
+            <MudItem xs="12" sm="4">
+                <MudPaper Elevation="0" Outlined="true" Class="pa-4 text-center rounded-lg" Style="background: linear-gradient(135deg, var(--mud-palette-primary) 0%, var(--mud-palette-primary-darken) 100%); color: white;">
+                    <MudText Typo="Typo.subtitle1" Style="opacity: 0.9;">Total Hours</MudText>
+                    <MudText Typo="Typo.h3" Style="font-weight: 700;">@_filteredEntries.Sum(e => e.Entry.Hours).ToString("0.00")</MudText>
+                </MudPaper>
+            </MudItem>
+            <MudItem xs="12" sm="4">
+                <MudPaper Elevation="0" Outlined="true" Class="pa-4 text-center rounded-lg" Style="background: linear-gradient(135deg, var(--mud-palette-success) 0%, var(--mud-palette-success-darken) 100%); color: white;">
+                    <MudText Typo="Typo.subtitle1" Style="opacity: 0.9;">Time Entries</MudText>
+                    <MudText Typo="Typo.h3" Style="font-weight: 700;">@_filteredEntries.Count</MudText>
+                </MudPaper>
+            </MudItem>
+            <MudItem xs="12" sm="4">
+                <MudPaper Elevation="0" Outlined="true" Class="pa-4 text-center rounded-lg" Style="background: linear-gradient(135deg, var(--mud-palette-info) 0%, var(--mud-palette-info-darken) 100%); color: white;">
+                    <MudText Typo="Typo.subtitle1" Style="opacity: 0.9;">Active Projects</MudText>
+                    <MudText Typo="Typo.h3" Style="font-weight: 700;">@_filteredEntries.Select(e => e.ProjectId).Where(id => !string.IsNullOrEmpty(id)).Distinct().Count()</MudText>
+                </MudPaper>
+            </MudItem>
+        </MudGrid>
+
+        <!-- Charts Section -->
+        <MudGrid Class="mb-6">
+            <MudItem xs="12" md="6">
+                <MudPaper Elevation="0" Outlined="true" Class="pa-4 rounded-lg">
+                    <MudText Typo="Typo.h6" Class="mb-4">Hours by Project</MudText>
+                    @if (_projectChartData.Length > 0)
+                    {
+                        <MudChart T="double" ChartType="ChartType.Donut" Width="100%" Height="300px" InputData="@_projectChartData" InputLabels="@_projectChartLabels" />
+                    }
+                    else
+                    {
+                        <MudText Color="Color.Default" Class="py-8 text-center" Style="opacity: 0.5;">No data available for the selected filters.</MudText>
+                    }
+                </MudPaper>
+            </MudItem>
+            <MudItem xs="12" md="6">
+                <MudPaper Elevation="0" Outlined="true" Class="pa-4 rounded-lg">
+                    <MudText Typo="Typo.h6" Class="mb-4">Hours by Task</MudText>
+                    @if (_taskChartLabels.Length > 0)
+                    {
+                        <MudChart T="double" ChartType="ChartType.Bar" Width="100%" Height="300px" ChartSeries="@_taskBarSeries" XAxisLabels="@_taskChartLabels" />
+                    }
+                    else
+                    {
+                        <MudText Color="Color.Default" Class="py-8 text-center" Style="opacity: 0.5;">No data available for the selected filters.</MudText>
+                    }
+                </MudPaper>
+            </MudItem>
+        </MudGrid>
+
+        <!-- Detailed List Section -->
+        <MudPaper Elevation="0" Outlined="true" Class="rounded-lg">
+            <MudTable Items="@_tableData" Dense="true" Hover="true" Bordered="false" Striped="true" FixedHeader="true" Height="400px">
+                <ToolBarContent>
+                    <MudText Typo="Typo.h6">Time Entries Breakdown</MudText>
+                    <MudSpacer />
+                    <MudTextField @bind-Value="_searchString" Placeholder="Search description..." Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search" IconSize="Size.Medium" Class="mt-0" />
+                    <MudButton StartIcon="@Icons.Material.Filled.FileDownload" Variant="Variant.Outlined" Color="Color.Primary" Class="ml-2" OnClick="ExportCsv" Disabled="@(!_filteredEntries.Any())">CSV</MudButton>
+                </ToolBarContent>
+                <HeaderContent>
+                    <MudTh>Date</MudTh>
+                    <MudTh>Employee</MudTh>
+                    <MudTh>Project</MudTh>
+                    <MudTh>Task</MudTh>
+                    <MudTh>Description</MudTh>
+                    <MudTh Style="text-align: right;">Hours</MudTh>
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd DataLabel="Date">@context.Entry.Date.ToString("yyyy-MM-dd")</MudTd>
+                    <MudTd DataLabel="Employee">@context.EmployeeName</MudTd>
+                    <MudTd DataLabel="Project">@context.ProjectName</MudTd>
+                    <MudTd DataLabel="Task">@context.TaskName</MudTd>
+                    <MudTd DataLabel="Description">@context.Entry.Description</MudTd>
+                    <MudTd DataLabel="Hours" Style="text-align: right; font-weight: bold;">@context.Entry.Hours.ToString("0.00")</MudTd>
+                </RowTemplate>
+                <PagerContent>
+                    <MudTablePager />
+                </PagerContent>
+            </MudTable>
+        </MudPaper>
+    }
+</MudContainer>
+
+@code {
+    private bool _loading = true;
+
+    // Filters
+    private DateRange _dateRange = new DateRange(
+        new DateTime(DateTime.Now.Year, DateTime.Now.Month, 1), 
+        new DateTime(DateTime.Now.Year, DateTime.Now.Month, DateTime.DaysInMonth(DateTime.Now.Year, DateTime.Now.Month))
+    );
+    private IReadOnlyCollection<string> _selectedEmployees = new HashSet<string>();
+    private IReadOnlyCollection<string> _selectedTeams = new HashSet<string>();
+    private IReadOnlyCollection<string> _selectedProjects = new HashSet<string>();
+    private IReadOnlyCollection<string> _selectedProjectGroups = new HashSet<string>();
+    private IReadOnlyCollection<string> _selectedClients = new HashSet<string>();
+    private IReadOnlyCollection<string> _selectedTasks = new HashSet<string>();
+
+    // Data sources
+    private List<Employee> _allEmployees = new();
+    private List<Team> _allTeams = new();
+    private List<Project> _allProjects = new();
+    private List<ProjectGroup> _allProjectGroups = new();
+    private List<string> _allClients = new();
+    private List<WorkType> _allTasks = new();
+    private List<Timesheet> _allTimesheets = new();
+
+    // Data shapes for UI
+    private List<TimesheetReportEntry> _allEntries = new();
+    private List<TimesheetReportEntry> _filteredEntries = new();
+
+    // Table Data
+    private string _searchString = "";
+    private IEnumerable<TimesheetReportEntry> _tableData => string.IsNullOrWhiteSpace(_searchString) 
+        ? _filteredEntries 
+        : _filteredEntries.Where(e => e.Entry.Description.Contains(_searchString, StringComparison.OrdinalIgnoreCase) || 
+                                     e.EmployeeName.Contains(_searchString, StringComparison.OrdinalIgnoreCase) ||
+                                     e.ProjectName.Contains(_searchString, StringComparison.OrdinalIgnoreCase));
+
+    // Chart Data
+    private double[] _projectChartData = Array.Empty<double>();
+    private string[] _projectChartLabels = Array.Empty<string>();
+    
+    // Bar Chart
+    private List<ChartSeries<double>> _taskBarSeries = new();
+    private string[] _taskChartLabels = Array.Empty<string>();
+
+    protected override async Task OnInitializedAsync()
+    {
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        var user = authState.User;
+
+        // Optionally enforce access checks here
+        if (!user.Identity?.IsAuthenticated ?? false)
+        {
+            NavManager.NavigateTo("/", true);
+            return;
+        }
+
+        await LoadDataAsync();
+        
+        // Select all by default
+        _selectedEmployees = _allEmployees.Select(e => e.Id).ToList();
+        _selectedTeams = _allTeams.Select(t => t.Id).ToList();
+        _selectedProjects = _allProjects.Select(p => p.Id).ToList();
+        _selectedProjectGroups = _allProjectGroups.Select(p => p.Id).ToList();
+        _selectedClients = _allClients.ToList();
+        _selectedTasks = _allTasks.Select(t => t.Id).ToList();
+        
+        ApplyFilters();
+        _loading = false;
+    }
+
+    private async Task LoadDataAsync()
+    {
+        _allEmployees = Db.Employees.GetAll();
+        _allTeams = Db.Teams.GetAll();
+        _allProjects = Db.Projects.GetAll();
+        _allProjectGroups = Db.ProjectGroups.GetAll();
+        _allTasks = Db.WorkTypes.GetAll();
+        _allTimesheets = Db.Timesheets.GetAll();
+
+        // Extract Clients from Projects
+        _allClients = _allProjects.Where(p => p.Client != null && !string.IsNullOrWhiteSpace(p.Client.BusinessName))
+                                  .Select(p => p.Client!.BusinessName)
+                                  .Distinct(StringComparer.OrdinalIgnoreCase)
+                                  .ToList();
+
+        // Flatten all time entries manually
+        _allEntries = new List<TimesheetReportEntry>();
+        
+        foreach (var ts in _allTimesheets)
+        {
+            var emp = _allEmployees.FirstOrDefault(e => string.Equals(e.Id, ts.EmployeeId, StringComparison.OrdinalIgnoreCase));
+            var empName = emp?.FullName ?? (!string.IsNullOrWhiteSpace(ts.EmployeeName) ? ts.EmployeeName : "Unknown Employee");
+            var empId = emp?.Id ?? ts.EmployeeId ?? "";
+            var teamId = emp?.TeamId ?? "";
+
+            if (ts.Entries == null) continue;
+
+            foreach (var entry in ts.Entries)
+            {
+                var proj = _allProjects.FirstOrDefault(p => string.Equals(p.Id, entry.ProjectId, StringComparison.OrdinalIgnoreCase));
+                var task = _allTasks.FirstOrDefault(t => string.Equals(t.Id, entry.WorkTypeId, StringComparison.OrdinalIgnoreCase));
+
+                _allEntries.Add(new TimesheetReportEntry
+                {
+                    Entry = entry,
+                    EmployeeId = empId,
+                    EmployeeName = empName,
+                    TeamId = teamId,
+                    ProjectId = proj?.Id ?? entry.ProjectId ?? "",
+                    ProjectName = proj?.DisplayName ?? (!string.IsNullOrWhiteSpace(entry.ProjectId) ? entry.ProjectId : "Unknown Project"),
+                    ProjectGroupId = proj?.ProjectGroupId ?? "",
+                    ClientId = proj?.Client?.BusinessName ?? "",
+                    TaskId = task?.Id ?? entry.WorkTypeId ?? "",
+                    TaskName = task?.Name ?? (!string.IsNullOrWhiteSpace(entry.WorkTypeId) ? entry.WorkTypeId : "Unknown Task")
+                });
+            }
+        }
+    }
+
+    private void ApplyFilters()
+    {
+        var criteria = new TimesheetReportFilterCriteria
+        {
+            StartDate = _dateRange?.Start,
+            EndDate = _dateRange?.End,
+            SelectedEmployees = _selectedEmployees,
+            TotalEmployeesCount = _allEmployees.Count,
+            SelectedTeams = _selectedTeams,
+            TotalTeamsCount = _allTeams.Count,
+            SelectedProjectGroups = _selectedProjectGroups,
+            TotalProjectGroupsCount = _allProjectGroups.Count,
+            SelectedClients = _selectedClients,
+            TotalClientsCount = _allClients.Count,
+            SelectedProjects = _selectedProjects,
+            TotalProjectsCount = _allProjects.Count,
+            SelectedTasks = _selectedTasks,
+            TotalTasksCount = _allTasks.Count
+        };
+
+        _filteredEntries = TimesheetReportFilterHelper.Filter(_allEntries, criteria);
+        
+        UpdateCharts();
+    }
+
+    private string GetEmployeeSelectionText(IReadOnlyList<string> selectedIds)
+    {
+        if (selectedIds == null || selectedIds.Count == 0) return "None selected";
+        if (_allEmployees.Count > 0 && selectedIds.Count >= _allEmployees.Count) return "Select All";
+        return string.Join(", ", _allEmployees.Where(x => selectedIds.Contains(x.Id)).Select(x => x.FullName));
+    }
+    private string GetTeamSelectionText(IReadOnlyList<string> selectedIds)
+    {
+        if (selectedIds == null || selectedIds.Count == 0) return "None selected";
+        if (_allTeams.Count > 0 && selectedIds.Count >= _allTeams.Count) return "Select All";
+        return string.Join(", ", _allTeams.Where(x => selectedIds.Contains(x.Id)).Select(x => x.Name));
+    }
+    private string GetProjectGroupSelectionText(IReadOnlyList<string> selectedIds)
+    {
+        if (selectedIds == null || selectedIds.Count == 0) return "None selected";
+        if (_allProjectGroups.Count > 0 && selectedIds.Count >= _allProjectGroups.Count) return "Select All";
+        return string.Join(", ", _allProjectGroups.Where(x => selectedIds.Contains(x.Id)).Select(x => x.Name));
+    }
+    private string GetClientSelectionText(IReadOnlyList<string> selectedIds)
+    {
+        if (selectedIds == null || selectedIds.Count == 0) return "None selected";
+        if (_allClients.Count > 0 && selectedIds.Count >= _allClients.Count) return "Select All";
+        return string.Join(", ", selectedIds);
+    }
+    private string GetProjectSelectionText(IReadOnlyList<string> selectedIds)
+    {
+        if (selectedIds == null || selectedIds.Count == 0) return "None selected";
+        if (_allProjects.Count > 0 && selectedIds.Count >= _allProjects.Count) return "Select All";
+        return string.Join(", ", _allProjects.Where(x => selectedIds.Contains(x.Id)).Select(x => x.DisplayName));
+    }
+    private string GetTaskSelectionText(IReadOnlyList<string> selectedIds)
+    {
+        if (selectedIds == null || selectedIds.Count == 0) return "None selected";
+        if (_allTasks.Count > 0 && selectedIds.Count >= _allTasks.Count) return "Select All";
+        return string.Join(", ", _allTasks.Where(x => selectedIds.Contains(x.Id)).Select(x => x.Name));
+    }
+
+    private void UpdateCharts()
+    {
+        // Hours by Project (Donut)
+        var projectGroupsList = _filteredEntries
+            .GroupBy(e => e.ProjectName)
+            .Select(g => new { Name = g.Key, Total = (double)g.Sum(e => e.Entry.Hours) })
+            .Where(x => x.Total > 0)
+            .OrderByDescending(x => x.Total)
+            .Take(10) // Top 10 to keep donut clean
+            .ToList();
+
+        _projectChartLabels = projectGroupsList.Select(x => x.Name).ToArray();
+        _projectChartData = projectGroupsList.Select(x => x.Total).ToArray();
+
+        // Hours by Task (Bar Chart)
+        var taskGroupsList = _filteredEntries
+            .GroupBy(e => e.TaskName)
+            .Select(g => new { Name = g.Key, Total = (double)g.Sum(e => e.Entry.Hours) })
+            .Where(x => x.Total > 0)
+            .OrderByDescending(x => x.Total)
+            .Take(10)
+            .ToList();
+
+        _taskChartLabels = taskGroupsList.Select(x => x.Name).ToArray();
+        _taskBarSeries = new List<ChartSeries<double>>
+        {
+            new ChartSeries<double> { Name = "Hours", Data = taskGroupsList.Select(x => x.Total).ToArray() }
+        };
+        
+        StateHasChanged();
+    }
+
+    private async Task ExportCsv()
+    {
+        var sb = new System.Text.StringBuilder();
+        
+        // Header
+        sb.AppendLine("Date,Employee,Project,Task,Description,Hours");
+
+        // Check if rounding is enabled
+        var profile = Db.CompanyProfile.Get();
+        var roundingEnabled = profile.TimesheetConfig.EnableRounding;
+        var roundingInterval = profile.TimesheetConfig.RoundingIntervalMinutes;
+        var roundingDirection = profile.TimesheetConfig.RoundingDirection;
+        
+        // Data rows (use the search-filtered data)
+        foreach (var entry in _tableData.OrderByDescending(e => e.Entry.Date))
+        {
+            var hours = entry.Entry.Hours;
+            if (roundingEnabled)
+            {
+                hours = HRService.RoundHours(hours, roundingInterval, roundingDirection);
+            }
+
+            var date = entry.Entry.Date.ToString("yyyy-MM-dd");
+            var employee = CsvHelper.EscapeCsv(entry.EmployeeName);
+            var project = CsvHelper.EscapeCsv(entry.ProjectName);
+            var task = CsvHelper.EscapeCsv(entry.TaskName);
+            var description = CsvHelper.EscapeCsv(entry.Entry.Description);
+            sb.AppendLine($"{date},{employee},{project},{task},{description},{hours:0.00}");
+        }
+
+        // Trigger download via existing JS helper
+        var csvContent = sb.ToString();
+        var fileName = $"timesheet_report_{DateTime.Now:yyyyMMdd_HHmmss}.csv";
+        
+        await JS.InvokeVoidAsync("downloadFile", fileName, "text/csv", csvContent);
+        Snackbar.Add("CSV exported successfully", Severity.Success);
+    }
+}

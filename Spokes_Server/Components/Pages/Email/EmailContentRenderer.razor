@@ -1,0 +1,86 @@
+@inject IJSRuntime JSRuntime
+@inject IDialogService DialogService
+@implements IAsyncDisposable
+
+<div @ref="_container" class="email-content-renderer" style="width: 100%; height: 100%;"></div>
+
+@code {
+    [Parameter] public string HtmlContent { get; set; } = "";
+
+    private ElementReference _container;
+    private IJSObjectReference? _module;
+    private DotNetObjectReference<EmailContentRenderer>? _dotNetHelper;
+
+    private bool _initialized;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            try
+            {
+                _module = await JSRuntime.InvokeAsync<IJSObjectReference>("import",
+                    $"./{Assets.Bypassed("Components/Pages/Email/EmailContentRenderer.razor.js")}");
+                _dotNetHelper = DotNetObjectReference.Create(this);
+                _initialized = true;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error initializing email renderer: {ex.Message}");
+            }
+        }
+
+        if (_initialized && _module != null && _dotNetHelper != null)
+        {
+            try
+            {
+                await _module.InvokeVoidAsync("renderContent", _container, HtmlContent, _dotNetHelper);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error rendering content: {ex.Message}");
+            }
+        }
+    }
+
+    [JSInvokable]
+    public async Task HandleLinkClick(string url)
+    {
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var parsedUri) || 
+            (parsedUri.Scheme != Uri.UriSchemeHttp && parsedUri.Scheme != Uri.UriSchemeHttps))
+        {
+            await DialogService.ShowMessageBoxAsync("Security Warning", "This link was blocked for security reasons.", yesText: "OK");
+            return;
+        }
+
+        var encodedUrl = System.Net.WebUtility.HtmlEncode(url);
+        var result = await DialogService.ShowMessageBoxAsync("External Link", 
+            (MarkupString)$"Do you really want to go to <br/><a href='{encodedUrl}' target='_blank' rel='noopener noreferrer' style='word-break: break-all;'>{encodedUrl}</a>?", 
+            yesText: "Yes", cancelText: "No");
+
+        if (result == true)
+        {
+            await JSRuntime.InvokeVoidAsync("open", url, "_blank");
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_module != null)
+        {
+            try
+            {
+                await _module.DisposeAsync();
+            }
+            catch (JSDisconnectedException)
+            {
+                // Ignored - disconnected
+            }
+            catch (InvalidOperationException)
+            {
+                // Ignored - prerendering
+            }
+        }
+        _dotNetHelper?.Dispose();
+    }
+}

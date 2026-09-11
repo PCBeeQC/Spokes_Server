@@ -1,0 +1,220 @@
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Data
+@using MudBlazor
+@inject Database Db
+@inject ISnackbar Snackbar
+
+<MudDialog>
+    <DialogContent>
+        <MudForm @ref="form" @bind-IsValid="@success">
+            <MudTextField @bind-Value="Group.Name" Label="Group Name" Required="true"
+                          RequiredError="Name is required" Variant="Variant.Outlined" Class="mb-4" />
+
+            <MudTextField @bind-Value="Group.Description" Label="Description" Lines="2"
+                          Variant="Variant.Outlined" Class="mb-4" />
+
+            <MudText Typo="Typo.subtitle1" Class="mb-2">Client</MudText>
+            <MudAutocomplete T="Supplier" Label="Select Client" Value="selectedClient"
+                             SearchFunc="SearchClients" ToStringFunc="@(s => s?.Info.BusinessName ?? "")"
+                             Variant="Variant.Outlined" Class="mb-4" Required="true"
+                             RequiredError="Client is required" ValueChanged="OnClientSelected" MaxItems="null" />
+
+            @if (selectedClient != null)
+            {
+                <MudText Typo="Typo.subtitle1" Class="mb-2 mt-4">Projects for @selectedClient.Info.BusinessName</MudText>
+                
+                @if (!AvailableProjects.Any())
+                {
+                    <MudAlert Severity="Severity.Warning" Class="mb-4">
+                        No available projects found for this client. Projects already in another group are not shown.
+                    </MudAlert>
+                }
+                else
+                {
+                    <MudPaper Outlined="true" Class="pa-3 mb-4" Style="max-height: 300px; overflow-y: auto;">
+                        @foreach (var project in AvailableProjects)
+                        {
+                            var isSelected = SelectedProjectIds.Contains(project.Id);
+                            <MudCheckBox T="bool" Value="@isSelected" 
+                                         ValueChanged="@((bool v) => ToggleProject(project.Id, v))"
+                                         Label="@project.DisplayName" Color="Color.Primary" />
+                        }
+                    </MudPaper>
+                    
+                    <MudText Typo="Typo.body2" Color="Color.Secondary">
+                        @SelectedProjectIds.Count project(s) selected
+                    </MudText>
+                }
+            }
+        </MudForm>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+        <MudButton Color="Color.Primary" OnClick="Submit" Variant="Variant.Filled"
+                   Disabled="@(!success || selectedClient == null || !SelectedProjectIds.Any())">
+            @(IsEdit ? "Save Changes" : "Create Group")
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
+    [Parameter] public ProjectGroup? ExistingGroup { get; set; }
+
+    private MudForm form = default!;
+    private bool success;
+    private ProjectGroup Group = new();
+    private Supplier? selectedClient;
+    private List<Supplier> AllClients = new();
+    private List<Project> AvailableProjects = new();
+    private HashSet<string> SelectedProjectIds = new();
+    private bool IsEdit => ExistingGroup != null;
+
+    protected override void OnInitialized()
+    {
+        AllClients = Db.Suppliers.GetAll().OrderBy(s => s.Info.BusinessName).ToList();
+
+        if (ExistingGroup != null)
+        {
+            // Edit mode
+            Group = new ProjectGroup
+            {
+                Id = ExistingGroup.Id,
+                Name = ExistingGroup.Name,
+                Description = ExistingGroup.Description,
+                Client = ExistingGroup.Client,
+                ProjectIds = new List<string>(ExistingGroup.ProjectIds),
+                CreatedAt = ExistingGroup.CreatedAt
+            };
+
+            // Find matching client
+            selectedClient = AllClients.FirstOrDefault(c => 
+                c.Info.BusinessName.Equals(Group.Client.BusinessName, StringComparison.OrdinalIgnoreCase));
+
+            SelectedProjectIds = new HashSet<string>(Group.ProjectIds);
+            
+            if (selectedClient != null)
+            {
+                LoadProjectsForClient();
+            }
+        }
+    }
+
+    private async Task<IEnumerable<Supplier>> SearchClients(string value, CancellationToken token)
+    {
+        if (string.IsNullOrEmpty(value))
+            return AllClients;
+
+        return AllClients.Where(c => 
+            c.Info.BusinessName.Contains(value, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private void LoadProjectsForClient()
+    {
+        if (selectedClient == null)
+        {
+            AvailableProjects = new();
+            return;
+        }
+
+        var selectedClientName = selectedClient.Info.BusinessName?.Trim() ?? "";
+
+        // Get all projects for this client that are NOT in another group
+        // Match client by trimmed, case-insensitive business name
+        var allClientProjects = Db.Projects.GetAll()
+            .Where(p => (p.Client.BusinessName?.Trim() ?? "").Equals(selectedClientName, StringComparison.OrdinalIgnoreCase))
+            .Where(p => !p.IsInternal)
+            .ToList();
+
+        // Filter out projects that are in OTHER groups (allow projects in THIS group for editing)
+        AvailableProjects = allClientProjects
+            .Where(p => string.IsNullOrEmpty(p.ProjectGroupId) || 
+                        (IsEdit && p.ProjectGroupId == Group.Id))
+            .OrderBy(p => p.DisplayName)
+            .ToList();
+
+        // If client changed, clear project selections that don't belong to new client
+        var validIds = AvailableProjects.Select(p => p.Id).ToHashSet();
+        SelectedProjectIds.RemoveWhere(id => !validIds.Contains(id));
+    }
+
+    private void OnClientSelected(Supplier? client)
+    {
+        selectedClient = client;
+        if (client != null)
+        {
+            Group.Client = new ClientInfo
+            {
+                BusinessName = client.Info.BusinessName,
+                ContactPersonName = client.Info.ContactPersonName,
+                ContactPersonEmail = client.Info.ContactPersonEmail,
+                ContactPersonPhone = client.Info.ContactPersonPhone,
+                BusinessAdressStreet = client.Info.BusinessAdressStreet,
+                BusinessAdressCity = client.Info.BusinessAdressCity,
+                BusinessAdressState = client.Info.BusinessAdressState,
+                BusinessAdressZip = client.Info.BusinessAdressZip,
+                BusinessAdressCountry = client.Info.BusinessAdressCountry
+            };
+            LoadProjectsForClient();
+        }
+        else
+        {
+            AvailableProjects = new();
+        }
+        StateHasChanged();
+    }
+
+
+
+    private void ToggleProject(string projectId, bool isSelected)
+    {
+        if (isSelected)
+            SelectedProjectIds.Add(projectId);
+        else
+            SelectedProjectIds.Remove(projectId);
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+
+    private void Submit()
+    {
+        form.Validate();
+        if (!success || selectedClient == null || !SelectedProjectIds.Any())
+            return;
+
+        Group.ProjectIds = SelectedProjectIds.ToList();
+
+        // Update project references - set ProjectGroupId on selected projects
+        foreach (var projectId in SelectedProjectIds)
+        {
+            var project = Db.Projects.GetById(projectId);
+            if (project != null)
+            {
+                project.ProjectGroupId = Group.Id;
+                Db.Projects.Save(project);
+            }
+        }
+
+        // If editing, clear ProjectGroupId from projects that were removed
+        if (IsEdit && ExistingGroup != null)
+        {
+            var removedProjectIds = ExistingGroup.ProjectIds.Except(SelectedProjectIds);
+            foreach (var projectId in removedProjectIds)
+            {
+                var project = Db.Projects.GetById(projectId);
+                if (project != null)
+                {
+                    project.ProjectGroupId = null;
+                    Db.Projects.Save(project);
+                }
+            }
+        }
+
+        MudDialog.Close(DialogResult.Ok(Group));
+    }
+}
+

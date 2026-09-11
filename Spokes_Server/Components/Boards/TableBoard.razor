@@ -1,0 +1,318 @@
+@using Spokes_Server.Core.Data
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Services
+@inject Database Db
+@inject BoardService BoardService
+@inject IDialogService DialogService
+
+<MudDataGrid T="BoardCard" Items="Cards" Filterable="true" SortMode="SortMode.Multiple" Class="h-100" Elevation="0"
+    RowClick="RowClicked" ReadOnly="false" EditMode="DataGridEditMode.Cell" EditTrigger="DataGridEditTrigger.OnRowClick"
+    CommittedItemChanges="ItemUpdated">
+    <Columns>
+        <PropertyColumn Property="x => x.Title" Title="Name" />
+
+        @foreach (var prop in Board.Properties.Where(p => View.VisiblePropertyIds.Contains(p.Id)))
+        {
+            <PropertyColumn Property="@(x => GetPropertyValue(x, prop))" Title="@prop.Name">
+                <CellTemplate>
+                    @{
+                        // Helper to get raw value
+                        context.Item.PropertyValues.TryGetValue(prop.Id, out var rawVal);
+                        rawVal ??= "";
+                    }
+
+                    @if (prop.Type == BoardPropertyType.Select)
+                    {
+                        var opt = prop.Options.FirstOrDefault(o => o.Id == rawVal);
+                        if (opt != null)
+                        {
+                            <MudChip T="string" Size="Size.Small"
+                                Style="@($"background-color: {GetColor(opt.Color)}; color: white;")">
+                                @opt.Name
+                            </MudChip>
+                        }
+                        else
+                        {
+                            @rawVal
+                        }
+                    }
+                    else if (prop.Type == BoardPropertyType.MultiSelect)
+                    {
+                        var ids = rawVal.Split(',', StringSplitOptions.RemoveEmptyEntries);
+                        <div class="d-flex gap-1 flex-wrap">
+                            @foreach (var id in ids)
+                            {
+                                var opt = prop.Options.FirstOrDefault(o => o.Id == id);
+                                if (opt != null)
+                                {
+                                    <MudChip T="string" Size="Size.Small"
+                                        Style="@($"background-color: {GetColor(opt.Color)}; color: white;")">
+                                        @opt.Name
+                                    </MudChip>
+                                }
+                                else
+                                {
+                                    <span>@id</span>
+                                }
+                            }
+                        </div>
+                    }
+                    else
+                    {
+                        @GetPropertyValue(context.Item, prop)
+                    }
+                </CellTemplate>
+
+                <EditTemplate>
+                    @{
+                        // Helper to get current value for binding
+                        string GetVal() => context.Item.PropertyValues.TryGetValue(prop.Id, out var v) ? v : "";
+                        // Helper to set value
+                        void SetVal(string v) => context.Item.PropertyValues[prop.Id] = v;
+                    }
+
+                    @if (prop.Type == BoardPropertyType.Select)
+                    {
+                        <MudSelect T="string" Value="@GetVal()" ValueChanged="@(v => SetVal(v))" Margin="Margin.Dense"
+                            Dense="true">
+                            @foreach (var opt in prop.Options)
+                            {
+                                <MudSelectItem Value="@opt.Id">
+                                    <div class="d-flex align-center gap-2">
+                                        @if (!string.IsNullOrEmpty(opt.Color))
+                                {
+                                    <MudIcon Icon="@Icons.Material.Filled.Circle" Size="Size.Small"
+                                        Style="@($"color: {GetColor(opt.Color)}")" />
+                                }
+                                @opt.Name
+                            </div>
+                        </MudSelectItem>
+                            }
+                        </MudSelect>
+                    }
+                    else if (prop.Type == BoardPropertyType.MultiSelect)
+                    {
+                        <MudSelect T="string" SelectedValues="@(GetVal().Split(',', StringSplitOptions.RemoveEmptyEntries))"
+                            SelectedValuesChanged="@((IReadOnlyCollection<string> vals) => SetVal(string.Join(",", vals)))"
+                            MultiSelection="true" Margin="Margin.Dense" Dense="true">
+                            @foreach (var opt in prop.Options)
+                            {
+                                <MudSelectItem Value="@opt.Id">
+                                    <div class="d-flex align-center gap-2">
+                                        @if (!string.IsNullOrEmpty(opt.Color))
+                                {
+                                    <MudIcon Icon="@Icons.Material.Filled.Circle" Size="Size.Small"
+                                        Style="@($"color: {GetColor(opt.Color)}")" />
+                                }
+                                @opt.Name
+                            </div>
+                        </MudSelectItem>
+                            }
+                        </MudSelect>
+                    }
+                    else if (prop.Type == BoardPropertyType.Person)
+                    {
+                        <MudSelect T="string" Value="@GetVal()" ValueChanged="@(v => SetVal(v))" Margin="Margin.Dense"
+                            Dense="true">
+                            @foreach (var e in _employees.Where(x => x.IsActive))
+                            {
+                                <MudSelectItem Value="@e.Id">@e.FirstName @e.LastName
+                                </MudSelectItem>
+                            }
+                        </MudSelect>
+                    }
+                    else if (prop.Type == BoardPropertyType.Project)
+                    {
+                        <MudSelect T="string" Value="@GetVal()" ValueChanged="@(v => SetVal(v))" Margin="Margin.Dense"
+                            Dense="true">
+                            @foreach (var p in _projects)
+                            {
+                                <MudSelectItem Value="@p.Id">@p.Name</MudSelectItem>
+                            }
+                        </MudSelect>
+                    }
+                    else if (prop.Type == BoardPropertyType.Date)
+                    {
+                        // Basic date handling
+                        <MudDatePicker Date="@(DateTime.TryParse(GetVal(), out var d) ? d : null)"
+                            DateChanged="@((d) => SetVal(d?.ToString("O") ?? ""))" />
+                    }
+                    else
+                    {
+                        <MudTextField T="string" Value="@GetVal()" ValueChanged="@(v => SetVal(v))" Margin="Margin.Dense" />
+                    }
+                </EditTemplate>
+                <FooterTemplate>
+                    <MudMenu AnchorOrigin="Origin.BottomLeft" TransformOrigin="Origin.TopLeft" Dense="true">
+                        <ActivatorContent Context="menuContext">
+                            <MudText Typo="Typo.body2" Color="Color.Secondary" Class="cursor-pointer hover-underline">
+                                @GetCalculationLabel(prop.Id)
+                            </MudText>
+                        </ActivatorContent>
+                        <ChildContent>
+                            <MudMenuItem OnClick="@(() => SetCalculation(prop.Id, "none"))">None</MudMenuItem>
+                            <MudMenuItem OnClick="@(() => SetCalculation(prop.Id, "count"))">Count</MudMenuItem>
+                            <MudMenuItem OnClick="@(() => SetCalculation(prop.Id, "countEmpty"))">Count Empty</MudMenuItem>
+                            <MudMenuItem OnClick="@(() => SetCalculation(prop.Id, "countNotEmpty"))">Count Not Empty
+                            </MudMenuItem>
+                            <MudMenuItem OnClick="@(() => SetCalculation(prop.Id, "percentEmpty"))">% Empty</MudMenuItem>
+                            <MudMenuItem OnClick="@(() => SetCalculation(prop.Id, "percentNotEmpty"))">% Not Empty
+                            </MudMenuItem>
+
+                            @if (prop.Type == BoardPropertyType.Number)
+                            {
+                                <MudDivider />
+                                <MudMenuItem OnClick="@(() => SetCalculation(prop.Id, "sum"))">Sum</MudMenuItem>
+                                <MudMenuItem OnClick="@(() => SetCalculation(prop.Id, "average"))">Average</MudMenuItem>
+                                <MudMenuItem OnClick="@(() => SetCalculation(prop.Id, "min"))">Min</MudMenuItem>
+                                <MudMenuItem OnClick="@(() => SetCalculation(prop.Id, "max"))">Max</MudMenuItem>
+                            }
+                        </ChildContent>
+                    </MudMenu>
+                </FooterTemplate>
+            </PropertyColumn>
+        }
+    </Columns>
+</MudDataGrid>
+
+@code {
+    [Parameter] public Board Board { get; set; } = default!;
+    [Parameter] public BoardView View { get; set; } = default!;
+    [Parameter] public List<BoardCard> Cards { get; set; } = new();
+
+    private List<Employee> _employees = new();
+    private List<Project> _projects = new();
+
+    protected override void OnInitialized()
+    {
+        _employees = Db.Employees.GetAll();
+        _projects = Db.Projects.GetAll();
+    }
+    protected override void OnParametersSet()
+    {
+        // No local data fetch needed anymore
+    }
+
+    void SetCalculation(string propId, string type)
+    {
+        if (View.ColumnCalculations.ContainsKey(propId))
+        {
+            View.ColumnCalculations[propId] = type;
+        }
+        else
+        {
+            View.ColumnCalculations.Add(propId, type);
+        }
+        BoardService.UpdateBoard(Board);
+        StateHasChanged();
+    }
+
+    string GetCalculationLabel(string propId)
+    {
+        if (!View.ColumnCalculations.TryGetValue(propId, out var type) || type == "none") return "Calculate";
+
+        var values = Cards.Select(c =>
+        {
+            c.PropertyValues.TryGetValue(propId, out var v);
+            return v;
+        }).ToList(); // Handle nulls?
+
+        int count = values.Count;
+        int empty = values.Count(string.IsNullOrEmpty);
+        int notEmpty = count - empty;
+
+        switch (type)
+        {
+            case "count": return $"{count}";
+            case "countEmpty": return $"{empty}";
+            case "countNotEmpty": return $"{notEmpty}";
+            case "percentEmpty": return count == 0 ? "0%" : $"{(double)empty / count:P0}";
+            case "percentNotEmpty": return count == 0 ? "0%" : $"{(double)notEmpty / count:P0}";
+            case "sum":
+            case "average":
+            case "min":
+            case "max":
+                // Number logic
+                var nums = values.Where(v => !string.IsNullOrEmpty(v) && double.TryParse(v, out _)).Select(v =>
+                double.Parse(v!)).ToList();
+                if (!nums.Any()) return "-";
+
+                if (type == "sum") return $"{nums.Sum()}";
+                if (type == "average") return $"{nums.Average():F2}";
+                if (type == "min") return $"{nums.Min()}";
+                if (type == "max") return $"{nums.Max()}";
+                break;
+        }
+
+        return "Calculate";
+    }
+
+    string GetColor(string colorName)
+    {
+        return colorName switch
+        {
+            "gray" => "var(--mud-palette-grey)",
+            "brown" => "#795548",
+            "orange" => "var(--mud-palette-warning)",
+            "yellow" => "#FBC02D",
+            "green" => "var(--mud-palette-success)",
+            "blue" => "var(--mud-palette-info)",
+            "purple" => "#9C27B0",
+            "pink" => "#E91E63",
+            "red" => "var(--mud-palette-error)",
+            _ => "var(--mud-palette-text-primary)"
+        };
+    }
+
+    string GetPropertyValue(BoardCard card, BoardProperty prop)
+    {
+        if (card.PropertyValues.TryGetValue(prop.Id, out var val))
+        {
+            if (prop.Type == BoardPropertyType.Select)
+            {
+                var option = prop.Options.FirstOrDefault(o => o.Id == val);
+                return option?.Name ?? val;
+            }
+            if (prop.Type == BoardPropertyType.MultiSelect)
+            {
+                var ids = val.Split(',', StringSplitOptions.RemoveEmptyEntries);
+                var names = ids.Select(id => prop.Options.FirstOrDefault(o => o.Id == id)?.Name ?? id);
+                return string.Join(", ", names);
+            }
+            if (prop.Type == BoardPropertyType.Person)
+            {
+                var emp = _employees.FirstOrDefault(e => e.Id == val);
+                return emp != null ? $"{emp.FirstName} {emp.LastName}" : val;
+            }
+            if (prop.Type == BoardPropertyType.Project)
+            {
+                var proj = _projects.FirstOrDefault(p => p.Id == val);
+                return proj?.Name ?? val;
+            }
+            return val;
+        }
+        return "";
+    }
+
+    Task<MudBlazor.DataGridEditFormAction> ItemUpdated(BoardCard card)
+    {
+        BoardService.UpdateCard(card);
+        return Task.FromResult(MudBlazor.DataGridEditFormAction.Close);
+    }
+
+    async Task RowClicked(DataGridRowClickEventArgs<BoardCard> args)
+    {
+        await OpenCard(args.Item);
+    }
+
+    async Task OpenCard(BoardCard card)
+    {
+        var parameters = new DialogParameters<CardDetailDialog> { { x => x.Card, card }, { x => x.Board, Board } };
+        var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Medium, FullWidth = true };
+        await DialogService.ShowAsync<CardDetailDialog>("Card Details", parameters, options);
+    }
+}

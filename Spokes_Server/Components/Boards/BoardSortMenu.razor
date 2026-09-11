@@ -1,0 +1,102 @@
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Services
+@inject BoardService BoardService
+
+<MudPaper Class="pa-4" Style="width: 350px;" @onclick:stopPropagation="true">
+    <MudText Typo="Typo.subtitle2" Class="mb-2">Sort</MudText>
+
+    @if (View.SortOptions.Count == 0)
+    {
+        <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-4">No sort options applied</MudText>
+    }
+    else
+    {
+        <MudStack Spacing="2" Class="mb-4">
+            @foreach (var sort in View.SortOptions)
+            {
+                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+                    <span @onclick:stopPropagation="true">
+                        <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small"
+                            OnClick="@(() => RemoveSort(sort))" />
+                    </span>
+
+                    <MudText Typo="Typo.body2" Style="min-width: 30px;">By</MudText>
+
+                    <!-- PROPERTY SELECTOR -->
+                    <MudSelect T="string" Value="@sort.PropertyId" ValueChanged="@((val) => UpdateSortProp(sort, val))"
+                        Margin="Margin.Dense" Dense="true" Variant="Variant.Outlined" Style="flex-grow: 1;">
+                        @foreach (var prop in Board.Properties)
+                        {
+                            <MudSelectItem Value="@prop.Id">@prop.Name</MudSelectItem>
+                        }
+                        <MudSelectItem Value="@("title")">Name</MudSelectItem> <!-- Special case for Title -->
+                        <MudSelectItem Value="@("createdAt")">Date Created</MudSelectItem>
+                        <MudSelectItem Value="@("updatedAt")">Date Updated</MudSelectItem>
+
+                    </MudSelect>
+
+                    <!-- DIRECTION TOGGLE -->
+                    <span @onclick:stopPropagation="true">
+                        <MudIconButton
+                            Icon="@(sort.IsDescending ? Icons.Material.Filled.ArrowDownward : Icons.Material.Filled.ArrowUpward)"
+                            OnClick="@(() => ToggleDirection(sort))" Size="Size.Small" Color="Color.Default"
+                            Title="@(sort.IsDescending ? "Descending" : "Ascending")" />
+                    </span>
+                </MudStack>
+            }
+        </MudStack>
+    }
+
+    <span @onclick:stopPropagation="true">
+        <MudButton StartIcon="@Icons.Material.Filled.Add" OnClick="AddSort" Size="Size.Small" Color="Color.Primary">
+            Add Sort
+        </MudButton>
+    </span>
+
+</MudPaper>
+
+@code {
+    [Parameter] public Board Board { get; set; } = default!;
+    [Parameter] public BoardView View { get; set; } = default!;
+    [Parameter] public EventCallback OnChange { get; set; }
+
+    void AddSort()
+    {
+        // Default to first property
+        var firstProp = Board.Properties.FirstOrDefault();
+        View.SortOptions.Add(new BoardViewSortOption
+        {
+            PropertyId = firstProp?.Id ?? "title",
+            IsDescending = false
+        });
+        NotifyChange();
+    }
+
+    void RemoveSort(BoardViewSortOption sort)
+    {
+        View.SortOptions.Remove(sort);
+        NotifyChange();
+    }
+
+    void UpdateSortProp(BoardViewSortOption sort, string propId)
+    {
+        sort.PropertyId = propId;
+        NotifyChange();
+    }
+
+    void ToggleDirection(BoardViewSortOption sort)
+    {
+        sort.IsDescending = !sort.IsDescending;
+        NotifyChange();
+    }
+
+    void NotifyChange()
+    {
+        BoardService.UpdateBoard(Board);
+        OnChange.InvokeAsync();
+    }
+}

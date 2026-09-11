@@ -1,0 +1,35 @@
+@using Spokes_Server.Core.Services
+@inject BoardService BoardService
+
+<MudDialog Class="blur-dialog">
+    <DialogContent>
+        <MudStack>
+            <MudText Typo="Typo.h6">Save as Template</MudText>
+            <MudTextField @bind-Value="_templateName" Label="Template Name" AutoFocus="true"
+                Variant="Variant.Outlined" />
+            <MudText Typo="Typo.caption">The current structure (Properties and Views) will be saved as a reusable
+                template.</MudText>
+        </MudStack>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="Save"
+            Disabled="@string.IsNullOrWhiteSpace(_templateName)">Save</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
+
+    // We pass the board implicitly via calling logic or parameter?
+    // Actually calling logic calls SaveAsTemplate. This dialog just gets the string.
+
+    private string _templateName = "";
+
+    void Cancel() => MudDialog.Cancel();
+
+    void Save()
+    {
+        MudDialog.Close(DialogResult.Ok(_templateName));
+    }
+}

@@ -1,0 +1,121 @@
+@using Spokes_Server.Core.Services
+@using System.IO
+@inject BoardService BoardService
+@inject UserService UserService
+
+<MudDialog>
+    <DialogContent>
+        <MudTabs Elevation="0" Rounded="true" ApplyEffectsToContainer="true" TabPanelsClass="pa-4">
+            <!-- TAB 1: NEW BOARD -->
+            <MudTabPanel Text="New Board">
+                <MudStack Spacing="3">
+                    <MudTextField @bind-Value="_title" Label="Board Name" Variant="Variant.Outlined" AutoFocus="true" />
+
+                    <MudSelect T="string" Label="Template" @bind-Value="_selectedTemplate" Variant="Variant.Outlined">
+                        @foreach (var t in BoardService.GetTemplates())
+                        {
+                            <MudSelectItem Value="@t">@t</MudSelectItem>
+                        }
+                    </MudSelect>
+
+                    <MudText Typo="Typo.caption" Color="Color.Secondary">
+                        Choose a template to start with pre-configured properties and views.
+                    </MudText>
+                </MudStack>
+            </MudTabPanel>
+
+            <!-- TAB 2: IMPORT -->
+            <MudTabPanel Text="Import JSON">
+                <MudStack Spacing="3">
+                    <MudText Typo="Typo.body2">Upload a previously exported board JSON file.</MudText>
+
+                    <MudFileUpload T="IBrowserFile" FilesChanged="UploadFile">
+                        <CustomContent>
+                            <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                                OnClick="@context.OpenFilePickerAsync" StartIcon="@Icons.Material.Filled.CloudUpload">
+                                Select File
+                            </MudButton>
+                        </CustomContent>
+                        <SelectedTemplate></SelectedTemplate>
+                    </MudFileUpload>
+
+                    @if (_uploadedFile != null)
+                    {
+                        <MudText Typo="Typo.body2" Color="Color.Success">Selected: @_uploadedFile.Name</MudText>
+                    }
+                    @if (!string.IsNullOrEmpty(_error))
+                    {
+                        <MudAlert Severity="Severity.Error">@_error</MudAlert>
+                    }
+                </MudStack>
+            </MudTabPanel>
+        </MudTabs>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+        <MudButton Color="Color.Primary" OnClick="Create" Disabled="@(IsInvalid())">Create</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
+
+    string _title = "New Board";
+    string _selectedTemplate = "Kanban";
+
+    IBrowserFile? _uploadedFile;
+    string _error = "";
+
+    void Cancel() => MudDialog.Cancel();
+
+    bool IsInvalid()
+    {
+        // specific logic per tab could be better, but simple check:
+        // If file uploaded, allow. Else need title.
+        if (_uploadedFile != null) return false;
+        return string.IsNullOrWhiteSpace(_title);
+    }
+
+    void UploadFile(IBrowserFile file)
+    {
+        _uploadedFile = file;
+    }
+
+    async Task Create()
+    {
+        try
+        {
+            var emp = await UserService.GetEmployeeAsync();
+            var ownerId = emp?.Id ?? "";
+
+            if (_uploadedFile != null)
+            {
+                // IMPORT FLOW
+                using var stream = _uploadedFile.OpenReadStream(maxAllowedSize: 1024 * 1024 * 5); // 5MB
+                using var reader = new StreamReader(stream);
+                var json = await reader.ReadToEndAsync();
+
+                var board = BoardService.ImportBoardFromJson(json, ownerId);
+                if (board != null)
+                {
+                    MudDialog.Close(DialogResult.Ok(board.Id));
+                }
+                else
+                {
+                    _error = "Failed to parse board JSON.";
+                }
+            }
+            else
+            {
+                // TEMPLATE FLOW
+                var board = BoardService.CreateBoardFromTemplate(_title, _selectedTemplate, ownerId);
+                MudDialog.Close(DialogResult.Ok(board.Id));
+            }
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+    }
+}
+

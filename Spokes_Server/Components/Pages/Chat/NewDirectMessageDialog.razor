@@ -1,0 +1,103 @@
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Models.HR
+
+<MudDialog>
+    <TitleContent>
+        <MudText Typo="Typo.h6">
+            <MudIcon Icon="@Icons.Material.Filled.PersonAdd" Class="mr-2" />
+            Start a Direct Message
+        </MudText>
+    </TitleContent>
+    <DialogContent>
+        <div class="d-flex flex-column gap-4 pb-2" style="max-height: 70vh; overflow-y: auto;">
+            @* --- Select Participants Card --- *@
+            <MudPaper Elevation="0" Outlined="true" Class="rounded-lg overflow-hidden flex-shrink-0">
+                <div class="d-flex align-center px-4 py-3">
+                    <MudIcon Icon="@Icons.Material.Filled.GroupAdd" Size="Size.Small" Class="mr-2 flex-shrink-0" />
+                    <MudText Typo="Typo.subtitle2">Select Participants</MudText>
+                </div>
+                <MudDivider />
+                <div class="px-4 py-4 d-flex flex-column gap-3">
+                    <EmployeeAutocomplete Label="Select people" Margin="Margin.Dense"
+                                          Employees="@Employees" ExcludedIds="@_selectedEmployees.Select(e => e.Id)"
+                                          ValueChanged="AddEmployee" ResetOnSelect="true" Class="ma-0" />
+
+                    @if (_selectedEmployees.Any())
+                    {
+                        <div class="d-flex flex-wrap gap-2 mt-2">
+                            @foreach (var emp in _selectedEmployees)
+                            {
+                                <EmployeeChip Employee="@emp" Color="Color.Primary" Variant="Variant.Filled" OnClose="@(() => RemoveEmployee(emp))" Size="Size.Small" />
+                            }
+                        </div>
+                    }
+                </div>
+            </MudPaper>
+
+            @* --- Encryption Card --- *@
+            <MudPaper Elevation="0" Outlined="true" Class="rounded-lg overflow-hidden flex-shrink-0">
+                <div class="d-flex align-center justify-space-between ps-4 pe-2 py-1">
+                    <div class="d-flex align-center min-w-0 mr-2">
+                        <MudIcon Icon="@Icons.Material.Filled.Lock" Size="Size.Small" Class="mr-2 flex-shrink-0" />
+                        <MudText Typo="Typo.subtitle2">Channel Encryption</MudText>
+                    </div>
+                    <MudSwitch @bind-Value="_isEncrypted" Color="Color.Primary" Class="ma-0 flex-shrink-0" />
+                </div>
+                <MudDivider />
+                @if (_isEncrypted)
+                {
+                    <div class="px-4 py-4 d-flex flex-column gap-3">
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">
+                            This will encrypt your messages on the server's disk. Your chat password will be required to read messages.
+                        </MudText>
+                    </div>
+                }
+            </MudPaper>
+        </div>
+    </DialogContent>
+    <DialogActions>
+        <MudSpacer />
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="Submit" Disabled="!_selectedEmployees.Any()">
+            Start Chat
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
+
+    [Parameter] public List<Employee> Employees { get; set; } = new();
+    [Parameter] public string? CurrentUserId { get; set; }
+
+    private List<Employee> _selectedEmployees = new();
+    private bool _isEncrypted = false;
+
+    private void AddEmployee(Employee? employee)
+    {
+        if (employee != null && !_selectedEmployees.Any(e => e.Id == employee.Id))
+        {
+            _selectedEmployees.Add(employee);
+        }
+        StateHasChanged();
+    }
+
+    private void RemoveEmployee(Employee employee)
+    {
+        _selectedEmployees.RemoveAll(e => e.Id == employee.Id);
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+
+    private void Submit()
+    {
+        if (_selectedEmployees.Any())
+        {
+            var userIds = _selectedEmployees.Select(e => e.Id).ToList();
+            MudDialog.Close(DialogResult.Ok((userIds, _isEncrypted)));
+        }
+    }
+}
+

@@ -1,0 +1,151 @@
+@using Spokes_Server.Core.Data
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Services
+@inject Database Db
+@inject BoardService BoardService
+@inject NavigationManager Nav
+
+<MudPaper Elevation="0" Class="h-100 d-flex flex-column border-r">
+    <!-- HEADER -->
+    <MudPaper Elevation="0" Class="pa-4 border-b d-flex align-center justify-space-between">
+        <MudText Typo="Typo.h6" Style="font-weight: 700;">Boards</MudText>
+        <MudIconButton Icon="@Icons.Material.Filled.Add" Size="Size.Small" Color="Color.Primary" OnClick="CreateNewBoard" Title="New Board" />
+    </MudPaper>
+
+    <!-- BOARD LIST -->
+    <MudList T="string" Class="flex-grow-1 overflow-y-auto pa-2">
+        
+        <!-- MY BOARDS -->
+        <MudText Typo="Typo.subtitle2" Class="px-4 py-2 mt-2" Color="Color.Secondary">MY BOARDS</MudText>
+        @foreach (var board in _myBoards)
+        {
+            <MudListItem OnClick="@(() => SelectBoard(board.Id))" 
+                         Class="@(SelectedBoardId == board.Id ? "mud-theme-primary-hover rounded selected-board" : "mud-theme-hover rounded")"
+                         Style="@(SelectedBoardId == board.Id ? "background-color: var(--mud-palette-action-selected);" : "")">
+                <div class="d-flex align-center gap-2">
+                    <MudIcon Icon="@(board.Icon ?? Icons.Material.Filled.Dashboard)" Size="Size.Small" Color="@(SelectedBoardId == board.Id ? Color.Primary : Color.Default)" />
+                    <MudText Typo="Typo.body2" Style="@(SelectedBoardId == board.Id ? "font-weight: 600;" : "")">
+                        @board.Title
+                    </MudText>
+                </div>
+            </MudListItem>
+        }
+        @if (!_myBoards.Any()) { <MudText Typo="Typo.caption" Class="px-4 pb-2 font-italic text-secondary d-block">No boards created.</MudText> }
+
+
+        <!-- SHARED BOARDS -->
+        @if (_sharedBoards.Any())
+        {
+            <MudText Typo="Typo.subtitle2" Class="px-4 py-2 mt-4" Color="Color.Secondary">SHARED WITH ME</MudText>
+            @foreach (var board in _sharedBoards)
+            {
+                <MudListItem OnClick="@(() => SelectBoard(board.Id))" 
+                             Class="@(SelectedBoardId == board.Id ? "mud-theme-primary-hover rounded selected-board" : "mud-theme-hover rounded")"
+                             Style="@(SelectedBoardId == board.Id ? "background-color: var(--mud-palette-action-selected);" : "")">
+                    <div class="d-flex align-center gap-2">
+                         <MudIcon Icon="@Icons.Material.Filled.People" Size="Size.Small" Color="@(SelectedBoardId == board.Id ? Color.Primary : Color.Default)" />
+                        <MudText Typo="Typo.body2" Style="@(SelectedBoardId == board.Id ? "font-weight: 600;" : "")">
+                            @board.Title
+                        </MudText>
+                    </div>
+                </MudListItem>
+            }
+        }
+
+        <!-- PUBLIC / OTHER -->
+        @if (_publicBoards.Any())
+        {
+            <MudText Typo="Typo.subtitle2" Class="px-4 py-2 mt-4" Color="Color.Secondary">PUBLIC / OTHER</MudText>
+            @foreach (var board in _publicBoards)
+            {
+                <MudListItem OnClick="@(() => SelectBoard(board.Id))" 
+                             Class="@(SelectedBoardId == board.Id ? "mud-theme-primary-hover rounded selected-board" : "mud-theme-hover rounded")"
+                             Style="@(SelectedBoardId == board.Id ? "background-color: var(--mud-palette-action-selected);" : "")">
+                    <div class="d-flex align-center gap-2">
+                        <MudIcon Icon="@Icons.Material.Filled.Public" Size="Size.Small" Color="@(SelectedBoardId == board.Id ? Color.Primary : Color.Default)" />
+                        <MudText Typo="Typo.body2" Style="@(SelectedBoardId == board.Id ? "font-weight: 600;" : "")">
+                            @board.Title
+                        </MudText>
+                    </div>
+                </MudListItem>
+            }
+        }
+
+    </MudList>
+</MudPaper>
+
+@code {
+    [Parameter] public string? SelectedBoardId { get; set; }
+    [Parameter] public EventCallback<string> OnBoardSelected { get; set; }
+
+    [Inject] IDialogService DialogService { get; set; } = default!;
+    [Inject] UserService UserService { get; set; } = default!;
+
+    private Employee? _currentUser;
+    private List<Board> _myBoards = new();
+    private List<Board> _sharedBoards = new();
+    private List<Board> _publicBoards = new(); // Or legacy/other
+
+    protected override async Task OnParametersSetAsync()
+    {
+        _currentUser = await UserService.GetEmployeeAsync();
+        RefreshBoards();
+    }
+
+    void RefreshBoards()
+    {
+        _myBoards.Clear();
+        _sharedBoards.Clear();
+        _publicBoards.Clear();
+
+        var all = Db.Boards.GetAll().OrderByDescending(b => b.CreatedAt).ToList();
+
+        if (_currentUser == null)
+        {
+            // Fallback for unauthenticated or issues
+            _publicBoards = all;
+            return;
+        }
+
+        foreach (var b in all)
+        {
+            if (b.OwnerId == _currentUser.Id)
+            {
+                _myBoards.Add(b);
+            }
+            else if (b.MemberIds.Contains(_currentUser.Id))
+            {
+                _sharedBoards.Add(b);
+            }
+            else if (b.IsPublic || string.IsNullOrEmpty(b.OwnerId)) 
+            {
+                // Public or Legacy (no owner)
+                _publicBoards.Add(b);
+            }
+        }
+    }
+
+    void SelectBoard(string boardId)
+    {
+        OnBoardSelected.InvokeAsync(boardId);
+        // Also navigate to keep URL in sync
+        Nav.NavigateTo($"/boards/{boardId}");
+    }
+
+    async Task CreateNewBoard()
+    {
+        var dialog = await DialogService.ShowAsync<CreateBoardDialog>("New Board", new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true });
+        var result = await dialog.Result;
+        
+        if (!result.Canceled && result.Data is string boardId)
+        {
+            RefreshBoards(); // Refresh local list
+            SelectBoard(boardId);
+        }
+    }
+}
+

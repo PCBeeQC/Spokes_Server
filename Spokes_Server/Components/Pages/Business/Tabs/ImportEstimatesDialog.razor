@@ -1,0 +1,81 @@
+@using Spokes_Server.Core.Data
+@using Spokes_Server.Core.Models.Accounting
+@inject Database Db
+@inject ISnackbar Snackbar
+
+<MudDialog>
+    <DialogContent>
+        <MudText Typo="Typo.body1" Class="mb-4">
+            Select forward planning estimates to import as actual bill profiles. This will clone the profile so you can manage real bills against them without affecting your theoretical estimates.
+        </MudText>
+        
+        @if (Estimates.Any())
+        {
+            <MudTable Items="Estimates" MultiSelection="true" @bind-SelectedItems="SelectedEstimates" Hover="true">
+                <HeaderContent>
+                    <MudTh>Name</MudTh>
+                    <MudTh>Supplier</MudTh>
+                    <MudTh>Amount</MudTh>
+                    <MudTh>Frequency</MudTh>
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd DataLabel="Name">@context.Name</MudTd>
+                    <MudTd DataLabel="Supplier">@context.Supplier</MudTd>
+                    <MudTd DataLabel="Amount">@context.Amount.ToString("C2")</MudTd>
+                    <MudTd DataLabel="Frequency">@context.Frequency</MudTd>
+                </RowTemplate>
+            </MudTable>
+        }
+        else
+        {
+            <MudAlert Severity="Severity.Info">No forward planning estimates available to import.</MudAlert>
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="Import" Disabled="!SelectedEstimates.Any()">
+            Import Selected (@SelectedEstimates.Count)
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
+
+    private List<RecurringExpense> Estimates = new();
+    private HashSet<RecurringExpense> SelectedEstimates = new();
+
+    protected override void OnInitialized()
+    {
+        Estimates = Db.RecurringExpenses.GetAll().Where(e => e.IsEstimate).ToList();
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+
+    private void Import()
+    {
+        int imported = 0;
+        foreach (var estimate in SelectedEstimates)
+        {
+            // Clone the estimate to a real bill profile
+            var realBill = new RecurringExpense
+            {
+                Id = Guid.NewGuid().ToString(),
+                IsEstimate = false, // Critical flag
+                Name = estimate.Name,
+                Supplier = estimate.Supplier,
+                Description = estimate.Description,
+                Amount = estimate.Amount,
+                Frequency = estimate.Frequency,
+                CreatedDate = DateTime.Today,
+                NextDueDate = estimate.NextDueDate
+            };
+            
+            Db.RecurringExpenses.Save(realBill);
+            imported++;
+        }
+
+        Snackbar.Add($"Imported {imported} bill profiles", Severity.Success);
+        MudDialog.Close(DialogResult.Ok(true));
+    }
+}

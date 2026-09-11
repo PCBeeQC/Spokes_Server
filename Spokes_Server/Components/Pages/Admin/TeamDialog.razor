@@ -1,0 +1,109 @@
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Models.HR
+@using MudBlazor
+@inject Spokes_Server.Core.Services.Core.AppLabelService AppLabels
+
+<MudDialog>
+    <DialogContent>
+        <MudForm @ref="form" @bind-IsValid="@success">
+            <MudGrid>
+                <MudItem xs="12" sm="6">
+                    <MudTextField Variant="Variant.Outlined" Margin="Margin.Dense" ShrinkLabel="true" @bind-Value="Team.Name" Label="@($"{AppLabels.Team} Name")" Required="true" />
+                </MudItem>
+                <MudItem xs="12" sm="6">
+                    <MudColorPicker Variant="Variant.Outlined" Margin="Margin.Dense" ShrinkLabel="true" Label="@($"{AppLabels.Team} Color")" @bind-Text="Team.Color" Style="@($"color: {Team.Color};")" />
+                </MudItem>
+                <MudItem xs="12">
+                    <MudTextField Variant="Variant.Outlined" Margin="Margin.Dense" ShrinkLabel="true" @bind-Value="Team.Description" Label="Description" />
+                </MudItem>
+                <MudItem xs="12">
+                    <MudSelect Variant="Variant.Outlined" Margin="Margin.Dense" ShrinkLabel="true" T="string" @bind-Value="Team.LeaderId" Label="@($"{AppLabels.Team} Leader")" Clearable="true">
+                        @foreach (var emp in Employees)
+                        {
+                            <MudSelectItem Value="@emp.Id">@emp.FullName</MudSelectItem>
+                        }
+                    </MudSelect>
+                </MudItem>
+
+                <!-- Member Picker -->
+                <MudItem xs="12">
+                    <MudText Typo="Typo.subtitle2" Class="mb-1">@($"{AppLabels.Team} Members")</MudText>
+                     
+                     <EmployeeAutocomplete Label="Add Member" ShrinkLabel="true" Margin="Margin.Dense"
+                                           Employees="@Employees" ExcludedIds="@SelectedMemberIds"
+                                           ValueChanged="AddUser" ResetOnSelect="true" />
+ 
+                     <div class="d-flex flex-wrap gap-1 mt-2">
+                         @foreach(var userId in SelectedMemberIds)
+                         {
+                             var user = Employees.FirstOrDefault(u => u.Id == userId);
+                             if (user != null)
+                             {
+                                 <EmployeeChip Employee="@user" OnClose="@(() => RemoveUser(userId))" Size="Size.Small" />
+                             }
+                         }
+                     </div>
+                 </MudItem>
+
+            </MudGrid>
+        </MudForm>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="Submit">Save</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
+    [Parameter] public Team Team { get; set; } = default!;
+    [Parameter] public List<Employee> Employees { get; set; } = new();
+
+    private MudForm form = default!;
+    private bool success;
+    private HashSet<string> SelectedMemberIds { get; set; } = new();
+
+    protected override void OnInitialized()
+    {
+        // Initialize members who are currently in this team
+        SelectedMemberIds = Employees.Where(e => e.TeamId == Team.Id).Select(e => e.Id).ToHashSet();
+    }
+
+    private void AddUser(Employee? user)
+    {
+        if (user != null && !SelectedMemberIds.Contains(user.Id))
+        {
+            SelectedMemberIds.Add(user.Id);
+        }
+    }
+
+    private void RemoveUser(string userId)
+    {
+        SelectedMemberIds.Remove(userId);
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+
+    private void Submit()
+    {
+        form.Validate();
+        if (success)
+        {
+            MudDialog.Close(DialogResult.Ok(new TeamDialogResult 
+            { 
+                Team = Team, 
+                MemberIds = SelectedMemberIds.ToList() 
+            }));
+        }
+    }
+
+    public class TeamDialogResult
+    {
+        public Team Team { get; set; } = new();
+        public List<string> MemberIds { get; set; } = new();
+    }
+}
+

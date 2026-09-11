@@ -1,0 +1,395 @@
+@page "/business/documents/{DocumentId}"
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Data
+@using Spokes_Server.Core.Services.Core
+@using Spokes_Server.Components.Shared
+@using MudBlazor
+@using Markdig
+@using Spokes_Server.Core.Constants
+@inject Database Db
+@inject ISnackbar Snackbar
+@inject IDialogService DialogService
+@inject NavigationManager Nav
+@inject IJSRuntime JS
+@inject ILogger<BusinessDocumentViewer> Logger
+@inject UserService UserService
+@implements IAsyncDisposable
+@using Spokes_Server.Core.Services.Documents
+@inject DocumentPdfService PdfService
+@inject MarkdownSanitizerService MarkdownSanitizer
+
+<style>
+    .markdown-content h1,
+    .markdown-content h2,
+    .markdown-content h3 {
+        color: @_profile?.PrimaryColor !important;
+        margin-top: 1rem;
+        margin-bottom: 0.75rem;
+    }
+
+    .markdown-content h4,
+    .markdown-content h5,
+    .markdown-content h6 {
+        color: black !important;
+        margin-top: 1rem;
+        margin-bottom: 0.75rem;
+    }
+
+    .markdown-content p {
+        margin-bottom: 1rem;
+        line-height: 1.6;
+    }
+
+    .markdown-content ul,
+    .markdown-content ol {
+        padding-left: 2rem;
+        margin-bottom: 1rem;
+    }
+
+    .markdown-content li {
+        margin-bottom: 0.5rem;
+    }
+
+    .markdown-content strong {
+        font-weight: bold;
+    }
+</style>
+
+@if (_document == null || _profile == null)
+{
+    <MudContainer MaxWidth="MaxWidth.Small" Class="mt-10">
+        <MudAlert Severity="Severity.Info">Loading document...</MudAlert>
+    </MudContainer>
+}
+else
+{
+    <PageTitle>@_document.Name</PageTitle>
+
+    <MudGrid Spacing="0" Class="py-2 px-4 mb-4 d-print-none align-center" Style="position: sticky; top: 0; z-index: 99; background-color: var(--mud-palette-background);">
+        <MudItem xs="3">
+            <MudButton StartIcon="@Icons.Material.Filled.ArrowBack" OnClick="GoBack">Back</MudButton>
+        </MudItem>
+        <MudItem xs="9" Class="d-flex justify-end align-center gap-2">
+            @if (_isEditing)
+            {
+                <MudButton Variant="Variant.Outlined" OnClick="CancelEditing">Cancel</MudButton>
+                <MudButton Variant="Variant.Outlined" Color="Color.Primary" OnClick="SaveEdits">Save Changes</MudButton>
+            }
+            else
+            {
+                <MudSelect T="string" Value="@_document.Status" ValueChanged="UpdateStatus" Dense="true" Margin="Margin.Dense"
+                    Variant="Variant.Outlined" Style="width: 150px;">
+                    <MudSelectItem Value="@("Draft")">Draft</MudSelectItem>
+                    <MudSelectItem Value="@("Final")">Final</MudSelectItem>
+                </MudSelect>
+
+                <MudButton Variant="Variant.Outlined" Color="Color.Secondary" StartIcon="@Icons.Material.Filled.Print"
+                    OnClick="Print">Print / PDF</MudButton>
+
+                @if (_document.Status == "Final" && !string.IsNullOrEmpty(_document.PdfPath))
+                {
+                    <MudButton Variant="Variant.Outlined" Color="Color.Secondary" StartIcon="@Icons.Material.Filled.OpenInNew" OnClick="OpenPdf">Open PDF</MudButton>
+                }
+
+                @if (_document.Status != "Final")
+                {
+                    <MudButton Variant="Variant.Outlined" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Edit"
+                        OnClick="StartEditing" Class="mr-2">Edit Content</MudButton>
+                }
+            }
+        </MudItem>
+    </MudGrid>
+
+    <MudPaper Class="mx-auto overflow-hidden mb-10" Style="max-width: 8.5in; width: 100%; min-height: 11in;" Elevation="3"
+        id="printable-area">
+
+        @if (!_isEditing)
+        {
+            <div class="print-footer-custom">
+                @if (_document.IsLongFooter)
+                {
+                    <span>@((_profile?.CompanyName) + " - " + _profile?.AddressStreet + ", " + _profile?.AddressCity + " - " + _profile?.PhoneNumber) </span>
+                }
+                else
+                {
+                    <span>@_profile?.CompanyName</span>
+                }
+
+                <span>
+                    @if (_document.IsConfidential)
+                    {
+                        <span style="color: #d32f2f; font-weight: bold; text-transform: uppercase;">CONFIDENTIAL</span>
+                    }
+                </span>
+
+                <span data-page-number style="display:none">{page} / {pages}</span>
+            </div>
+        }
+
+        <div class="@(_isEditing ? "pa-10" : "print-body")">
+            @if (_isEditing)
+            {
+                <MudText Typo="Typo.h6" Class="mb-4">Editing Document Content</MudText>
+                
+                <MudSwitch @bind-Value="_document.IsConfidential" Label="Confidential Footer" Color="Color.Error"
+                    Class="mb-4" />
+
+                <MudSwitch @bind-Value="_document.IsLongFooter" Label="Footer with address and phone number" Color="Color.Error"
+                           Class="mb-4" />
+
+                @if (DocumentBlockLibrary.GetAll().Any())
+                {
+                    <DocumentBlocksEditor Blocks="_document.Blocks" BlocksChanged="@(b => { _document.Blocks = b; SaveBlocks(); })"
+                        OnBlockAdded="OnBlockAdded" OnBlockRenamed="OnBlockRenamed" />
+                }
+
+                <MarkdownEditor @bind-Value="_editingBody" AvailableTags="GetAvailableTags()" />
+            }
+            else
+            {
+                <div class="markdown-content allow-break">
+                    @RenderMarkdown(GetResolvedBody())
+                </div>
+            }
+        </div>
+    </MudPaper>
+}
+
+@code {
+    [Parameter] public string DocumentId { get; set; } = string.Empty;
+
+    private ProjectDocument? _document;
+    private CompanyProfile? _profile;
+
+    private bool _isAdmin = false;
+    private bool _isEditing = false;
+    private string _editingBody = string.Empty;
+    private bool _needsPagination = false;
+
+    private const int PageHeight = 940;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if ((firstRender || _needsPagination) && _document != null && _profile != null && !_isEditing)
+        {
+            _needsPagination = false;
+            await Task.Delay(50);
+            try { await JS.InvokeVoidAsync("paginateSections", "printable-area", PageHeight); }
+            catch { }
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        try { await JS.InvokeVoidAsync("cleanupPagination", "printable-area"); }
+        catch { }
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        var emp = await UserService.GetEmployeeAsync();
+        if (emp == null || !emp.HasPermission(AppPermissions.BusinessDocuments.View))
+        {
+            Nav.NavigateTo("/");
+            return;
+        }
+
+        _document = Db.ProjectDocuments.GetById(DocumentId);
+        _profile = Db.CompanyProfile.Get();
+        _isAdmin = await UserService.IsAdminAsync();
+
+        if (_document == null)
+        {
+            Snackbar.Add("Document not found", Severity.Error);
+            Nav.NavigateTo("/business/documents");
+        }
+    }
+
+    private string GetResolvedBody()
+    {
+        if (_document == null || _profile == null) return string.Empty;
+
+        if (_document.Status == "Final")
+        {
+            return _document.ResolvedBody;
+        }
+
+        string resolvedBody = ContextTagRegistry.Resolve(_document.ResolvedBody, null, _profile, null);
+
+        foreach (var block in _document.Blocks)
+        {
+            var libraryDef = DocumentBlockLibrary.GetByType(block.Type);
+            if (libraryDef != null)
+            {
+                string blockHtml = libraryDef.RenderHtml(block, null, _profile, null);
+                resolvedBody = resolvedBody.Replace($"@Block.{block.Name}", blockHtml);
+            }
+        }
+
+        return resolvedBody;
+    }
+
+    private List<ContextTagDefinition> GetAvailableTags()
+    {
+        var baseTags = ContextTagRegistry.GetAvailableTags().Where(t => !t.Tag.StartsWith("@Project") && !t.Tag.StartsWith("@Client") && !t.Tag.StartsWith("@PM")).ToList();
+        if (_document == null) return baseTags;
+
+        var blockTags = _document.Blocks
+        .Where(b => !string.IsNullOrWhiteSpace(b.Name))
+        .Select(b => new ContextTagDefinition
+            {
+                Tag = $"@Block.{b.Name}",
+                Description = $"Renders the {b.Type} block",
+                Category = "Document Blocks"
+            })
+        .ToList();
+
+        return blockTags.Concat(baseTags).ToList();
+    }
+
+    private MarkupString RenderMarkdown(string text)
+    {
+        if (string.IsNullOrEmpty(text)) return new MarkupString("");
+        
+        text = text.Replace("\r\n", "\n").Replace("\r", "\n");
+        text = System.Text.RegularExpressions.Regex.Replace(text, @"\n{3,}", match => 
+            "\n\n" + string.Join("", System.Linq.Enumerable.Repeat("<div style=\"height: 1rem;\"></div>\n\n", match.Length - 2)));
+
+        text = text.Replace("<!-- pagebreak -->", "\n\n<div class=\"force-break\"></div>\n\n");
+        return new MarkupString(MarkdownSanitizer.RenderSanitizedHtml(text));
+    }
+
+    private void UpdateStatus(string newStatus)
+    {
+        _ = UpdateStatusAsync(newStatus);
+    }
+
+    private async Task UpdateStatusAsync(string newStatus)
+    {
+        if (_document == null) return;
+
+        if (_document.Status == "Final" && newStatus == "Draft" && !_isAdmin)
+        {
+            Snackbar.Add("Only administrators can revert a finalized document to draft.", Severity.Warning);
+            return;
+        }
+
+        var oldStatus = _document.Status;
+
+        if (oldStatus == "Final" && newStatus == "Draft")
+        {
+            if (!string.IsNullOrEmpty(_document.PdfPath) && System.IO.File.Exists(_document.PdfPath))
+            {
+                try { System.IO.File.Delete(_document.PdfPath); } catch { }
+            }
+            _document.PdfPath = string.Empty;
+        }
+        else if (newStatus == "Final" && oldStatus == "Draft")
+        {
+            _document.ResolvedBody = GetResolvedBody();
+            _document.Status = newStatus;
+            Db.ProjectDocuments.Save(_document);
+
+            Snackbar.Add("Generating PDF document...", Severity.Info);
+            _document.PdfPath = await PdfService.GenerateBusinessDocumentPdfAsync(_document, Nav.BaseUri);
+        }
+
+        _document.Status = newStatus;
+        _document.UpdatedAt = DateTime.UtcNow;
+        Db.ProjectDocuments.Save(_document);
+        Spokes_Server.Core.Services.Projects.TimelineEventHelper.ProcessDocumentStatusChange(Db, _document, oldStatus, newStatus, null);
+        Snackbar.Add($"Status updated to {newStatus}", Severity.Success);
+        
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private void SaveEdits()
+    {
+        if (_document == null) return;
+
+        _document.ResolvedBody = _editingBody;
+        _document.IsManualEdit = true;
+        _document.UpdatedAt = DateTime.UtcNow;
+
+        Db.ProjectDocuments.Save(_document);
+        _isEditing = false;
+        _needsPagination = true;
+        Snackbar.Add("Changes saved", Severity.Info);
+    }
+
+    private void CancelEditing()
+    {
+        _isEditing = false;
+        _needsPagination = true;
+    }
+
+    private void SaveBlocks()
+    {
+        if (_document == null) return;
+        _document.IsManualEdit = true;
+        _document.UpdatedAt = DateTime.UtcNow;
+        Db.ProjectDocuments.Save(_document);
+    }
+
+    private void OnBlockAdded(string blockName)
+    {
+        var tag = $"@Block.{blockName}";
+        if (!_editingBody.Contains(tag))
+        {
+            _editingBody = string.IsNullOrWhiteSpace(_editingBody)
+            ? tag
+            : _editingBody + "\n\n" + tag;
+        }
+    }
+
+    private void OnBlockRenamed((string OldName, string NewName) rename)
+    {
+        var oldTag = $"@Block.{rename.OldName}";
+        var newTag = $"@Block.{rename.NewName}";
+        if (_editingBody.Contains(oldTag))
+        {
+            _editingBody = _editingBody.Replace(oldTag, newTag);
+        }
+    }
+
+    private async Task StartEditing()
+    {
+        if (_document == null) return;
+
+        try { await JS.InvokeVoidAsync("cleanupPagination", "printable-area"); }
+        catch { }
+
+        _editingBody = _document.ResolvedBody;
+        _isEditing = true;
+    }
+
+    private async Task Print()
+    {
+        await JS.InvokeVoidAsync("window.print");
+    }
+
+    private void GoBack() => Nav.NavigateTo($"/business/documents");
+
+    private async Task OpenPdf()
+    {
+        if (string.IsNullOrEmpty(_document?.PdfPath) || !System.IO.File.Exists(_document.PdfPath))
+        {
+            Snackbar.Add("PDF file not found.", Severity.Warning);
+            return;
+        }
+
+        try
+        {
+            var bytes = await System.IO.File.ReadAllBytesAsync(_document.PdfPath);
+            var base64 = Convert.ToBase64String(bytes);
+            var dataUrl = $"data:application/pdf;base64,{base64}";
+            await JS.InvokeVoidAsync("window.openBase64InNewTab", dataUrl, $"{_document.Name}.pdf");
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to open PDF");
+            Snackbar.Add("Failed to open PDF view", Severity.Error);
+        }
+    }
+}

@@ -1,0 +1,450 @@
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Helpers
+@using Spokes_Server.Core.Services.HR
+@using Spokes_Server.Components.Shared
+@using MudBlazor
+
+@{
+    var today = DateTime.Today;
+    var weekEnd = WeekStart.AddDays(6);
+    var isViewingCurrentWeek = today >= WeekStart && today <= weekEnd;
+    int todayIndex = isViewingCurrentWeek ? (today - WeekStart).Days : -1;
+}
+
+<div class="px-3 pb-6 d-flex flex-column gap-4">
+    @* --- TOP HERO CARD: TODAY --- *@
+    @if (isViewingCurrentWeek && todayIndex >= 0 && todayIndex < 7)
+    {
+        var todayTotal = UiRows.Sum(r => r.DailyHours[todayIndex]);
+        var isTodayWeekend = today.DayOfWeek == DayOfWeek.Saturday || today.DayOfWeek == DayOfWeek.Sunday;
+        var todayTarget = isTodayWeekend ? 0m : DailyTarget;
+        var todayEntries = UiRows.Where(r => r.DailyHours[todayIndex] > 0 && !string.IsNullOrEmpty(r.ProjectId)).ToList();
+
+        Color todayChipColor = Color.Default;
+        Variant todayChipVariant = Variant.Text;
+        if (todayTotal >= todayTarget && todayTarget > 0)
+        {
+            todayChipColor = Color.Success;
+            todayChipVariant = Variant.Filled;
+        }
+        else if (todayTotal > 0)
+        {
+            todayChipColor = isTodayWeekend ? Color.Success : Color.Warning;
+            todayChipVariant = Variant.Outlined;
+        }
+
+        <MudCard Elevation="0" Outlined="true" Class="directory-card"
+            Style="border-radius: 16px; border: 2px solid var(--mud-palette-primary);">
+            <MudCardHeader Class="pb-2">
+                <CardHeaderAvatar>
+                    <MudAvatar Color="Color.Primary" Variant="Variant.Filled"
+                        Size="Size.Medium" Style="font-weight: 700; width: 48px; height: 48px; border-radius: 12px;">
+                        <div class="d-flex flex-column align-center" style="line-height: 1.1;">
+                            <span style="font-size: 0.65rem; text-transform: uppercase;">TODAY</span>
+                            <span style="font-size: 0.95rem;">@today.Day</span>
+                        </div>
+                    </MudAvatar>
+                </CardHeaderAvatar>
+
+                <CardHeaderContent>
+                    <div class="d-flex align-center gap-2">
+                        <MudText Typo="Typo.subtitle1" Style="font-weight: 700;">
+                            @today.ToString("dddd, MMM dd")
+                        </MudText>
+                        <MudChip T="string" Size="Size.Small" Color="Color.Primary" Variant="Variant.Filled" Style="height: 20px; font-size: 0.7rem;">Today</MudChip>
+                    </div>
+                    <MudText Typo="Typo.caption" Color="Color.Secondary">
+                        @if (isTodayWeekend)
+                        {
+                            @(todayTotal > 0 ? $"{FormatHoursDisplay(todayTotal)} hrs (Weekend)" : "Weekend")
+                        }
+                        else
+                        {
+                            @($"{FormatHoursDisplay(todayTotal)} / {FormatHoursDisplay(todayTarget)} hrs")
+                        }
+                    </MudText>
+                </CardHeaderContent>
+
+                <CardHeaderActions>
+                    <MudChip T="string" Color="@todayChipColor" Variant="@todayChipVariant" Size="Size.Small" Class="mt-1 font-weight-bold">
+                        @(todayTotal > 0 ? $"{FormatHoursDisplay(todayTotal)} hrs" : "0:00")
+                    </MudChip>
+                </CardHeaderActions>
+            </MudCardHeader>
+
+            <MudCardContent Class="py-1 px-4 flex-grow-1">
+                @if (todayEntries.Any())
+                {
+                    <div class="d-flex flex-column gap-2">
+                        @foreach (var row in todayEntries)
+                        {
+                            var currentRow = row;
+                            var hours = row.DailyHours[todayIndex];
+                            var note = row.DailyNotes[todayIndex];
+                            var projectName = GetProjectName(row.ProjectId);
+                            var taskName = GetTaskName(row.WorkTypeId);
+                            var subTaskName = GetSubTaskName(row.SubTaskId, row.WorkTypeId);
+
+                            <MudPaper Elevation="0" Outlined="true" Class="pa-3 entry-card cursor-pointer"
+                                Style="border-radius: 12px; background-color: var(--mud-palette-background-grey);"
+                                @onclick="@(() => OnEditEntry.InvokeAsync((currentRow, todayIndex)))">
+                                <div class="d-flex justify-space-between align-start gap-2">
+                                    <div class="d-flex flex-column" style="min-width: 0; flex: 1;">
+                                        <MudText Typo="Typo.body2" Style="font-weight: 600;" Class="text-truncate">
+                                            @projectName
+                                        </MudText>
+                                        <MudText Typo="Typo.caption" Color="Color.Secondary" Class="text-truncate">
+                                            @taskName @(string.IsNullOrEmpty(subTaskName) ? "" : $"› {subTaskName}")
+                                        </MudText>
+                                        @if (!string.IsNullOrWhiteSpace(note))
+                                        {
+                                            <div class="d-flex align-center gap-1 mt-1">
+                                                <MudIcon Icon="@Icons.Material.Filled.StickyNote2" Size="Size.Small" Color="Color.Secondary" Style="font-size: 14px;" />
+                                                <MudText Typo="Typo.caption" Style="font-style: italic; color: var(--mud-palette-text-secondary);" Class="text-truncate">
+                                                    @note
+                                                </MudText>
+                                            </div>
+                                        }
+                                    </div>
+
+                                    <div class="d-flex align-center gap-1">
+                                        <MudChip T="string" Size="Size.Small" Color="Color.Primary" Variant="Variant.Filled" Style="font-weight: 600;">
+                                            @FormatHoursDisplay(hours)
+                                        </MudChip>
+                                        @if (CanEdit)
+                                        {
+                                            <MudIcon Icon="@Icons.Material.Filled.ChevronRight" Size="Size.Small" Color="Color.Secondary" />
+                                        }
+                                    </div>
+                                </div>
+                            </MudPaper>
+                        }
+                    </div>
+                }
+                else
+                {
+                    <div class="py-2 px-1">
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">No time logged for today</MudText>
+                    </div>
+                }
+            </MudCardContent>
+
+            @if (CanEdit)
+            {
+                <MudCardActions Class="px-4 pb-3 pt-2 d-flex justify-end align-center">
+                    <MudButton StartIcon="@Icons.Material.Filled.Add"
+                        Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                        OnClick="@(() => OnAddEntry.InvokeAsync(todayIndex))">
+                        Log Time
+                    </MudButton>
+                </MudCardActions>
+            }
+        </MudCard>
+    }
+    else
+    {
+        <MudPaper Elevation="0" Outlined="true" Class="pa-3 d-flex justify-space-between align-center" Style="border-radius: 12px;">
+            <div>
+                <MudText Typo="Typo.body2" Style="font-weight: 600;">Viewing Week @CurrentWeekNumber</MudText>
+                <MudText Typo="Typo.caption" Color="Color.Secondary">@WeekStart.ToString("MMM dd") - @weekEnd.ToString("MMM dd, yyyy")</MudText>
+            </div>
+            <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small"
+                StartIcon="@Icons.Material.Filled.Today" OnClick="OnGoToCurrentWeek">
+                Go to Today
+            </MudButton>
+        </MudPaper>
+    }
+
+    @* --- SECTION: THIS WEEK / WEEK SELECTOR --- *@
+    <div class="d-flex flex-column gap-2 mt-2">
+        <div class="d-flex justify-space-between align-center">
+            <MudText Typo="Typo.h6" Style="font-weight: 700;">
+                @(isViewingCurrentWeek ? "This Week" : $"Week {CurrentWeekNumber}")
+            </MudText>
+        </div>
+
+        @* Mobile Week Selector Bar *@
+        <MudPaper Elevation="0" Outlined="true" Class="pa-2 d-flex justify-space-between align-center" Style="border-radius: 14px;">
+            <MudIconButton Icon="@Icons.Material.Filled.ChevronLeft" Size="Size.Small"
+                OnClick="@(() => OnChangeWeek.InvokeAsync(-1))" Variant="Variant.Outlined" />
+
+            <div class="d-flex flex-column align-center">
+                <MudText Typo="Typo.subtitle2" Style="font-weight: 700;">Week @CurrentWeekNumber</MudText>
+                <MudText Typo="Typo.caption" Color="Color.Secondary">
+                    @WeekStart.ToString("MMM dd") - @weekEnd.ToString("MMM dd, yyyy")
+                </MudText>
+                <div>
+                    @if (IsSaving)
+                    {
+                        <MudText Typo="Typo.caption" Color="Color.Warning">Saving...</MudText>
+                    }
+                    else
+                    {
+                        <MudText Typo="Typo.caption" Color="Color.Success">All changes saved</MudText>
+                    }
+                </div>
+            </div>
+
+            <MudIconButton Icon="@Icons.Material.Filled.ChevronRight" Size="Size.Small"
+                OnClick="@(() => OnChangeWeek.InvokeAsync(1))" Variant="Variant.Outlined" />
+        </MudPaper>
+    </div>
+
+    @* --- ALL 7 DAY CARDS (Monday to Sunday) --- *@
+    <MudGrid Spacing="3">
+        @for (int i = 0; i < 7; i++)
+        {
+            var dayIndex = i;
+            var day = WeekStart.AddDays(dayIndex);
+            var isDayToday = day == DateTime.Today;
+            var isWeekend = day.DayOfWeek == DayOfWeek.Saturday || day.DayOfWeek == DayOfWeek.Sunday;
+            var dayTarget = isWeekend ? 0m : DailyTarget;
+            var dayTotal = UiRows.Sum(r => r.DailyHours[dayIndex]);
+            var dayEntries = UiRows.Where(r => r.DailyHours[dayIndex] > 0 && !string.IsNullOrEmpty(r.ProjectId)).ToList();
+
+            Color chipColor = Color.Default;
+            Variant chipVariant = Variant.Text;
+            if (dayTotal >= dayTarget && dayTarget > 0)
+            {
+                chipColor = Color.Success;
+                chipVariant = Variant.Filled;
+            }
+            else if (dayTotal > 0)
+            {
+                chipColor = isWeekend ? Color.Success : Color.Warning;
+                chipVariant = Variant.Outlined;
+            }
+
+            <MudItem xs="12">
+                <MudCard Elevation="0" Outlined="true" Class="h-100 d-flex flex-column directory-card"
+                    Style="@($"border-radius: 16px; {(isDayToday ? "border: 2px solid var(--mud-palette-primary);" : "")} {(isWeekend && dayTotal == 0 ? "opacity: 0.85;" : "")}")">
+
+                    @* Day Header *@
+                    <MudCardHeader Class="pb-2">
+                        <CardHeaderAvatar>
+                            <MudAvatar Color="@(isDayToday ? Color.Primary : (isWeekend ? Color.Secondary : Color.Default))"
+                                Variant="@(isDayToday ? Variant.Filled : Variant.Outlined)"
+                                Size="Size.Medium" Style="font-weight: 700; width: 46px; height: 46px; border-radius: 12px;">
+                                <div class="d-flex flex-column align-center" style="line-height: 1.1;">
+                                    <span style="font-size: 0.65rem; text-transform: uppercase;">@day.ToString("ddd")</span>
+                                    <span style="font-size: 0.95rem;">@day.Day</span>
+                                </div>
+                            </MudAvatar>
+                        </CardHeaderAvatar>
+
+                        <CardHeaderContent>
+                            <div class="d-flex align-center gap-2">
+                                <MudText Typo="Typo.subtitle1" Style="font-weight: 700;">
+                                    @day.ToString("dddd, MMM dd")
+                                </MudText>
+                                @if (isDayToday)
+                                {
+                                    <MudChip T="string" Size="Size.Small" Color="Color.Primary" Variant="Variant.Filled" Style="height: 20px; font-size: 0.7rem;">Today</MudChip>
+                                }
+                            </div>
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                @if (isWeekend)
+                                {
+                                    @(dayTotal > 0 ? $"{FormatHoursDisplay(dayTotal)} hrs (Weekend)" : "Weekend")
+                                }
+                                else
+                                {
+                                    @($"{FormatHoursDisplay(dayTotal)} / {FormatHoursDisplay(dayTarget)} hrs")
+                                }
+                            </MudText>
+                        </CardHeaderContent>
+
+                        <CardHeaderActions>
+                            <MudChip T="string" Color="@chipColor" Variant="@chipVariant" Size="Size.Small" Class="mt-1 font-weight-bold">
+                                @(dayTotal > 0 ? $"{FormatHoursDisplay(dayTotal)} hrs" : "0:00")
+                            </MudChip>
+                        </CardHeaderActions>
+                    </MudCardHeader>
+
+                    @* Day Content: List of logged entries *@
+                    <MudCardContent Class="py-1 px-4 flex-grow-1">
+                        @if (dayEntries.Any())
+                        {
+                            <div class="d-flex flex-column gap-2">
+                                @foreach (var row in dayEntries)
+                                {
+                                    var currentRow = row;
+                                    var hours = row.DailyHours[dayIndex];
+                                    var note = row.DailyNotes[dayIndex];
+                                    var projectName = GetProjectName(row.ProjectId);
+                                    var taskName = GetTaskName(row.WorkTypeId);
+                                    var subTaskName = GetSubTaskName(row.SubTaskId, row.WorkTypeId);
+
+                                    <MudPaper Elevation="0" Outlined="true" Class="pa-3 entry-card cursor-pointer"
+                                        Style="border-radius: 12px; background-color: var(--mud-palette-background-grey);"
+                                        @onclick="@(() => OnEditEntry.InvokeAsync((currentRow, dayIndex)))">
+                                        <div class="d-flex justify-space-between align-start gap-2">
+                                            <div class="d-flex flex-column" style="min-width: 0; flex: 1;">
+                                                <MudText Typo="Typo.body2" Style="font-weight: 600;" Class="text-truncate">
+                                                    @projectName
+                                                </MudText>
+                                                <MudText Typo="Typo.caption" Color="Color.Secondary" Class="text-truncate">
+                                                    @taskName @(string.IsNullOrEmpty(subTaskName) ? "" : $"› {subTaskName}")
+                                                </MudText>
+                                                @if (!string.IsNullOrWhiteSpace(note))
+                                                {
+                                                    <div class="d-flex align-center gap-1 mt-1">
+                                                        <MudIcon Icon="@Icons.Material.Filled.StickyNote2" Size="Size.Small" Color="Color.Secondary" Style="font-size: 14px;" />
+                                                        <MudText Typo="Typo.caption" Style="font-style: italic; color: var(--mud-palette-text-secondary);" Class="text-truncate">
+                                                            @note
+                                                        </MudText>
+                                                    </div>
+                                                }
+                                            </div>
+
+                                            <div class="d-flex align-center gap-1">
+                                                <MudChip T="string" Size="Size.Small" Color="Color.Primary" Variant="Variant.Filled" Style="font-weight: 600;">
+                                                    @FormatHoursDisplay(hours)
+                                                </MudChip>
+                                                @if (CanEdit)
+                                                {
+                                                    <MudIcon Icon="@Icons.Material.Filled.ChevronRight" Size="Size.Small" Color="Color.Secondary" />
+                                                }
+                                            </div>
+                                        </div>
+                                    </MudPaper>
+                                }
+                            </div>
+                        }
+                        else
+                        {
+                            <div class="py-2 px-1">
+                                <MudText Typo="Typo.caption" Color="Color.Secondary">No time logged</MudText>
+                            </div>
+                        }
+                    </MudCardContent>
+
+                    @* Day Action: Log Time button *@
+                    @if (CanEdit)
+                    {
+                        <MudCardActions Class="px-4 pb-3 pt-2 d-flex justify-end align-center">
+                            <MudButton StartIcon="@Icons.Material.Filled.Add"
+                                Variant="Variant.Text" Color="Color.Primary" Size="Size.Small"
+                                OnClick="@(() => OnAddEntry.InvokeAsync(dayIndex))">
+                                Log Time
+                            </MudButton>
+                        </MudCardActions>
+                    }
+                </MudCard>
+            </MudItem>
+        }
+    </MudGrid>
+
+    @* --- WEEKLY PROGRESS CARD (Moved below day cards) --- *@
+    <MudCard Elevation="0" Outlined="true" Class="directory-card mt-2" Style="border-radius: 16px;">
+        <MudCardContent Class="pa-4">
+            <div class="d-flex justify-space-between align-center mb-2">
+                <div>
+                    <MudText Typo="Typo.overline" Color="Color.Secondary" Style="font-weight: 600; letter-spacing: 0.5px;">WEEKLY PROGRESS</MudText>
+                    <div class="d-flex align-baseline gap-2">
+                        <MudText Typo="Typo.h5" Style="font-weight: 700;">
+                            @FormatHoursDisplay(WeeklyResult.WorkedHours)
+                        </MudText>
+                        <MudText Typo="Typo.body2" Color="Color.Secondary">
+                            / @FormatHoursDisplay(TimesheetOwner?.WeeklyHours ?? 40.0m) hrs
+                        </MudText>
+                    </div>
+                </div>
+                <div class="d-flex flex-column align-end">
+                    @if (WeeklyResult.Difference >= 0 && WeeklyResult.WorkedHours > 0)
+                    {
+                        <MudChip T="string" Size="Size.Small" Color="Color.Success" Variant="Variant.Filled">
+                            +@FormatHoursDisplay(WeeklyResult.Difference)
+                        </MudChip>
+                    }
+                    else if (WeeklyResult.Difference < 0)
+                    {
+                        <MudChip T="string" Size="Size.Small" Color="Color.Warning" Variant="Variant.Outlined">
+                            @FormatHours(WeeklyResult.Difference)
+                        </MudChip>
+                    }
+                </div>
+            </div>
+
+            @{
+                var weeklyTarget = TimesheetOwner?.WeeklyHours ?? 40.0m;
+                var progressPercent = weeklyTarget > 0
+                    ? Math.Min(100, (double)(WeeklyResult.WorkedHours / weeklyTarget * 100m))
+                    : 0;
+                var progressColor = progressPercent >= 100 ? Color.Success : Color.Primary;
+            }
+            <MudProgressLinear Value="@progressPercent" Color="@progressColor" Rounded="true" Size="Size.Medium" Class="my-2" />
+
+            @if (Settings.RequireApproval && CurrentSheet != null)
+            {
+                <div class="d-flex justify-space-between align-center mt-3 pt-2" style="border-top: 1px solid var(--mud-palette-lines-default);">
+                    <div class="d-flex align-center gap-2">
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">Status:</MudText>
+                        <StatusChip Status="@CurrentSheet.Status" />
+                    </div>
+                    @if (CanEdit && (CurrentSheet.Status == "Draft" || CurrentSheet.Status == "Rejected"))
+                    {
+                        <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                            StartIcon="@Icons.Material.Filled.Send" OnClick="OnSubmitApproval">
+                            Submit
+                        </MudButton>
+                    }
+                </div>
+            }
+        </MudCardContent>
+    </MudCard>
+</div>
+
+<style>
+    .directory-card {
+        transition: transform 0.2s ease, box-shadow 0.2s ease;
+        border: 1px solid var(--mud-palette-lines-default);
+    }
+    .directory-card:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(0,0,0,0.08) !important;
+        border-color: var(--mud-palette-primary-hover);
+    }
+    .entry-card {
+        transition: background-color 0.15s ease, border-color 0.15s ease;
+    }
+    .entry-card:hover {
+        border-color: var(--mud-palette-primary);
+        background-color: var(--mud-palette-surface) !important;
+    }
+</style>
+
+@code {
+    [Parameter] public List<TimesheetUiRow> UiRows { get; set; } = new();
+    [Parameter] public DateTime WeekStart { get; set; }
+    [Parameter] public int CurrentWeekNumber { get; set; }
+    [Parameter] public bool IsSaving { get; set; }
+    [Parameter] public Employee? TimesheetOwner { get; set; }
+    [Parameter] public WeeklyOvertimeResult WeeklyResult { get; set; } = new();
+    [Parameter] public Timesheet? CurrentSheet { get; set; }
+    [Parameter] public TimesheetSettings Settings { get; set; } = new();
+    [Parameter] public bool CanEdit { get; set; }
+    [Parameter] public List<Project> ActiveProjects { get; set; } = new();
+    [Parameter] public List<WorkType> ActiveWorkTypes { get; set; } = new();
+
+    [Parameter] public EventCallback<int> OnAddEntry { get; set; }
+    [Parameter] public EventCallback<(TimesheetUiRow Row, int DayIndex)> OnEditEntry { get; set; }
+    [Parameter] public EventCallback OnSubmitApproval { get; set; }
+    [Parameter] public EventCallback<int> OnChangeWeek { get; set; }
+    [Parameter] public EventCallback OnGoToCurrentWeek { get; set; }
+
+    private decimal DailyTarget => (TimesheetOwner?.WeeklyHours ?? 40.0m) / 5.0m;
+
+    private string FormatHours(decimal hours) => TimesheetSearchHelper.FormatHours(hours);
+
+    private string FormatHoursDisplay(decimal hours) => hours > 0 ? FormatHours(hours) : "0:00";
+
+    private string GetProjectName(string id) => TimesheetSearchHelper.GetProjectName(id, ActiveProjects);
+
+    private string GetTaskName(string id) => TimesheetSearchHelper.GetTaskName(id, ActiveWorkTypes);
+
+    private string GetSubTaskName(string subTaskId, string workTypeId) => TimesheetSearchHelper.GetSubTaskName(subTaskId, workTypeId, ActiveWorkTypes);
+}

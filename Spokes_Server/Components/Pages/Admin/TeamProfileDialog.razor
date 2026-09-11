@@ -1,0 +1,87 @@
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Models.HR
+@using MudBlazor
+@inject Spokes_Server.Core.Services.Core.AppLabelService AppLabels
+
+<MudDialog DisableSidePadding="true">
+    <DialogContent>
+        <div class="d-flex flex-column align-center justify-center pt-8 pb-6">
+            <TeamAvatar Team="@Team" Size="Size.Large" Class="mb-3" Style="width: 80px; height: 80px; font-size: 2.5rem; font-weight: 600; box-shadow: 0 4px 12px rgba(0,0,0,0.1);" />
+            <MudText Typo="Typo.h5" Style="font-weight: 700;">@Team.Name</MudText>
+            @if (!string.IsNullOrWhiteSpace(Team.Description))
+            {
+                <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mt-1 px-4 text-center">@Team.Description</MudText>
+            }
+        </div>
+
+        <div class="pa-4">
+            <MudText Typo="Typo.subtitle2" Class="mb-3 text-uppercase" Style="letter-spacing: 0.5px;" Color="Color.Primary">Leadership</MudText>
+            
+            @if (Leader != null)
+            {
+                <div class="d-flex align-center gap-4 pa-3 mb-4 rounded" style="background-color: var(--mud-palette-background-grey);">
+                    <EmployeeAvatar Employee="@Leader" Size="Size.Medium" />
+                    <div class="d-flex flex-column">
+                        <MudText Typo="Typo.body1" Style="font-weight: 600;">@Leader.FullName</MudText>
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">Team Leader</MudText>
+                    </div>
+                </div>
+            }
+            else
+            {
+                <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-4">No leader assigned to this team.</MudText>
+            }
+
+            <MudDivider Class="my-4" />
+
+            <MudText Typo="Typo.subtitle2" Class="mb-3 text-uppercase" Style="letter-spacing: 0.5px;" Color="Color.Primary">@($"{AppLabels.Team} Members ({Members.Count})")</MudText>
+            
+            @if (Members.Any())
+            {
+                <div class="d-flex flex-column gap-2">
+                    @foreach (var member in Members.OrderBy(m => m.FullName))
+                    {
+                        <div class="d-flex align-center gap-3 pa-2 rounded hover-bg-grey">
+                            <EmployeeAvatar Employee="@member" Size="Size.Small" Style="width: 32px; height: 32px;" />
+                            <MudText Typo="Typo.body2" Style="font-weight: 500;">@member.FullName</MudText>
+                        </div>
+                    }
+                </div>
+            }
+            else
+            {
+                <MudText Typo="Typo.body2" Color="Color.Secondary">No members currently assigned.</MudText>
+            }
+        </div>
+    </DialogContent>
+    <DialogActions>
+        <MudButton Color="Color.Primary" OnClick="Close">Close</MudButton>
+    </DialogActions>
+</MudDialog>
+
+<style>
+    .hover-bg-grey {
+        transition: background-color 0.2s ease;
+    }
+    .hover-bg-grey:hover {
+        background-color: var(--mud-palette-background-grey);
+    }
+</style>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
+    [Parameter] public Team Team { get; set; } = default!;
+    [Parameter] public Employee? Leader { get; set; }
+    [Parameter] public List<Employee> Members { get; set; } = new();
+
+    private void Close() => MudDialog.Close(DialogResult.Ok(true));
+
+    private string GetTintedBackground(string hexColor)
+    {
+        if (string.IsNullOrEmpty(hexColor) || !hexColor.StartsWith("#")) return "var(--mud-palette-background-grey)";
+        return hexColor + "1A"; // Append 10% opacity to hex
+    }
+}

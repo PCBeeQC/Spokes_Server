@@ -1,0 +1,78 @@
+@page "/authentication/login"
+@layout Spokes_Server.Components.Layout.LoginLayout
+@using Microsoft.AspNetCore.Authorization
+@using Spokes_Server.Core.Data
+@attribute [AllowAnonymous]
+@inject NavigationManager Nav
+@inject Database Db
+@inject IJSRuntime JS
+
+<MudContainer MaxWidth="MaxWidth.False" Class="d-flex align-center justify-center mud-width-full"
+    Style="height: 100vh; background-color: #f4f6f8;">
+
+    <MudPaper Elevation="3" Class="pa-8 d-flex flex-column align-center" Width="100%" MaxWidth="400px">
+
+        <div class="d-flex justify-center mb-6">
+            @if (Profile?.HasCustomLogo == true)
+            {
+                <MudImage Src="@($"/spokesapi/Media/Logo?v={Profile.LogoVersion}")" Height="80" ObjectFit="ObjectFit.Contain" />
+            }
+            else
+            {
+                <MudAvatar Color="Color.Primary" Style="height: 80px; width: 80px; font-size: 2rem;">
+                    @(Profile?.CompanyName?.Substring(0, 1) ?? "M")
+                </MudAvatar>
+            }
+        </div>
+
+        <MudText Typo="Typo.h4" Align="Align.Center" GutterBottom="true">@Profile?.CompanyName</MudText>
+        <MudText Typo="Typo.body1" Align="Align.Center" Color="Color.Secondary" Class="mb-8">
+            Please sign in to access the management portal.
+        </MudText>
+
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Large" FullWidth="true"
+            StartIcon="@Icons.Material.Filled.Login" OnClick="SignIn" Class="py-3">
+            Connect with SSO
+        </MudButton>
+
+        <MudText Typo="Typo.caption" Color="Color.Default" Class="mt-8">
+            &copy; @DateTime.Now.Year @Profile?.CompanyName
+        </MudText>
+
+    </MudPaper>
+</MudContainer>
+
+@code {
+    [Parameter][SupplyParameterFromQuery] public string? ReturnUrl { get; set; }
+    private CompanyProfile Profile = default!;
+
+    [CascadingParameter] private HttpContext? HttpContext { get; set; }
+
+    protected override void OnInitialized()
+    {
+        Profile = Db.CompanyProfile.Get();
+
+        // If we haven't tried a silent SSO login yet, try it now.
+        // This handles users navigating directly to the login page.
+        if (HttpContext != null && !HttpContext.Request.Cookies.ContainsKey("Spokes_SSO_Attempt"))
+        {
+            var target = !string.IsNullOrEmpty(ReturnUrl) ? ReturnUrl : "/";
+            Nav.NavigateTo($"/sso/login/auto?returnUrl={Uri.EscapeDataString(target)}", forceLoad: true);
+        }
+    }
+
+    private async Task SignIn()
+    {
+        // 1. Determine where to go after login (Default to Home "/")
+        var target = !string.IsNullOrEmpty(ReturnUrl) ? ReturnUrl : "/";
+
+        string deviceId = "";
+        try {
+            deviceId = await JS.InvokeAsync<string>("pushNotifications.getDeviceId");
+        } catch { }
+
+        // 2. Redirect to the Program.cs endpoint
+        // IMPORTANT: forceLoad: true is required to break out of Blazor and hit the server endpoint
+        Nav.NavigateTo($"/sso/login?deviceId={Uri.EscapeDataString(deviceId)}&returnUrl={Uri.EscapeDataString(target)}", forceLoad: true);
+    }
+}

@@ -1,0 +1,105 @@
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Services
+
+@* Link preview card — rendered below message content for each URL *@
+@if (Preview != null && (!string.IsNullOrEmpty(Preview.Title) || Preview.IsYouTube))
+{
+    <MudPaper Elevation="0" Class="mt-2 link-preview-card"
+        Style="border: 1px solid var(--mud-palette-divider); border-radius: 8px; overflow: hidden; max-width: 480px; transition: border-color 0.2s;">
+
+        @if (Preview.IsYouTube)
+        {
+            @if (_playVideo)
+            {
+                <div style="position: relative; width: 100%; padding-bottom: 56.25%;">
+                    <iframe src="@Preview.VideoEmbedUrl" 
+                            style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: none;"
+                            allow="autoplay; encrypted-media; picture-in-picture" 
+                            allowfullscreen>
+                    </iframe>
+                </div>
+            }
+            else
+            {
+                <div style="position: relative; width: 100%; padding-bottom: 56.25%; background: var(--mud-palette-background-grey); cursor: pointer;" 
+                     @onclick="() => _playVideo = true">
+                    @if (!string.IsNullOrEmpty(Preview.ImageUrl) && !_imageFailed)
+                    {
+                        <img src="@Preview.ImageUrl" alt="@Preview.Title"
+                            style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; display: block;"
+                            @onerror="@(() => _imageFailed = true)" />
+                    }
+                    <div style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,0.2); transition: background 0.2s;" class="yt-overlay">
+                        <MudIcon Icon="@Icons.Custom.Brands.YouTube" Style="font-size: 64px; color: #ff0000; filter: drop-shadow(0 0 10px rgba(0,0,0,0.5));" />
+                    </div>
+                </div>
+            }
+        }
+        else
+        {
+            <a href="@Preview.Url" target="_blank" rel="noopener noreferrer" style="text-decoration: none; color: inherit; display: block; cursor: pointer;">
+                @if (!string.IsNullOrEmpty(Preview.ImageUrl) && !_imageFailed)
+                {
+                    <div style="height: 160px; overflow: hidden; background: var(--mud-palette-background-grey);">
+                        <img src="@Preview.ImageUrl" alt="@Preview.Title"
+                            style="width: 100%; height: 160px; object-fit: cover; display: block;"
+                            @onerror="@(() => _imageFailed = true)" />
+                    </div>
+                }
+            </a>
+        }
+
+        <a href="@Preview.Url" target="_blank" rel="noopener noreferrer" style="text-decoration: none; color: inherit; display: block; cursor: pointer;">
+            <div class="pa-3">
+                @* Site name / domain *@
+                <div class="d-flex align-center gap-1 mb-1">
+                    @if (!string.IsNullOrEmpty(Preview.FaviconUrl) && !_faviconFailed)
+                    {
+                        <img src="@Preview.FaviconUrl" alt="" style="width: 14px; height: 14px; border-radius: 2px;"
+                            @onerror="@(() => _faviconFailed = true)" />
+                    }
+                    <MudText Typo="Typo.caption" Color="Color.Secondary">
+                        @(Preview.SiteName ?? LinkPreviewService.GetDomain(Preview.Url))
+                    </MudText>
+                </div>
+
+                @* Title *@
+                <MudText Typo="Typo.body2"
+                    Style="font-weight: 600; line-height: 1.3; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;">
+                    @Preview.Title
+                </MudText>
+
+                @* Description *@
+                @if (!string.IsNullOrEmpty(Preview.Description))
+                {
+                    <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mt-1"
+                        Style="display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; line-height: 1.4;">
+                        @Preview.Description
+                    </MudText>
+                }
+            </div>
+        </a>
+    </MudPaper>
+}
+
+<style>
+    .link-preview-card:hover {
+        border-color: var(--mud-palette-primary) !important;
+    }
+    .yt-overlay:hover {
+        background: rgba(0,0,0,0.1) !important;
+    }
+</style>
+
+@code {
+    [Parameter] public LinkPreview? Preview { get; set; }
+
+    private bool _imageFailed = false;
+    private bool _faviconFailed = false;
+    private bool _playVideo = false;
+}
+

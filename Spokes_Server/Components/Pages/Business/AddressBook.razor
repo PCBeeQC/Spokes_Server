@@ -1,0 +1,424 @@
+@page "/business/address-book"
+@using Microsoft.AspNetCore.Authorization
+@using Spokes_Server.Core.Constants
+@using Spokes_Server.Core.Data
+@attribute [Authorize(Policy = AppPermissions.AddressBook.View)]
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Components.Dialogs
+@using MudBlazor
+@inject Database Db
+@inject IDialogService DialogService
+@inject ISnackbar Snackbar
+@inject IJSRuntime JS
+@inject UserService UserService
+
+<PageTitle>Address Book</PageTitle>
+
+<MudContainer MaxWidth="MaxWidth.Large" Class="mt-4">
+    <div class="d-flex justify-space-between align-center mb-4">
+        <div>
+            <MudText Typo="Typo.h5">Address Book</MudText>
+            <MudText Typo="Typo.body2" Color="Color.Secondary">
+                Manage clients, suppliers, and external contacts.
+            </MudText>
+        </div>
+        @if (CanManage)
+        {
+            @if (_activeTabIndex == 0)
+            {
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Add"
+                           OnClick="AddSupplier">New Company</MudButton>
+            }
+            else if (_activeTabIndex == 1)
+            {
+                <div class="d-flex gap-2">
+                    <MudFileUpload T="IBrowserFile" Accept=".vcf" FilesChanged="ImportContacts" Class="mt-0">
+                        <CustomContent>
+                            <MudButton Variant="Variant.Outlined" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Upload" OnClick="@context.OpenFilePickerAsync">
+                                Import
+                            </MudButton>
+                        </CustomContent>
+                            <SelectedTemplate></SelectedTemplate>
+                    </MudFileUpload>
+                    <MudButton Variant="Variant.Outlined" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Download" OnClick="ExportContacts">
+                        Export
+                    </MudButton>
+                    <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Add"
+                               OnClick="AddPublicContact">New Public Contact</MudButton>
+                </div>
+            }
+        }
+    </div>
+    <MudTabs @bind-ActivePanelIndex="_activeTabIndex" Elevation="0" Outlined="true" Border="true" ApplyEffectsToContainer="true" Rounded="true" TabPanelsClass="pa-4">
+        <MudTabPanel Text="Companies">
+            <MudTable Items="@Suppliers" Dense="true" Striped="true" Outlined="true" Elevation="0" Hover="true" Filter="new Func<Supplier, bool>(FilterSuppliers)">
+                <ToolBarContent>
+                    <MudText Typo="Typo.h6">Contacts</MudText>
+                    <MudSpacer />
+                    <MudTextField @bind-Value="searchString" Variant="Variant.Outlined" Margin="Margin.Dense" Placeholder="Search..." Adornment="Adornment.Start"
+                                  AdornmentIcon="@Icons.Material.Filled.Search" IconSize="Size.Medium" Class="my-1"></MudTextField>
+                </ToolBarContent>
+                <HeaderContent>
+                    <MudTh>Business Name</MudTh>
+                    <MudTh>Primary Contact</MudTh>
+                    <MudTh>Email</MudTh>
+                    <MudTh>Phone</MudTh>
+                    <MudTh>City</MudTh>
+                    <MudTh>Actions</MudTh>
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd DataLabel="Business Name">@context.Info.BusinessName</MudTd>
+                    <MudTd DataLabel="Primary Contact">
+                        @if (context.Contacts.Any(c => c.IsPrimary))
+                        {
+                            var p = context.Contacts.First(c => c.IsPrimary);
+                            @($"{p.Prefix} {p.Name}")
+                        }
+                        else
+                        {
+                            @context.Info.ContactPersonName
+                        }
+                    </MudTd>
+                    <MudTd DataLabel="Email">
+                        @if (context.Contacts.Any(c => c.IsPrimary))
+                        {
+                            @context.Contacts.First(c => c.IsPrimary).Email
+                        }
+                        else
+                        {
+                            @context.Info.ContactPersonEmail
+                        }
+                    </MudTd>
+                    <MudTd DataLabel="Phone">
+                        @if (context.Contacts.Any(c => c.IsPrimary))
+                        {
+                            @context.Contacts.First(c => c.IsPrimary).Phone
+                        }
+                        else
+                        {
+                            @context.Info.ContactPersonPhone
+                        }
+                    </MudTd>
+                    <MudTd DataLabel="City">@context.Info.BusinessAdressCity</MudTd>
+                    <MudTd DataLabel="Actions">
+                        @if (CanManage)
+                        {
+                            <MudIconButton Icon="@Icons.Material.Filled.Edit" Color="Color.Primary" Size="Size.Small"
+                                           OnClick="@(() => EditSupplier(context))" />
+                            <MudIconButton Icon="@Icons.Material.Filled.Delete" Color="Color.Error" Size="Size.Small"
+                                           OnClick="@(() => DeleteSupplier(context))" />
+                        }
+                    </MudTd>
+                </RowTemplate>
+                <PagerContent>
+                    <MudTablePager />
+                </PagerContent>
+            </MudTable>
+        </MudTabPanel>
+
+        <MudTabPanel Text="Public Contacts">
+            <MudTable Items="@PublicContacts" Dense="true" Striped="true" Outlined="true" Elevation="0" Hover="true" Filter="new Func<ContactPerson, bool>(FilterPublicContacts)">
+                <ToolBarContent>
+                    <MudText Typo="Typo.h6">Public Contacts</MudText>
+                    <MudSpacer />
+                    <MudTextField @bind-Value="searchStringPublic" Variant="Variant.Outlined" Margin="Margin.Dense" Placeholder="Search..." Adornment="Adornment.Start"
+                                  AdornmentIcon="@Icons.Material.Filled.Search" IconSize="Size.Medium" Class="my-1"></MudTextField>
+                </ToolBarContent>
+                <HeaderContent>
+                    <MudTh>Name</MudTh>
+                    <MudTh>Title</MudTh>
+                    <MudTh>Email</MudTh>
+                    <MudTh>Phone</MudTh>
+                    <MudTh>Actions</MudTh>
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd DataLabel="Name">@($"{context.Prefix} {context.Name}".Trim())</MudTd>
+                    <MudTd DataLabel="Title">@context.Title</MudTd>
+                    <MudTd DataLabel="Email">@context.Email</MudTd>
+                    <MudTd DataLabel="Phone">@context.Phone</MudTd>
+                    <MudTd DataLabel="Actions">
+                        @if (CanManage)
+                        {
+                            <MudIconButton Icon="@Icons.Material.Filled.Edit" Color="Color.Primary" Size="Size.Small"
+                                           OnClick="@(() => EditPublicContact(context))" />
+                            <MudIconButton Icon="@Icons.Material.Filled.Delete" Color="Color.Error" Size="Size.Small"
+                                           OnClick="@(() => DeletePublicContact(context))" />
+                        }
+                    </MudTd>
+                </RowTemplate>
+                <PagerContent>
+                    <MudTablePager />
+                </PagerContent>
+            </MudTable>
+        </MudTabPanel>
+    </MudTabs>
+</MudContainer>
+
+@code {
+    private int _activeTabIndex = 0;
+    
+    // Companies Tab
+    private List<Supplier> Suppliers = new();
+    private string searchString = "";
+
+    // Public Contacts Tab
+    private List<ContactPerson> PublicContacts = new();
+    private string searchStringPublic = "";
+    private bool CanManage = false;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var emp = await UserService.GetEmployeeAsync();
+        CanManage = emp?.HasPermission(AppPermissions.AddressBook.Manage) ?? false;
+        RefreshLists();
+    }
+
+    private void RefreshLists()
+    {
+        Suppliers = Db.Suppliers.GetAll().OrderBy(s => s.Info.BusinessName).ToList();
+        PublicContacts = Db.PublicContacts.GetAll().OrderBy(c => c.Name).ToList();
+    }
+
+    private bool FilterSuppliers(Supplier element)
+    {
+        if (string.IsNullOrWhiteSpace(searchString)) return true;
+
+        if (element.Info.BusinessName.Contains(searchString, StringComparison.OrdinalIgnoreCase)) return true;
+        if (element.Info.ContactPersonName.Contains(searchString, StringComparison.OrdinalIgnoreCase)) return true;
+        if (element.Contacts.Any(c => c.Name.Contains(searchString, StringComparison.OrdinalIgnoreCase))) return true;
+
+        return false;
+    }
+
+    private bool FilterPublicContacts(ContactPerson element)
+    {
+        if (string.IsNullOrWhiteSpace(searchStringPublic)) return true;
+        if (element.Name.Contains(searchStringPublic, StringComparison.OrdinalIgnoreCase)) return true;
+        if (element.Email.Contains(searchStringPublic, StringComparison.OrdinalIgnoreCase)) return true;
+        if (element.Phone.Contains(searchStringPublic, StringComparison.OrdinalIgnoreCase)) return true;
+        return false;
+    }
+
+    private async Task AddSupplier()
+    {
+        var newSupplier = new Supplier();
+        var options = new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true };
+        var dialog = await DialogService.ShowAsync<SupplierDialog>("Create New Company", new DialogParameters
+            {
+                ["Supplier"] = newSupplier
+            }, options);
+        var result = await dialog.Result;
+
+        if (!result.Canceled)
+        {
+            var created = (Supplier)result.Data;
+            Db.Suppliers.Save(created);
+            RefreshLists();
+            Snackbar.Add("Company created", Severity.Success);
+        }
+    }
+
+    private async Task EditSupplier(Supplier supplier)
+    {
+        var options = new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true };
+        var dialog = await DialogService.ShowAsync<SupplierDialog>("Edit Company", new DialogParameters
+            {
+                ["Supplier"] = supplier
+            }, options);
+        var result = await dialog.Result;
+
+        if (!result.Canceled)
+        {
+            var updated = (Supplier)result.Data;
+            Db.Suppliers.Save(updated);
+            RefreshLists();
+            Snackbar.Add("Company updated", Severity.Success);
+        }
+    }
+
+    private async Task DeleteSupplier(Supplier supplier)
+    {
+        bool? result = await DialogService.ShowMessageBoxAsync(
+        "Warning",
+        $"Deleting a company cannot be undone. Are you sure you want to delete '{supplier.Info.BusinessName}'?",
+        yesText: "Delete!", cancelText: "Cancel");
+
+        if (result == true)
+        {
+            Db.Suppliers.Delete(supplier.Id);
+            RefreshLists();
+            Snackbar.Add("Company deleted", Severity.Success);
+        }
+    }
+
+    // Public Contacts Actions
+    private async Task AddPublicContact()
+    {
+        var newContact = new ContactPerson();
+        var options = new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true };
+        
+        // Use ContactPersonDialog instead of SupplierDialog
+        var dialog = await DialogService.ShowAsync<ContactPersonDialog>("Create Public Contact", new DialogParameters
+        {
+            ["Contact"] = newContact
+        }, options);
+        var result = await dialog.Result;
+
+        if (!result.Canceled)
+        {
+            var created = (ContactPerson)result.Data;
+            Db.PublicContacts.Save(created);
+            RefreshLists();
+            Snackbar.Add("Public contact created", Severity.Success);
+        }
+    }
+
+    private async Task EditPublicContact(ContactPerson contact)
+    {
+        var options = new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true };
+        var dialog = await DialogService.ShowAsync<ContactPersonDialog>("Edit Public Contact", new DialogParameters
+        {
+            ["Contact"] = contact
+        }, options);
+        var result = await dialog.Result;
+
+        if (!result.Canceled)
+        {
+            var updated = (ContactPerson)result.Data;
+            Db.PublicContacts.Save(updated);
+            RefreshLists();
+            Snackbar.Add("Public contact updated", Severity.Success);
+        }
+    }
+
+    private async Task DeletePublicContact(ContactPerson contact)
+    {
+        bool? result = await DialogService.ShowMessageBoxAsync(
+        "Warning",
+        $"Deleting a contact cannot be undone. Are you sure you want to delete '{contact.Name}'?",
+        yesText: "Delete!", cancelText: "Cancel");
+
+        if (result == true)
+        {
+            Db.PublicContacts.Delete(contact.Id);
+            RefreshLists();
+            Snackbar.Add("Contact deleted", Severity.Success);
+        }
+    }
+
+    private async Task ImportContacts(IBrowserFile file)
+    {
+        try
+        {
+            if (file == null) return;
+            if (file.Size > 10 * 1024 * 1024)
+            {
+                Snackbar.Add("File too large. Max 10MB.", Severity.Error);
+                return;
+            }
+
+            using var stream = file.OpenReadStream(10 * 1024 * 1024);
+            using var reader = new System.IO.StreamReader(stream);
+            var content = await reader.ReadToEndAsync();
+            
+            var cards = content.Split(new[] { "BEGIN:VCARD" }, StringSplitOptions.RemoveEmptyEntries);
+            int importedCount = 0;
+            int skippedCount = 0;
+            
+            foreach (var card in cards)
+            {
+                if (!card.Contains("END:VCARD")) continue;
+                
+                var lines = card.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.RemoveEmptyEntries);
+                var contact = new ContactPerson();
+                
+                foreach (var line in lines)
+                {
+                    int colonIdx = line.IndexOf(':');
+                    if (colonIdx < 0) continue;
+                    
+                    var keyPart = line.Substring(0, colonIdx).ToUpperInvariant();
+                    var value = line.Substring(colonIdx + 1).Trim();
+                    
+                    if (keyPart.StartsWith("FN")) contact.Name = value;
+                    else if (keyPart.StartsWith("TITLE")) contact.Title = value;
+                    else if (keyPart.StartsWith("EMAIL")) contact.Email = value;
+                    else if (keyPart.StartsWith("TEL")) contact.Phone = value;
+                }
+                
+                if (!string.IsNullOrWhiteSpace(contact.Name) || !string.IsNullOrWhiteSpace(contact.Email))
+                {
+                    bool isDuplicate = PublicContacts.Any(existing => 
+                        (!string.IsNullOrWhiteSpace(contact.Email) && string.Equals(existing.Email, contact.Email, StringComparison.OrdinalIgnoreCase)) ||
+                        (!string.IsNullOrWhiteSpace(contact.Name) && string.Equals(existing.Name, contact.Name, StringComparison.OrdinalIgnoreCase) && string.Equals(existing.Phone, contact.Phone, StringComparison.OrdinalIgnoreCase))
+                    );
+
+                    if (!isDuplicate)
+                    {
+                        Db.PublicContacts.Save(contact);
+                        importedCount++;
+                    }
+                    else
+                    {
+                        skippedCount++;
+                    }
+                }
+            }
+            
+            RefreshLists();
+            
+            if (skippedCount > 0)
+            {
+                Snackbar.Add($"Imported {importedCount} contacts from VCF. Skipped {skippedCount} duplicates.", Severity.Success);
+            }
+            else
+            {
+                Snackbar.Add($"Imported {importedCount} contacts from VCF", Severity.Success);
+            }
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to import: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private async Task ExportContacts()
+    {
+        if (PublicContacts == null || !PublicContacts.Any())
+        {
+            Snackbar.Add("No public contacts to export.", Severity.Warning);
+            return;
+        }
+
+        var sb = new System.Text.StringBuilder();
+        foreach (var contact in PublicContacts)
+        {
+            sb.AppendLine("BEGIN:VCARD");
+            sb.AppendLine("VERSION:3.0");
+            
+            var nameToExport = !string.IsNullOrWhiteSpace(contact.Name) ? contact.Name : "Unknown";
+            if (!string.IsNullOrWhiteSpace(contact.Prefix))
+            {
+                nameToExport = $"{contact.Prefix} {nameToExport}".Trim();
+            }
+            sb.AppendLine($"FN:{nameToExport}");
+            
+            if (!string.IsNullOrWhiteSpace(contact.Title))
+                sb.AppendLine($"TITLE:{contact.Title}");
+            if (!string.IsNullOrWhiteSpace(contact.Email))
+                sb.AppendLine($"EMAIL;TYPE=INTERNET:{contact.Email}");
+            if (!string.IsNullOrWhiteSpace(contact.Phone))
+                sb.AppendLine($"TEL;TYPE=CELL:{contact.Phone}");
+            sb.AppendLine("END:VCARD");
+        }
+
+        var fileName = $"contacts_{DateTime.Now:yyyyMMdd}.vcf";
+        await JS.InvokeVoidAsync("downloadFile", fileName, "text/vcard", sb.ToString());
+    }
+}
+
+
