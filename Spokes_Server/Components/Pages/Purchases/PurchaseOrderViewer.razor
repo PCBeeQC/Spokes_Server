@@ -110,9 +110,9 @@ else
 
             <div class="d-flex justify-space-between align-start mb-2 keep-together">
                 <div style="max-width: 50%;">
-                    @if (!string.IsNullOrEmpty(Profile.LogoBase64))
+                    @if (Profile.HasCustomLogo)
                     {
-                        <MudImage Src="@Profile.LogoBase64" Height="80" ObjectFit="ObjectFit.Contain" Class="mb-2" />
+                        <MudImage Src="@($"/spokesapi/Media/Logo?v={Profile.LogoVersion}")" Height="80" ObjectFit="ObjectFit.Contain" Class="mb-2" />
                     }
                     else
                     {

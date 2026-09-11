@@ -46,57 +46,16 @@ namespace Spokes_Server.Controllers
         }
 
         [HttpGet("Icon")]
+        [Microsoft.AspNetCore.Authorization.AllowAnonymous]
         [ResponseCache(Duration = 3600, Location = ResponseCacheLocation.Client)] // Cache for 1 hour locally
         public IActionResult GetIcon([FromQuery] string? t = null)
         {
-            bool isAuthorized = false;
-            if (User?.Identity?.IsAuthenticated == true)
-            {
-                var currentUser = _userService.GetEmployee(User);
-                isAuthorized = currentUser != null && currentUser.IsActive && !currentUser.IsSuspended && !currentUser.IsBanned;
-            }
-
-            // Validate token for push workers requesting the server icon
-            if (!isAuthorized && !string.IsNullOrEmpty(t))
-            {
-                try
-                {
-                    var protector = _dataProtection.CreateProtector("AvatarPushToken");
-                    var decrypted = protector.Unprotect(t);
-                    var parts = decrypted.Split('|');
-                    // As long as the token has not expired, it is considered valid to get the company icon.
-                    if (parts.Length == 2 && new DateTime(long.Parse(parts[1])) > DateTime.UtcNow)
-                    {
-                        isAuthorized = true;
-                    }
-                }
-                catch (Exception ex)
-                {
-                    System.Diagnostics.Debug.WriteLine($"[MediaController] Icon token validation failed: {ex.Message}");
-                }
-            }
-
-            if (!isAuthorized)
-            {
-                return Unauthorized();
-            }
-
             var profile = _companyProfile.Get();
 
-            if (!string.IsNullOrEmpty(profile?.IconBase64) && profile.IconBase64.Contains(","))
+            var parsed = TryParseDataUri(profile?.IconBase64);
+            if (parsed.HasValue)
             {
-                try
-                {
-                    // Extract Base64 part
-                    var base64Data = profile.IconBase64.Substring(profile.IconBase64.IndexOf(",") + 1);
-                    var bytes = Convert.FromBase64String(base64Data);
-                    return File(bytes, "image/png");
-                }
-                catch (Exception ex)
-                {
-                    // If parsing fails, fall back to default
-                    Console.WriteLine($"[MediaController] Failed to parse custom icon: {ex.Message}");
-                }
+                return File(parsed.Value.Bytes, parsed.Value.MimeType);
             }
 
             // Fallback to default-icon-192.png
@@ -108,6 +67,52 @@ namespace Spokes_Server.Controllers
 
             // Last resort: standard favicon
             return PhysicalFile(Path.Combine(_env.WebRootPath, "favicon.ico"), "image/x-icon");
+        }
+
+        [HttpGet("Logo")]
+        [Microsoft.AspNetCore.Authorization.AllowAnonymous]
+        [ResponseCache(Duration = 3600, Location = ResponseCacheLocation.Client)] // Cache for 1 hour locally
+        public IActionResult GetLogo()
+        {
+            var profile = _companyProfile.Get();
+
+            var parsed = TryParseDataUri(profile?.LogoBase64);
+            if (parsed.HasValue)
+            {
+                return File(parsed.Value.Bytes, parsed.Value.MimeType);
+            }
+
+            // Fallback to icon if no custom logo is uploaded
+            return GetIcon();
+        }
+
+        private static (byte[] Bytes, string MimeType)? TryParseDataUri(string? dataUri)
+        {
+            if (string.IsNullOrEmpty(dataUri) || !dataUri.Contains(",")) return null;
+
+            try
+            {
+                var commaIdx = dataUri.IndexOf(",");
+                var header = dataUri.Substring(0, commaIdx);
+                var base64 = dataUri.Substring(commaIdx + 1);
+
+                var mimeType = "image/png";
+                if (header.StartsWith("data:") && header.Contains(";"))
+                {
+                    var semicolonIdx = header.IndexOf(";");
+                    if (semicolonIdx > 5)
+                    {
+                        mimeType = header.Substring(5, semicolonIdx - 5);
+                    }
+                }
+
+                var bytes = Convert.FromBase64String(base64);
+                return (bytes, mimeType);
+            }
+            catch
+            {
+                return null;
+            }
         }
 
         [HttpGet("Avatar/{userId}")]

@@ -14,9 +14,9 @@
         <div class="d-flex flex-column gap-4 pb-2" style="max-height: 70vh; overflow-y: auto;">
             @* --- Select Participants Card --- *@
             <MudPaper Elevation="0" Outlined="true" Class="rounded-lg overflow-hidden flex-shrink-0">
-                <div class="d-flex align-center my-1 ml-4">
-                    <MudIcon Icon="@Icons.Material.Filled.GroupAdd" Size="Size.Small" Class="mr-2" />
-                    <MudText Typo="Typo.h6">Select Participants</MudText>
+                <div class="d-flex align-center px-4 py-3">
+                    <MudIcon Icon="@Icons.Material.Filled.GroupAdd" Size="Size.Small" Class="mr-2 flex-shrink-0" />
+                    <MudText Typo="Typo.subtitle2">Select Participants</MudText>
                 </div>
                 <MudDivider />
                 <div class="px-4 py-4 d-flex flex-column gap-3">
@@ -38,12 +38,12 @@
 
             @* --- Encryption Card --- *@
             <MudPaper Elevation="0" Outlined="true" Class="rounded-lg overflow-hidden flex-shrink-0">
-                <div class="d-flex align-center justify-space-between my-1 ml-4 mr-2">
-                    <div class="d-flex align-center">
-                        <MudIcon Icon="@Icons.Material.Filled.Lock" Size="Size.Small" Class="mr-2" />
-                        <MudText Typo="Typo.h6">Channel Encryption</MudText>
+                <div class="d-flex align-center justify-space-between ps-4 pe-2 py-1">
+                    <div class="d-flex align-center min-w-0 mr-2">
+                        <MudIcon Icon="@Icons.Material.Filled.Lock" Size="Size.Small" Class="mr-2 flex-shrink-0" />
+                        <MudText Typo="Typo.subtitle2">Channel Encryption</MudText>
                     </div>
-                    <MudSwitch @bind-Value="_isEncrypted" Color="Color.Primary" Class="ma-0" />
+                    <MudSwitch @bind-Value="_isEncrypted" Color="Color.Primary" Class="ma-0 flex-shrink-0" />
                 </div>
                 <MudDivider />
                 @if (_isEncrypted)

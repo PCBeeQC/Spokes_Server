@@ -4,6 +4,7 @@ ARG CASDOOR_VERSION=3.49.0
 ARG APP_VERSION=dev
 ARG SPOKES_HMAC_SALT=default-development-salt
 ARG SPOKES_KLIPY_KEY=
+ARG SPOKES_RELAY_KEY=
 
 FROM livekit/livekit-server:${LIVEKIT_VERSION} AS livekit
 FROM casbin/casdoor:${CASDOOR_VERSION} AS casdoor
@@ -68,8 +69,10 @@ ENV ASPNETCORE_URLS=http://+:8080
 ENV DataPath="/data"
 ARG SPOKES_HMAC_SALT
 ARG SPOKES_KLIPY_KEY
+ARG SPOKES_RELAY_KEY
 ENV SPOKES_HMAC_SALT=${SPOKES_HMAC_SALT}
 ENV SPOKES_KLIPY_KEY=${SPOKES_KLIPY_KEY}
+ENV SPOKES_RELAY_KEY=${SPOKES_RELAY_KEY}
 COPY --from=publish /app/publish .
 
 # Copy LiveKit Server binary from the specific version image

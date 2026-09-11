@@ -7,7 +7,6 @@
             if (window.Capacitor.Plugins && window.Capacitor.Plugins.StatusBar) {
                 window.Capacitor.Plugins.StatusBar.setOverlaysWebView({ overlay: true }).catch(console.error);
                 window.Capacitor.Plugins.StatusBar.setStyle({ style: 'DARK' }).catch(console.error);
-                console.log('[Capacitor-Init] [STARTUP-DIAGNOSTIC] StatusBar applied aggressively at:', Date.now());
             } else if (attempts < 50) {
                 attempts++;
                 setTimeout(applyStatusBar, 10);
@@ -46,7 +45,6 @@ window.triggerHaptic = async function(style = 'LIGHT') {
 };
 
 window.initCapacitorEnv = async function () {
-    console.log('[Capacitor-Init] [STARTUP-DIAGNOSTIC] initCapacitorEnv started at:', Date.now());
     if (window._capacitorInitCompleted) {
         console.error('[DOUBLE-LOAD-DEBUG] initCapacitorEnv called AGAIN (already completed at:',
             window._capacitorInitCompletedAt, '). This indicates a page reload or duplicate script execution.',
@@ -55,19 +53,13 @@ window.initCapacitorEnv = async function () {
         console.trace('[DOUBLE-LOAD-DEBUG] initCapacitorEnv duplicate call stack');
     }
     window._capacitorInitStartedAt = Date.now();
-    console.log('[Capacitor-Init] Checking Capacitor environment...');
     if (window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) {
         try {
-            console.log('[Capacitor-Init] [STARTUP-DIAGNOSTIC] Native platform detected at:', Date.now());
-            console.log('[Capacitor-Init] Native platform detected. Applying Solid Theme Bounds.');
-            
             // Check if we restarted the server specifically to open a notification
             // Skip if runStartup() in App.razor already handled it (avoids redundant bridge call)
             if (!window._pendingNotificationUrlChecked && Capacitor.Plugins.Preferences) {
                 try {
-                    console.log('[Capacitor-Init] [STARTUP-DIAGNOSTIC] Preferences get pendingNotificationUrl start:', Date.now());
                     const pending = await Capacitor.Plugins.Preferences.get({ key: 'pendingNotificationUrl' });
-                    console.log('[Capacitor-Init] [STARTUP-DIAGNOSTIC] Preferences get pendingNotificationUrl end:', Date.now());
                     if (pending && pending.value) {
                         await Capacitor.Plugins.Preferences.remove({ key: 'pendingNotificationUrl' });
                         // Navigate to the deep link and let Blazor handle it

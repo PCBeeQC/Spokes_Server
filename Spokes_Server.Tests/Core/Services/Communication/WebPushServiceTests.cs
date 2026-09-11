@@ -51,6 +51,16 @@ namespace Spokes_Server.Tests.Core.Services.Communication
             _systemConfigs = new SystemConfigRepository(_persistence, _config);
             var encService = new Spokes_Server.Core.Services.Core.EncryptionService(_config);
             var serverConfigs = new ServerConfigRepository(_persistence, _config, encService);
+            var currentVersion = $"{DateTime.UtcNow.Year}.{DateTime.UtcNow.Month}.1";
+            var globalCfg = serverConfigs.GetOrCreateGlobalConfig();
+            globalCfg.DatabaseCreationVersion = currentVersion;
+            globalCfg.DatabaseCreationSignature = Spokes_Server.Core.Services.Licensing.LicenseValidationService.SignDemoVersion(currentVersion, encService.KeyHash);
+            serverConfigs.Save(globalCfg);
+
+            var licenseValidation = new Spokes_Server.Core.Services.Licensing.LicenseValidationService(
+                new Mock<ILogger<Spokes_Server.Core.Services.Licensing.LicenseValidationService>>().Object,
+                encService,
+                new Spokes_Server.Core.Services.Licensing.VersionMetadata(currentVersion));
 
             var dataProtector = new Mock<Microsoft.AspNetCore.DataProtection.IDataProtector>();
             dataProtector.Setup(x => x.Protect(It.IsAny<byte[]>())).Returns((byte[] b) => b);
@@ -70,7 +80,9 @@ namespace Spokes_Server.Tests.Core.Services.Communication
                 _config,
                 new Mock<System.Net.Http.IHttpClientFactory>().Object,
                 dataProtectionProvider.Object,
-                new Mock<Spokes_Server.Core.Services.Logging.ISystemLogService>().Object);
+                new Mock<Spokes_Server.Core.Services.Logging.ISystemLogService>().Object,
+                encService,
+                licenseValidation);
         }
 
         public void Dispose()
@@ -157,6 +169,16 @@ namespace Spokes_Server.Tests.Core.Services.Communication
 
             var encService = new Spokes_Server.Core.Services.Core.EncryptionService(_config);
             var serverConfigs = new ServerConfigRepository(_persistence, _config, encService);
+            var currentVersion = $"{DateTime.UtcNow.Year}.{DateTime.UtcNow.Month}.1";
+            var globalCfg = serverConfigs.GetOrCreateGlobalConfig();
+            globalCfg.DatabaseCreationVersion = currentVersion;
+            globalCfg.DatabaseCreationSignature = Spokes_Server.Core.Services.Licensing.LicenseValidationService.SignDemoVersion(currentVersion, encService.KeyHash);
+            serverConfigs.Save(globalCfg);
+
+            var licenseValidation = new Spokes_Server.Core.Services.Licensing.LicenseValidationService(
+                new Mock<ILogger<Spokes_Server.Core.Services.Licensing.LicenseValidationService>>().Object,
+                encService,
+                new Spokes_Server.Core.Services.Licensing.VersionMetadata(currentVersion));
 
             var service = new WebPushService(
                 _sessions,
@@ -170,7 +192,9 @@ namespace Spokes_Server.Tests.Core.Services.Communication
                 _config,
                 httpClientFactory.Object,
                 dataProtectionProvider.Object,
-                new Mock<Spokes_Server.Core.Services.Logging.ISystemLogService>().Object);
+                new Mock<Spokes_Server.Core.Services.Logging.ISystemLogService>().Object,
+                encService,
+                licenseValidation);
 
             var exception = await Assert.ThrowsAsync<Exception>(() => service.SendDeviceTestNotificationAsync("s1", "u1", "test title", "test body"));
             Assert.Contains("has expired or the app was uninstalled", exception.Message);
@@ -178,6 +202,110 @@ namespace Spokes_Server.Tests.Core.Services.Communication
             var updatedSession = _sessions.GetById("s1");
             Assert.Null(updatedSession.PushEndpoint);
             Assert.False(updatedSession.PushEnabled);
+        }
+
+        [Fact]
+        public async Task TestPushAsync_ThrowsLicenseExpired_WhenTrialExpired()
+        {
+            var session = new DeviceSession 
+            { 
+                Id = "s2", 
+                EmployeeId = "u2", 
+                PushEnabled = true, 
+                PushEndpoint = "some-endpoint",
+                PushSubscriptionType = "NativeRelay"
+            };
+            _sessions.Save(session);
+            _employees.Save(new Employee { Id = "u2", PushNotificationsEnabled = true });
+            var vapidKeys = WebPush.VapidHelper.GenerateVapidKeys();
+            _companyProfile.Save(new CompanyProfile { VapidSubject = "mailto:test@test.com", VapidPublicKey = vapidKeys.PublicKey, VapidPrivateKey = vapidKeys.PrivateKey });
+
+            var encService = new Spokes_Server.Core.Services.Core.EncryptionService(_config);
+            var serverConfigs = new ServerConfigRepository(_persistence, _config, encService);
+            // Expired 6 months ago
+            var expiredVersion = $"{DateTime.UtcNow.AddMonths(-6).Year}.{DateTime.UtcNow.AddMonths(-6).Month}.1";
+            var globalCfg = serverConfigs.GetOrCreateGlobalConfig();
+            globalCfg.DatabaseCreationVersion = expiredVersion;
+            globalCfg.DatabaseCreationSignature = Spokes_Server.Core.Services.Licensing.LicenseValidationService.SignDemoVersion(expiredVersion, encService.KeyHash);
+            serverConfigs.Save(globalCfg);
+
+            var licenseValidation = new Spokes_Server.Core.Services.Licensing.LicenseValidationService(
+                new Mock<ILogger<Spokes_Server.Core.Services.Licensing.LicenseValidationService>>().Object,
+                encService,
+                new Spokes_Server.Core.Services.Licensing.VersionMetadata(expiredVersion));
+
+            var dataProtector = new Mock<Microsoft.AspNetCore.DataProtection.IDataProtector>();
+            dataProtector.Setup(x => x.Protect(It.IsAny<byte[]>())).Returns((byte[] b) => b);
+            var dataProtectionProvider = new Mock<Microsoft.AspNetCore.DataProtection.IDataProtectionProvider>();
+            dataProtectionProvider.Setup(x => x.CreateProtector(It.IsAny<string>())).Returns(dataProtector.Object);
+
+            var service = new WebPushService(
+                _sessions,
+                _employees,
+                _companyProfile,
+                _systemConfigs,
+                serverConfigs,
+                new Mock<PresenceStateService>(new ChatStateService()).Object,
+                new NotificationQueueService(new Mock<ILogger<NotificationQueueService>>().Object),
+                new Mock<ILogger<WebPushService>>().Object,
+                _config,
+                new Mock<System.Net.Http.IHttpClientFactory>().Object,
+                dataProtectionProvider.Object,
+                new Mock<Spokes_Server.Core.Services.Logging.ISystemLogService>().Object,
+                encService,
+                licenseValidation);
+
+            var exception = await Assert.ThrowsAsync<Spokes_Server.Core.Services.Licensing.LicenseExpiredException>(() => service.SendDeviceTestNotificationAsync("s2", "u2", "test title", "test body"));
+            Assert.Contains("Cannot send test notification: Your server license has expired", exception.Message);
+        }
+
+        [Fact]
+        public async Task SendNotificationAsync_SkipsRelayPush_WhenTrialExpired()
+        {
+            var session = new DeviceSession 
+            { 
+                Id = "s3", 
+                EmployeeId = "u3", 
+                PushEnabled = true, 
+                PushEndpoint = "some-endpoint",
+                PushSubscriptionType = "NativeRelay"
+            };
+            _sessions.Save(session);
+            _employees.Save(new Employee { Id = "u3", PushNotificationsEnabled = true });
+
+            var encService = new Spokes_Server.Core.Services.Core.EncryptionService(_config);
+            var serverConfigs = new ServerConfigRepository(_persistence, _config, encService);
+            var expiredVersion = $"{DateTime.UtcNow.AddMonths(-6).Year}.{DateTime.UtcNow.AddMonths(-6).Month}.1";
+            var globalCfg = serverConfigs.GetOrCreateGlobalConfig();
+            globalCfg.DatabaseCreationVersion = expiredVersion;
+            globalCfg.DatabaseCreationSignature = Spokes_Server.Core.Services.Licensing.LicenseValidationService.SignDemoVersion(expiredVersion, encService.KeyHash);
+            serverConfigs.Save(globalCfg);
+
+            var licenseValidation = new Spokes_Server.Core.Services.Licensing.LicenseValidationService(
+                new Mock<ILogger<Spokes_Server.Core.Services.Licensing.LicenseValidationService>>().Object,
+                encService,
+                new Spokes_Server.Core.Services.Licensing.VersionMetadata(expiredVersion));
+
+            var mockHttpFactory = new Mock<System.Net.Http.IHttpClientFactory>(MockBehavior.Strict);
+
+            var service = new WebPushService(
+                _sessions,
+                _employees,
+                _companyProfile,
+                _systemConfigs,
+                serverConfigs,
+                new Mock<PresenceStateService>(new ChatStateService()).Object,
+                new NotificationQueueService(new Mock<ILogger<NotificationQueueService>>().Object),
+                new Mock<ILogger<WebPushService>>().Object,
+                _config,
+                mockHttpFactory.Object,
+                new Mock<Microsoft.AspNetCore.DataProtection.IDataProtectionProvider>().Object,
+                new Mock<Spokes_Server.Core.Services.Logging.ISystemLogService>().Object,
+                encService,
+                licenseValidation);
+
+            // Because license is expired, CreateClient must NOT be called on mockHttpFactory (strict mock will throw if called)
+            await service.SendNotificationAsync("u3", "title", "body");
         }
 
         private class MockHttpMessageHandler : System.Net.Http.HttpMessageHandler

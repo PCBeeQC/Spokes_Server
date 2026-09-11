@@ -17,6 +17,8 @@ using Spokes_Server.Core.Services;
 using System.Security.Claims;
 using WebPushException = WebPush.WebPushException;
 using Microsoft.AspNetCore.DataProtection;
+using Spokes_Server.Core.Services.Licensing;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Spokes_Server.Controllers;
 
@@ -62,7 +64,11 @@ public class PushController : SpokesControllerBase
     /// Stamps push fields directly onto the caller's DeviceSession.
     /// </summary>
     [HttpPost("subscribe")]
-    public async Task<IActionResult> Subscribe([FromBody] SubscribeRequest request)
+    public async Task<IActionResult> Subscribe(
+        [FromBody] SubscribeRequest request,
+        [FromServices] CompanyProfileRepository? companyProfiles = null,
+        [FromServices] ServerConfigRepository? serverConfigs = null,
+        [FromServices] LicenseValidationService? licenseValidation = null)
     {
         // For NativeRelay, P256dh and Auth might be empty, so skip those checks if NativeRelay.
         if (string.IsNullOrEmpty(request.Endpoint) ||
@@ -150,7 +156,27 @@ public class PushController : SpokesControllerBase
             }
         }
 
-        return Ok(new { message = "Subscribed successfully", id = session.Id });
+        bool isNativePushLicensed = true;
+        if (session.PushSubscriptionType == "NativeRelay")
+        {
+            var profilesRepo = companyProfiles ?? HttpContext?.RequestServices?.GetService<CompanyProfileRepository>();
+            var configsRepo = serverConfigs ?? HttpContext?.RequestServices?.GetService<ServerConfigRepository>();
+            var licenseService = licenseValidation ?? HttpContext?.RequestServices?.GetService<LicenseValidationService>();
+
+            if (profilesRepo != null && configsRepo != null && licenseService != null)
+            {
+                var profile = profilesRepo.Get();
+                var serverConfig = configsRepo.GetOrCreateGlobalConfig();
+                var licenseResult = licenseService.ValidateLicense(profile?.LicensePayload, serverConfig);
+                isNativePushLicensed = licenseResult.Status != LicenseStatus.HardLock && licenseResult.Status != LicenseStatus.Expired;
+            }
+        }
+
+        return Ok(new { 
+            message = "Subscribed successfully", 
+            id = session.Id,
+            isNativePushLicensed = isNativePushLicensed
+        });
     }
 
     /// <summary>
@@ -193,7 +219,10 @@ public class PushController : SpokesControllerBase
     /// Get current user's subscription status.
     /// </summary>
     [HttpGet("status")]
-    public async Task<IActionResult> GetStatus()
+    public async Task<IActionResult> GetStatus(
+        [FromServices] CompanyProfileRepository? companyProfiles = null,
+        [FromServices] ServerConfigRepository? serverConfigs = null,
+        [FromServices] LicenseValidationService? licenseValidation = null)
     {
         var userId = GetCurrentUserId();
         if (string.IsNullOrEmpty(userId))
@@ -204,11 +233,35 @@ public class PushController : SpokesControllerBase
         var sessionsWithPush = _sessions.GetPushEnabledByEmployeeId(userId);
         var employee = await _employees.GetByIdAsync(userId);
 
+        var profilesRepo = companyProfiles ?? HttpContext?.RequestServices?.GetService<CompanyProfileRepository>();
+        var configsRepo = serverConfigs ?? HttpContext?.RequestServices?.GetService<ServerConfigRepository>();
+        var licenseService = licenseValidation ?? HttpContext?.RequestServices?.GetService<LicenseValidationService>();
+
+        bool isNativeRelayAvailable = true;
+        string? status = null;
+        string? message = null;
+
+        if (profilesRepo != null && configsRepo != null && licenseService != null)
+        {
+            var profile = profilesRepo.Get();
+            var serverConfig = configsRepo.GetOrCreateGlobalConfig();
+            var licenseResult = licenseService.ValidateLicense(profile?.LicensePayload, serverConfig);
+            isNativeRelayAvailable = licenseResult.Status != LicenseStatus.HardLock && licenseResult.Status != LicenseStatus.Expired;
+            status = licenseResult.Status.ToString();
+            message = licenseResult.Message;
+        }
+
         return Ok(new
         {
             isConfigured = _webPush.IsConfigured,
             enabled = employee?.PushNotificationsEnabled ?? true,
-            subscriptionCount = sessionsWithPush.Count
+            subscriptionCount = sessionsWithPush.Count,
+            nativePush = new
+            {
+                isAvailable = isNativeRelayAvailable,
+                status = status,
+                message = message
+            }
         });
     }
 
@@ -329,7 +382,12 @@ public class PushController : SpokesControllerBase
         try
         {
             bool wasEncrypted = await _webPush.SendDeviceTestNotificationAsync(id, userId, "Test Notification", $"Rich push notification test from {sender.FirstName}", icon);
-            return Ok(new { message = wasEncrypted ? "Test notification sent (Encrypted)" : "Test notification sent (Unencrypted Text)" });
+            return Ok(new { message = wasEncrypted ? "Test notification sent (Encrypted)" : "Test notification sent (Encrypted Text)" });
+        }
+        catch (LicenseExpiredException lex)
+        {
+            systemLog.LogError("Notifications", $"Test push failed for device {id}", lex.Message);
+            return BadRequest(new { error = lex.Message, code = "LICENSE_EXPIRED" });
         }
         catch (WebPushException wpe)
         {

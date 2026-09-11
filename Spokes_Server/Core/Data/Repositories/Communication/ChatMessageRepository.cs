@@ -11,6 +11,7 @@ using System.Linq;
 using System.Collections.Generic;
 using System;
 using Spokes_Server.Core.Data.Repositories.Core;
+using Spokes_Server.Core.Helpers;
 
 
 namespace Spokes_Server.Core.Data.Repositories.Communication;
@@ -24,8 +25,9 @@ public class ChatMessageRepository : JsonRepository<ChatMessage>
 {
 
 
-    // Separate cache for sidebar preview messages (latest per channel) to avoid
-    // polluting the main _cache which drives the channel load logic.
+    // In-memory cache for channel previews (latest per channel) used by sidebar
+    // to avoid reading messages from disk or polluting the main message _cache.
+    private readonly ConcurrentDictionary<string, ChannelPreviewSummary> _channelPreviews = new();
     private readonly ConcurrentDictionary<string, ChatMessage> _previewCache = new();
 
     // NEW: Master Index for all channels
@@ -175,6 +177,7 @@ public class ChatMessageRepository : JsonRepository<ChatMessage>
         {
             var channelIndex = _channelIndexes.GetOrAdd(item.ChannelId, _ => new List<ChatIndexEntry>());
             var existing = channelIndex.FirstOrDefault(x => x.Id == item.Id);
+            var previewText = item.IsEncrypted ? null : ChatPreviewFormatter.FormatAndTruncatePreview(item.Content, item.Attachments, 30);
             if (existing != null)
             {
                 existing.SentAt = item.SentAt;
@@ -182,6 +185,7 @@ public class ChatMessageRepository : JsonRepository<ChatMessage>
                 existing.IsEncrypted = item.IsEncrypted;
                 existing.SearchText = item.IsEncrypted ? null : item.Content?.ToLowerInvariant();
                 existing.ReplyToId = item.ReplyToId;
+                existing.PreviewText = previewText;
             }
             else
             {
@@ -194,9 +198,11 @@ public class ChatMessageRepository : JsonRepository<ChatMessage>
                     IsDeleted = item.IsDeleted,
                     IsEncrypted = item.IsEncrypted,
                     SearchText = item.IsEncrypted ? null : item.Content?.ToLowerInvariant(),
-                    ReplyToId = item.ReplyToId
+                    ReplyToId = item.ReplyToId,
+                    PreviewText = previewText
                 });
             }
+            RefreshChannelPreview(item.ChannelId);
             SaveMasterIndex();
         }
     }
@@ -207,6 +213,7 @@ public class ChatMessageRepository : JsonRepository<ChatMessage>
         {
             var channelIndex = _channelIndexes.GetOrAdd(item.ChannelId, _ => new List<ChatIndexEntry>());
             var existing = channelIndex.FirstOrDefault(x => x.Id == item.Id);
+            var previewText = item.IsEncrypted ? null : ChatPreviewFormatter.FormatAndTruncatePreview(item.Content, item.Attachments, 30);
             if (existing != null)
             {
                 existing.SentAt = item.SentAt;
@@ -214,6 +221,7 @@ public class ChatMessageRepository : JsonRepository<ChatMessage>
                 existing.IsEncrypted = item.IsEncrypted;
                 existing.SearchText = item.IsEncrypted ? null : item.Content?.ToLowerInvariant();
                 existing.ReplyToId = item.ReplyToId;
+                existing.PreviewText = previewText;
             }
             else
             {
@@ -226,9 +234,11 @@ public class ChatMessageRepository : JsonRepository<ChatMessage>
                     IsDeleted = item.IsDeleted,
                     IsEncrypted = item.IsEncrypted,
                     SearchText = item.IsEncrypted ? null : item.Content?.ToLowerInvariant(),
-                    ReplyToId = item.ReplyToId
+                    ReplyToId = item.ReplyToId,
+                    PreviewText = previewText
                 });
             }
+            RefreshChannelPreview(item.ChannelId);
         }
         await SaveMasterIndexAsync();
     }
@@ -240,6 +250,7 @@ public class ChatMessageRepository : JsonRepository<ChatMessage>
             if (_channelIndexes.TryGetValue(item.ChannelId, out var channelIndex))
             {
                 channelIndex.RemoveAll(x => x.Id == item.Id);
+                RefreshChannelPreview(item.ChannelId);
                 SaveMasterIndex();
             }
         }
@@ -252,9 +263,88 @@ public class ChatMessageRepository : JsonRepository<ChatMessage>
             if (_channelIndexes.TryGetValue(item.ChannelId, out var channelIndex))
             {
                 channelIndex.RemoveAll(x => x.Id == item.Id);
+                RefreshChannelPreview(item.ChannelId);
             }
         }
         await SaveMasterIndexAsync();
+    }
+
+    public void RefreshChannelPreview(string channelId)
+    {
+        if (_channelIndexes.TryGetValue(channelId, out var channelIndex))
+        {
+            var latestEntry = channelIndex
+                .Where(e => !e.IsDeleted)
+                .OrderByDescending(e => e.SentAt)
+                .FirstOrDefault();
+
+            if (latestEntry != null)
+            {
+                _cache.TryGetValue(latestEntry.Id, out var cachedMsg);
+
+                _channelPreviews[channelId] = new ChannelPreviewSummary
+                {
+                    MessageId = latestEntry.Id,
+                    ChannelId = channelId,
+                    SenderId = latestEntry.SenderId,
+                    SentAt = latestEntry.SentAt,
+                    PreviewText = latestEntry.PreviewText ?? (latestEntry.IsEncrypted ? null : latestEntry.SearchText),
+                    IsEncrypted = latestEntry.IsEncrypted,
+                    EncryptedContent = latestEntry.IsEncrypted ? cachedMsg?.Content : null,
+                    Attachments = cachedMsg?.Attachments
+                };
+            }
+            else
+            {
+                _channelPreviews.TryRemove(channelId, out _);
+            }
+        }
+        else
+        {
+            _channelPreviews.TryRemove(channelId, out _);
+        }
+    }
+
+    /// <summary>
+    /// Returns the in-memory preview summary for a channel without loading messages from disk.
+    /// If blockedUserIds is provided and the latest message was sent by a blocked user, finds the latest non-blocked message from the in-memory index.
+    /// </summary>
+    public ChannelPreviewSummary? GetChannelPreviewSummary(string channelId, IReadOnlyList<string>? blockedUserIds = null)
+    {
+        if (_channelPreviews.TryGetValue(channelId, out var preview))
+        {
+            if (blockedUserIds == null || !blockedUserIds.Contains(preview.SenderId))
+            {
+                return preview;
+            }
+        }
+
+        // Fallback when latest message is from a blocked user: query in-memory index
+        if (_channelIndexes.TryGetValue(channelId, out var channelIndex))
+        {
+            var entry = channelIndex
+                .Where(e => !e.IsDeleted && (blockedUserIds == null || !blockedUserIds.Contains(e.SenderId)))
+                .OrderByDescending(e => e.SentAt)
+                .FirstOrDefault();
+
+            if (entry != null)
+            {
+                _cache.TryGetValue(entry.Id, out var cachedMsg);
+                return new ChannelPreviewSummary
+                {
+                    MessageId = entry.Id,
+                    ChannelId = channelId,
+                    SenderId = entry.SenderId,
+                    SentAt = entry.SentAt,
+                    PreviewText = entry.PreviewText ?? (entry.IsEncrypted ? null : entry.SearchText),
+                    IsEncrypted = entry.IsEncrypted,
+                    EncryptedContent = entry.IsEncrypted ? cachedMsg?.Content : null,
+                    Attachments = cachedMsg?.Attachments
+                };
+            }
+        }
+
+        return null;
     }
 
     public List<ChatIndexEntry> GetIndexForChannel(string channelId)
@@ -381,7 +471,12 @@ public class ChatMessageRepository : JsonRepository<ChatMessage>
                     }
                 }
 
+                // Immediately initialize in-memory channel preview from index
+                RefreshChannelPreview(channelId);
             }
+
+            // Asynchronously backfill PreviewText for legacy unmigrated indexes in background
+            TriggerBackgroundPreviewBackfill();
             return;
         }
 
@@ -414,7 +509,8 @@ public class ChatMessageRepository : JsonRepository<ChatMessage>
                             IsDeleted = item.IsDeleted,
                             IsEncrypted = item.IsEncrypted,
                             SearchText = item.IsEncrypted ? null : item.Content?.ToLowerInvariant(),
-                            ReplyToId = item.ReplyToId
+                            ReplyToId = item.ReplyToId,
+                            PreviewText = item.IsEncrypted ? null : ChatPreviewFormatter.FormatAndTruncatePreview(item.Content, item.Attachments, 30)
                         });
 
                         deserializedMessages[item.Id] = item;
@@ -448,12 +544,50 @@ public class ChatMessageRepository : JsonRepository<ChatMessage>
             }
 
             _channelIndexes[channelId] = channelIndexList;
+            RefreshChannelPreview(channelId);
         }
 
         SaveMasterIndex();
     }
 
+    private void TriggerBackgroundPreviewBackfill()
+    {
+        _ = Task.Run(() =>
+        {
+            try
+            {
+                bool anyUpdated = false;
+                foreach (var kvp in _channelIndexes)
+                {
+                    var channelId = kvp.Key;
+                    var channelIndex = kvp.Value;
+                    var latest = channelIndex
+                        .Where(e => !e.IsDeleted && !e.IsEncrypted && e.PreviewText == null)
+                        .OrderByDescending(e => e.SentAt)
+                        .FirstOrDefault();
 
+                    if (latest != null)
+                    {
+                        var msg = GetMessageFromDisk(channelId, latest.Id);
+                        if (msg != null)
+                        {
+                            latest.PreviewText = ChatPreviewFormatter.FormatAndTruncatePreview(msg.Content, msg.Attachments, 30);
+                            anyUpdated = true;
+                            RefreshChannelPreview(channelId);
+                        }
+                    }
+                }
+                if (anyUpdated)
+                {
+                    SaveMasterIndex();
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[ChatMessageRepo] Preview backfill error: {ex.Message}");
+            }
+        });
+    }
 
     /// <summary>
     /// Ensures that the master index is populated for the given channel.
@@ -490,7 +624,8 @@ public class ChatMessageRepository : JsonRepository<ChatMessage>
                                         IsDeleted = item.IsDeleted,
                                         IsEncrypted = item.IsEncrypted,
                                         SearchText = item.IsEncrypted ? null : item.Content?.ToLowerInvariant(),
-                                        ReplyToId = item.ReplyToId
+                                        ReplyToId = item.ReplyToId,
+                                        PreviewText = item.IsEncrypted ? null : ChatPreviewFormatter.FormatAndTruncatePreview(item.Content, item.Attachments, 30)
                                     });
                                 }
                             }
@@ -500,6 +635,7 @@ public class ChatMessageRepository : JsonRepository<ChatMessage>
                             }
                         }
                         _channelIndexes[channelId] = channelIndexList;
+                        RefreshChannelPreview(channelId);
                         SaveMasterIndex();
                     }
                 }
@@ -750,9 +886,16 @@ public class ChatMessageRepository : JsonRepository<ChatMessage>
     {
         if (_channelIndexes.TryGetValue(channelId, out var idx))
         {
-            return idx.Count(e => !e.IsDeleted && e.SentAt > since && (excludeUserId == null || e.SenderId != excludeUserId));
+            var count = idx.Count(e => !e.IsDeleted && e.SentAt > since && (excludeUserId == null || e.SenderId != excludeUserId));
+            if (count > 0) return count;
         }
-        return 0;
+
+        // Fallback: check in-memory cache (zero disk I/O)
+        return _cache.Values.Count(m =>
+            m.ChannelId == channelId &&
+            !m.IsDeleted &&
+            m.SentAt > since &&
+            (excludeUserId == null || m.SenderId != excludeUserId));
     }
 
     /// <summary>

@@ -31,6 +31,7 @@
 @inject Spokes_Server.Core.Services.Security.GlobalKeystoreService GlobalKeystore
 @inject Spokes_Server.Core.Services.UI.ImageRecoveryService ImageRecovery
 @inject Microsoft.AspNetCore.Http.IHttpContextAccessor HttpContextAccessor
+@inject Spokes_Server.Core.Services.Core.StartupTimingService StartupTimings
 @implements IAsyncDisposable
 @implements IBrowserViewportObserver
 
@@ -44,13 +45,13 @@
         <MudIconButton Icon="@Icons.Material.Filled.Menu" Color="Color.Inherit" Edge="Edge.Start"
             OnClick="@((e) => DrawerToggle())" />
         <div class="d-flex align-center ml-1">
-            @if (!string.IsNullOrEmpty(Profile?.IconBase64))
+            @if (Profile?.HasCustomIcon == true)
             {
-                <MudImage Src="@Profile.IconBase64" Height="32" Class="mr-2" />
+                <MudImage Src="@($"/spokesapi/Media/Icon?v={Profile.IconVersion}")" Height="32" Class="mr-2" />
             }
-            else if (!string.IsNullOrEmpty(Profile?.LogoBase64))
+            else if (Profile?.HasCustomLogo == true)
             {
-                <MudImage Src="@Profile.LogoBase64" Height="32" Class="mr-2" />
+                <MudImage Src="@($"/spokesapi/Media/Logo?v={Profile.LogoVersion}")" Height="32" Class="mr-2" />
             }
 
             @if(!IsFriendEdition)
@@ -247,96 +248,36 @@
     </MudDrawer>
 
     <MudMainContent Class="@(_isChatPage ? $"pr-1 d-flex flex-column{(_isChatChannelOpen ? " chat-channel-open" : " pt-12")} print-layout" : "pt-12 pb-4 px-0 px-md-4 d-flex flex-column print-layout")" Style="height: 100vh; overflow: hidden;">
-        @if (_licenseStatus == Spokes_Server.Core.Services.Licensing.LicenseStatus.HardLock)
+        @if ((_licenseStatus == Spokes_Server.Core.Services.Licensing.LicenseStatus.HardLock || 
+              _licenseStatus == Spokes_Server.Core.Services.Licensing.LicenseStatus.Expired || 
+              _licenseStatus == Spokes_Server.Core.Services.Licensing.LicenseStatus.Tolerated) && 
+              _currentUser != null && (_currentUser.IsAdmin || _currentUser.HasPermission(AppPermissions.Admin.ManageSettings)) && !_hideLicenseBanner)
         {
-            <div class="d-flex flex-column align-center justify-center" style="height: 100%; width: 100%;">
-                <MudIcon Icon="@Icons.Material.Filled.Lock" Color="Color.Error" Style="font-size: 8rem;" Class="mb-4" />
-                <MudText Typo="Typo.h4" GutterBottom="true">License Expired</MudText>
-                <MudText Typo="Typo.body1" Class="mb-4 text-center" Style="max-width: 500px;">
-                    @(_licenseError ?? "The software license is invalid or has expired.")
-                </MudText>
-                
-                @if (!string.IsNullOrEmpty(_firstInstalledVersion) && !string.IsNullOrEmpty(_lockupVersion) && string.IsNullOrEmpty(Profile?.LicensePayload))
-                {
-                    <MudText Typo="Typo.body2" Color="Color.Info" Class="mb-6">
-                        The first installed version is <b>@_firstInstalledVersion</b>. Your demo lockup begins on version <b>@_lockupVersion</b>
+            <MudAlert Severity="@(_licenseStatus == Spokes_Server.Core.Services.Licensing.LicenseStatus.HardLock ? Severity.Error : Severity.Warning)" 
+                      Dense="true" 
+                      NoIcon="true"
+                      Class="license-banner mb-0 mx-2 mt-2" 
+                      ShowCloseIcon="false" 
+                      Style="z-index: 100;">
+                <div class="d-flex align-center flex-wrap flex-grow-1">
+                    <MudIcon Icon="@(_licenseStatus == Spokes_Server.Core.Services.Licensing.LicenseStatus.HardLock ? Icons.Material.Filled.Error : Icons.Material.Filled.Warning)" 
+                             Color="Color.Inherit" 
+                             Size="Size.Small" 
+                             Class="mr-2" />
+                    <MudText Typo="Typo.body2" Class="mr-2">
+                        <b>@(_licenseStatus == Spokes_Server.Core.Services.Licensing.LicenseStatus.HardLock ? "Spokes Pass Invalid:" : _licenseStatus == Spokes_Server.Core.Services.Licensing.LicenseStatus.Expired ? "Spokes Pass Expired:" : "Spokes Pass Outdated:")</b> @(_licenseStatus == Spokes_Server.Core.Services.Licensing.LicenseStatus.HardLock || _licenseStatus == Spokes_Server.Core.Services.Licensing.LicenseStatus.Expired ? "Mobile push notifications are currently disabled." : _licenseError)
                     </MudText>
-                }
-                else if (!string.IsNullOrEmpty(_allowedVersion))
-                {
-                    <MudText Typo="Typo.body2" Color="Color.Info" Class="mb-6">
-                        Maximum allowed server version: <b>@_allowedVersion</b>
-                    </MudText>
-                }
-
-                @if (_currentUser != null && (_currentUser.IsAdmin || _currentUser.HasPermission(AppPermissions.Admin.ManageSettings)))
-                {
-                    <div class="d-flex flex-column align-center w-100" style="max-width: 600px;">
-                        <Spokes_Server.Components.Shared.ApiFileUpload 
-                            Category="temp" 
-                            ContextId="@Guid.NewGuid().ToString()" 
-                            OnUploadCompleted="HandleLicenseUploaded">
-                            <CustomContent>
-                                <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.UploadFile" Class="mb-6">
-                                    Upload New License
-                                </MudButton>
-                            </CustomContent>
-                        </Spokes_Server.Components.Shared.ApiFileUpload>
-
-                        <MudPaper Elevation="0" Class="pa-4 mt-4" Style="background-color: var(--mud-palette-background-grey); width: 100%;">
-                            <MudText Typo="Typo.h6" GutterBottom="true" Class="mb-4">How to fix this</MudText>
-                            
-                            @if (!_isCapacitorApp)
-                            {
-                                <MudAlert Severity="Severity.Success" Variant="Variant.Outlined" Class="mb-4" Icon="@Icons.Material.Filled.Favorite">
-                                    <MudText Typo="Typo.subtitle2" Class="mb-1"><b>If you want to keep using your server, receive updates and support the developer :)</b></MudText>
-                                    <MudText Typo="Typo.body2">
-                                        You need to purchase a license at <MudLink Href="https://www.spokes.sh" Target="_blank" Color="Color.Success"><b>https://www.spokes.sh</b></MudLink>
-                                    </MudText>
-                                </MudAlert>
-                            }
-                            
-                            <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Class="mb-4" Icon="@Icons.Material.Filled.UpdateDisabled">
-                                <MudText Typo="Typo.subtitle2" Class="mb-1"><b>If you want to keep using your server, but don't care about updates</b></MudText>
-                                <MudText Typo="Typo.body2" Class="mb-2">
-                                    You need to edit your container to pull a specific version of Spokes.
-                                </MudText>
-                                <MudText Typo="Typo.body2">
-                                    Right now, you are using <code style="background: rgba(128,128,128,0.2); padding: 2px 4px; border-radius: 4px;">ghcr.io/pcbeeqc/spokes:latest</code>, you need to specify a version ex : <code style="background: rgba(128,128,128,0.2); padding: 2px 4px; border-radius: 4px;">ghcr.io/pcbeeqc/spokes:@_allowedVersionStripped</code>
-                                </MudText>
-                            </MudAlert>
-
-                            <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Icon="@Icons.Material.Filled.DeleteForever">
-                                <MudText Typo="Typo.subtitle2" Class="mb-1"><b>If this is just for testing</b></MudText>
-                                <MudText Typo="Typo.body2">
-                                    If you don't mind losing all your data, you can start over. Stop the container, delete the content of the data folder, and restart the container. This will give you a fresh, updated instance. With a reset clock on the demo.
-                                </MudText>
-                            </MudAlert>
-                        </MudPaper>
-                    </div>
-                }
-                else
-                {
-                    <MudText Typo="Typo.body2" Color="Color.Secondary">Please contact your system administrator.</MudText>
-                }
-            </div>
+                    <MudButton Variant="Variant.Text" Color="Color.Inherit" Size="Size.Small" OnClick="@(() => Nav.NavigateTo("/admin/settings?tab=setup"))">Resolve</MudButton>
+                    <MudSpacer />
+                    <MudButton Variant="Variant.Text" Color="Color.Inherit" Size="Size.Small" OnClick="DismissLicenseBanner">Remind me later</MudButton>
+                    <MudButton Variant="Variant.Text" Color="Color.Inherit" Size="Size.Small" OnClick="NeverShowLicenseBanner">Never show again</MudButton>
+                </div>
+            </MudAlert>
         }
-        else
-        {
-            @if (_licenseStatus == Spokes_Server.Core.Services.Licensing.LicenseStatus.Tolerated && _currentUser != null && (_currentUser.IsAdmin || _currentUser.HasPermission(AppPermissions.Admin.ManageSettings)))
-            {
-                <MudAlert Severity="Severity.Warning" Dense="true" Class="mb-0 mx-2 mt-2" ShowCloseIcon="false" Style="z-index: 100;">
-                    <div class="d-flex align-center">
-                        <span class="mr-2"><b>License Outdated:</b> @_licenseError</span>
-                        <MudButton Variant="Variant.Text" Color="Color.Inherit" Size="Size.Small" OnClick="@(() => Nav.NavigateTo("/admin/settings?tab=licensing"))">Resolve</MudButton>
-                    </div>
-                </MudAlert>
-            }
-            <Spokes_Server.Components.Shared.GlobalVoiceBar />
-            <div class="flex-grow-1 d-flex flex-column overflow-auto print-scroll" style="position: relative; min-height: 0;">
-                @Body
-            </div>
-        }
+        <Spokes_Server.Components.Shared.GlobalVoiceBar />
+        <div class="flex-grow-1 d-flex flex-column overflow-auto print-scroll" style="position: relative; min-height: 0;">
+            @Body
+        </div>
     </MudMainContent>
 </MudLayout>
 
@@ -347,6 +288,15 @@
 </div>
 
 <style>
+    .license-banner.mud-alert {
+        align-items: center;
+    }
+
+    .license-banner .mud-alert-message {
+        width: 100%;
+        padding: 4px 0;
+    }
+
     :root {
         --safe-area-top: env(safe-area-inset-top, 0px);
         --safe-area-bottom: env(safe-area-inset-bottom, 0px);
@@ -443,12 +393,6 @@
 </style>
 
 @code {
-    public class ServerTiming
-    {
-        public string Name { get; set; } = "";
-        public long Timestamp { get; set; }
-    }
-    private List<ServerTiming> _serverTimings = new();
     private bool _isLoaded = false;
     private bool _isCapacitorApp = false;
     private bool _isEditingFavorites = false;
@@ -473,6 +417,29 @@
     private string? _currentSessionId;
     private bool _isChatPage;
     private bool _isChatChannelOpen;
+    private bool _hideLicenseBanner = false;
+
+    private void DismissLicenseBanner()
+    {
+        _hideLicenseBanner = true;
+        if (_currentUser != null)
+        {
+            _currentUser.LicenseBannerRemindLaterDate = DateTimeOffset.UtcNow.AddDays(3);
+            Db.Employees.Save(_currentUser);
+        }
+    }
+
+    private void NeverShowLicenseBanner()
+    {
+        _hideLicenseBanner = true;
+        if (_currentUser != null)
+        {
+            _currentUser.DismissedLicenseBannerPermanently = true;
+            _currentUser.LicenseBannerRemindLaterDate = null;
+            Db.Employees.Save(_currentUser);
+        }
+    }
+
     private bool _isThisTabFocused = true; // Assume focused on initial load
     private string _appVersion = Spokes_Server.Core.Services.Licensing.LicenseValidationService.AppVersion;
     private string? _licenseError;
@@ -499,7 +466,9 @@
                 var config = Db.ServerConfigs.GetOrCreateGlobalConfig();
                 var validationResult = LicenseValidationService.ValidateLicense(json, config);
 
-                if (validationResult.Status == Spokes_Server.Core.Services.Licensing.LicenseStatus.Valid || validationResult.Status == Spokes_Server.Core.Services.Licensing.LicenseStatus.Tolerated)
+                if (validationResult.Status == Spokes_Server.Core.Services.Licensing.LicenseStatus.Valid || 
+                    validationResult.Status == Spokes_Server.Core.Services.Licensing.LicenseStatus.Tolerated ||
+                    validationResult.Status == Spokes_Server.Core.Services.Licensing.LicenseStatus.Expired)
                 {
                     if (validationResult.ParsedLicense != null)
                     {
@@ -515,10 +484,32 @@
                             
                             Db.CompanyProfile.Save(Profile);
                         }
-                        Snackbar.Add("License Validated & Saved Successfully!", Severity.Success);
+
+                        // Reset license banner dismissals so admins are alerted if/when this license expires in the future
+                        var admins = Db.Employees.GetAll().Where(e => e.IsAdmin || e.Permissions.Contains(Spokes_Server.Core.Constants.AppPermissions.Admin.ManageSettings)).ToList();
+                        foreach (var admin in admins)
+                        {
+                            if (admin.DismissedLicenseBannerPermanently || admin.LicenseBannerRemindLaterDate != null)
+                            {
+                                admin.DismissedLicenseBannerPermanently = false;
+                                admin.LicenseBannerRemindLaterDate = null;
+                                Db.Employees.Save(admin);
+                            }
+                        }
+
+                        if (validationResult.Status == Spokes_Server.Core.Services.Licensing.LicenseStatus.Expired)
+                        {
+                            Snackbar.Add($"Expired License Saved: {validationResult.Message}", Severity.Warning);
+                            _licenseStatus = validationResult.Status;
+                            _licenseError = validationResult.Message;
+                        }
+                        else
+                        {
+                            Snackbar.Add("License Validated & Saved Successfully!", Severity.Success);
+                            _licenseStatus = validationResult.Status;
+                            _licenseError = null;
+                        }
                         
-                        _licenseStatus = validationResult.Status;
-                        _licenseError = null;
                         _allowedVersion = null;
                         _firstInstalledVersion = null;
                         _lockupVersion = null;
@@ -546,8 +537,7 @@
 
     protected override void OnInitialized()
     {
-        _serverTimings.Add(new ServerTiming { Name = "Server: Layout OnInitialized", Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() });
-        Console.WriteLine($"[STARTUP-DIAGNOSTIC] {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss.fff} - MainLayout.OnInitialized started");
+        StartupTimings.Add("Server: Layout OnInitialized");
         _isChatPage = Nav.Uri.Contains("/chat", StringComparison.OrdinalIgnoreCase);
         _isChatChannelOpen = IsChatChannelUrl(Nav.Uri);
         Nav.LocationChanged += HandleLocationChanged;
@@ -586,8 +576,7 @@
 
     protected override async Task OnInitializedAsync()
     {
-        _serverTimings.Add(new ServerTiming { Name = "Server: Layout OnInitializedAsync Start", Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() });
-        Console.WriteLine($"[STARTUP-DIAGNOSTIC] {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss.fff} - MainLayout.OnInitializedAsync started");
+        StartupTimings.Add("Server: Layout OnInitializedAsync Start");
         Profile = Db.CompanyProfile.Get();
 
         // 1. Setup Theme
@@ -602,13 +591,9 @@
         var authState = await AuthStateProvider.GetAuthenticationStateAsync();
         var user = authState.User;
 
-        // Use UserService to get the employee (time this operation)
-        var empStopwatch = System.Diagnostics.Stopwatch.StartNew();
+        // Use UserService to get the employee
         _currentUser = await UserService.GetEmployeeAsync();
-        empStopwatch.Stop();
-        
-        _serverTimings.Add(new ServerTiming { Name = "Server: Layout GetEmployeeAsync Done", Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() });
-        Console.WriteLine($"[STARTUP-DIAGNOSTIC] {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss.fff} - MainLayout.OnInitializedAsync: GetEmployeeAsync took {empStopwatch.ElapsedMilliseconds}ms. Employee ID: {_currentUser?.Id ?? "null"}. Avatar Base64 length: {_currentUser?.AvatarBase64?.Length ?? 0} chars.");
+        StartupTimings.Add("Server: Layout GetEmployeeAsync Done");
 
         // Redirect to access-pending if authenticated but no employee linked
         if (user.Identity?.IsAuthenticated == true && _currentUser == null)
@@ -666,6 +651,16 @@
                     _lockupVersion = result.LockupVersion ?? _firstInstalledVersion;
                     _allowedVersionStripped = GetVersionNumbersOnly(_allowedVersion);
                 }
+
+                if (_currentUser != null)
+                {
+                    bool isPermanentlyDismissed = _currentUser.DismissedLicenseBannerPermanently;
+                    bool isRemindLaterActive = _currentUser.LicenseBannerRemindLaterDate != null && DateTimeOffset.UtcNow < _currentUser.LicenseBannerRemindLaterDate;
+                    if (isPermanentlyDismissed || isRemindLaterActive)
+                    {
+                        _hideLicenseBanner = true;
+                    }
+                }
             }
 
             // Server-side vault unlock: read the HttpOnly cookie directly from HttpContext
@@ -677,8 +672,7 @@
                     HttpContextAccessor.HttpContext, _currentUser.Id, _currentUser.EncryptedPrivateKey, Crypto, GlobalKeystore);
             }
         }
-        _serverTimings.Add(new ServerTiming { Name = "Server: Layout OnInitializedAsync Done", Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() });
-        Console.WriteLine($"[STARTUP-DIAGNOSTIC] {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss.fff} - MainLayout.OnInitializedAsync completed");
+        StartupTimings.Add("Server: Layout OnInitializedAsync Done");
     }
 
     private string GetVersionNumbersOnly(string? version)
@@ -704,15 +698,14 @@
     {
         if (firstRender)
         {
-            _serverTimings.Add(new ServerTiming { Name = "Server: Layout OnAfterRenderAsync Start", Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() });
-            Console.WriteLine($"[STARTUP-DIAGNOSTIC] {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss.fff} - MainLayout.OnAfterRenderAsync (firstRender) entered");
+            StartupTimings.Add("Server: Layout OnAfterRenderAsync Start");
             try
             {
-                await JS.InvokeVoidAsync("startupDiagnostics.reportInteractive", _currentUser?.Id, _currentUser?.AvatarBase64?.Length ?? 0, _serverTimings);
+                await JS.InvokeVoidAsync("startupDiagnostics.reportInteractive", _currentUser?.Id, _currentUser?.AvatarBase64?.Length ?? 0, StartupTimings.GetTimings());
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[STARTUP-DIAGNOSTIC] Failed to call reportInteractive in JS: {ex.Message}");
+                Console.WriteLine($"[Startup] Failed to report interactive in JS: {ex.Message}");
             }
 
             _dotNetRef = DotNetObjectReference.Create(this);
@@ -764,20 +757,32 @@
                             var isSupported = await JS.InvokeAsync<bool>("pushNotifications.isSupported");
                             if (isSupported)
                             {
-                                await JS.InvokeVoidAsync("pushNotifications.setPushPrompted", profile.VapidPublicKey);
-                                
-                                Snackbar.Add("Would you like to enable push notifications for this server?", Severity.Info, config =>
+                                var isNativeMobile = await JS.InvokeAsync<bool>("pushNotifications.isNativePlatform");
+                                bool isNativePushBlocked = _licenseStatus == Spokes_Server.Core.Services.Licensing.LicenseStatus.HardLock || 
+                                                           _licenseStatus == Spokes_Server.Core.Services.Licensing.LicenseStatus.Expired;
+
+                                if (isNativeMobile && isNativePushBlocked)
                                 {
-                                    config.Action = "Enable";
-                                    config.ActionColor = Color.Success;
-                                    config.OnClick = snackbar =>
+                                    // Suppress auto-prompt for mobile app users when server lacks a Spokes Pass.
+                                    await JS.InvokeVoidAsync("pushNotifications.setPushPrompted", profile.VapidPublicKey);
+                                }
+                                else
+                                {
+                                    await JS.InvokeVoidAsync("pushNotifications.setPushPrompted", profile.VapidPublicKey);
+                                    
+                                    Snackbar.Add("Would you like to enable push notifications for this server?", Severity.Info, config =>
                                     {
-                                        _ = TriggerAutoPushRegistration(profile.VapidPublicKey);
-                                        return Task.CompletedTask;
-                                    };
-                                    config.ShowCloseIcon = true;
-                                    config.RequireInteraction = true;
-                                });
+                                        config.Action = "Enable";
+                                        config.ActionColor = Color.Success;
+                                        config.OnClick = snackbar =>
+                                        {
+                                            _ = TriggerAutoPushRegistration(profile.VapidPublicKey);
+                                            return Task.CompletedTask;
+                                        };
+                                        config.ShowCloseIcon = true;
+                                        config.RequireInteraction = true;
+                                    });
+                                }
                             }
                         }
                     }
@@ -792,52 +797,18 @@
                 {
                     if (_currentUser.LastSeenUpdateVersion != ServerUpdateService.LatestVersion)
                     {
-                        var profile = Db.CompanyProfile.Get();
-                        var valResult = LicenseValidationService.ValidateLicense(profile?.LicensePayload, Db.ServerConfigs.GetOrCreateGlobalConfig());
-                        string maxVer = valResult.MaxAllowedVersion ?? "";
-                        bool latestExceedsAllowed = false;
-
-                        if (Version.TryParse(ServerUpdateService.LatestVersion.TrimStart('v'), out Version? lv) && 
-                            Version.TryParse(maxVer.TrimStart('v'), out Version? mv))
+                        Snackbar.Add($"A new server update is available (v{ServerUpdateService.LatestVersion})", Severity.Info, config =>
                         {
-                            latestExceedsAllowed = lv > mv;
-                        }
-
-                        if (latestExceedsAllowed)
-                        {
-                            bool isDemo = string.IsNullOrEmpty(profile?.LicensePayload);
-                            string msg = isDemo 
-                                ? $"A new update (v{ServerUpdateService.LatestVersion}) is available, but your Demo limits updates to {maxVer}."
-                                : $"A new update (v{ServerUpdateService.LatestVersion}) is available, but your license limits updates to {maxVer}.";
-
-                            Snackbar.Add(msg, Severity.Warning, config =>
+                            config.Action = "More Info";
+                            config.ActionColor = Color.Primary;
+                            config.OnClick = snackbar =>
                             {
-                                config.Action = "More Info";
-                                config.ActionColor = Color.Warning;
-                                config.OnClick = snackbar =>
-                                {
-                                    Nav.NavigateTo("/admin/settings");
-                                    return Task.CompletedTask;
-                                };
-                                config.RequireInteraction = true;
-                                config.ShowCloseIcon = true;
-                            });
-                        }
-                        else
-                        {
-                            Snackbar.Add($"A new server update is available (v{ServerUpdateService.LatestVersion})", Severity.Info, config =>
-                            {
-                                config.Action = "More Info";
-                                config.ActionColor = Color.Primary;
-                                config.OnClick = snackbar =>
-                                {
-                                    Nav.NavigateTo("/admin/settings");
-                                    return Task.CompletedTask;
-                                };
-                                config.RequireInteraction = true;
-                                config.ShowCloseIcon = true;
-                            });
-                        }
+                                Nav.NavigateTo("/admin/settings");
+                                return Task.CompletedTask;
+                            };
+                            config.RequireInteraction = true;
+                            config.ShowCloseIcon = true;
+                        });
                         
                         _currentUser.LastSeenUpdateVersion = ServerUpdateService.LatestVersion;
                         Db.Employees.Save(_currentUser);

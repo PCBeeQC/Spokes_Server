@@ -1,6 +1,7 @@
 @using Spokes_Server.Core.Models.Core
 @using Spokes_Server.Core.Models.HR
 @using Spokes_Server.Core.Data
+@using Spokes_Server.Core.Constants
 @using MudBlazor
 @using Microsoft.AspNetCore.Components.Authorization
 @using System.Security.Claims
@@ -16,6 +17,7 @@
 @inject NavigationManager Nav
 @inject Spokes_Server.Core.Services.Core.AccountDeletionService AccountDeletionService
 @inject Microsoft.Extensions.Configuration.IConfiguration Config
+@inject Spokes_Server.Core.Services.Licensing.LicenseValidationService LicenseValidationService
 
 <MudDialog>
     <TitleContent>
@@ -202,67 +204,126 @@
                         <MudDivider></MudDivider>
                         <div class="pa-4">
                             @if (!IsSupported)
-                        {
-                            <MudAlert Severity="Severity.Warning" Dense="true" Class="mb-0">
-                                Push notifications are not supported on this browser: @UnsupportedReason
-                            </MudAlert>
-                        }
-                        else if (!IsConfigured)
-                        {
-                            <MudAlert Severity="Severity.Info" Dense="true" Class="mb-0">
-                                Push notifications are not configured by an administrator.
-                            </MudAlert>
-                        }
-                        else if (IsSubscribed)
-                        {
-                            <div class="d-flex align-center justify-space-between">
-                                <div class="d-flex align-center gap-2">
-                                    <MudIcon Icon="@Icons.Material.Filled.CheckCircle" Color="Color.Success" Size="Size.Small" />
-                                    <MudText Typo="Typo.body2">Notifications are enabled on this device.</MudText>
+                            {
+                                <MudAlert Severity="Severity.Warning" Dense="true" Class="mb-0">
+                                    Push notifications are not supported on this browser: @UnsupportedReason
+                                </MudAlert>
+                            }
+                            else if (!IsConfigured)
+                            {
+                                <MudAlert Severity="Severity.Info" Dense="true" Class="mb-0">
+                                    Push notifications are not configured by an administrator.
+                                </MudAlert>
+                            }
+                            else if (_isNativeMobile && !_isNativePushLicensed)
+                            {
+                                @if (IsSubscribed)
+                                {
+                                    <MudAlert Severity="Severity.Warning" Dense="false" Class="mb-0">
+                                        <div class="d-flex flex-column gap-1">
+                                            <div class="d-flex align-center justify-space-between">
+                                                <MudText Typo="Typo.subtitle2" Style="font-weight: 600;">Mobile Notifications Paused</MudText>
+                                                <MudButton Variant="Variant.Outlined" Color="Color.Error" Size="Size.Small"
+                                                    Disabled="@IsLoading" OnClick="UnsubscribeDevice">
+                                                    Disable
+                                                </MudButton>
+                                            </div>
+                                            <MudText Typo="Typo.body2">
+                                                This device is registered, but notifications cannot be delivered because this server's Spokes Pass has expired. Subscriptions are retained and will resume automatically once renewed.
+                                            </MudText>
+                                            @if (_currentUser?.IsAdmin == true || _currentUser?.HasPermission(AppPermissions.Admin.ManageSettings) == true)
+                                            {
+                                                <div class="mt-2">
+                                                    <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                                                               OnClick="@(() => { MudDialog.Close(); Nav.NavigateTo("/admin/settings?tab=setup"); })">
+                                                        Manage Spokes Pass
+                                                    </MudButton>
+                                                </div>
+                                            }
+                                        </div>
+                                    </MudAlert>
+                                }
+                                else
+                                {
+                                    <MudAlert Severity="Severity.Warning" Dense="false" Class="mb-0">
+                                        <div class="d-flex flex-column gap-2">
+                                            <div class="d-flex align-center gap-2">
+                                                <MudIcon Icon="@Icons.Material.Filled.NotificationsOff" Color="Color.Warning" Size="Size.Medium" />
+                                                <MudText Typo="Typo.subtitle1" Style="font-weight: 600;">Mobile Notifications Unavailable</MudText>
+                                            </div>
+                                            <MudText Typo="Typo.body2">
+                                                @if (_currentUser?.IsAdmin == true || _currentUser?.HasPermission(AppPermissions.Admin.ManageSettings) == true)
+                                                {
+                                                    <span>Your server is not currently licensed for native mobile push notifications. A single Spokes Pass covers all mobile devices on this server.</span>
+                                                }
+                                                else
+                                                {
+                                                    <span>Spokes Pass is required for mobile notifications to work. Only 1 pass per server is required. Talk to your server owner, I'm sure they would love to split the cost :)</span>
+                                                }
+                                            </MudText>
+                                            @if (_currentUser?.IsAdmin == true || _currentUser?.HasPermission(AppPermissions.Admin.ManageSettings) == true)
+                                            {
+                                                <div class="mt-1">
+                                                    <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                                                               OnClick="@(() => { MudDialog.Close(); Nav.NavigateTo("/admin/settings?tab=setup"); })">
+                                                        Resolve in Server Settings
+                                                    </MudButton>
+                                                </div>
+                                            }
+                                        </div>
+                                    </MudAlert>
+                                }
+                            }
+                            else if (IsSubscribed)
+                            {
+                                <div class="d-flex align-center justify-space-between">
+                                    <div class="d-flex align-center gap-2">
+                                        <MudIcon Icon="@Icons.Material.Filled.CheckCircle" Color="Color.Success" Size="Size.Small" />
+                                        <MudText Typo="Typo.body2">Notifications are enabled on this device.</MudText>
+                                    </div>
+                                    <MudButton Class="ml-2" Variant="Variant.Outlined" Color="Color.Error" Size="Size.Small"
+                                        Disabled="@IsLoading" OnClick="UnsubscribeDevice">
+                                        Disable
+                                    </MudButton>
                                 </div>
-                                <MudButton Class="ml-2" Variant="Variant.Outlined" Color="Color.Error" Size="Size.Small"
-                                    Disabled="@IsLoading" OnClick="UnsubscribeDevice">
-                                    Disable
-                                </MudButton>
-                            </div>
-                        }
-                        else if (_currentUser?.IsSuspended == true)
-                        {
-                            <MudAlert Severity="Severity.Warning" Dense="true" Class="mb-0">
-                                Suspended accounts cannot enable notifications for new devices.
-                            </MudAlert>
-                        }
-                        else
-                        {
-                            <MudText Typo="Typo.body2" Class="mb-3">
-                                Enable push notifications to receive alerts when the browser is minimized.
-                            </MudText>
+                            }
+                            else if (_currentUser?.IsSuspended == true)
+                            {
+                                <MudAlert Severity="Severity.Warning" Dense="true" Class="mb-0">
+                                    Suspended accounts cannot enable notifications for new devices.
+                                </MudAlert>
+                            }
+                            else
+                            {
+                                <MudText Typo="Typo.body2" Class="mb-3">
+                                    Enable push notifications to receive alerts when the browser is minimized.
+                                </MudText>
 
-                            <MudGrid Spacing="2">
-                                <MudItem xs="12" sm="6">
-                                    <MudSelect Value="_newDeviceType" ValueChanged="@((string v) => _newDeviceType = v)" Label="Device Type" Variant="Variant.Outlined"
-                                        Margin="Margin.Dense" T="string">
-                                        <MudSelectItem Value="@("Desktop")">Desktop</MudSelectItem>
-                                        <MudSelectItem Value="@("Mobile")">Mobile</MudSelectItem>
-                                    </MudSelect>
-                                </MudItem>
-                                <MudItem xs="12" sm="6">
-                                    <MudTextField Value="_newDeviceName" ValueChanged="@((string v) => _newDeviceName = v)" Label="Device Name (optional)"
-                                        Placeholder="e.g., Work Laptop" Variant="Variant.Outlined" Margin="Margin.Dense" T="string" />
-                                </MudItem>
-                            </MudGrid>
+                                <MudGrid Spacing="2">
+                                    <MudItem xs="12" sm="6">
+                                        <MudSelect Value="_newDeviceType" ValueChanged="@((string v) => _newDeviceType = v)" Label="Device Type" Variant="Variant.Outlined"
+                                            Margin="Margin.Dense" T="string">
+                                            <MudSelectItem Value="@("Desktop")">Desktop</MudSelectItem>
+                                            <MudSelectItem Value="@("Mobile")">Mobile</MudSelectItem>
+                                        </MudSelect>
+                                    </MudItem>
+                                    <MudItem xs="12" sm="6">
+                                        <MudTextField Value="_newDeviceName" ValueChanged="@((string v) => _newDeviceName = v)" Label="Device Name (optional)"
+                                            Placeholder="e.g., Work Laptop" Variant="Variant.Outlined" Margin="Margin.Dense" T="string" />
+                                    </MudItem>
+                                </MudGrid>
 
-                            <div class="mt-3">
-                                <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
-                                    Disabled="@IsLoading" OnClick="SubscribeDevice" StartIcon="@Icons.Material.Filled.NotificationsActive">
-                                    @if (IsLoading)
-                                    {
-                                        <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" />
-                                    }
-                                    Enable Notifications
-                                </MudButton>
-                            </div>
-                        }
+                                <div class="mt-3">
+                                    <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                                        Disabled="@IsLoading" OnClick="SubscribeDevice" StartIcon="@Icons.Material.Filled.NotificationsActive">
+                                        @if (IsLoading)
+                                        {
+                                            <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" />
+                                        }
+                                        Enable Notifications
+                                    </MudButton>
+                                </div>
+                            }
                             </div>
                         
                     </MudPaper>
@@ -342,11 +403,21 @@
 
                                     @if (device.HasPush)
                                     {
+                                        var isDeviceMobile = device.DeviceType == "Mobile" || device.PushSubscriptionType == "NativeRelay";
+                                        var isPushBlockedForDevice = isDeviceMobile && !_isNativePushLicensed;
+
                                         <MudDivider Class="mb-3" />
                                         <div class="d-flex flex-column gap-2 ml-1">
                                             <div class="d-flex justify-space-between align-center">
-                                                <MudText Typo="Typo.body2" Color="Color.Secondary">Push Notifications</MudText>
+                                                <div class="d-flex align-center gap-2">
+                                                    <MudText Typo="Typo.body2" Color="Color.Secondary">Push Notifications</MudText>
+                                                    @if (isPushBlockedForDevice)
+                                                    {
+                                                        <MudChip T="string" Size="Size.Small" Color="Color.Warning" Variant="Variant.Outlined" Style="font-size: 0.65rem; height: 18px; padding: 0 4px;">Pass Required</MudChip>
+                                                    }
+                                                </div>
                                                 <MudSwitch T="bool" Value="device.IsEnabled" Class="ma-0"
+                                                    Disabled="@isPushBlockedForDevice"
                                                     ValueChanged="@(v => ToggleDeviceEnabled(device.Id, v))"
                                                     Color="Color.Primary" Size="Size.Small" />
                                             </div>
@@ -472,6 +543,9 @@
     private bool IsConfigured = false;
     private bool IsSubscribed = false;
     private bool IsLoading = false;
+    private bool _isNativeMobile = false;
+    private bool _isNativePushLicensed = true;
+    private string _nativePushMessage = "";
 
     // Preferences
     private bool _pushEnabled = true;
@@ -594,7 +668,19 @@
             }
             if (IsSupported)
             {
+                try
+                {
+                    _isNativeMobile = await JS.InvokeAsync<bool>("pushNotifications.isNativePlatform");
+                }
+                catch { }
+
+                var currentConfig = Db.ServerConfigs.GetOrCreateGlobalConfig();
                 var profile = Db.CompanyProfile.Get();
+                var licenseResult = LicenseValidationService.ValidateLicense(profile?.LicensePayload, currentConfig);
+                _isNativePushLicensed = licenseResult.Status != Spokes_Server.Core.Services.Licensing.LicenseStatus.HardLock &&
+                                        licenseResult.Status != Spokes_Server.Core.Services.Licensing.LicenseStatus.Expired;
+                _nativePushMessage = licenseResult.Message;
+
                 IsConfigured = !string.IsNullOrEmpty(profile?.VapidPublicKey);
 
                 if (IsConfigured)
@@ -672,6 +758,7 @@
                 IsEnabled = s.HasPush && s.PushEnabled,
                 IsIdleDetectionEnabled = s.IsIdleDetectionEnabled,
                 HasPush = s.HasPush,
+                PushSubscriptionType = s.PushSubscriptionType ?? "",
                 Endpoint = s.PushEndpoint ?? "",
                 HasVaultCookie = s.HasVaultCookie,
                 DeviceId = s.DeviceId
@@ -1228,16 +1315,33 @@
             {
                 var msg = response.GetProperty("data").TryGetProperty("message", out JsonElement successMsg) ? successMsg.GetString() : "Test push dispatched to push service successfully.";
                 AddDebugLog($"Server: {msg}");
+                Snackbar.Add("Test notification sent successfully!", Severity.Success);
             }
             else
             {
-                var msg = response.GetProperty("data").TryGetProperty("error", out JsonElement errMsg) ? errMsg.GetString() : "Unknown error";
+                var data = response.GetProperty("data");
+                var msg = data.TryGetProperty("error", out JsonElement errMsg) ? errMsg.GetString() : "Unknown error";
+                var code = data.TryGetProperty("code", out JsonElement codeElem) ? codeElem.GetString() : "";
                 AddDebugLog($"Server Error {response.GetProperty("status").GetInt32()}: {msg}", true);
+
+                if (code == "LICENSE_EXPIRED" || msg?.Contains("license", StringComparison.OrdinalIgnoreCase) == true)
+                {
+                    Snackbar.Add("Spokes Pass is required for mobile notifications to work. Only 1 pass per server is required. Talk to your server owner, I'm sure they would love to split the cost :)", Severity.Warning, config =>
+                    {
+                        config.VisibleStateDuration = 10000;
+                        config.ShowCloseIcon = true;
+                    });
+                }
+                else
+                {
+                    Snackbar.Add($"Failed to send test notification: {msg}", Severity.Error);
+                }
             }
         }
         catch (Exception ex)
         {
             AddDebugLog($"Client Error: {ex.Message}", true);
+            Snackbar.Add($"Error: {ex.Message}", Severity.Error);
         }
         finally
         {
@@ -1277,6 +1381,7 @@
         public bool IsEnabled { get; set; } = true;
         public bool IsIdleDetectionEnabled { get; set; } = true;
         public bool HasPush { get; set; }
+        public string PushSubscriptionType { get; set; } = "";
         public string Endpoint { get; set; } = "";
         public string? DeviceId { get; set; }
         public bool HasVaultCookie { get; set; } = false;

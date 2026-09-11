@@ -17,6 +17,7 @@ using System.Net.Http.Json;
 using Microsoft.AspNetCore.DataProtection;
 using System.Security.Cryptography;
 using Spokes_Server.Core.Constants;
+using Spokes_Server.Core.Services.Licensing;
 
 namespace Spokes_Server.Core.Services.Communication.Notifications;
 
@@ -40,6 +41,8 @@ public class WebPushService : IWebPushService
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly IDataProtectionProvider _dataProtection;
     private readonly Spokes_Server.Core.Services.Logging.ISystemLogService _systemLog;
+    private readonly Spokes_Server.Core.Services.Core.EncryptionService _encryptionService;
+    private readonly Spokes_Server.Core.Services.Licensing.LicenseValidationService _licenseValidation;
 
     public WebPushService(
         DeviceSessionRepository sessions,
@@ -53,7 +56,9 @@ public class WebPushService : IWebPushService
         IConfiguration configuration,
         IHttpClientFactory httpClientFactory,
         IDataProtectionProvider dataProtection,
-        Spokes_Server.Core.Services.Logging.ISystemLogService systemLog)
+        Spokes_Server.Core.Services.Logging.ISystemLogService systemLog,
+        Spokes_Server.Core.Services.Core.EncryptionService encryptionService,
+        Spokes_Server.Core.Services.Licensing.LicenseValidationService licenseValidation)
     {
         _sessions = sessions;
         _employees = employees;
@@ -67,6 +72,8 @@ public class WebPushService : IWebPushService
         _httpClientFactory = httpClientFactory;
         _dataProtection = dataProtection;
         _systemLog = systemLog;
+        _encryptionService = encryptionService;
+        _licenseValidation = licenseValidation;
     }
 
     /// <summary>
@@ -260,6 +267,10 @@ public class WebPushService : IWebPushService
             { "headers", new Dictionary<string, object> { { "urgency", "high" } } }
         };
 
+        var serverConfig = _serverConfigs.GetOrCreateGlobalConfig();
+        var licenseResult = _licenseValidation.ValidateLicense(profile.LicensePayload, serverConfig);
+        bool isNativeRelayBlocked = licenseResult.Status == Spokes_Server.Core.Services.Licensing.LicenseStatus.HardLock || licenseResult.Status == Spokes_Server.Core.Services.Licensing.LicenseStatus.Expired;
+
         foreach (var sub in subscriptions)
         {
             try
@@ -272,16 +283,24 @@ public class WebPushService : IWebPushService
 
                 if (sub.PushSubscriptionType == "NativeRelay")
                 {
+                    if (isNativeRelayBlocked)
+                    {
+                        _logger.LogDebug("Skipping NativeRelay push for {SubscriptionId} because local license status is {Status}.", sub.Id, licenseResult.Status);
+                        continue;
+                    }
+
                     var httpClient = _httpClientFactory.CreateClient();
                     httpClient.DefaultRequestHeaders.Add("X-Relay-Key", SpokesConstants.PushRelayKey);
 
                     string? absoluteImageUrl = null;
                     string? originUrl = _systemConfigs.Get().ServerPublicUrl?.TrimEnd('/');
 
-                    var serverConfig = _serverConfigs.GetOrCreateGlobalConfig();
                     string serverId = serverConfig.DatabaseCreationId;
                     string serverIdSignature = serverConfig.DatabaseCreationIdSignature;
                     string licensePayload = profile.LicensePayload;
+                    string databaseCreationVersion = serverConfig.DatabaseCreationVersion;
+                    string databaseCreationSignature = serverConfig.DatabaseCreationSignature;
+                    string keyHash = _encryptionService.KeyHash;
 
                     if (!string.IsNullOrEmpty(icon) && !string.IsNullOrEmpty(originUrl))
                     {
@@ -344,6 +363,9 @@ public class WebPushService : IWebPushService
                             Sound = category == "chat" ? "SpokesNotif1.wav" : "default",
                             ServerId = serverId,
                             ServerIdSignature = serverIdSignature,
+                            DatabaseCreationVersion = databaseCreationVersion,
+                            DatabaseCreationSignature = databaseCreationSignature,
+                            KeyHash = keyHash,
                             LicensePayload = licensePayload,
                             ThreadId = threadId,
                             ServerName = serverName,
@@ -368,6 +390,9 @@ public class WebPushService : IWebPushService
                             Sound = category == "chat" ? "SpokesNotif1.wav" : "default",
                             ServerId = serverId,
                             ServerIdSignature = serverIdSignature,
+                            DatabaseCreationVersion = databaseCreationVersion,
+                            DatabaseCreationSignature = databaseCreationSignature,
+                            KeyHash = keyHash,
                             LicensePayload = licensePayload,
                             ThreadId = threadId,
                             ServerName = serverName,
@@ -460,9 +485,18 @@ public class WebPushService : IWebPushService
         if (sub.PushSubscriptionType == "NativeRelay")
         {
             var serverConfig = _serverConfigs.GetOrCreateGlobalConfig();
+            var licenseResult = _licenseValidation.ValidateLicense(profile.LicensePayload, serverConfig);
+            if (licenseResult.Status == LicenseStatus.HardLock || licenseResult.Status == LicenseStatus.Expired)
+            {
+                throw new LicenseExpiredException("Cannot send test notification: Your server license has expired.");
+            }
+
             string serverId = serverConfig.DatabaseCreationId;
             string serverIdSignature = serverConfig.DatabaseCreationIdSignature;
             string licensePayload = profile.LicensePayload;
+            string databaseCreationVersion = serverConfig.DatabaseCreationVersion;
+            string databaseCreationSignature = serverConfig.DatabaseCreationSignature;
+            string keyHash = _encryptionService.KeyHash;
 
             var httpClient = _httpClientFactory.CreateClient();
             httpClient.DefaultRequestHeaders.Add("X-Relay-Key", SpokesConstants.PushRelayKey);
@@ -514,6 +548,9 @@ public class WebPushService : IWebPushService
                     Sound = category == "chat" ? "SpokesNotif1.wav" : "default",
                     ServerId = serverId,
                     ServerIdSignature = serverIdSignature,
+                    DatabaseCreationVersion = databaseCreationVersion,
+                    DatabaseCreationSignature = databaseCreationSignature,
+                    KeyHash = keyHash,
                     LicensePayload = licensePayload
                 };
             }
@@ -529,6 +566,9 @@ public class WebPushService : IWebPushService
                     Sound = category == "chat" ? "SpokesNotif1.wav" : "default",
                     ServerId = serverId,
                     ServerIdSignature = serverIdSignature,
+                    DatabaseCreationVersion = databaseCreationVersion,
+                    DatabaseCreationSignature = databaseCreationSignature,
+                    KeyHash = keyHash,
                     LicensePayload = licensePayload
                 };
             }

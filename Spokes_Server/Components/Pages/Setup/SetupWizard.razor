@@ -100,13 +100,13 @@
         }
         else if (_step == 3)
         {
-            <MudText Typo="Typo.body1" Class="mb-6">Upload your Spokes software license.</MudText>
+            <MudText Typo="Typo.body1" Class="mb-6">Upload your Spokes Pass (.spokes-license) to enable native mobile push notifications, or skip to use the 2-month free trial.</MudText>
             
             <MudItem xs="12">
                 <div class="d-inline-flex mt-2 mb-4">
                     <MudFileUpload T="IBrowserFile" Accept=".spokes-license" FilesChanged="HandleLicenseUploaded">
                         <CustomContent>
-                            <MudButton Variant="Variant.Outlined" Color="Color.Primary" OnClick="@context.OpenFilePickerAsync" StartIcon="@Icons.Material.Filled.UploadFile">Upload License File (.spokes-license)</MudButton>
+                            <MudButton Variant="Variant.Outlined" Color="Color.Primary" OnClick="@context.OpenFilePickerAsync" StartIcon="@Icons.Material.Filled.UploadFile">Upload Spokes Pass (.spokes-license)</MudButton>
                         </CustomContent>
                         <SelectedTemplate></SelectedTemplate>
                     </MudFileUpload>
@@ -115,9 +115,25 @@
 
             @if (!string.IsNullOrEmpty(_licensePayload))
             {
-                <MudAlert Severity="Severity.Success" Class="mb-4">
-                    <b>License Active:</b> Your Spokes instance is licensed.
-                </MudAlert>
+                var currentValidation = LicenseService.ValidateLicense(_licensePayload, Db.ServerConfigs.GetOrCreateGlobalConfig());
+                @if (currentValidation.Status == Spokes_Server.Core.Services.Licensing.LicenseStatus.Valid)
+                {
+                    <MudAlert Severity="Severity.Success" Class="mb-4">
+                        <b>Spokes Pass Active:</b> Your Spokes instance is enabled for Native Mobile Push Notifications.
+                    </MudAlert>
+                }
+                else if (currentValidation.Status == Spokes_Server.Core.Services.Licensing.LicenseStatus.Expired)
+                {
+                    <MudAlert Severity="Severity.Warning" Class="mb-4">
+                        <b>Spokes Pass Expired:</b> @currentValidation.Message Native mobile push notifications will be disabled until renewed.
+                    </MudAlert>
+                }
+                else
+                {
+                    <MudAlert Severity="Severity.Error" Class="mb-4">
+                        <b>Spokes Pass Invalid:</b> @currentValidation.Message
+                    </MudAlert>
+                }
 
                 Spokes_Server.Core.Services.Licensing.SpokesLicenseFile? license = null;
                 try 
@@ -137,7 +153,7 @@
                                 <MudText Typo="Typo.body2">@license.Email</MudText>
                             </MudItem>
                             <MudItem xs="12" sm="4">
-                                <MudText Typo="Typo.caption" Color="Color.Secondary">Updates Expiry Date</MudText>
+                                <MudText Typo="Typo.caption" Color="Color.Secondary">Push Notifications Expiry Date</MudText>
                                 <MudText Typo="Typo.body2">@license.ValidForUpdatesUntil.ToString("yyyy-MM-dd")</MudText>
                             </MudItem>
                             <MudItem xs="12" sm="4">
@@ -728,7 +744,9 @@
             var config = Db.ServerConfigs.GetOrCreateGlobalConfig();
             var validationResult = LicenseService.ValidateLicense(json, config);
 
-            if (validationResult.Status == Spokes_Server.Core.Services.Licensing.LicenseStatus.Valid || validationResult.Status == Spokes_Server.Core.Services.Licensing.LicenseStatus.Tolerated)
+            if (validationResult.Status == Spokes_Server.Core.Services.Licensing.LicenseStatus.Valid || 
+                validationResult.Status == Spokes_Server.Core.Services.Licensing.LicenseStatus.Tolerated ||
+                validationResult.Status == Spokes_Server.Core.Services.Licensing.LicenseStatus.Expired)
             {
                 if (validationResult.ParsedLicense != null)
                 {
@@ -746,7 +764,14 @@
                         _selectedEdition = newEditions.First();
                     }
                     
-                    Snackbar.Add("License Validated Successfully!", Severity.Success);
+                    if (validationResult.Status == Spokes_Server.Core.Services.Licensing.LicenseStatus.Expired)
+                    {
+                        Snackbar.Add($"Expired License Saved: {validationResult.Message}", Severity.Warning);
+                    }
+                    else
+                    {
+                        Snackbar.Add("License Validated Successfully!", Severity.Success);
+                    }
                 }
                 else
                 {

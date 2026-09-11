@@ -13,9 +13,9 @@
     <MudPaper Elevation="3" Class="pa-8 d-flex flex-column align-center" Width="100%" MaxWidth="400px">
 
         <div class="d-flex justify-center mb-6">
-            @if (!string.IsNullOrEmpty(Profile?.LogoBase64))
+            @if (Profile?.HasCustomLogo == true)
             {
-                <MudImage Src="@Profile.LogoBase64" Height="80" ObjectFit="ObjectFit.Contain" />
+                <MudImage Src="@($"/spokesapi/Media/Logo?v={Profile.LogoVersion}")" Height="80" ObjectFit="ObjectFit.Contain" />
             }
             else
             {

@@ -15,9 +15,9 @@
         <div class="d-flex flex-column gap-4 pb-2" style="max-height: 70vh; overflow-y: auto;">
             @* --- General Info Card --- *@
             <MudPaper Elevation="0" Outlined="true" Class="rounded-lg overflow-hidden flex-shrink-0">
-                <div class="d-flex align-center my-1 ml-4">
-                    <MudIcon Icon="@Icons.Material.Filled.Info" Size="Size.Small" Class="mr-2" />
-                    <MudText Typo="Typo.h6">General Info</MudText>
+                <div class="d-flex align-center px-4 py-3">
+                    <MudIcon Icon="@Icons.Material.Filled.Info" Size="Size.Small" Class="mr-2 flex-shrink-0" />
+                    <MudText Typo="Typo.subtitle2">General Info</MudText>
                 </div>
                 <MudDivider />
                 <div class="px-4 py-4 d-flex flex-column gap-3">
@@ -64,9 +64,9 @@
 
             @* --- Access Control Card --- *@
             <MudPaper Elevation="0" Outlined="true" Class="rounded-lg overflow-hidden flex-shrink-0">
-                <div class="d-flex align-center my-1 ml-4">
-                    <MudIcon Icon="@Icons.Material.Filled.Security" Size="Size.Small" Class="mr-2" />
-                    <MudText Typo="Typo.h6">Access Control</MudText>
+                <div class="d-flex align-center px-4 py-3">
+                    <MudIcon Icon="@Icons.Material.Filled.Security" Size="Size.Small" Class="mr-2 flex-shrink-0" />
+                    <MudText Typo="Typo.subtitle2">Access Control</MudText>
                 </div>
                 <MudDivider />
                 <div class="px-4 py-4 d-flex flex-column gap-3">
@@ -134,12 +134,12 @@
             @if (ExistingChannel == null || ExistingChannel.SupportsAnnouncements)
             {
                 <MudPaper Elevation="0" Outlined="true" Class="rounded-lg overflow-hidden flex-shrink-0">
-                    <div class="d-flex align-center justify-space-between my-1 ml-4 mr-2">
-                        <div class="d-flex align-center">
-                            <MudIcon Icon="@Icons.Material.Filled.Campaign" Size="Size.Small" Class="mr-2" />
-                            <MudText Typo="Typo.h6">Announcement Channel</MudText>
+                    <div class="d-flex align-center justify-space-between ps-4 pe-2 py-1">
+                        <div class="d-flex align-center min-w-0 mr-2">
+                            <MudIcon Icon="@Icons.Material.Filled.Campaign" Size="Size.Small" Class="mr-2 flex-shrink-0" />
+                            <MudText Typo="Typo.subtitle2">Announcement Channel</MudText>
                         </div>
-                        <MudSwitch @bind-Value="IsAnnouncementOnly" Color="Color.Primary" Class="ma-0" />
+                        <MudSwitch @bind-Value="IsAnnouncementOnly" Color="Color.Primary" Class="ma-0 flex-shrink-0" />
                     </div>
                     <MudDivider />
                     @if (IsAnnouncementOnly)
@@ -183,12 +183,12 @@
 
             @* --- Voice & Video Card --- *@
             <MudPaper Elevation="0" Outlined="true" Class="rounded-lg overflow-hidden flex-shrink-0">
-                <div class="d-flex align-center justify-space-between my-1 ml-4 mr-2">
-                    <div class="d-flex align-center">
-                        <MudIcon Icon="@Icons.Material.Filled.VolumeUp" Size="Size.Small" Class="mr-2" />
-                        <MudText Typo="Typo.h6">Voice Channel</MudText>
+                <div class="d-flex align-center justify-space-between ps-4 pe-2 py-1">
+                    <div class="d-flex align-center min-w-0 mr-2">
+                        <MudIcon Icon="@Icons.Material.Filled.VolumeUp" Size="Size.Small" Class="mr-2 flex-shrink-0" />
+                        <MudText Typo="Typo.subtitle2">Voice Channel</MudText>
                     </div>
-                    <MudSwitch @bind-Value="IsVoiceChannel" Color="Color.Primary" Class="ma-0" Disabled="IsAnnouncementOnly" />
+                    <MudSwitch @bind-Value="IsVoiceChannel" Color="Color.Primary" Class="ma-0 flex-shrink-0" Disabled="IsAnnouncementOnly" />
                 </div>
                 <MudDivider />
                 @if (IsVoiceChannel && !IsAnnouncementOnly)
@@ -208,12 +208,12 @@
 
             @* --- Encryption Card --- *@
             <MudPaper Elevation="0" Outlined="true" Class="rounded-lg overflow-hidden flex-shrink-0">
-                <div class="d-flex align-center justify-space-between my-1 ml-4 mr-2">
-                    <div class="d-flex align-center">
-                        <MudIcon Icon="@Icons.Material.Filled.Lock" Size="Size.Small" Class="mr-2" />
-                        <MudText Typo="Typo.h6">Channel Encryption</MudText>
+                <div class="d-flex align-center justify-space-between ps-4 pe-2 py-1">
+                    <div class="d-flex align-center min-w-0 mr-2">
+                        <MudIcon Icon="@Icons.Material.Filled.Lock" Size="Size.Small" Class="mr-2 flex-shrink-0" />
+                        <MudText Typo="Typo.subtitle2">Channel Encryption</MudText>
                     </div>
-                    <MudSwitch @bind-Value="IsEncrypted" Color="Color.Primary" Class="ma-0" />
+                    <MudSwitch @bind-Value="IsEncrypted" Color="Color.Primary" Class="ma-0 flex-shrink-0" />
                 </div>
                 <MudDivider />
                 @if (IsEncrypted)

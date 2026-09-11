@@ -155,28 +155,45 @@ public class ChatNotificationService : IUserNotificationService, IAsyncDisposabl
         {
             var lastReadAt = _readStates.GetLastReadAt(_currentUserId, channelId);
 
-            // Get actual unread messages to evaluate notification tier
-            var unreadMessages = _messages.GetUnreadMessagesSince(channelId, lastReadAt, _currentUserId);
-            var unreadCount = unreadMessages.Count;
+            // Fast path: get unread count strictly from in-memory index without loading messages from disk
+            var unreadCount = _messages.GetUnreadCountSince(channelId, lastReadAt, _currentUserId);
 
             if (unreadCount > 0)
             {
                 // Always increment sidebar unread count (even muted channels)
                 _unreadByChannel[channelId] = unreadCount;
 
-                // Evaluate how many of these should trigger a global notification (nav menu badge)
-                int notifiedCount = 0;
-                foreach (var msg in unreadMessages)
-                {
-                    if (ShouldNotifyForMessage(msg))
-                    {
-                        notifiedCount++;
-                    }
-                }
+                // Evaluate notification tier efficiently
+                var channel = _channels.GetById(channelId);
+                var notifLevel = _readStates.GetNotificationLevel(
+                    _currentUserId, channelId, channel?.ChannelType.ToString(), channel?.IsVoiceChannel ?? false);
 
-                if (notifiedCount > 0)
+                if (notifLevel == "None")
                 {
-                    _notifiedByChannel[channelId] = notifiedCount;
+                    // Muted: 0 notified
+                }
+                else if (notifLevel != "Mentions")
+                {
+                    // "All": all unread messages trigger notification without loading bodies
+                    _notifiedByChannel[channelId] = unreadCount;
+                }
+                else
+                {
+                    // "Mentions": inspect messages for specific mentions
+                    var unreadMessages = _messages.GetUnreadMessagesSince(channelId, lastReadAt, _currentUserId);
+                    int notifiedCount = 0;
+                    foreach (var msg in unreadMessages)
+                    {
+                        if (ShouldNotifyForMessage(msg))
+                        {
+                            notifiedCount++;
+                        }
+                    }
+
+                    if (notifiedCount > 0)
+                    {
+                        _notifiedByChannel[channelId] = notifiedCount;
+                    }
                 }
             }
         }
@@ -401,17 +418,20 @@ public class ChatNotificationService : IUserNotificationService, IAsyncDisposabl
         var channel = _channels.GetById(channelId);
         _readStates.MarkAsRead(_currentUserId, channelId, channel?.ChannelType.ToString(), channel?.IsVoiceChannel ?? false);
 
-        // Broadcast silent push to clear notifications on other devices
+        // Broadcast silent push to clear notifications on other devices in background
         if (_webPush != null)
         {
-            try
+            _ = Task.Run(async () =>
             {
-                await _webPush.SendClearNotificationAsync(_currentUserId, channelId);
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"[ChatNotificationService] Silent push clear error: {ex.Message}");
-            }
+                try
+                {
+                    await _webPush.SendClearNotificationAsync(_currentUserId, channelId);
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[ChatNotificationService] Silent push clear error: {ex.Message}");
+                }
+            });
         }
 
         // Update both in-memory caches
@@ -438,17 +458,26 @@ public class ChatNotificationService : IUserNotificationService, IAsyncDisposabl
         {
             var channel = _channels.GetById(channelId);
             _readStates.MarkAsRead(_currentUserId, channelId, channel?.ChannelType.ToString(), channel?.IsVoiceChannel ?? false);
-            if (_webPush != null)
+        }
+
+        if (_webPush != null)
+        {
+            var channelsToClear = _subscribedChannels.ToList();
+            var userId = _currentUserId;
+            _ = Task.Run(async () =>
             {
-                try
+                foreach (var channelId in channelsToClear)
                 {
-                    await _webPush.SendClearNotificationAsync(_currentUserId, channelId);
+                    try
+                    {
+                        await _webPush.SendClearNotificationAsync(userId, channelId);
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"[ChatNotificationService] Silent push clear error: {ex.Message}");
+                    }
                 }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"[ChatNotificationService] Silent push clear error: {ex.Message}");
-                }
-            }
+            });
         }
 
         // Clear both in-memory caches

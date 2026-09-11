@@ -66,6 +66,7 @@ namespace Spokes_Server.Controllers
 
         [HttpGet("{token}/logo")]
         [HttpGet("{token}/logo.png")]
+        [ResponseCache(Duration = 86400, Location = ResponseCacheLocation.Client)]
         public IActionResult GetLogo(string token)
         {
             if (!ValidateToken(token)) return Unauthorized();
@@ -77,6 +78,7 @@ namespace Spokes_Server.Controllers
 
         [HttpGet("{token}/icon")]
         [HttpGet("{token}/icon.png")]
+        [ResponseCache(Duration = 86400, Location = ResponseCacheLocation.Client)]
         public IActionResult GetIcon(string token)
         {
             if (!ValidateToken(token)) return Unauthorized();

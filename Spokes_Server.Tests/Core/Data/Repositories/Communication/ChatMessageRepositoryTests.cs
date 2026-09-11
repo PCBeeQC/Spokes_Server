@@ -190,5 +190,118 @@ namespace Spokes_Server.Tests.Core.Data.Repositories.Communication
             Assert.NotNull(cachedPreview);
             Assert.Equal("old_preview", cachedPreview!.Id);
         }
+
+        [Fact]
+        public void ChannelPreviewSummary_PopulatedOnSave_And_UpdatedOnDelete()
+        {
+            var msg1 = new ChatMessage
+            {
+                Id = "msg1",
+                ChannelId = "chan_prev",
+                SenderId = "alice",
+                Content = "Hello from Alice",
+                SentAt = DateTime.UtcNow.AddMinutes(-5)
+            };
+            _repo.Save(msg1);
+
+            var preview1 = _repo.GetChannelPreviewSummary("chan_prev");
+            Assert.NotNull(preview1);
+            Assert.Equal("msg1", preview1!.MessageId);
+            Assert.Equal("alice", preview1.SenderId);
+            Assert.Equal("Hello from Alice", preview1.PreviewText);
+
+            var msg2 = new ChatMessage
+            {
+                Id = "msg2",
+                ChannelId = "chan_prev",
+                SenderId = "bob",
+                Content = "Reply from Bob",
+                SentAt = DateTime.UtcNow
+            };
+            _repo.Save(msg2);
+
+            var preview2 = _repo.GetChannelPreviewSummary("chan_prev");
+            Assert.NotNull(preview2);
+            Assert.Equal("msg2", preview2!.MessageId);
+            Assert.Equal("bob", preview2.SenderId);
+            Assert.Equal("Reply from Bob", preview2.PreviewText);
+
+            // Deleting msg2 should restore msg1 as the channel preview
+            _repo.Delete("msg2");
+
+            var previewAfterDelete = _repo.GetChannelPreviewSummary("chan_prev");
+            Assert.NotNull(previewAfterDelete);
+            Assert.Equal("msg1", previewAfterDelete!.MessageId);
+            Assert.Equal("alice", previewAfterDelete.SenderId);
+            Assert.Equal("Hello from Alice", previewAfterDelete.PreviewText);
+        }
+
+        [Fact]
+        public void GetChannelPreviewSummary_ExcludesBlockedUser()
+        {
+            var msg1 = new ChatMessage
+            {
+                Id = "m1",
+                ChannelId = "chan_blocked",
+                SenderId = "good_user",
+                Content = "Good message",
+                SentAt = DateTime.UtcNow.AddMinutes(-10)
+            };
+            _repo.Save(msg1);
+
+            var msg2 = new ChatMessage
+            {
+                Id = "m2",
+                ChannelId = "chan_blocked",
+                SenderId = "spammer",
+                Content = "Spam message",
+                SentAt = DateTime.UtcNow
+            };
+            _repo.Save(msg2);
+
+            // Without blocking: latest is spammer
+            var normalPreview = _repo.GetChannelPreviewSummary("chan_blocked");
+            Assert.NotNull(normalPreview);
+            Assert.Equal("m2", normalPreview!.MessageId);
+
+            // With spammer blocked: returns good_user
+            var filteredPreview = _repo.GetChannelPreviewSummary("chan_blocked", new List<string> { "spammer" });
+            Assert.NotNull(filteredPreview);
+            Assert.Equal("m1", filteredPreview!.MessageId);
+            Assert.Equal("good_user", filteredPreview.SenderId);
+            Assert.Equal("Good message", filteredPreview.PreviewText);
+        }
+
+        [Fact]
+        public void LoadFromDisk_PopulatesChannelPreviewsFromIndex_WithoutDiskRead()
+        {
+            var channelDir = Path.Combine(_testDataDir, "chat", "c_index_prev", "messages");
+            Directory.CreateDirectory(channelDir);
+
+            // Save old message (> 7 days ago)
+            var oldMsg = new ChatMessage
+            {
+                Id = "old_msg",
+                ChannelId = "c_index_prev",
+                SenderId = "charlie",
+                Content = "Message from long ago",
+                SentAt = DateTime.UtcNow.AddDays(-30)
+            };
+            File.WriteAllText(Path.Combine(channelDir, "old_msg.json"), JsonSerializer.Serialize(oldMsg));
+
+            // Load from disk: reads directory and populates index and preview summary
+            _repo.LoadFromDisk();
+
+            // Preview summary should be available in memory without needing message in _cache
+            var preview = _repo.GetChannelPreviewSummary("c_index_prev");
+            Assert.NotNull(preview);
+            Assert.Equal("old_msg", preview!.MessageId);
+            Assert.Equal("charlie", preview.SenderId);
+            Assert.Equal("Message from long ago", preview.PreviewText);
+
+            // Verify message body is NOT in _cache (lazy loading preserved)
+            var cached = _repo.GetByChannel("c_index_prev");
+            Assert.Empty(cached);
+        }
     }
 }

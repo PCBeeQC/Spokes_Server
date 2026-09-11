@@ -10,6 +10,7 @@
 @inject ChatNotificationService ChatNotifications
 @inject EmailNotificationService EmailNotifications
 @inject Spokes_Server.Core.Services.Core.AppLabelService AppLabels
+@inject Spokes_Server.Core.Services.Core.StartupTimingService StartupTimings
 @inject IJSRuntime JS
 @implements IDisposable
 
@@ -101,6 +102,8 @@
 
     protected override async Task OnInitializedAsync()
     {
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        StartupTimings.Add("Server: NavMenu_Friend OnInitializedAsync Start");
         _currentUser = await UserService.GetEmployeeAsync();
         if (_currentUser != null)
         {
@@ -149,6 +152,7 @@
             _unreadEmailCount = EmailNotifications.TotalUnreadCount;
             UpdateUnreadCount();
         }
+        StartupTimings.Add($"Server: NavMenu_Friend OnInitializedAsync Done (+{sw.ElapsedMilliseconds}ms)");
     }
 
     private bool HasPerm(string perm) => _currentUser?.HasPermission(perm) ?? false;

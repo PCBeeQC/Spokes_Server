@@ -40,6 +40,8 @@
 
 
 
+    var isMobile = string.Equals(HttpContext?.Request.Query["client"].ToString(), "mobile", StringComparison.OrdinalIgnoreCase) 
+        || (HttpContext?.Request.Headers.UserAgent.ToString().Contains("Capacitor") == true);
     var brandingToken = Db.SystemConfigs.Get().PublicBrandingToken ?? "default";
     var favicon = $"/branding/{brandingToken}/icon.png";
     var startupId = HttpContext?.Items["StartupCorrelationId"] as string;
@@ -53,7 +55,6 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=0, interactive-widget=resizes-content, viewport-fit=cover" />
     <base href="/" />
-    <link rel="preload" href="/_blazor/initializers" as="fetch" crossorigin="anonymous">
     <link rel="preconnect" href="@(HttpContext.Request.Scheme + "://" + HttpContext.Request.Host)" />
     <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin />
     <link rel="preconnect" href="https://cdn.quilljs.com" crossorigin />
@@ -61,7 +62,10 @@
     <link rel="preconnect" href="https://unpkg.com" crossorigin />
     <link href="https://fonts.googleapis.com/css?family=Roboto:300,400,500,700&display=swap" rel="stylesheet" />
     <link href="@Assets["_content/MudBlazor/MudBlazor.min.css"]" rel="stylesheet" />
-    <link rel="icon" href="@favicon" />
+    @if (!isMobile)
+    {
+        <link rel="icon" href="@favicon" />
+    }
     @if (HttpContext != null && (HttpContext.Request.Path.StartsWithSegments("/mobile-login") || HttpContext.Request.Path.StartsWithSegments("/mobile-login-success")))
     {
         <HeadOutlet />
@@ -71,13 +75,10 @@
         <HeadOutlet @rendermode="new InteractiveServerRenderMode(prerender: false)" />
     }
     <ImportMap />
-    <link href="https://cdn.quilljs.com/2.0.3/quill.snow.css" rel="stylesheet" />
-    <link href="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.1/cropper.min.css" rel="stylesheet" />
     <link href="@Assets["css/app.css"]" rel="stylesheet" />
     <script src="@Assets["js/capacitor-init.js"]"></script>
     <script src="@Assets["js/spokes-auth.js"]"></script>
-    <script src="@Assets["js/spokes-vault.js"]"></script>
-    <script src="@Assets["js/voice-recorder.js"]"></script>
+    <script src="@Assets["js/spokes-vault.js"]" defer></script>
 </head>
 
 <body>
@@ -102,87 +103,40 @@
         window.startupTimings = window.startupTimings || {};
         window.startupTimings.remote_html_received = Date.now();
 
-        console.log('[App.razor] [STARTUP-DIAGNOSTIC] Remote HTML received. Startup ID:', window.__startupCorrelationId);
-
-        try {
-            const navEntries = window.performance.getEntriesByType("navigation");
-            if (navEntries && navEntries.length > 0) {
-                const nav = navEntries[0];
-                console.log('[STARTUP-DIAGNOSTIC] --- Web Vitals & Navigation Timings ---');
-                console.log('  Redirect:        ' + (nav.redirectEnd - nav.redirectStart).toFixed(1) + 'ms');
-                console.log('  DNS Lookup:      ' + (nav.domainLookupEnd - nav.domainLookupStart).toFixed(1) + 'ms');
-                console.log('  TCP Connect:     ' + (nav.connectEnd - nav.connectStart).toFixed(1) + 'ms');
-                if (nav.secureConnectionStart > 0) {
-                    console.log('  SSL Handshake:   ' + (nav.connectEnd - nav.secureConnectionStart).toFixed(1) + 'ms');
-                }
-                console.log('  Time to First Byte (TTFB): ' + nav.responseStart.toFixed(1) + 'ms');
-                console.log('  HTML Download:   ' + (nav.responseEnd - nav.responseStart).toFixed(1) + 'ms');
-                console.log('  DOM Interactive: ' + nav.domInteractive.toFixed(1) + 'ms');
-                console.log('--------------------------------------------------');
-            }
-        } catch(e) { console.warn('[STARTUP-DIAGNOSTIC] Navigation timing failed', e); }
-
-        try {
-            // Dump resource timings for the Dead Zone
-            console.log('[STARTUP-DIAGNOSTIC] --- Resource Load Timings (The Dead Zone) ---');
-            const resources = window.performance.getEntriesByType("resource");
-            resources.forEach(r => {
-                if (r.initiatorType === 'link' || r.initiatorType === 'script' || (r.name && (r.name.includes('css') || r.name.includes('js')))) {
-                    const duration = r.duration ? r.duration.toFixed(1) : 0;
-                    const name = r.name ? r.name.substring(r.name.lastIndexOf('/') + 1) : 'unknown';
-                    console.log(`  [Resource] ${name}: ` +
-                        `${duration}ms ` +
-                        `(Start: ${(r.startTime || 0).toFixed(1)}, End: ${(r.responseEnd || 0).toFixed(1)})`);
-                }
-            });
-            console.log('--------------------------------------------------');
-        } catch(e) { console.warn('[STARTUP-DIAGNOSTIC] Resource timing failed', e); }
+        console.log('[App.razor] Remote HTML received. Startup ID:', window.__startupCorrelationId);
             
         try {
-            // Fetch patch remains but WebSocket patch removed to fix Blazor startup
             const originalFetch = window.fetch;
             window.fetch = async function() {
                 let url = '';
                 if (arguments[0] instanceof Request) url = arguments[0].url;
                 else if (typeof arguments[0] === 'string') url = arguments[0];
                 
+                if (url && typeof url === 'string' && url.includes('_blazor/initializers')) {
+                    return new Response('[]', {
+                        status: 200,
+                        headers: { 'Content-Type': 'application/json' }
+                    });
+                }
+
                 if (url && typeof url === 'string' && (url.includes('/negotiate') || url.includes('_blazor') || url.includes('/prime-session'))) {
-                    console.log(`[STARTUP-DIAGNOSTIC] Fetch called for ${url} at ${Date.now()}`);
-                    // Track start time for timeline
                     const fetchStart = Date.now();
                     if (url.includes('/prime-session')) window.startupTimings.prime_session_start = fetchStart;
                     if (url.includes('/negotiate')) window.startupTimings.negotiate_start = fetchStart;
                     try {
                         const res = await originalFetch.apply(this, arguments);
                         const fetchEnd = Date.now();
-                        console.log(`[STARTUP-DIAGNOSTIC] Fetch completed for ${url} at ${fetchEnd} with status ${res.status} (${fetchEnd - fetchStart}ms)`);
-                        // Track end time for timeline
                         if (url.includes('/prime-session')) window.startupTimings.prime_session_end = fetchEnd;
                         if (url.includes('/negotiate')) window.startupTimings.negotiate_end = fetchEnd;
                         return res;
                     } catch(err) {
-                        console.log(`[STARTUP-DIAGNOSTIC] Fetch FAILED for ${url} at ${Date.now()}`, err);
+                        console.error(`[App.razor] Fetch failed for ${url}`, err);
                         throw err;
                     }
                 }
                 return originalFetch.apply(this, arguments);
             };
-
-            // Patch XHR for Long Polling
-            const originalXHROpen = window.XMLHttpRequest.prototype.open;
-            window.XMLHttpRequest.prototype.open = function(method, url) {
-                if (typeof url === 'string' && (url.includes('/negotiate') || url.includes('_blazor'))) {
-                    console.log(`[STARTUP-DIAGNOSTIC] XHR Open called for ${url} at ${Date.now()}`);
-                    this.addEventListener('load', function() {
-                        console.log(`[STARTUP-DIAGNOSTIC] XHR Load completed for ${url} at ${Date.now()} with status ${this.status}`);
-                    });
-                    this.addEventListener('error', function() {
-                        console.log(`[STARTUP-DIAGNOSTIC] XHR ERROR for ${url} at ${Date.now()}`);
-                    });
-                }
-                return originalXHROpen.apply(this, arguments);
-            };
-        } catch(e) { console.warn('[STARTUP-DIAGNOSTIC] Patching failed', e); }
+        } catch(e) {}
 
         // Patch WebSocket to track connection timing (TCP + TLS + upgrade handshake)
         try {
@@ -191,10 +145,28 @@
                 const ws = protocols ? new OriginalWebSocket(url, protocols) : new OriginalWebSocket(url);
                 if (url && typeof url === 'string' && url.includes('_blazor')) {
                     window.startupTimings.ws_open_start = Date.now();
-                    console.log(`[STARTUP-DIAGNOSTIC] WebSocket opening to ${url.split('?')[0]} at ${Date.now()}`);
                     ws.addEventListener('open', () => {
                         window.startupTimings.ws_open_end = Date.now();
-                        console.log(`[STARTUP-DIAGNOSTIC] WebSocket connected in ${Date.now() - window.startupTimings.ws_open_start}ms`);
+                    });
+                    let msgIndex = 0;
+                    ws.addEventListener('message', (event) => {
+                        msgIndex++;
+                        let size = 0;
+                        if (typeof event.data === 'string') {
+                            size = event.data.length;
+                        } else if (event.data instanceof ArrayBuffer) {
+                            size = event.data.byteLength;
+                        } else if (event.data && typeof event.data.size === 'number') {
+                            size = event.data.size;
+                        }
+                        const now = Date.now();
+                        if (msgIndex === 1) {
+                            window.startupTimings.ws_msg_1 = now;
+                        }
+                        if (size > (window.startupTimings.ws_render_batch_size || 0)) {
+                            window.startupTimings.ws_render_batch = now;
+                            window.startupTimings.ws_render_batch_size = size;
+                        }
                     });
                 }
                 return ws;
@@ -204,7 +176,18 @@
             window.WebSocket.OPEN = OriginalWebSocket.OPEN;
             window.WebSocket.CLOSING = OriginalWebSocket.CLOSING;
             window.WebSocket.CLOSED = OriginalWebSocket.CLOSED;
-        } catch(e) { console.warn('[STARTUP-DIAGNOSTIC] WebSocket patching failed', e); }
+        } catch(e) {}
+
+        try {
+            let firstMutationRecorded = false;
+            window._startupMutationObserver = new MutationObserver(() => {
+                if (!firstMutationRecorded) {
+                    firstMutationRecorded = true;
+                    window.startupTimings.first_dom_mutation = Date.now();
+                }
+            });
+            window._startupMutationObserver.observe(document.documentElement, { childList: true, subtree: true });
+        } catch(e) {}
 
         window.checkCookieHealthAsync = async () => {
             if (window._cookieRefreshInProgress) return;
@@ -295,7 +278,6 @@
             reportInteractive: function(userId, avatarLength, serverTimings) {
                 const now = Date.now();
                 window.startupTimings.interactive = now;
-                console.log('[App.razor] [STARTUP-DIAGNOSTIC] App interactive at:', now, 'User ID:', userId, 'Avatar Length:', avatarLength);
                 
                 const correlationId = window.__startupCorrelationId;
                 const cTimesStr = window.__clientLocalTimings;
@@ -328,6 +310,11 @@
                 if (window.startupTimings.negotiate_end) timeline.push({ name: 'Client: Negotiate Done', absolute: window.startupTimings.negotiate_end });
                 if (window.startupTimings.ws_open_start) timeline.push({ name: 'Client: WebSocket Open Start', absolute: window.startupTimings.ws_open_start });
                 if (window.startupTimings.ws_open_end) timeline.push({ name: 'Client: WebSocket Connected', absolute: window.startupTimings.ws_open_end });
+                if (window.startupTimings.ws_msg_1) timeline.push({ name: 'Client: WS Msg #1 (Handshake)', absolute: window.startupTimings.ws_msg_1 });
+                if (window.startupTimings.ws_render_batch && window.startupTimings.ws_render_batch_size > 100) {
+                    timeline.push({ name: `Client: WS Batch (${window.startupTimings.ws_render_batch_size}B)`, absolute: window.startupTimings.ws_render_batch });
+                }
+                if (window.startupTimings.first_dom_mutation) timeline.push({ name: 'Client: First DOM Mutation', absolute: window.startupTimings.first_dom_mutation });
                 if (window.startupTimings.blazor_conn_up) timeline.push({ name: 'Client: Circuit Established', absolute: window.startupTimings.blazor_conn_up });
                 
                 let clockOffset = 0;
@@ -371,6 +358,11 @@
                 if (!window._lazyScriptsLoaded) {
                     window._lazyScriptsLoaded = true;
                     loadDeferredScripts();
+                }
+
+                if (window._startupMutationObserver) {
+                    try { window._startupMutationObserver.disconnect(); } catch(e) {}
+                    window._startupMutationObserver = null;
                 }
             }
         };
@@ -514,7 +506,6 @@
         };
 
         const startBlazor = () => {
-            console.log('[App.razor] [STARTUP-DIAGNOSTIC] Blazor.start() called at:', Date.now());
             window.startupTimings.blazor_start = Date.now();
             try {
                 if (typeof Blazor === 'undefined') {
@@ -830,7 +821,6 @@
                                 console.log('[Server Connection] Connection Up during server restart. Suppressing overlay hide until redirect.');
                                 return;
                             }
-                            console.log('[App.razor] [STARTUP-DIAGNOSTIC] Blazor Connection Up (onConnectionUp) at:', Date.now());
                             window.startupTimings.blazor_conn_up = Date.now();
                             window._blazorDisconnected = false;
                             const splash = document.getElementById('startup-splash');
@@ -864,12 +854,12 @@
                 }
             }).then(() => {
                 // Initial connection established
-                console.log('[App.razor] [STARTUP-DIAGNOSTIC] Blazor circuit established.');
+                console.log('[App.razor] Blazor circuit established.');
                 if (window._isServerRestarting) return;
                 const splash = document.getElementById('startup-splash');
                 if (splash) splash.style.display = 'none';
             }).catch(async e => {
-                console.error('[App.razor] [STARTUP-DIAGNOSTIC] Blazor.start() promise rejected:', e);
+                console.error('[App.razor] Blazor.start() promise rejected:', e);
                 const errMsg = e ? (e.message || e.toString()) : "unknown";
                 
                 // If Blazor failed, our optimistic fast boot assumption might have been wrong 
@@ -894,7 +884,7 @@
                 handleSevereError("Circuit not initialized (Blazor failed to load: " + errMsg + ")");
             });
             } catch (e) {
-                console.error('[App.razor] [STARTUP-DIAGNOSTIC] Blazor.start() threw synchronously:', e);
+                console.error('[App.razor] Blazor.start() threw synchronously:', e);
                 handleSevereError("Circuit not initialized (Blazor failed to load: " + (e ? e.message || e : "unknown") + ")");
             }
         };
@@ -932,7 +922,7 @@
             const isStale = (Date.now() - lastRefresh) > 12 * 3600 * 1000;
 
             if (hasBuffer) {
-                console.log('[App.razor] [STARTUP-DIAGNOSTIC] Optimistic Fast Boot: Session cookie is assumed valid. Skipping blocking refresh.');
+                console.log('[App.razor] Optimistic Fast Boot: Session cookie is assumed valid. Skipping blocking refresh.');
 
                 let probeOk = false;
                 try {
@@ -957,20 +947,20 @@
                     }
 
                     if (isStale) {
-                        console.log('[App.razor] [STARTUP-DIAGNOSTIC] Session cookie is older than 12h. Triggering background refresh.');
+                        console.log('[App.razor] Session cookie is older than 12h. Triggering background refresh.');
                         window.spokesAuth.refreshSessionAsync().catch(()=>{});
                     }
                     return true;
                 } else {
-                    console.log('[App.razor] [STARTUP-DIAGNOSTIC] Optimistic Fast Boot probe failed (401/404). Falling through to blocking refresh.');
+                    console.log('[App.razor] Optimistic Fast Boot probe failed (401/404). Falling through to blocking refresh.');
                 }
             }
 
-            console.log('[App.razor] [STARTUP-DIAGNOSTIC] Triggering blocking refreshSessionAsync...');
+            console.log('[App.razor] Triggering blocking refreshSessionAsync...');
             window.startupTimings.cookie_sync_start = Date.now();
             const refreshed = await window.spokesAuth.refreshSessionAsync();
             if (refreshed) {
-                console.log('[App.razor] [STARTUP-DIAGNOSTIC] Session established from Preferences refresh token.');
+                console.log('[App.razor] Session established from Preferences refresh token.');
                 
                 const path = window.location.pathname.toLowerCase();
                 if (path.includes('/mobile-login') || path.includes('/session-expired')) {
@@ -989,7 +979,7 @@
                 
                 return true;
             } else {
-                console.log('[App.razor] [STARTUP-DIAGNOSTIC] No valid refresh token. User will need to log in.');
+                console.log('[App.razor] No valid refresh token. User will need to log in.');
             }
 
             window.startupTimings.cookie_sync_end = Date.now();
@@ -1011,11 +1001,21 @@
                 });
             };
 
-            // Group 1: independent scripts — load all in parallel
+            const loadCss = (href) => {
+                const l = document.createElement('link');
+                l.rel = 'stylesheet';
+                l.href = href;
+                document.head.appendChild(l);
+            };
+
+            // Group 1: independent scripts and non-critical stylesheets — load all in parallel
+            loadCss('https://cdn.quilljs.com/2.0.3/quill.snow.css');
+            loadCss('https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.1/cropper.min.css');
             const quillReady = loadScript('https://cdn.quilljs.com/2.0.3/quill.js');
             const cropperReady = loadScript('https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.1/cropper.min.js');
             loadScript('https://cdn.jsdelivr.net/npm/livekit-client@@2/dist/livekit-client.umd.min.js');
             loadScript('@Assets["js/download.js"]');
+            loadScript('@Assets["js/voice-recorder.js"]');
 
             // Group 2: depends on quill.js and cropperjs — load after they're ready
             Promise.all([quillReady, cropperReady]).then(() => {

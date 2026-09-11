@@ -13,6 +13,7 @@
 @inject ChatNotificationService ChatNotifications
 @inject EmailNotificationService EmailNotifications
 @inject Spokes_Server.Core.Services.Core.AppLabelService AppLabels
+@inject Spokes_Server.Core.Services.Core.StartupTimingService StartupTimings
 @inject IConfiguration Config
 @inject IJSRuntime JS
 @implements IDisposable
@@ -420,8 +421,6 @@
 
 </MudNavMenu>
 
-
-
 @code {
     [Parameter] public bool _isEditingFavorites { get; set; } = false;
     [Parameter] public bool drawerOpen { get; set; } = true;
@@ -508,6 +507,8 @@
 
     protected override async Task OnInitializedAsync()
     {
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        StartupTimings.Add("Server: NavMenu OnInitializedAsync Start");
         _currentUser = await UserService.GetEmployeeAsync();
         if (_currentUser != null)
         {
@@ -538,6 +539,7 @@
                 _ = InitializeNotificationsAsync(_currentUser.Id);
             }
         }
+        StartupTimings.Add($"Server: NavMenu OnInitializedAsync Done (+{sw.ElapsedMilliseconds}ms)");
     }
 
     private async Task InitializeNotificationsAsync(string userId)

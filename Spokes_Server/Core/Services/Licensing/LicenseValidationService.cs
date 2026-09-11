@@ -20,7 +20,8 @@ namespace Spokes_Server.Core.Services.Licensing
     {
         Valid,
         Tolerated,
-        HardLock
+        HardLock,
+        Expired
     }
 
     public class LicenseValidationResult
@@ -38,6 +39,7 @@ namespace Spokes_Server.Core.Services.Licensing
         private readonly ILogger<LicenseValidationService> _logger;
         private readonly Spokes_Server.Core.Services.Core.EncryptionService _encryptionService;
         private readonly VersionMetadata _versionMetadata;
+        private readonly string _publicKeyPem;
 
         // This is the release version of THIS specific compiled binary. 
         // Example format: 2026.4.102 (Year.Month.Revision)
@@ -51,11 +53,12 @@ namespace Spokes_Server.Core.Services.Licensing
             // "SPK-12345678",
         };
 
-        public LicenseValidationService(ILogger<LicenseValidationService> logger, Spokes_Server.Core.Services.Core.EncryptionService encryptionService, VersionMetadata versionMetadata)
+        public LicenseValidationService(ILogger<LicenseValidationService> logger, Spokes_Server.Core.Services.Core.EncryptionService encryptionService, VersionMetadata versionMetadata, string? publicKeyPem = null)
         {
             _logger = logger;
             _encryptionService = encryptionService;
             _versionMetadata = versionMetadata;
+            _publicKeyPem = publicKeyPem ?? SpokesConstants.LicensePublicKeyPem;
         }
 
         public static string SignDemoVersion(string version, string? securityKeyHash = null)
@@ -133,74 +136,54 @@ namespace Spokes_Server.Core.Services.Licensing
                 var cleanAppVersion = GetCleanVersion(AppVersion);
                 _ = Version.TryParse(cleanAppVersion, out var appVerObj);
 
-                // DEMO MODE CHECK if no license
+                // DEMO / TRIAL MODE CHECK if no license
                 if (string.IsNullOrEmpty(jsonPayload))
                 {
                     string? firstInstalled = config?.DatabaseCreationVersion;
-                    string? lockupVersion = firstInstalled;
+                    string finalMaxAllowed = config != null ? CalculateMaxAllowedVersion(config.DatabaseCreationVersion, 2) : "vUnknown";
 
-                    if (config != null && VerifyDemoVersion(config.DatabaseCreationVersion, config.DatabaseCreationSignature, _encryptionService.KeyHash))
+                    if (config != null)
                     {
+                        if (!VerifyDemoVersion(config.DatabaseCreationVersion, config.DatabaseCreationSignature, _encryptionService.KeyHash))
+                        {
+                            return new LicenseValidationResult
+                            {
+                                Status = LicenseStatus.HardLock,
+                                Message = "Demo version signature is invalid or tampered with.",
+                                FirstInstalledVersion = firstInstalled,
+                                MaxAllowedVersion = finalMaxAllowed
+                            };
+                        }
+
                         var cleanDbVersion = GetCleanVersion(config.DatabaseCreationVersion);
                         var dbVersionParts = cleanDbVersion.Split('.');
-                        var appVersionParts = cleanAppVersion.Split('.');
 
                         if (dbVersionParts.Length >= 2 && int.TryParse(dbVersionParts[0], out int demoDbYear) && int.TryParse(dbVersionParts[1], out int demoDbMonth))
                         {
-                            // Lockup occurs when difference > 2, so the first locked version is month + 3
-                            int lockedMonth = demoDbMonth + 3;
-                            int lockedYear = demoDbYear;
-                            while (lockedMonth > 12)
-                            {
-                                lockedMonth -= 12;
-                                lockedYear++;
-                            }
-                            
-                            int firstDigitIndex = -1;
-                            for (int i = 0; i < config.DatabaseCreationVersion.Length; i++)
-                            {
-                                if (char.IsDigit(config.DatabaseCreationVersion[i]))
-                                {
-                                    firstDigitIndex = i;
-                                    break;
-                                }
-                            }
-                            string prefix = firstDigitIndex > 0 ? config.DatabaseCreationVersion.Substring(0, firstDigitIndex) : "";
-                            lockupVersion = $"{prefix}{lockedYear}.{lockedMonth}.0";
-                        }
+                            int currentYear = DateTime.UtcNow.Year;
+                            int currentMonth = DateTime.UtcNow.Month;
+                            int demoMonthsDifference = (currentYear - demoDbYear) * 12 + (currentMonth - demoDbMonth);
 
-                        bool isValid = false;
-                        if (appVersionParts.Length >= 2 && dbVersionParts.Length >= 2)
-                        {
-                            int.TryParse(appVersionParts[0], out int demoAppYear);
-                            int.TryParse(appVersionParts[1], out int demoAppMonth);
-                            int.TryParse(dbVersionParts[0], out int dbYear);
-                            int.TryParse(dbVersionParts[1], out int dbMonth);
-                            
-                            int demoMonthsDifference = (demoAppYear - dbYear) * 12 + (demoAppMonth - dbMonth);
-                            isValid = demoMonthsDifference <= 2;
-                        }
-                        else
-                        {
-                            isValid = true; // Fallback for dev builds if format isn't year.month
-                        }
-
-                        string maxAllowed = CalculateMaxAllowedVersion(firstInstalled ?? "0.0.0", 2);
-                        if (isValid)
-                        {
-                            return new LicenseValidationResult { Status = LicenseStatus.Valid, Message = "Free Demo Mode Active.", FirstInstalledVersion = firstInstalled, LockupVersion = lockupVersion, MaxAllowedVersion = maxAllowed };
+                            if (demoMonthsDifference >= 0 && demoMonthsDifference <= 2)
+                            {
+                                return new LicenseValidationResult 
+                                { 
+                                    Status = LicenseStatus.Valid, 
+                                    Message = "Free Trial Active.", 
+                                    FirstInstalledVersion = firstInstalled, 
+                                    MaxAllowedVersion = finalMaxAllowed 
+                                };
+                            }
                         }
                     }
-                    
-                    string finalMaxAllowed = config != null ? CalculateMaxAllowedVersion(config.DatabaseCreationVersion, 2) : "vUnknown";
-                    
-                    // Security patch bypass — allow expired demos to run security updates
-                    if (_versionMetadata.IsSecurityPatch)
-                    {
-                        return new LicenseValidationResult { Status = LicenseStatus.Tolerated, Message = "This is a security patch. Your demo has expired — feature updates require a valid license.", FirstInstalledVersion = firstInstalled, LockupVersion = lockupVersion, MaxAllowedVersion = finalMaxAllowed };
-                    }
-                    
-                    return new LicenseValidationResult { Status = LicenseStatus.HardLock, Message = "No license installed and Demo Mode expired (Server was updated).", FirstInstalledVersion = firstInstalled, LockupVersion = lockupVersion, MaxAllowedVersion = finalMaxAllowed };
+
+                    return new LicenseValidationResult 
+                    { 
+                        Status = LicenseStatus.Expired, 
+                        Message = "Your 2-month free trial for the Spokes Push Relay has expired.", 
+                        FirstInstalledVersion = firstInstalled, 
+                        MaxAllowedVersion = finalMaxAllowed 
+                    };
                 }
 
                 var options = new JsonSerializerOptions
@@ -213,12 +196,6 @@ namespace Spokes_Server.Core.Services.Licensing
 
                 if (license.AvailableEditions == null) license.AvailableEditions = new List<string>();
 
-                // Security patch bypass — allow all instances to run security updates regardless of license status
-                if (_versionMetadata.IsSecurityPatch)
-                {
-                    return new LicenseValidationResult { Status = LicenseStatus.Tolerated, Message = "This is a security patch. Your license is expired — feature updates require a valid license.", ParsedLicense = license };
-                }
-
                 if (BlacklistedKeys.Contains(license.LicenseId))
                 {
                     return new LicenseValidationResult { Status = LicenseStatus.HardLock, Message = "This license key has been revoked." };
@@ -230,7 +207,7 @@ namespace Spokes_Server.Core.Services.Licensing
                 byte[] signatureBytes = Convert.FromBase64String(license.Signature);
 
                 using var rsa = RSA.Create();
-                rsa.ImportFromPem(SpokesConstants.LicensePublicKeyPem);
+                rsa.ImportFromPem(_publicKeyPem);
 
                 bool isSignatureValid = rsa.VerifyData(dataBytes, signatureBytes, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
 
@@ -239,37 +216,27 @@ namespace Spokes_Server.Core.Services.Licensing
                     return new LicenseValidationResult { Status = LicenseStatus.HardLock, Message = "License signature is invalid or tampered with." };
                 }
 
-                // Version Validation Logic
-                // AppVersion format: 2026.4.102 -> [0] = 2026, [1] = 4, [2] = 102
-                var versionParts = cleanAppVersion.Split('.');
-                if (versionParts.Length < 2)
-                {
-                    return new LicenseValidationResult { Status = LicenseStatus.Valid, Message = "Dev build. Assuming Valid." };
-                }
-
-                int appYear = int.Parse(versionParts[0]);
-                int appMonth = int.Parse(versionParts[1]);
-                int appRevision = versionParts.Length > 2 ? int.Parse(versionParts[2]) : 0;
-
-                int licenseYear = license.ValidForUpdatesUntil.Year;
-                int licenseMonth = license.ValidForUpdatesUntil.Month;
-
-                int monthsDifference = (appYear - licenseYear) * 12 + (appMonth - licenseMonth);
-
                 string maxPaidAllowed = $"v{license.ValidForUpdatesUntil.Year}.{license.ValidForUpdatesUntil.Month}.0";
 
-                if (monthsDifference <= 0)
+                // Date Validation Logic: License gives access to Push Relay until ValidForUpdatesUntil
+                if (license.ValidForUpdatesUntil < DateTime.UtcNow)
                 {
-                    return new LicenseValidationResult { Status = LicenseStatus.Valid, Message = "License is active.", ParsedLicense = license, MaxAllowedVersion = maxPaidAllowed };
+                    return new LicenseValidationResult 
+                    { 
+                        Status = LicenseStatus.Expired, 
+                        Message = $"Your Spokes license expired on {license.ValidForUpdatesUntil:yyyy-MM-dd}.", 
+                        ParsedLicense = license, 
+                        MaxAllowedVersion = maxPaidAllowed 
+                    };
                 }
-                else if (monthsDifference == 1 && appRevision == 0)
-                {
-                    return new LicenseValidationResult { Status = LicenseStatus.Tolerated, Message = $"Your maintenance expired on {license.ValidForUpdatesUntil:yyyy-MM}. You are using a tolerated version, but future updates will be locked.", ParsedLicense = license, MaxAllowedVersion = maxPaidAllowed };
-                }
-                else
-                {
-                    return new LicenseValidationResult { Status = LicenseStatus.HardLock, Message = $"Your maintenance expired on {license.ValidForUpdatesUntil:yyyy-MM}. Please renew or downgrade to an older version.", ParsedLicense = license, MaxAllowedVersion = maxPaidAllowed };
-                }
+
+                return new LicenseValidationResult 
+                { 
+                    Status = LicenseStatus.Valid, 
+                    Message = "Spokes license is active.", 
+                    ParsedLicense = license, 
+                    MaxAllowedVersion = maxPaidAllowed 
+                };
             }
             catch (Exception ex)
             {

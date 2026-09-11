@@ -143,6 +143,54 @@ namespace Spokes_Server.Tests.Controllers
             var physicalFileResult = Assert.IsType<PhysicalFileResult>(result);
             Assert.Contains("favicon.ico", physicalFileResult.FileName);
         }
+
+        [Fact]
+        public void GetLogo_ReturnsLogoBase64_WhenConfigured()
+        {
+            var logoBytes = new byte[] { 0x89, 0x50, 0x4E, 0x47, 0x01, 0x02 };
+            var base64 = Convert.ToBase64String(logoBytes);
+            var profile = new CompanyProfile { LogoBase64 = "data:image/png;base64," + base64 };
+            _companyRepo.Save(profile);
+
+            var result = _controller.GetLogo();
+            var fileContentResult = Assert.IsType<FileContentResult>(result);
+            Assert.Equal("image/png", fileContentResult.ContentType);
+            Assert.Equal(logoBytes, fileContentResult.FileContents);
+        }
+
+        [Fact]
+        public void GetLogo_FallsBackToIcon_WhenLogoNotConfigured()
+        {
+            var iconBytes = new byte[] { 0x89, 0x50, 0x4E, 0x47, 0x09, 0x09 };
+            var base64 = Convert.ToBase64String(iconBytes);
+            var profile = new CompanyProfile 
+            { 
+                LogoBase64 = string.Empty,
+                IconBase64 = "data:image/png;base64," + base64 
+            };
+            _companyRepo.Save(profile);
+
+            var result = _controller.GetLogo();
+            var fileContentResult = Assert.IsType<FileContentResult>(result);
+            Assert.Equal("image/png", fileContentResult.ContentType);
+            Assert.Equal(iconBytes, fileContentResult.FileContents);
+        }
+
+        [Fact]
+        public void MediaController_IconAndLogo_AllowAnonymous()
+        {
+            var getIconMethod = typeof(MediaController).GetMethod(nameof(MediaController.GetIcon));
+            var getLogoMethod = typeof(MediaController).GetMethod(nameof(MediaController.GetLogo));
+
+            Assert.NotNull(getIconMethod);
+            Assert.NotNull(getLogoMethod);
+
+            var iconAllowAnon = getIconMethod.GetCustomAttributes(typeof(Microsoft.AspNetCore.Authorization.AllowAnonymousAttribute), true);
+            var logoAllowAnon = getLogoMethod.GetCustomAttributes(typeof(Microsoft.AspNetCore.Authorization.AllowAnonymousAttribute), true);
+
+            Assert.NotEmpty(iconAllowAnon);
+            Assert.NotEmpty(logoAllowAnon);
+        }
     }
 }
 

@@ -113,7 +113,7 @@
                         </MudPaper>
                 }
 
-                <div class="d-inline-flex">
+                <div class="d-inline-flex align-center">
                     <ApiFileUpload 
                         Category="temp" 
                         ContextId="@Guid.NewGuid().ToString()" 
@@ -124,6 +124,12 @@
                             </MudButton>
                         </CustomContent>
                     </ApiFileUpload>
+                    @if (!string.IsNullOrEmpty(Profile.LogoBase64))
+                    {
+                        <MudButton Variant="Variant.Text" Color="Color.Error" Size="Size.Small" Class="ml-2" OnClick="ClearLogo">
+                            Remove
+                        </MudButton>
+                    }
                 </div>
 
                 <MudDivider Class="my-4" />
@@ -139,7 +145,7 @@
                         </MudPaper>
                 }
 
-                <div class="d-inline-flex">
+                <div class="d-inline-flex align-center">
                     <ApiFileUpload 
                         Category="temp" 
                         ContextId="@Guid.NewGuid().ToString()" 
@@ -150,6 +156,12 @@
                             </MudButton>
                         </CustomContent>
                     </ApiFileUpload>
+                    @if (!string.IsNullOrEmpty(Profile.IconBase64))
+                    {
+                        <MudButton Variant="Variant.Text" Color="Color.Error" Size="Size.Small" Class="ml-2" OnClick="ClearIcon">
+                            Remove
+                        </MudButton>
+                    }
                 </div>
             </MudItem>
 
@@ -766,7 +778,7 @@
             <MudItem xs="12" Class="mt-n2">
                 <MudText Typo="Typo.h5">Licensing & Telemetry</MudText>
                 <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-4">
-                    Manage your Spokes software license and usage statistics preferences.
+                    Manage your Spokes license and usage statistics preferences.
                 </MudText>
             </MudItem>
 
@@ -783,29 +795,58 @@
             }
 
             <MudItem xs="12" Class="mt-n4">
+                @{
+                    var currentConfig = Db.ServerConfigs.GetOrCreateGlobalConfig();
+                    var activeValidation = LicenseService.ValidateLicense(Profile.LicensePayload, currentConfig);
+                }
                 @if (string.IsNullOrEmpty(Profile.LicensePayload))
                 {
-                    <MudAlert Severity="Severity.Warning" Class="mb-4">
-                        <b>No License Found:</b> Spokes requires a valid license to receive updates.
-                        <br/>
-                        Maximum allowed server version for this Demo: <b>@(Spokes_Server.Core.Services.Licensing.LicenseValidationService.CalculateMaxAllowedVersion(Db.ServerConfigs.GetOrCreateGlobalConfig().DatabaseCreationVersion))</b>
-                        <br/>
-                        <MudText Typo="Typo.caption">Updating the application beyond this version will cause the system to lock up until a valid license is uploaded, or the server version is reverted to the allowed version.</MudText>
-                    </MudAlert>
+                    @if (activeValidation.Status == Spokes_Server.Core.Services.Licensing.LicenseStatus.Valid)
+                    {
+                        <MudAlert Severity="Severity.Info" Class="mb-4">
+                            <b>Free Trial Active:</b> Your server has an active 2-month free trial for native mobile push notifications.
+                        </MudAlert>
+                    }
+                    else
+                    {
+                        <MudAlert Severity="Severity.Warning" Class="mb-4">
+                            <b>Native Push Notifications Disabled:</b> Your free trial for native push notifications has expired, or you do not have a license installed.
+                            <br/>
+                            <MudText Typo="Typo.caption">The Spokes server continues to function normally, but native mobile push notifications for iOS and Android require an active Spokes license.</MudText>
+                        </MudAlert>
+                    }
                 }
                 else
                 {
-                    <MudAlert Severity="Severity.Success" Class="mb-4">
-                        <b>License Active:</b> Your Spokes instance is licensed.
-                    </MudAlert>
+                    @if (activeValidation.Status == Spokes_Server.Core.Services.Licensing.LicenseStatus.Valid)
+                    {
+                        <MudAlert Severity="Severity.Success" Class="mb-4">
+                            <b>License Active:</b> Your Spokes instance is licensed for Native Mobile Push Notifications.
+                        </MudAlert>
+                    }
+                    else if (activeValidation.Status == Spokes_Server.Core.Services.Licensing.LicenseStatus.Expired)
+                    {
+                        <MudAlert Severity="Severity.Warning" Class="mb-4">
+                            <b>License Expired:</b> @activeValidation.Message Native mobile push notifications are disabled until renewed.
+                        </MudAlert>
+                    }
+                    else
+                    {
+                        <MudAlert Severity="Severity.Error" Class="mb-4">
+                            <b>License Invalid:</b> @activeValidation.Message
+                        </MudAlert>
+                    }
 
-                    Spokes_Server.Core.Services.Licensing.SpokesLicenseFile? license = null;
-                    try 
-                    { 
-                        var options = new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true };
-                        license = System.Text.Json.JsonSerializer.Deserialize<Spokes_Server.Core.Services.Licensing.SpokesLicenseFile>(Profile.LicensePayload, options); 
-                    } 
-                    catch { }
+                    Spokes_Server.Core.Services.Licensing.SpokesLicenseFile? license = activeValidation.ParsedLicense;
+                    if (license == null)
+                    {
+                        try 
+                        { 
+                            var options = new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+                            license = System.Text.Json.JsonSerializer.Deserialize<Spokes_Server.Core.Services.Licensing.SpokesLicenseFile>(Profile.LicensePayload, options); 
+                        } 
+                        catch { }
+                    }
                     
                     if (license != null)
                     {
@@ -817,7 +858,7 @@
                                     <MudText Typo="Typo.body2">@license.Email</MudText>
                                 </MudItem>
                                 <MudItem xs="12" sm="4">
-                                    <MudText Typo="Typo.caption" Color="Color.Secondary">Updates Expiry Date</MudText>
+                                    <MudText Typo="Typo.caption" Color="Color.Secondary">Push Notifications Expiry Date</MudText>
                                     <MudText Typo="Typo.body2">@license.ValidForUpdatesUntil.ToString("yyyy-MM-dd")</MudText>
                                 </MudItem>
                                 <MudItem xs="12" sm="4">
@@ -833,7 +874,7 @@
             </MudItem>
 
             <MudItem xs="12" Class="mt-n4">
-                <MudText Typo="Typo.subtitle1">Upload License (.spokes-license)</MudText>
+                <MudText Typo="Typo.subtitle1">Upload Spokes Pass (.spokes-license)</MudText>
                 <div class="d-inline-flex mt-2">
                     <ApiFileUpload 
                         Category="temp" 
@@ -842,7 +883,7 @@
                         OnUploadCompleted="HandleLicenseUploaded">
                         <CustomContent>
                             <MudButton Variant="Variant.Outlined" Color="Color.Primary" StartIcon="@Icons.Material.Filled.UploadFile">
-                                Upload License File
+                                Upload Spokes Pass
                             </MudButton>
                         </CustomContent>
                     </ApiFileUpload>
@@ -1157,7 +1198,7 @@
                 "permissions" => 5,
                 "email" => 6,
                 "chat" => 7,
-                "setup" => 8,
+                "setup" or "licensing" => 8,
                 "logs" => 9,
                 "timesheets" => 10,
                 _ => 0
@@ -1500,6 +1541,7 @@
     }
 
     [Inject] private Spokes_Server.Core.Services.Core.IFileService FileService { get; set; } = default!;
+    [Inject] private Spokes_Server.Core.Services.Core.ImageProcessingService ImageService { get; set; } = default!;
 
     private void HandleLogoUploaded(List<ApiFileUpload.UploadResult> results)
     {
@@ -1515,9 +1557,10 @@
             try
             {
                 var bytes = File.ReadAllBytes(fullPath);
-                var base64 = Convert.ToBase64String(bytes);
-                var format = result.FileName?.EndsWith("png", StringComparison.OrdinalIgnoreCase) == true ? "png" : "jpeg";
-                Profile.LogoBase64 = $"data:image/{format};base64,{base64}";
+                var optimizedBytes = ImageService.OptimizeImage(bytes, maxDimension: 1024, out var mimeType);
+                var base64 = Convert.ToBase64String(optimizedBytes);
+                Profile.LogoBase64 = $"data:{mimeType};base64,{base64}";
+                Profile.LogoVersion++;
                 FileService.CleanTempContext(parts[1]);
                 StateHasChanged();
             }
@@ -1543,10 +1586,10 @@
             try
             {
                 var bytes = File.ReadAllBytes(fullPath);
-                var base64 = Convert.ToBase64String(bytes);
-                var format = result.FileName?.EndsWith("png", StringComparison.OrdinalIgnoreCase) == true ? "png" : 
-                            result.FileName?.EndsWith("ico", StringComparison.OrdinalIgnoreCase) == true ? "x-icon" : "jpeg";
-                Profile.IconBase64 = $"data:image/{format};base64,{base64}";
+                var optimizedBytes = ImageService.OptimizeImage(bytes, maxDimension: 256, out var mimeType);
+                var base64 = Convert.ToBase64String(optimizedBytes);
+                Profile.IconBase64 = $"data:{mimeType};base64,{base64}";
+                Profile.IconVersion++;
                 FileService.CleanTempContext(parts[1]);
                 StateHasChanged();
             }
@@ -1556,6 +1599,20 @@
                 FileService.CleanTempContext(parts[1]);
             }
         }
+    }
+
+    private void ClearLogo()
+    {
+        Profile.LogoBase64 = string.Empty;
+        Profile.LogoVersion++;
+        StateHasChanged();
+    }
+
+    private void ClearIcon()
+    {
+        Profile.IconBase64 = string.Empty;
+        Profile.IconVersion++;
+        StateHasChanged();
     }
 
     // --- Template Logic ---
@@ -1665,7 +1722,9 @@
                 var config = Db.ServerConfigs.GetOrCreateGlobalConfig();
                 var validationResult = LicenseService.ValidateLicense(json, config);
 
-                if (validationResult.Status == Spokes_Server.Core.Services.Licensing.LicenseStatus.Valid || validationResult.Status == Spokes_Server.Core.Services.Licensing.LicenseStatus.Tolerated)
+                if (validationResult.Status == Spokes_Server.Core.Services.Licensing.LicenseStatus.Valid || 
+                    validationResult.Status == Spokes_Server.Core.Services.Licensing.LicenseStatus.Tolerated ||
+                    validationResult.Status == Spokes_Server.Core.Services.Licensing.LicenseStatus.Expired)
                 {
                     if (validationResult.ParsedLicense != null)
                     {
@@ -1678,7 +1737,27 @@
                         }
                         
                         Db.CompanyProfile.Save(Profile);
-                        Snackbar.Add("License Validated & Saved Successfully!", Severity.Success);
+                        
+                        // Reset license banner dismissals so admins are alerted if/when this license expires in the future
+                        var admins = Db.Employees.GetAll().Where(e => e.IsAdmin || e.Permissions.Contains(Spokes_Server.Core.Constants.AppPermissions.Admin.ManageSettings)).ToList();
+                        foreach (var admin in admins)
+                        {
+                            if (admin.DismissedLicenseBannerPermanently || admin.LicenseBannerRemindLaterDate != null)
+                            {
+                                admin.DismissedLicenseBannerPermanently = false;
+                                admin.LicenseBannerRemindLaterDate = null;
+                                Db.Employees.Save(admin);
+                            }
+                        }
+                        
+                        if (validationResult.Status == Spokes_Server.Core.Services.Licensing.LicenseStatus.Expired)
+                        {
+                            Snackbar.Add($"Expired License Saved: {validationResult.Message}", Severity.Warning);
+                        }
+                        else
+                        {
+                            Snackbar.Add("License Validated & Saved Successfully!", Severity.Success);
+                        }
                         
                         // Force a reload so MainLayout picks up the new status
                         Nav.NavigateTo(Nav.Uri, forceLoad: true);

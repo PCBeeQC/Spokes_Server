@@ -15,6 +15,7 @@
 @inject ICryptoService Crypto
 @inject ISnackbar Snackbar
 @inject Spokes_Server.Core.Services.Core.AppLabelService AppLabels
+@inject Spokes_Server.Core.Services.Core.StartupTimingService StartupTimings
 @implements IDisposable
 
 <MudPaper Elevation="0" Style="height: 100%; display: flex; flex-direction: column;">
@@ -725,7 +726,6 @@
     </div>
 </MudPaper>
 
-
 @code {
     [Parameter] public List<ChatChannel> Channels { get; set; } = new();
     [Parameter] public string? SelectedChannelId { get; set; }
@@ -737,7 +737,19 @@
     [Parameter] public EventCallback<ChatChannel> OnUnarchiveChannel { get; set; }
     [Parameter] public EventCallback<Dictionary<string, int>> OnChannelOrdersChanged { get; set; }
 
-    private string _searchText = string.Empty;
+    private string _searchTextInternal = string.Empty;
+    private string _searchText
+    {
+        get => _searchTextInternal;
+        set
+        {
+            if (_searchTextInternal != value)
+            {
+                _searchTextInternal = value;
+                _cachedVisibleCategories = null;
+            }
+        }
+    }
 
     private Dictionary<string, object> _inputAttributes = new()
     {
@@ -755,6 +767,7 @@
 
     private void SetReorderMode(ReorderMode mode)
     {
+        _cachedVisibleCategories = null;
         if (mode == ReorderMode.Personal)
         {
             InitializeCustomOrderIfNeeded();
@@ -787,6 +800,7 @@
     {
         if (_currentUserObj != null)
         {
+            _cachedVisibleCategories = null;
             _currentUserObj.UsesCustomSidebarOrder = false;
             _currentUserObj.CustomCategoryOrder.Clear();
             _currentUserObj.CustomChannelOrder.Clear();
@@ -846,9 +860,10 @@
         return false;
     }
 
+    private List<ChatCategory>? _cachedVisibleCategories;
     private List<ChatCategory> GetVisibleCategories()
     {
-        return GetAllCategoriesOrdered()
+        return _cachedVisibleCategories ??= GetAllCategoriesOrdered()
             .Where(c => c.Id != "sys_archive" && IsCategoryVisible(c))
             .ToList();
     }
@@ -926,6 +941,7 @@
             allCats.Add(archiveCat);
         }
 
+        _cachedVisibleCategories = null;
         PersistCategoryOrder(allCats);
         InvokeAsync(StateHasChanged);
     }
@@ -981,12 +997,35 @@
     private bool _archiveCollapsed = false;
     private bool _prefsLoaded = false;
 
+    private Dictionary<string, Employee> _employeeLookup = new();
+
+    private string GetEmployeeFirstName(string senderId)
+    {
+        if (_employeeLookup.TryGetValue(senderId, out var emp))
+        {
+            return emp.FirstName ?? emp.FullName ?? "Unknown";
+        }
+        var sender = Employees.FirstOrDefault(e => e.Id == senderId);
+        return sender?.FirstName ?? "Unknown";
+    }
+
     private Employee? _currentUserObj => Employees.FirstOrDefault(e => e.Id == CurrentUserId);
     private bool CanCreateChannel => _currentUserObj?.HasPermission(Spokes_Server.Core.Constants.AppPermissions.Chat.CreateChannels) == true || _currentUserObj?.IsAdmin == true;
     private bool CanReorder => _currentUserObj?.HasPermission(Spokes_Server.Core.Constants.AppPermissions.Chat.EditAllPublicChannels) == true || _currentUserObj?.IsAdmin == true;
 
     protected override void OnParametersSet()
     {
+        var lookup = new Dictionary<string, Employee>();
+        foreach (var emp in Employees)
+        {
+            if (!string.IsNullOrEmpty(emp.Id))
+            {
+                lookup[emp.Id] = emp;
+            }
+        }
+        _employeeLookup = lookup;
+        _cachedVisibleCategories = null;
+
         if (_currentUserObj != null && !_prefsLoaded)
         {
             _publicCollapsed = _currentUserObj.ChatPublicCollapsed;
@@ -997,6 +1036,7 @@
             _archiveCollapsed = _currentUserObj.ChatArchiveCollapsed;
             _prefsLoaded = true;
         }
+        StartupTimings.Add($"Server: ChatSidebar OnParametersSet Done (Channels: {Channels.Count}, Employees: {Employees.Count})");
     }
 
     private void SaveLocalPrefs()
@@ -1046,6 +1086,7 @@
 
     protected override void OnInitialized()
     {
+        StartupTimings.Add("Server: ChatSidebar OnInitialized");
         // Subscribe to unread count changes to re-render badges
         ChatNotifications.OnUnreadCountChanged += OnUnreadChanged;
         ChatState.VoiceMemberJoined += OnVoicePresenceChanged;
@@ -1081,28 +1122,54 @@
         return Spokes_Server.Core.Helpers.ChatPreviewFormatter.FormatAndTruncatePreview(rawContent, attachments, 30);
     }
 
+    private readonly Dictionary<string, (string MessageId, string Text)> _decryptedPreviewCache = new();
+
+    protected override Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            StartupTimings.Add("Server: ChatSidebar OnAfterRenderAsync Start");
+        }
+        return Task.CompletedTask;
+    }
+
     private string? GetChannelPreview(string channelId)
     {
-        var messages = Db.ChatMessages.GetByChannel(channelId, 10);
-        var msg = messages.FirstOrDefault(m => _currentUserObj?.BlockedUserIds?.Contains(m.SenderId) != true);
-        if (msg == null) return null;
+        var preview = Db.ChatMessages.GetChannelPreviewSummary(channelId, _currentUserObj?.BlockedUserIds);
+        if (preview == null) return null;
 
-        var sender = Employees.FirstOrDefault(e => e.Id == msg.SenderId);
-        var senderName = sender?.FirstName ?? "Unknown";
+        var senderName = GetEmployeeFirstName(preview.SenderId);
 
-        if (msg.IsEncrypted)
+        if (preview.IsEncrypted)
         {
-            var channel = Db.ChatChannels.GetById(channelId);
-            if (channel != null && CurrentUserId != null && ScopedKeystore.IsUnlocked)
+            if (ScopedKeystore.IsUnlocked && CurrentUserId != null)
             {
+                if (_decryptedPreviewCache.TryGetValue(channelId, out var cached) && cached.MessageId == preview.MessageId)
+                {
+                    return $"{senderName}: {cached.Text}";
+                }
+
+                var channel = Channels.FirstOrDefault(c => c.Id == channelId) ?? Db.ChatChannels.GetById(channelId);
                 var privKey = ScopedKeystore.GetPrivateKey();
-                if (privKey != null && channel.EncryptedChannelKeys.TryGetValue(CurrentUserId, out var cipherChannelKey))
+                if (channel != null && privKey != null && channel.EncryptedChannelKeys.TryGetValue(CurrentUserId, out var cipherChannelKey))
                 {
                     try
                     {
-                        var plainKey = Crypto.DecryptRsa(cipherChannelKey, privKey);
-                        var plainContent = Crypto.DecryptAes(msg.Content, plainKey);
-                        return $"{senderName}: {FormatPreviewContent(plainContent, msg.Attachments)}";
+                        var cipherContent = preview.EncryptedContent;
+                        if (cipherContent == null)
+                        {
+                            var fullMsg = Db.ChatMessages.GetLatestInChannel(channelId);
+                            cipherContent = fullMsg?.Content;
+                        }
+
+                        if (!string.IsNullOrEmpty(cipherContent))
+                        {
+                            var plainKey = Crypto.DecryptRsa(cipherChannelKey, privKey);
+                            var plainContent = Crypto.DecryptAes(cipherContent, plainKey);
+                            var formatted = FormatPreviewContent(plainContent, preview.Attachments);
+                            _decryptedPreviewCache[channelId] = (preview.MessageId, formatted);
+                            return $"{senderName}: {formatted}";
+                        }
                     }
                     catch { }
                 }
@@ -1110,7 +1177,8 @@
             return $"{senderName}: 🔒 Locked Message";
         }
 
-        return $"{senderName}: {FormatPreviewContent(msg.Content, msg.Attachments)}";
+        var snippet = preview.PreviewText;
+        return string.IsNullOrEmpty(snippet) ? null : $"{senderName}: {snippet}";
     }
 
     private async Task OpenCreateChannelDialog(string? initialAccessType = null, string? categoryId = null)

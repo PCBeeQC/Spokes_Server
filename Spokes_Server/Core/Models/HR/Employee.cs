@@ -114,6 +114,10 @@ public class Employee : IDataEntity
     public bool DismissedChatWizardPermanently { get; set; } = false;
     public DateTimeOffset? ChatWizardRemindLaterDate { get; set; }
 
+    // License Banner Dismissal (Matching Secure Chat Wizard Pattern)
+    public bool DismissedLicenseBannerPermanently { get; set; } = false;
+    public DateTimeOffset? LicenseBannerRemindLaterDate { get; set; }
+
     // Email Credentials (Portable Encrypted)
     public string EncryptedEmailPassword { get; set; } = string.Empty;
     public string SignatureHtml { get; set; } = string.Empty;

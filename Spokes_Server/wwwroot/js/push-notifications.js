@@ -174,6 +174,11 @@ window.pushNotifications = {
         }
     },
 
+    // Check if running in native mobile Capacitor shell
+    isNativePlatform: function () {
+        return !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
+    },
+
     // Check if push notifications are supported
     isSupported: function () {
         if (window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) return true;

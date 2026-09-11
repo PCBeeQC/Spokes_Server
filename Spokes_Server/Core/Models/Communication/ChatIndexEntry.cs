@@ -15,4 +15,10 @@ public class ChatIndexEntry
     /// </summary>
     public string? SearchText { get; set; }
     public string? ReplyToId { get; set; }
+
+    /// <summary>
+    /// Pre-formatted preview text for sidebar display (e.g. "Sounds good!", "📷 Sent an image").
+    /// MUST BE NULL if IsEncrypted is true to prevent plaintext leaks.
+    /// </summary>
+    public string? PreviewText { get; set; }
 }

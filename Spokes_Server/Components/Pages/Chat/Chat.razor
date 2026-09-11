@@ -1,5 +1,4 @@
-@page "/chat"
-@page "/chat/{ChannelId}"
+@page "/chat/{ChannelId?}"
 @using Microsoft.AspNetCore.Components.Authorization
 @using Microsoft.AspNetCore.Http
 @using Spokes_Server.Core.Data
@@ -26,6 +25,7 @@
 @inject ScopedKeystoreService ScopedKeystore
 @inject NotificationRoutingService NotificationRoutingService
 @inject Spokes_Server.Core.Services.Communication.ShortcutIconService ShortcutIconService
+@inject Spokes_Server.Core.Services.Core.StartupTimingService StartupTimings
 @implements IAsyncDisposable
 
 <PageTitle>Chat</PageTitle>
@@ -101,7 +101,7 @@
         
         <!-- Chat Area -->
         <MudItem xs="12" md="9" Class="@(ChannelId == null ? "d-none d-md-block" : "")" Style="height: 100%;">
-            @if (!_isFirstRenderComplete)
+            @if (_selectedChannel == null && !string.IsNullOrEmpty(ChannelId) && !_channelNotFound)
             {
                 <div style="height: 100%; display: flex; flex-direction: column;">
                     <!-- Header Skeleton -->
@@ -515,9 +515,18 @@
                 else
                 {
                     <div class="d-flex flex-column align-center justify-center flex-grow-1" style="height: 100%; background: var(--mud-palette-background-grey);">
-                        <MudIcon Icon="@Icons.Material.Filled.Forum" Size="Size.Large" Color="Color.Surface" Style="font-size: 80px; opacity: 0.3;" />
-                        <MudText Typo="Typo.h5" Color="Color.Surface" Class="mt-4" Style="opacity: 0.5;">Select a Channel</MudText>
-                        <MudText Typo="Typo.body1" Color="Color.Surface" Class="mt-1" Style="opacity: 0.5;">Choose a channel from the sidebar to start chatting.</MudText>
+                        @if (_channelNotFound)
+                        {
+                            <MudIcon Icon="@Icons.Material.Filled.SearchOff" Size="Size.Large" Color="Color.Surface" Style="font-size: 80px; opacity: 0.3;" />
+                            <MudText Typo="Typo.h5" Color="Color.Surface" Class="mt-4" Style="opacity: 0.5;">Channel Not Found</MudText>
+                            <MudText Typo="Typo.body1" Color="Color.Surface" Class="mt-1" Style="opacity: 0.5;">This channel does not exist or you do not have permission to view it.</MudText>
+                        }
+                        else
+                        {
+                            <MudIcon Icon="@Icons.Material.Filled.Forum" Size="Size.Large" Color="Color.Surface" Style="font-size: 80px; opacity: 0.3;" />
+                            <MudText Typo="Typo.h5" Color="Color.Surface" Class="mt-4" Style="opacity: 0.5;">Select a Channel</MudText>
+                            <MudText Typo="Typo.body1" Color="Color.Surface" Class="mt-1" Style="opacity: 0.5;">Choose a channel from the sidebar to start chatting.</MudText>
+                        }
                     </div>
                 }
                 </div> @* Close chat-drop-zone div *@
@@ -660,6 +669,9 @@
     </div>
 }
 </MudContainer>
+@{
+    StartupTimings.Add("Server: RenderTree Chat Markup End");
+}
 
 <style>
     .action-sheet-emoji-row {
@@ -700,7 +712,7 @@
 </style>
 
 @code {
-    private bool _isFirstRenderComplete = false;
+    private bool _channelNotFound = false;
 
     [Parameter]
     public string? ChannelId { get; set; }
@@ -793,12 +805,24 @@
     {
         try
         {
+            StartupTimings.Add("Server: Chat OnInitializedAsync Start");
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+
             _currentUser = await UserService.GetEmployeeAsync();
+            StartupTimings.Add($"Server: Chat GetEmployee Done (+{sw.ElapsedMilliseconds}ms)");
+            sw.Restart();
+
             _sessionId = await UserService.GetSessionIdAsync();
             _employees = Db.Employees.GetAll();
             _employeeLookup = _employees.ToDictionary(e => e.Id, e => e);
             _teams = Db.Teams.GetAll();
+            StartupTimings.Add($"Server: Chat Load DB Entities Done (+{sw.ElapsedMilliseconds}ms)");
+            sw.Restart();
+
             LoadChannels();
+            StartupTimings.Add($"Server: Chat LoadChannels Done ({_channels.Count} channels) (+{sw.ElapsedMilliseconds}ms)");
+            sw.Restart();
+
             SubscribeToLocalEvents();
 
             // Server-side vault unlock: read the HttpOnly cookie directly from HttpContext
@@ -806,17 +830,8 @@
             // This is more reliable than a JS fetch round-trip and avoids timing issues.
             if (_currentUser != null && !string.IsNullOrEmpty(_currentUser.EncryptedPrivateKey) && !ScopedKeystore.IsUnlocked)
             {
-                Console.WriteLine($"[VAULT-DIAGNOSTIC] [Chat.razor] HttpContextAccessor.HttpContext == null ? {HttpContextAccessor.HttpContext == null}");
-                if (HttpContextAccessor.HttpContext != null)
-                {
-                    Console.WriteLine($"[VAULT-DIAGNOSTIC] [Chat.razor] Request Path: {HttpContextAccessor.HttpContext.Request.Path}");
-                    Console.WriteLine($"[VAULT-DIAGNOSTIC] [Chat.razor] Cookie count: {HttpContextAccessor.HttpContext.Request.Cookies.Count}");
-                }
-                
-                var success = ScopedKeystore.TryInitializeFromVaultCookie(
+                ScopedKeystore.TryInitializeFromVaultCookie(
                     HttpContextAccessor.HttpContext, _currentUser.Id, _currentUser.EncryptedPrivateKey, Crypto, GlobalKeystore);
-                
-                Console.WriteLine($"[VAULT-DIAGNOSTIC] [Chat.razor] TryInitializeFromVaultCookie returned {success}");
             }
             
             VoiceService.OnChange += HandleVoiceStateChanged;
@@ -845,10 +860,7 @@
             };
             _typingCleanupTimer.Start();
 
-            if (ChannelId != null)
-            {
-                await ChatNotifications.MarkChannelAsReadAsync(ChannelId);
-            }
+            StartupTimings.Add($"Server: Chat OnInitializedAsync Done (+{sw.ElapsedMilliseconds}ms)");
         }
         catch (Exception ex) when (ex is not NavigationException)
         {
@@ -975,7 +987,7 @@
     {
         if (firstRender)
         {
-            _isFirstRenderComplete = true;
+            StartupTimings.Add("Server: Chat OnAfterRenderAsync Start");
             try
             {
                 _objRef = DotNetObjectReference.Create(this);
@@ -1426,15 +1438,22 @@
         
         bool currentlyInChannel = !string.IsNullOrEmpty(ChannelId);
         
-        // Prune the PREVIOUS channel logic
-        // We do this before updating ChannelId so we know what we are leaving
+        // Prune the PREVIOUS channel logic in background - NEVER block UI transition
         if (_previousChannelId != null && _previousChannelId != newChannelId)
         {
-             // Mark the channel we are leaving as fully read
-             await ChatNotifications.MarkChannelAsReadAsync(_previousChannelId);
-             
-             // Fire and forget pruning - don't block UI
-             _ = Task.Run(() => Db.ChatMessages.EnforceGlobalCacheSizeLimit());
+             var prevChan = _previousChannelId;
+             _ = Task.Run(async () =>
+             {
+                 try
+                 {
+                     await ChatNotifications.MarkChannelAsReadAsync(prevChan);
+                     Db.ChatMessages.EnforceGlobalCacheSizeLimit();
+                 }
+                 catch (Exception ex)
+                 {
+                     Console.WriteLine($"[Chat] Previous channel cleanup error: {ex.Message}");
+                 }
+             });
         }
         _previousChannelId = newChannelId;
         ChannelId = newChannelId;
@@ -1447,33 +1466,24 @@
         }
         
         // If the channel was not found (access denied / deleted), don't proceed
-        if (_selectedChannel == null) return;
+        if (_selectedChannel == null)
+        {
+            _channelNotFound = true;
+            StateHasChanged();
+            return;
+        }
+        _channelNotFound = false;
 
         _channelTeams = GetChannelTeams();
         _channelEmployees = GetChannelEmployees();
 
-        _messages.Clear();
-        _sortedMessages = new();
-        _decryptedChannelKey = null;
-        _typingUsers.Clear();
-        _hasMoreMessages = false;
-        
-        _isLoadingMessages = true;
-        StateHasChanged();
-
-        // Artificial delay removed to avoid layout thrashing and flicker.
-        // The synchronous data fetch is fast enough to not require a forced UI yield here.
-
-        // Race condition check: Did the user switch away while we waited?
-        if (ChannelId != channelId) return;
-
         _messages = Db.ChatMessages.GetByChannel(channelId, 15);
-        
         var cachedCount = Db.ChatMessages.GetMessageCount(channelId);
         _hasMoreMessages = cachedCount > _messages.Count;
-        
-        // Race condition check again
-        if (ChannelId != channelId) return;
+        _typingUsers.Clear();
+        _sortedMessages = new();
+        _decryptedChannelKey = null;
+        _isLoadingMessages = false;
 
         // Proactively mark unread loaded messages as read for the current user
         if (_currentUser != null)
@@ -1489,8 +1499,15 @@
                     m.ReadBy ??= new List<string>();
                     m.ReadBy.Add(_currentUser.Id);
                     Db.ChatMessages.Save(m);
-                    ChatState.NotifyMessageRead(channelId, m.Id, m.ReadBy);
                 }
+
+                _ = Task.Run(() =>
+                {
+                    foreach (var m in unreadLoaded)
+                    {
+                        ChatState.NotifyMessageRead(channelId, m.Id, m.ReadBy);
+                    }
+                });
             }
         }
 
@@ -1498,7 +1515,6 @@
         RecomputeSortedMessages();
         RecomputeLatestReadReceipts();
 
-        _isLoadingMessages = false;
         _shouldScrollToBottomAndInitObserver = true;
 
         // Reset view states
@@ -1510,19 +1526,25 @@
             _ = JoinVoiceChannelInternal(isInitiator: false);
         }
 
-
-
-        StateHasChanged();
-        
-        // Note: Scrolling and observer initialization are now handled in OnAfterRenderAsync
-        // to ensure the DOM is fully updated before JS calls are made.
-
         if (updateUrl)
         {
             Nav.NavigateTo($"/chat/{channelId}", replace: currentlyInChannel);
         }
+
+        StateHasChanged();
         
-        await ChatNotifications.MarkChannelAsReadAsync(channelId);
+        // Mark channel as read in background
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await ChatNotifications.MarkChannelAsReadAsync(channelId);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[Chat] MarkChannelAsRead error: {ex.Message}");
+            }
+        });
 
         // Load notification level preference
         if (_currentUser != null)
@@ -1531,33 +1553,42 @@
                 _currentUser.Id, channelId, _selectedChannel.ChannelType.ToString(), _selectedChannel.IsVoiceChannel);
         }
 
-        // Push shortcuts to native OS
-        try
+        // Push shortcuts to native OS in background (never block UI)
+        _ = Task.Run(async () =>
         {
-            var serverUrl = Configuration["ServerUrl"] ?? Nav.BaseUri;
-            var channelName = GetChannelDisplayName(_selectedChannel);
-            string? channelIconBase64 = null;
-            if (_selectedChannel.ChannelType == ChatChannelType.Direct && _currentUser != null)
+            try
             {
-                var otherEmpId = _selectedChannel.ParticipantIds.FirstOrDefault(id => id != _currentUser.Id) ?? _currentUser.Id;
-                if (otherEmpId != null)
+                var serverUrl = Configuration["ServerUrl"] ?? Nav.BaseUri;
+                var channelName = GetChannelDisplayName(_selectedChannel);
+                string? channelIconBase64 = null;
+                if (_selectedChannel.ChannelType == ChatChannelType.Direct && _currentUser != null)
                 {
-                    channelIconBase64 = ShortcutIconService.GetShortcutIconBase64(GetEmployee(otherEmpId));
+                    var otherEmpId = _selectedChannel.ParticipantIds.FirstOrDefault(id => id != _currentUser.Id) ?? _currentUser.Id;
+                    if (otherEmpId != null)
+                    {
+                        channelIconBase64 = ShortcutIconService.GetShortcutIconBase64(GetEmployee(otherEmpId));
+                    }
                 }
-            }
 
-            if (string.IsNullOrEmpty(channelIconBase64))
-            {
-                var companyProfile = Db.CompanyProfile.Get();
-                channelIconBase64 = ShortcutIconService.GetCompanyLogoBase64(companyProfile?.LogoBase64);
+                if (string.IsNullOrEmpty(channelIconBase64))
+                {
+                    var companyProfile = Db.CompanyProfile.Get();
+                    channelIconBase64 = ShortcutIconService.GetCompanyLogoBase64(companyProfile?.LogoBase64);
+                }
+                
+                await InvokeAsync(async () =>
+                {
+                    if (_module != null)
+                    {
+                        await JS.InvokeVoidAsync("spokesPushDirectShareShortcut", serverUrl, channelId, channelName, channelIconBase64 ?? "");
+                    }
+                });
             }
-            
-            await JS.InvokeVoidAsync("spokesPushDirectShareShortcut", serverUrl, channelId, channelName, channelIconBase64 ?? "");
-        }
-        catch (Exception e)
-        {
-            Console.WriteLine($"[Shortcuts] Failed to push shortcut for {channelId}: {e.Message}");
-        }
+            catch (Exception e)
+            {
+                Console.WriteLine($"[Shortcuts] Failed to push shortcut for {channelId}: {e.Message}");
+            }
+        });
 
         // --- Stream the remaining messages to reach an initial 50-message cache ---
         if (_hasMoreMessages && _messages.Count < 50 && !token.IsCancellationRequested)
@@ -2424,10 +2455,12 @@
     {
         if (ChannelId != _selectedChannel?.Id)
         {
-             if (ChannelId == null)
+             if (string.IsNullOrEmpty(ChannelId))
              {
                  _selectedChannel = null;
+                 _channelNotFound = false;
                  _messages.Clear();
+                 _sortedMessages.Clear();
                  StateHasChanged();
              }
              else

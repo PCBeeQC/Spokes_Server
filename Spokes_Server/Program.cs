@@ -136,6 +136,7 @@ builder.Services.AddSingleton<Spokes_Server.Core.Services.Logging.ISystemLogServ
 builder.Services.AddScoped<Spokes_Server.Core.Utilities.SpokesDomInteropService>();
 builder.Services.AddScoped<Spokes_Server.Core.Services.UI.ImageRecoveryService>();
 builder.Services.AddScoped<Spokes_Server.Core.Services.Security.ScopedKeystoreService>();
+builder.Services.AddScoped<Spokes_Server.Core.Services.Core.StartupTimingService>();
 builder.Services.AddSingleton<Spokes_Server.Core.Services.Security.FileTokenService>();
 builder.Services.AddScoped<Spokes_Server.Core.Services.Migrations.LegacyAttachmentMigrationService>();
 
@@ -914,15 +915,6 @@ app.Use(async (context, next) =>
     if (!string.IsNullOrEmpty(cTimes))
     {
         context.Items["ClientLocalTimings"] = cTimes;
-    }
-
-    if (!string.IsNullOrEmpty(startupId) && (context.Request.Query.ContainsKey("startup_id") || path.StartsWith("/chat") || path.StartsWith("/sso/consume-token")))
-    {
-        Console.WriteLine($"[STARTUP-DIAGNOSTIC] {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss.fff} - Request: {context.Request.Method} {path} - StartupCorrelationId: {startupId}");
-        if (context.Request.Query.ContainsKey("c_times") && !string.IsNullOrEmpty(cTimes))
-        {
-            Console.WriteLine($"[STARTUP-DIAGNOSTIC] {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss.fff} - StartupCorrelationId: {startupId} - Client timings: {cTimes}");
-        }
     }
 
     if (path.StartsWith("/sso/consume-token") || path.StartsWith("/chat") || path.StartsWith("/_blazor") || path.StartsWith("/js/capacitor-init.js") || path.StartsWith("/sso/login/auto"))

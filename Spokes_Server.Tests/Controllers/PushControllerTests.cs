@@ -34,6 +34,8 @@ namespace Spokes_Server.Tests.Controllers
         private readonly WebPushService _webPushService;
         private readonly UserService _userService;
         private readonly OpenIdAccountRepository _openIdRepo;
+        private readonly ServerConfigRepository _serverConfigRepo;
+        private readonly Spokes_Server.Core.Services.Licensing.LicenseValidationService _licenseValidation;
 
         public PushControllerTests()
         {
@@ -53,8 +55,12 @@ namespace Spokes_Server.Tests.Controllers
             var mockHttpClientFactory = new Mock<System.Net.Http.IHttpClientFactory>();
             var systemConfigRepo = new SystemConfigRepository(writer, mockConfig.Object);
             var encService = new Spokes_Server.Core.Services.Core.EncryptionService(mockConfig.Object);
-            var serverConfigRepo = new ServerConfigRepository(writer, mockConfig.Object, encService);
-            _webPushService = new WebPushService(_sessionRepo, _empRepo, _companyRepo, systemConfigRepo, serverConfigRepo, mockPresenceState.Object, new NotificationQueueService(new Mock<ILogger<NotificationQueueService>>().Object), mockWebPushLogger.Object, mockConfig.Object, mockHttpClientFactory.Object, new Mock<Microsoft.AspNetCore.DataProtection.IDataProtectionProvider>().Object, new Mock<Spokes_Server.Core.Services.Logging.ISystemLogService>().Object);
+            _serverConfigRepo = new ServerConfigRepository(writer, mockConfig.Object, encService);
+            _licenseValidation = new Spokes_Server.Core.Services.Licensing.LicenseValidationService(
+                new Mock<ILogger<Spokes_Server.Core.Services.Licensing.LicenseValidationService>>().Object,
+                encService,
+                new Spokes_Server.Core.Services.Licensing.VersionMetadata("2026.8.102"));
+            _webPushService = new WebPushService(_sessionRepo, _empRepo, _companyRepo, systemConfigRepo, _serverConfigRepo, mockPresenceState.Object, new NotificationQueueService(new Mock<ILogger<NotificationQueueService>>().Object), mockWebPushLogger.Object, mockConfig.Object, mockHttpClientFactory.Object, new Mock<Microsoft.AspNetCore.DataProtection.IDataProtectionProvider>().Object, new Mock<Spokes_Server.Core.Services.Logging.ISystemLogService>().Object, encService, _licenseValidation);
 
             var mockAuthState = new Mock<Microsoft.AspNetCore.Components.Authorization.AuthenticationStateProvider>();
 
@@ -160,10 +166,34 @@ namespace Spokes_Server.Tests.Controllers
             _openIdRepo.Save(new OpenIdAccount { Sub = "sub1", LinkedEmployeeId = "emp1" });
             SetUser("sub1");
 
-            var result = await _controller.GetStatus();
+            var result = await _controller.GetStatus(_companyRepo, _serverConfigRepo, _licenseValidation);
             var okResult = Assert.IsType<OkObjectResult>(result);
             var value = okResult.Value.ToString();
             Assert.Contains("isConfigured", value);
+            Assert.Contains("nativePush", value);
+        }
+
+        [Fact]
+        public async Task Subscribe_NativeRelay_ReturnsIsNativePushLicensed()
+        {
+            _empRepo.Save(new Employee { Id = "emp1" });
+            _openIdRepo.Save(new OpenIdAccount { Sub = "sub1", LinkedEmployeeId = "emp1" });
+            var session = new DeviceSession { Id = "session_native", EmployeeId = "emp1", DeviceId = "native_dev_1" };
+            _sessionRepo.Save(session);
+            SetUserWithSession("sub1", "session_native");
+
+            var req = new SubscribeRequest
+            {
+                Endpoint = "https://relay.spokes.com/api/push/send",
+                SubscriptionType = "NativeRelay",
+                DeviceType = "iOS",
+                DeviceId = "native_dev_1"
+            };
+
+            var result = await _controller.Subscribe(req, _companyRepo, _serverConfigRepo, _licenseValidation);
+            var okResult = Assert.IsType<OkObjectResult>(result);
+            var value = okResult.Value.ToString();
+            Assert.Contains("isNativePushLicensed", value);
         }
 
         [Fact]
