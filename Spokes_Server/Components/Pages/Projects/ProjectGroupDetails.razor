@@ -1,0 +1,291 @@
+@page "/project-groups/{Id}"
+@implements IDisposable
+<PageTitle>@Group?.Name - Project Group</PageTitle>
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Data
+@using Spokes_Server.Core.Constants
+@inject Database Db
+@inject ISnackbar Snackbar
+@inject IDialogService DialogService
+@inject NavigationManager Nav
+@using Spokes_Server.Core.Services
+@inject UserService UserService
+
+@if (Group == null)
+{
+    <MudAlert Severity="Severity.Error">Project group not found.</MudAlert>
+}
+else
+{
+    <MudPaper Class="pa-6 mb-4" Elevation="2">
+        <div class="d-flex justify-space-between align-center mb-2">
+            <div>
+                <MudText Typo="Typo.h4" Color="Color.Primary">@Group.Name</MudText>
+                <MudText Typo="Typo.subtitle1" Color="Color.Secondary">
+                    Client: @Group.Client.BusinessName
+                </MudText>
+            </div>
+            <div class="d-flex gap-2">
+                <MudChip T="string" Color="Color.Info" Size="Size.Small">
+                    @GroupedProjects.Count Projects
+                </MudChip>
+            </div>
+        </div>
+        @if (!string.IsNullOrEmpty(Group.Description))
+        {
+            <MudDivider Class="my-3" />
+            <MudText Typo="Typo.body1" Style="white-space: pre-line; color: var(--mud-palette-text-secondary);">
+                @Group.Description
+            </MudText>
+        }
+    </MudPaper>
+
+    <MudTabs ActivePanelIndex="activeTabIndex" ActivePanelIndexChanged="UpdateActiveTab" Elevation="2" Rounded="true" TabPanelsClass="pa-4">
+
+        <MudTabPanel Text="Projects" Icon="@Icons.Material.Filled.Work">
+            <MudGrid>
+                <MudItem xs="12">
+                    <div class="d-flex justify-space-between align-center mb-4">
+                        <MudText Typo="Typo.h6">Projects in this Group</MudText>
+                        @if (CanEdit)
+                        {
+                            <MudButton Variant="Variant.Outlined" Color="Color.Primary"
+                                       StartIcon="@Icons.Material.Filled.Edit" OnClick="EditGroup">
+                                Edit Group
+                            </MudButton>
+                        }
+                    </div>
+                </MudItem>
+            </MudGrid>
+
+            @if (!GroupedProjects.Any())
+            {
+                <MudAlert Severity="Severity.Info">No projects in this group yet.</MudAlert>
+            }
+            else
+            {
+                <MudTable Items="@GroupedProjects" Hover="true" Dense="true">
+                    <HeaderContent>
+                        <MudTh>Project</MudTh>
+                        <MudTh>Status</MudTh>
+                        <MudTh>Created</MudTh>
+                        <MudTh>Actions</MudTh>
+                    </HeaderContent>
+                    <RowTemplate>
+                        <MudTd>
+                            <MudLink Href="@($"/projects/{context.Id}")">@context.DisplayName</MudLink>
+                        </MudTd>
+                        <MudTd>
+                            <StatusChip Status="@context.Status" Color="@GetStatusColor(context.Status)" />
+                        </MudTd>
+                        <MudTd>@context.CreatedAt.ToString("MMM dd, yyyy")</MudTd>
+                        <MudTd>
+                            <MudIconButton Icon="@Icons.Material.Filled.OpenInNew" Size="Size.Small"
+                                           Href="@($"/projects/{context.Id}")" />
+                        </MudTd>
+                    </RowTemplate>
+                </MudTable>
+            }
+        </MudTabPanel>
+
+        <MudTabPanel Text="Invoices" Icon="@Icons.Material.Filled.Receipt">
+            <Spokes_Server.Components.Pages.Projects.Tabs.GroupInvoiceList ProjectGroupId="@Id" />
+        </MudTabPanel>
+
+        <MudTabPanel Text="Settings" Icon="@Icons.Material.Filled.Settings">
+            <MudCard Elevation="0" Class="pa-4">
+                <MudText Typo="Typo.h6" Class="mb-4">Group Administration</MudText>
+                <div class="d-flex gap-4">
+                    @if (CanEdit)
+                    {
+                        <MudButton Variant="Variant.Outlined" Color="Color.Primary"
+                                   StartIcon="@Icons.Material.Filled.Edit" OnClick="EditGroup">
+                            Edit Group Details
+                        </MudButton>
+                        <MudButton Variant="Variant.Outlined" Color="Color.Error"
+                                   StartIcon="@Icons.Material.Filled.Delete" OnClick="DeleteGroup">
+                            Delete Group
+                        </MudButton>
+                    }
+                    else
+                    {
+                        <MudAlert Severity="Severity.Info">You do not have permission to edit this group.</MudAlert>
+                    }
+                </div>
+            </MudCard>
+        </MudTabPanel>
+
+    </MudTabs>
+}
+
+@code {
+    [Parameter] public string Id { get; set; } = string.Empty;
+
+    private ProjectGroup? Group;
+    private List<Project> GroupedProjects = new();
+    private int activeTabIndex = 0;
+    private bool CanEdit = false;
+    private List<ProjectStatusConfig> AvailableStatuses = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadPermissions();
+        await LoadDataAsync();
+    }
+
+    private async Task LoadPermissions()
+    {
+        var emp = await UserService.GetEmployeeAsync();
+        if (emp != null)
+        {
+            CanEdit = emp.HasPermission(AppPermissions.Projects.Edit) || emp.IsAdmin;
+        }
+    }
+
+    private async Task LoadDataAsync()
+    {
+        Group = Db.ProjectGroups.GetById(Id);
+        if (Group == null) return;
+
+        var emp = await UserService.GetEmployeeAsync();
+        if (emp == null || !emp.HasPermission(AppPermissions.Projects.View))
+        {
+            Nav.NavigateTo("/projects");
+            return;
+        }
+
+        var allProjects = Group.ProjectIds
+            .Select(id => Db.Projects.GetById(id))
+            .Where(p => p != null)
+            .Cast<Project>()
+            .OrderBy(p => p.DisplayName)
+            .ToList();
+
+        GroupedProjects = new List<Project>();
+        foreach (var p in allProjects)
+        {
+            if (await UserService.CanViewProjectAsync(p))
+            {
+                GroupedProjects.Add(p);
+            }
+        }
+
+        // If not an admin and cannot view any projects in this group, deny access to the group entirely
+        if (!emp.IsAdmin && !GroupedProjects.Any() && Group.ProjectIds.Any())
+        {
+            Nav.NavigateTo("/projects");
+            return;
+        }
+
+        var profile = Db.CompanyProfile.Get();
+        AvailableStatuses = profile?.ProjectStatuses ?? new();
+    }
+
+    private Color GetStatusColor(string status)
+    {
+        var match = AvailableStatuses.FirstOrDefault(s => s.Name == status);
+        if (match != null && Enum.TryParse<Color>(match.Color, out var c))
+        {
+            return c;
+        }
+        return StatusColorHelper.GetColor(status);
+    }
+
+    private async Task EditGroup()
+    {
+        if (Group == null) return;
+
+        var options = new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true };
+        var parameters = new DialogParameters { ["ExistingGroup"] = Group };
+        var dialog = await DialogService.ShowAsync<ProjectGroupDialog>("Edit Project Group", parameters, options);
+        var result = await dialog.Result;
+
+        if (!result.Canceled && result.Data is ProjectGroup updatedGroup)
+        {
+            Db.ProjectGroups.Save(updatedGroup);
+            Snackbar.Add("Project Group Updated!", Severity.Success);
+            await LoadDataAsync();
+        }
+    }
+
+    private async Task DeleteGroup()
+    {
+        if (Group == null) return;
+
+        var result = await DialogService.ShowMessageBoxAsync(
+            "Delete Project Group",
+            $"Are you sure you want to delete '{Group.Name}'? This will not delete the projects, but they will no longer be grouped.",
+            yesText: "Delete", cancelText: "Cancel");
+
+        if (result == true)
+        {
+            // Clear ProjectGroupId from all projects in this group
+            foreach (var projectId in Group.ProjectIds)
+            {
+                var project = Db.Projects.GetById(projectId);
+                if (project != null)
+                {
+                    project.ProjectGroupId = null;
+                    Db.Projects.Save(project);
+                }
+            }
+
+            Db.ProjectGroups.Delete(Group.Id);
+            Nav.NavigateTo("/project-groups");
+            Snackbar.Add("Project Group Deleted", Severity.Success);
+        }
+    }
+    [SupplyParameterFromQuery] public string? Tab { get; set; }
+
+    protected override void OnParametersSet()
+    {
+        if (!string.IsNullOrEmpty(Tab))
+        {
+            activeTabIndex = Tab.ToLower() switch
+            {
+                "projects" => 0,
+                "invoices" => 1,
+                "settings" => 2,
+                _ => 0
+            };
+        }
+    }
+
+    private bool _isDisposed;
+
+    public void Dispose()
+    {
+        _isDisposed = true;
+    }
+
+    private void UpdateActiveTab(int index)
+    {
+        if (_isDisposed) return;
+
+        activeTabIndex = index;
+
+        if (!Nav.Uri.Contains("/project-groups/", StringComparison.OrdinalIgnoreCase))
+            return;
+
+        var tabName = index switch
+        {
+            0 => "projects",
+            1 => "invoices",
+            2 => "settings",
+            _ => "projects"
+        };
+        
+        try
+        {
+            Nav.NavigateTo(Nav.GetUriWithQueryParameter("tab", tabName), replace: true);
+        }
+        catch (Microsoft.AspNetCore.Components.NavigationException)
+        {
+        }
+    }
+}
+

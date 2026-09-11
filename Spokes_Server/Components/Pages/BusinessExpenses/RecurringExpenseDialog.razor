@@ -1,0 +1,489 @@
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Services
+@using Spokes_Server.Core.Data
+@using MudBlazor
+@inject ISnackbar Snackbar
+@inject IJSRuntime JS
+@inject IFileService FileService
+@inject Database Db
+
+<MudDialog>
+    <DialogContent>
+        <MudTabs @bind-ActivePanelIndex="ActiveTabIndex" Elevation="0" Rounded="true" ApplyEffectsToContainer="true" TabPanelsClass="pa-2">
+            <MudTabPanel Text="Details">
+                <MudGrid>
+                    <MudItem xs="12">
+                        <MudTextField @bind-Value="Expense.Name" Label="Expense Name" 
+                            Placeholder="e.g. Rent, Internet, Insurance"
+                            Required="true" Variant="Variant.Outlined" />
+                    </MudItem>
+
+                    <MudItem xs="12">
+                        <MudTextField @bind-Value="Expense.Supplier" Label="Supplier / Vendor"
+                            Placeholder="e.g. Bell, Hydro-Québec"
+                            Variant="Variant.Outlined" />
+                    </MudItem>
+
+                    <MudItem xs="12">
+                        <MudTextField @bind-Value="Expense.Description" Label="Description / Notes"
+                            Lines="2" Variant="Variant.Outlined" />
+                    </MudItem>
+
+                    <MudItem xs="12" sm="6">
+                        <MudNumericField @bind-Value="Expense.Amount" Label="Default Amount" 
+                            Variant="Variant.Outlined" Adornment="Adornment.Start" AdornmentText="$"
+                            Min="0" />
+                    </MudItem>
+
+                    <MudItem xs="12" sm="6">
+                        <MudSelect T="string" @bind-Value="Expense.Frequency" Label="Frequency" 
+                            Variant="Variant.Outlined">
+                            <MudSelectItem Value="@RecurringExpenseFrequency.Weekly">Weekly</MudSelectItem>
+                            <MudSelectItem Value="@RecurringExpenseFrequency.BiWeekly">Bi-Weekly</MudSelectItem>
+                            <MudSelectItem Value="@RecurringExpenseFrequency.Monthly">Monthly</MudSelectItem>
+                            <MudSelectItem Value="@RecurringExpenseFrequency.Yearly">Yearly</MudSelectItem>
+                            <MudSelectItem Value="@RecurringExpenseFrequency.OneTime">One-Time</MudSelectItem>
+                            <MudSelectItem Value="@RecurringExpenseFrequency.AsNeeded">As Needed</MudSelectItem>
+                        </MudSelect>
+                    </MudItem>
+
+                    <MudItem xs="12" sm="6">
+                        <MudDatePicker @bind-Date="_createdDate" Label="Start Date" 
+                            Variant="Variant.Outlined" />
+                    </MudItem>
+                </MudGrid>
+            </MudTabPanel>
+
+            @if (ShowBillHistory)
+            {
+                <MudTabPanel Text="Bill History" Disabled="@IsNew">
+                @if (!IsNew)
+                {
+                    @if (Expense.Frequency == RecurringExpenseFrequency.AsNeeded)
+                    {
+                        @* --- AS NEEDED: Manual bill entry --- *@
+                        <MudText Typo="Typo.body2" Class="mb-4 mud-text-secondary">
+                            Add bills manually as you receive them.
+                        </MudText>
+
+                        <MudPaper Class="pa-4 mb-4" Elevation="0" Outlined="true">
+                            <MudText Typo="Typo.subtitle2" Class="mb-3">Add New Bill</MudText>
+                            <MudGrid>
+                                <MudItem xs="12" sm="6">
+                                    <MudDatePicker @bind-Date="_newBillDateReceived" Margin="Margin.Dense" Label="Date Received"
+                                        Variant="Variant.Outlined" />
+                                </MudItem>
+                                <MudItem xs="12" sm="6">
+                                        <MudDatePicker @bind-Date="_newBillDueDate" Margin="Margin.Dense" Label="Due Date"
+                                        Variant="Variant.Outlined" />
+                                </MudItem>
+                                <MudItem xs="12" sm="6">
+                                        <MudNumericField @bind-Value="_newBillAmount" Margin="Margin.Dense" DebounceInterval="500" Label="Amount"
+                                        Variant="Variant.Outlined" Adornment="Adornment.Start" AdornmentText="$"
+                                        Min="0" />
+                                </MudItem>
+                                <MudItem xs="12" sm="6" Class="d-flex align-end mt-n4">
+                                    <ApiFileUpload Category="recurringcosts" ContextId="@Expense.Id" MaximumFileCount="1"
+                                                   OnUploadCompleted="HandleNewBillApiUploaded"
+                                                   OnUploadError='(e) => Snackbar.Add($"Upload failed: {e}", Severity.Error)'>
+                                        <CustomContent>
+                                            <MudButton Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.CloudUpload">
+                                                @(!string.IsNullOrEmpty(_newBillFileName) ? _newBillFileName : "Upload Invoice")
+                                            </MudButton>
+                                        </CustomContent>
+                                    </ApiFileUpload>
+                                </MudItem>
+                                <MudItem xs="12">
+                                    <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                                        StartIcon="@Icons.Material.Filled.Add"
+                                        OnClick="AddManualBill"
+                                        Disabled="@(!_newBillDateReceived.HasValue || _newBillAmount <= 0)">
+                                        Add Bill
+                                    </MudButton>
+                                </MudItem>
+                            </MudGrid>
+                        </MudPaper>
+
+                        @if (Expense.History.Any())
+                        {
+                            <MudTable Items="@Expense.History.OrderByDescending(h => h.Date).ToList()" Dense="true" Hover="true" Striped="true">
+                                <HeaderContent>
+                                    <MudTh>Date Received</MudTh>
+                                    <MudTh>Due Date</MudTh>
+                                    <MudTh>Amount</MudTh>
+                                    <MudTh>Status</MudTh>
+                                    <MudTh>Invoice</MudTh>
+                                    <MudTh>Actions</MudTh>
+                                </HeaderContent>
+                                <RowTemplate>
+                                    <MudTd>@context.Date.ToString("MMM dd, yyyy")</MudTd>
+                                    <MudTd>@(context.DueDate?.ToString("MMM dd, yyyy") ?? "-")</MudTd>
+                                    <MudTd>@context.Amount.ToString("C2")</MudTd>
+                                    <MudTd>
+                                        <MudChip T="string" Size="Size.Small"
+                                            Color="@(context.IsPaid ? Color.Success : Color.Warning)">
+                                            @(context.IsPaid ? "Paid" : "Pending")
+                                        </MudChip>
+                                    </MudTd>
+                                    <MudTd>
+                                        @if (!string.IsNullOrEmpty(context.AttachmentPath))
+                                        {
+                                            <MudLink Href="@context.AttachmentPath" Target="_blank">
+                                                <MudIconButton Icon="@Icons.Material.Filled.AttachFile" Size="Size.Small"
+                                                    Color="Color.Secondary" />
+                                            </MudLink>
+                                        }
+                                    </MudTd>
+                                    <MudTd>
+                                        @* <MudIconButton Icon="@Icons.Material.Filled.CheckCircle" Size="Size.Small"
+                                            Color="@(context.IsPaid ? Color.Default : Color.Success)"
+                                            OnClick="@(() => TogglePaid(context))"
+                                            Title="@(context.IsPaid ? "Mark Unpaid" : "Mark Paid")" /> *@
+                                        @if (string.IsNullOrEmpty(context.AttachmentPath))
+                                        {
+                                            <ApiFileUpload Category="recurringcosts" ContextId="@Expense.Id" MaximumFileCount="1"
+                                                           OnUploadCompleted="@((r) => HandleUploadToExisting(context, r))"
+                                                           OnUploadError='(e) => Snackbar.Add($"Upload failed: {e}", Severity.Error)' Class="d-inline-block">
+                                                <CustomContent>
+                                                    <MudIconButton Icon="@Icons.Material.Filled.CloudUpload" Size="Size.Small" Color="Color.Info" />
+                                                </CustomContent>
+                                            </ApiFileUpload>
+                                        }
+                                        <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small"
+                                            Color="Color.Error" OnClick="@(() => DeleteBillRecord(context))" />
+                                    </MudTd>
+                                </RowTemplate>
+                            </MudTable>
+                        }
+                        else
+                        {
+                            <MudText Typo="Typo.body2" Class="mud-text-secondary mt-2">
+                                No bills recorded yet. Use the form above to add your first bill.
+                            </MudText>
+                        }
+                    }
+                    else
+                    {
+                        @* --- PERIOD-BASED: Auto-generated billing periods --- *@
+                        <MudText Typo="Typo.body2" Class="mb-4 mud-text-secondary">
+                            Upload invoices for each billing period. Periods are generated based on the start date and frequency.
+                        </MudText>
+
+                        <MudTable Items="@GetBillingPeriods()" Dense="true" Hover="true" Striped="true">
+                            <HeaderContent>
+                                <MudTh>Period</MudTh>
+                                <MudTh>Amount</MudTh>
+                                <MudTh>Status</MudTh>
+                                <MudTh>Invoice</MudTh>
+                                <MudTh>Actions</MudTh>
+                            </HeaderContent>
+                            <RowTemplate>
+                                <MudTd>@context.PeriodLabel</MudTd>
+                                <MudTd>
+                                @if (context.Record != null)
+                                {
+                                    @context.Record.Amount.ToString("C2")
+                                }
+                                else
+                                {
+                                            <MudText Typo="Typo.caption" Class="mud-text-secondary">@Expense.Amount.ToString("C2")</MudText>
+                                }
+                                </MudTd>
+                                <MudTd>
+                                @if (context.Record != null)
+                                {
+                                            <MudChip T="string" Size="Size.Small" 
+                                                Color="@(context.Record.IsPaid ? Color.Success : Color.Warning)">
+                                        @(context.Record.IsPaid ? "Paid" : "Pending")
+                                            </MudChip>
+                                }
+                                else
+                                {
+                                            <MudChip T="string" Size="Size.Small" Color="Color.Default">No Bill</MudChip>
+                                }
+                                </MudTd>
+                                <MudTd>
+                                @if (context.Record != null && !string.IsNullOrEmpty(context.Record.AttachmentPath))
+                                {
+                                            <MudLink Href="@context.Record.AttachmentPath" Target="_blank">
+                                                <MudIconButton Icon="@Icons.Material.Filled.AttachFile" Size="Size.Small" 
+                                                    Color="Color.Secondary" />
+                                            </MudLink>
+                                }
+                                </MudTd>
+                                <MudTd>
+                                @if (context.Record == null)
+                                {
+                                            <ApiFileUpload Category="recurringcosts" ContextId="@Expense.Id" MaximumFileCount="1"
+                                                           OnUploadCompleted="@((r) => HandleBillForPeriodUploaded(context.PeriodStart, r))"
+                                                           OnUploadError='(e) => Snackbar.Add($"Upload failed: {e}", Severity.Error)'>
+                                                <CustomContent>
+                                                    <MudButton Size="Size.Small" Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.CloudUpload">
+                                                        Upload
+                                                    </MudButton>
+                                                </CustomContent>
+                                            </ApiFileUpload>
+                                }
+                                else
+                                {
+                                            <MudIconButton Icon="@Icons.Material.Filled.CheckCircle" Size="Size.Small"
+                                                Color="@(context.Record.IsPaid ? Color.Default : Color.Success)"
+                                                OnClick="@(() => TogglePaid(context.Record))"
+                                                Title="@(context.Record.IsPaid ? "Mark Unpaid" : "Mark Paid")" />
+                                    @if (string.IsNullOrEmpty(context.Record.AttachmentPath))
+                                    {
+                                                    <ApiFileUpload Category="recurringcosts" ContextId="@Expense.Id" MaximumFileCount="1"
+                                                                   OnUploadCompleted="@((r) => HandleUploadToExisting(context.Record, r))"
+                                                                   OnUploadError='(e) => Snackbar.Add($"Upload failed: {e}", Severity.Error)' Class="d-inline-block">
+                                                        <CustomContent>
+                                                            <MudIconButton Icon="@Icons.Material.Filled.CloudUpload" Size="Size.Small" Color="Color.Info" />
+                                                        </CustomContent>
+                                                    </ApiFileUpload>
+                                    }
+                                }
+                                </MudTd>
+                            </RowTemplate>
+                        </MudTable>
+                    }
+                }
+                </MudTabPanel>
+            }
+        </MudTabs>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+        @if (IsNew)
+        {
+            <MudButton Color="Color.Primary" Variant="Variant.Outlined" OnClick="Apply"
+                Disabled="@(string.IsNullOrWhiteSpace(Expense.Name))">
+                Apply (Save & Continue)
+            </MudButton>
+        }
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="Submit" 
+            Disabled="@(string.IsNullOrWhiteSpace(Expense.Name))">
+            @(IsNew ? "Add Expense" : "Save Changes")
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
+    [Parameter] public RecurringExpense Expense { get; set; } = new();
+    [Parameter] public bool IsNew { get; set; } = true;
+    [Parameter] public bool ShowBillHistory { get; set; } = true;
+    [Parameter] public int ActiveTabIndex { get; set; } = 0;
+
+    private DateTime? _createdDate;
+
+    protected override void OnInitialized()
+    {
+        _createdDate = Expense.CreatedDate;
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+
+    private void Submit()
+    {
+        if (string.IsNullOrWhiteSpace(Expense.Name)) return;
+
+        if (_createdDate.HasValue)
+            Expense.CreatedDate = _createdDate.Value;
+
+        MudDialog.Close(DialogResult.Ok(Expense));
+    }
+
+    private void Apply()
+    {
+        if (string.IsNullOrWhiteSpace(Expense.Name)) return;
+
+        if (_createdDate.HasValue)
+            Expense.CreatedDate = _createdDate.Value;
+
+        // Save without closing, so user can access Bill History tab (if enabled)
+        Db.RecurringExpenses.Save(Expense);
+        IsNew = false;
+        Snackbar.Add("Expense saved.", Severity.Success);
+        StateHasChanged();
+    }
+
+    // --- Bill Period Logic ---
+    private class BillingPeriod
+    {
+        public DateTime PeriodStart { get; set; }
+        public string PeriodLabel { get; set; } = "";
+        public RecurringBillRecord? Record { get; set; }
+    }
+
+    private List<BillingPeriod> GetBillingPeriods()
+    {
+        var periods = new List<BillingPeriod>();
+        if (IsNew || Expense.Frequency == RecurringExpenseFrequency.OneTime
+            || Expense.Frequency == RecurringExpenseFrequency.AsNeeded)
+        {
+            // For one-time, just show one period. AsNeeded is handled separately in the UI.
+            if (Expense.Frequency == RecurringExpenseFrequency.OneTime)
+            {
+                periods.Add(new BillingPeriod
+                    {
+                        PeriodStart = Expense.CreatedDate,
+                        PeriodLabel = Expense.CreatedDate.ToString("MMM dd, yyyy"),
+                        Record = Expense.History.FirstOrDefault()
+                    });
+            }
+            return periods;
+        }
+
+        var startDate = Expense.CreatedDate;
+        var today = DateTime.Today;
+        var current = startDate;
+
+        // Generate periods from start date to today (show up to next period too)
+        while (current <= today.AddDays(GetFrequencyDays()))
+        {
+            var periodEnd = GetNextPeriodDate(current);
+            var label = Expense.Frequency switch
+            {
+                RecurringExpenseFrequency.Weekly => $"Week of {current:MMM dd}",
+                RecurringExpenseFrequency.BiWeekly => $"{current:MMM dd} - {periodEnd.AddDays(-1):MMM dd}",
+                RecurringExpenseFrequency.Monthly => current.ToString("MMMM yyyy"),
+                RecurringExpenseFrequency.Yearly => current.ToString("yyyy"),
+                _ => current.ToString("MMM dd, yyyy")
+            };
+
+            // Find matching record in history
+            var record = Expense.History.FirstOrDefault(h =>
+                h.Date >= current && h.Date < periodEnd);
+
+            periods.Add(new BillingPeriod
+                {
+                    PeriodStart = current,
+                    PeriodLabel = label,
+                    Record = record
+                });
+
+            current = periodEnd;
+
+            // Safety limit
+            if (periods.Count > 24) break;
+        }
+
+        // Show most recent first
+        periods.Reverse();
+        return periods;
+    }
+
+    private DateTime GetNextPeriodDate(DateTime current) => Expense.Frequency switch
+    {
+        RecurringExpenseFrequency.Weekly => current.AddDays(7),
+        RecurringExpenseFrequency.BiWeekly => current.AddDays(14),
+        RecurringExpenseFrequency.Monthly => current.AddMonths(1),
+        RecurringExpenseFrequency.Yearly => current.AddYears(1),
+        _ => current.AddMonths(1)
+    };
+
+    private int GetFrequencyDays() => Expense.Frequency switch
+    {
+        RecurringExpenseFrequency.Weekly => 7,
+        RecurringExpenseFrequency.BiWeekly => 14,
+        RecurringExpenseFrequency.Monthly => 31,
+        RecurringExpenseFrequency.Yearly => 365,
+        _ => 31
+    };
+
+    private void HandleBillForPeriodUploaded(DateTime periodStart, List<ApiFileUpload.UploadResult> results)
+    {
+        var result = results.FirstOrDefault();
+        if (result == null) return;
+
+        var record = new RecurringBillRecord
+            {
+                Date = periodStart,
+                Amount = Expense.Amount,
+                IsPaid = false,
+                DatePaid = null,
+                AttachmentPath = result.FilePath,
+                AttachmentName = result.FileName
+            };
+
+        Expense.History.Add(record);
+        Snackbar.Add("File uploaded", Severity.Success);
+        StateHasChanged();
+    }
+
+    private void HandleUploadToExisting(RecurringBillRecord record, List<ApiFileUpload.UploadResult> results)
+    {
+        var result = results.FirstOrDefault();
+        if (result == null) return;
+
+        record.AttachmentPath = result.FilePath;
+        record.AttachmentName = result.FileName;
+        Snackbar.Add("File uploaded", Severity.Success);
+        StateHasChanged();
+    }
+
+    private void TogglePaid(RecurringBillRecord record)
+    {
+        record.IsPaid = !record.IsPaid;
+        record.DatePaid = record.IsPaid ? DateTime.Today : null;
+        StateHasChanged();
+    }
+
+    private DateTime? _newBillDateReceived = DateTime.Today;
+    private DateTime? _newBillDueDate = DateTime.Today.AddDays(30);
+    private decimal _newBillAmount = 0;
+    private string? _newBillFilePath;
+    private string? _newBillFileName;
+
+    private void HandleNewBillApiUploaded(List<ApiFileUpload.UploadResult> results)
+    {
+        var result = results.FirstOrDefault();
+        if (result != null)
+        {
+            _newBillFilePath = result.FilePath;
+            _newBillFileName = result.FileName;
+            StateHasChanged();
+        }
+    }
+
+    private async Task AddManualBill()
+    {
+        if (!_newBillDateReceived.HasValue || _newBillAmount <= 0) return;
+
+        var record = new RecurringBillRecord
+        {
+            Date = _newBillDateReceived.Value,
+            DueDate = _newBillDueDate,
+            Amount = _newBillAmount,
+            IsPaid = false
+        };
+
+        if (!string.IsNullOrEmpty(_newBillFilePath))
+        {
+            record.AttachmentPath = _newBillFilePath;
+            record.AttachmentName = _newBillFileName ?? "Invoice.pdf";
+        }
+
+        Expense.History.Add(record);
+
+        // Reset the form
+        _newBillDateReceived = DateTime.Today;
+        _newBillDueDate = DateTime.Today.AddDays(30);
+        _newBillAmount = 0;
+        _newBillFilePath = null;
+        _newBillFileName = null;
+
+        Snackbar.Add("Bill added", Severity.Success);
+        StateHasChanged();
+    }
+
+    private void DeleteBillRecord(RecurringBillRecord record)
+    {
+        Expense.History.Remove(record);
+        StateHasChanged();
+    }
+}
+

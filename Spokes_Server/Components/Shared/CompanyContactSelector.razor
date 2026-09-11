@@ -1,0 +1,176 @@
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Data
+@using Spokes_Server.Components.Dialogs
+@using MudBlazor
+@inject Database Db
+@inject IDialogService DialogService
+@inject ISnackbar Snackbar
+
+<MudGrid Spacing="2">
+    <MudItem xs="12" sm="@(ShowEditButtons ? 8 : 12)">
+        <MudAutocomplete T="Supplier" Label="@Label" Value="selectedCompany" ValueChanged="OnCompanySelected"
+            SearchFunc="SearchCompanies" ToStringFunc="@(s => s?.Info.BusinessName)" CoerceText="false"
+            ResetValueOnEmptyText="true" Dense="true" Variant="Variant.Outlined" AdornmentIcon="@Icon"
+            Clearable="@Clearable" Required="@Required" HelperText="@GetCompanyHelperText()"
+            Placeholder="@Placeholder" MaxItems="null" />
+    </MudItem>
+
+    @if (ShowEditButtons)
+    {
+        <MudItem xs="12" sm="4" Class="d-flex gap-2 align-center mt-sm-0 mt-4">
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="CreateNewCompany"
+                StartIcon="@Icons.Material.Filled.Add">New</MudButton>
+
+            <MudTooltip Text="Edit the selected company's master record">
+                <MudButton Variant="Variant.Outlined" Color="Color.Secondary" OnClick="EditSelectedCompany"
+                    StartIcon="@Icons.Material.Filled.Edit" Disabled="@(selectedCompany == null)">
+                    Edit
+                </MudButton>
+            </MudTooltip>
+        </MudItem>
+    }
+
+    @if (selectedCompany != null && selectedCompany.Contacts.Any())
+    {
+        <MudItem xs="12">
+            <MudSelect T="ContactPerson" Label="@ContactLabel" Value="selectedContact" ValueChanged="OnContactSelected"
+                Variant="Variant.Outlined" AnchorOrigin="Origin.BottomLeft" TransformOrigin="Origin.TopLeft">
+                @foreach (var contact in selectedCompany.Contacts)
+                {
+                    <MudSelectItem Value="@contact">@contact.Prefix @contact.Name (@contact.Title)</MudSelectItem>
+                }
+            </MudSelect>
+        </MudItem>
+    }
+</MudGrid>
+
+@code {
+    [Parameter] public string Label { get; set; } = "Select Company";
+    [Parameter] public string ContactLabel { get; set; } = "Select Contact Person";
+    [Parameter] public string Icon { get; set; } = Icons.Material.Filled.Search;
+    [Parameter] public string HelperText { get; set; } = "Search your address book...";
+    [Parameter] public string Placeholder { get; set; } = "";
+    [Parameter] public bool ShowEditButtons { get; set; } = true;
+    [Parameter] public bool Clearable { get; set; } = false;
+    [Parameter] public bool Required { get; set; } = false;
+
+    // Optional Initial Values (To pre-select on load)
+    [Parameter] public string? InitialCompanyName { get; set; }
+    [Parameter] public string? InitialContactName { get; set; }
+
+    [Parameter] public EventCallback<Supplier?> SelectedCompanyChanged { get; set; }
+    [Parameter] public EventCallback<ContactPerson?> SelectedContactChanged { get; set; }
+
+    private List<Supplier> AllCompanies = new();
+    private Supplier? selectedCompany;
+    private ContactPerson? selectedContact;
+
+    protected override void OnInitialized()
+    {
+        AllCompanies = Db.Suppliers.GetAll().OrderBy(s => s.Info.BusinessName).ToList();
+
+        if (!string.IsNullOrEmpty(InitialCompanyName))
+        {
+            selectedCompany = AllCompanies.FirstOrDefault(s => s.Info.BusinessName == InitialCompanyName);
+            if (selectedCompany != null)
+            {
+                if (!string.IsNullOrEmpty(InitialContactName))
+                {
+                    selectedContact = selectedCompany.Contacts.FirstOrDefault(c => c.Name == InitialContactName);
+                }
+                else
+                {
+                    selectedContact = selectedCompany.Contacts.FirstOrDefault(c => c.IsPrimary) ??
+                    selectedCompany.Contacts.FirstOrDefault();
+                }
+            }
+        }
+    }
+
+    private async Task<IEnumerable<Supplier>> SearchCompanies(string value, CancellationToken token)
+    {
+        if (string.IsNullOrEmpty(value)) return AllCompanies;
+        return AllCompanies.Where(x => x.Info.BusinessName.Contains(value, StringComparison.InvariantCultureIgnoreCase));
+    }
+
+    private string GetCompanyHelperText()
+    {
+        if (selectedCompany != null)
+        {
+            return $"{selectedCompany.Info.BusinessAdressStreet}, {selectedCompany.Info.BusinessAdressCity}";
+        }
+        return HelperText;
+    }
+
+    private async Task OnCompanySelected(Supplier s)
+    {
+        selectedCompany = s;
+
+        if (s != null)
+        {
+            // Auto Select Primary Contact (or first one)
+            var c = s.Contacts.FirstOrDefault(c => c.IsPrimary) ?? s.Contacts.FirstOrDefault();
+            await OnContactSelected(c); // Update UI for contact and fire event
+
+            await SelectedCompanyChanged.InvokeAsync(s);
+        }
+        else
+        {
+            await OnContactSelected(null);
+            await SelectedCompanyChanged.InvokeAsync(null);
+        }
+    }
+
+    private async Task OnContactSelected(ContactPerson? c)
+    {
+        selectedContact = c;
+        await SelectedContactChanged.InvokeAsync(c);
+    }
+
+    // --- DIALOG LOGIC ---
+    private async Task CreateNewCompany()
+    {
+        var newCompany = new Supplier();
+        var options = new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true };
+        var dialog = await DialogService.ShowAsync<SupplierDialog>("Create New Company", new DialogParameters
+            {
+                ["Supplier"] =
+            newCompany
+            }, options);
+        var result = await dialog.Result;
+
+        if (!result.Canceled && result.Data is Supplier created)
+        {
+            Db.Suppliers.Save(created);
+            AllCompanies = Db.Suppliers.GetAll().OrderBy(s => s.Info.BusinessName).ToList();
+            await OnCompanySelected(created);
+            Snackbar.Add("Company created", Severity.Success);
+        }
+    }
+
+    private async Task EditSelectedCompany()
+    {
+        if (selectedCompany == null) return;
+
+        var options = new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true };
+        var dialog = await DialogService.ShowAsync<SupplierDialog>("Edit Company", new DialogParameters
+            {
+                ["Supplier"] =
+            selectedCompany
+            }, options);
+        var result = await dialog.Result;
+
+        if (!result.Canceled && result.Data is Supplier updated)
+        {
+            Db.Suppliers.Save(updated);
+            AllCompanies = Db.Suppliers.GetAll().OrderBy(s => s.Info.BusinessName).ToList();
+            await OnCompanySelected(updated);
+            Snackbar.Add("Company updated", Severity.Success);
+        }
+    }
+}
+

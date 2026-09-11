@@ -1,0 +1,359 @@
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Data
+@using Spokes_Server.Components.Dialogs
+@inject Database Db
+@inject IDialogService DialogService
+@inject ISnackbar Snackbar
+@inject AuthenticationStateProvider AuthStateProvider
+@using Microsoft.AspNetCore.Components.Authorization
+@using Spokes_Server.Core.Constants
+@inject UserService UserService
+@inject Spokes_Server.Core.Services.Accounting.FinancialCalculationEngine CalcEngine
+
+<MudGrid Class="mb-4 align-center">
+
+    @* Quotes *@
+    <MudItem xs="10">
+        <MudText Typo="Typo.h5">Project Quotes</MudText>
+    </MudItem>
+
+    <MudItem xs="2" Class="justify-end">
+        @if (CanEdit)
+        {
+            <MudButton FullWidth="true" Variant="Variant.Outlined" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Add"
+                OnClick="CreateQuote">New Quote</MudButton>
+        }
+    </MudItem>
+
+    <MudItem xs="12">
+        <MudTable Items="@Quotes" Dense="true" Striped="true" Outlined="true" Elevation="0" Hover="true">
+            <HeaderContent>
+                <MudTh>Number</MudTh>
+                <MudTh>Title</MudTh>
+                <MudTh>Date</MudTh>
+                <MudTh>Total</MudTh>
+                <MudTh>Status</MudTh>
+                <MudTh>Actions</MudTh>
+            </HeaderContent>
+            <RowTemplate>
+                <MudTd>@context.QuoteNumber</MudTd>
+                <MudTd>@context.Title</MudTd>
+                <MudTd>@context.Date.ToShortDateString()</MudTd>
+                <MudTd Style="font-weight: bold;">@context.GrandTotal.ToString("C0")</MudTd>
+                <MudTd>
+                    <StatusChip Status="@context.Status" />
+                </MudTd>
+                <MudTd>
+                    @* <MudIconButton Icon="@Icons.Material.Filled.Visibility" Size="Size.Small"
+                                   OnClick="@(() => OpenViewer(context))" /> *@
+                    <MudButton Variant="Variant.Outlined" Size="Size.Small" StartIcon="@Icons.Material.Filled.Visibility" OnClick="@(() => OpenViewer(context))">View</MudButton>
+
+                    @* @if (CanEdit && context.Status != "Accepted")
+                    {
+                        <MudTooltip Text="Mark as Winning Quote">
+                            <MudIconButton Icon="@Icons.Material.Filled.CheckCircle" Size="Size.Small" Color="Color.Success"
+                                           OnClick="@(() => MarkAccepted(context))" />
+                        </MudTooltip>
+                    } *@
+                </MudTd>
+            </RowTemplate>
+        </MudTable>
+    </MudItem>
+    <MudItem Class="mt-4" xs="12">
+        <MudDivider></MudDivider>
+    </MudItem>
+
+    @* Invoices *@
+    <MudItem xs="12">
+        @if (!string.IsNullOrEmpty(Project?.ProjectGroupId))
+        {
+            <MudAlert Severity="Severity.Info" Class="mb-4">
+                <MudText>
+                    This project is part of a <b>project group</b>. Invoicing is managed at the group level.
+                </MudText>
+                <MudButton Variant="Variant.Outlined" Color="Color.Primary" Class="mt-2"
+                           Href="@($"/project-groups/{Project.ProjectGroupId}")">
+                    Go to Project Group
+                </MudButton>
+            </MudAlert>
+
+            @* Show existing invoices (read-only) including group invoices *@
+            <MudText Typo="Typo.h5" Class="mt-4 mb-2">Invoice History</MudText>
+            <MudTable Items="@Invoices" Dense="true" Striped="true" Outlined="true" Elevation="0" Hover="true">
+                <HeaderContent>
+                    <MudTh>Date</MudTh>
+                    <MudTh>#</MudTh>
+                    <MudTh>Total</MudTh>
+                    <MudTh>Status</MudTh>
+                    <MudTh>Paid Date</MudTh>
+                    <MudTh>Source</MudTh>
+                    <MudTh></MudTh>
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd>@context.Date.ToShortDateString()</MudTd>
+                    <MudTd><b>@context.InvoiceNumber</b></MudTd>
+                    <MudTd>@context.GrandTotal.ToString("C")</MudTd>
+                    <MudTd>
+                        <StatusChip Status="@context.Status" />
+                    </MudTd>
+                    <MudTd>@(context.DatePaid.HasValue? context.DatePaid.Value.ToShortDateString() : "-")</MudTd>
+                    <MudTd>
+                        @if (!string.IsNullOrEmpty(context.ProjectGroupId))
+                        {
+                            <MudChip T="string" Size="Size.Small" Color="Color.Secondary">Group Invoice</MudChip>
+                        }
+                        else
+                        {
+                            <MudChip T="string" Size="Size.Small" Color="Color.Default">Individual</MudChip>
+                        }
+                    </MudTd>
+                    <MudTd>
+                        @* <MudIconButton Icon="@Icons.Material.Filled.Visibility" Size="Size.Small"
+                                       OnClick="@(() => OpenInvoice(context))" /> *@
+
+                        <MudButton Variant="Variant.Outlined" Size="Size.Small" StartIcon="@Icons.Material.Filled.Visibility" OnClick="@(() => OpenInvoice(context))">View</MudButton>
+                    </MudTd>
+                </RowTemplate>
+            </MudTable>
+        }
+        else
+        {
+            <MudGrid Class="mb-4 align-center">
+                <MudItem xs="6">
+                    <MudText Typo="Typo.h5">Invoices</MudText>
+                </MudItem>
+                <MudItem xs="6" Class="d-flex justify-end gap-2">
+                    @if (CanEdit)
+                    {
+                        <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="CreateInvoice">Create Invoice</MudButton>
+                    }
+                </MudItem>
+
+            </MudGrid>
+
+            @if (Project.BillingMethod == BillingMethods.TimeAndMaterials)
+            {
+                <MudAlert Severity="Severity.Info" Class="mb-4">
+                    Unbilled Work Available: <b>@UnbilledLabor.ToString("C")</b> (Labor) + <b>@UnbilledExpenses.ToString("C")</b>
+                    (Expenses)
+                </MudAlert>
+            }
+
+            <MudTable Items="@Invoices" Dense="true" Striped="true" Outlined="true" Elevation="0" Hover="true">
+                <HeaderContent>
+                    <MudTh>Date</MudTh>
+                    <MudTh>#</MudTh>
+                    <MudTh>Total</MudTh>
+                    <MudTh>Balance</MudTh>
+                    <MudTh>Status</MudTh>
+                    <MudTh>Paid Date</MudTh>
+                    <MudTh></MudTh>
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd>@context.Date.ToShortDateString()</MudTd>
+                    <MudTd><b>@context.InvoiceNumber</b></MudTd>
+                    <MudTd>@context.GrandTotal.ToString("C")</MudTd>
+                    <MudTd>@context.BalanceDue.ToString("C")</MudTd>
+                    <MudTd>
+                        <StatusChip Status="@context.Status" />
+                    </MudTd>
+                    <MudTd>@(context.DatePaid.HasValue? context.DatePaid.Value.ToShortDateString() : "-")</MudTd>
+                    <MudTd>
+                        <MudIconButton Icon="@Icons.Material.Filled.Visibility" Size="Size.Small"
+                                       OnClick="@(() => OpenInvoice(context))" />
+                    </MudTd>
+                </RowTemplate>
+            </MudTable>
+        }
+    </MudItem>
+</MudGrid>
+
+
+
+@code {
+    [Parameter] public string ProjectId { get; set; } = string.Empty;
+    [Inject] NavigationManager Nav { get; set; } = default!;
+    private List<Quote> Quotes = new();
+    private bool CanEdit = false;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Project = Db.Projects.GetById(ProjectId);
+        await LoadPermissions();
+        Refresh();
+    }
+
+    private async Task LoadPermissions()
+    {
+        var emp = await UserService.GetEmployeeAsync();
+        if (emp != null) CanEdit = emp.HasPermission(AppPermissions.Projects.Edit);
+    }
+
+    private void Refresh()
+    {
+        Quotes = Db.Quotes.GetByProject(ProjectId);
+        Invoices = Db.Invoices.GetByProject(ProjectId);
+        if (Project.BillingMethod == BillingMethods.TimeAndMaterials)
+        {
+            CalculateUnbilled();
+        }
+    }
+
+    private void MarkAccepted(Quote winner)
+    {
+        var oldStatus = winner.Status;
+        // 1. Mark winner
+        winner.Status = "Accepted";
+        Db.Quotes.Save(winner);
+        Spokes_Server.Core.Services.Projects.TimelineEventHelper.ProcessQuoteStatusChange(Db, winner, oldStatus, "Accepted", null);
+
+        // 2. Mark others as Rejected (Optional, but usually preferred)
+
+        Refresh();
+        Snackbar.Add($"Quote {winner.QuoteNumber} marked as Accepted!", Severity.Success);
+    }
+
+    private async Task CreateQuote()
+    {
+        var profile = Db.CompanyProfile.Get();
+        var nextNum = Db.Quotes.GenerateQuoteNumber(profile.QuotePrefix);
+        var newQuote = new Quote { ProjectId = ProjectId, QuoteNumber = nextNum, Date = DateTime.Today };
+
+        // Pull template defaults ONLY on creation
+        var project = Db.Projects.GetById(ProjectId);
+        if (project != null)
+        {
+            var template = (!string.IsNullOrEmpty(project.DefaultTemplateId))
+            ? Db.DocumentTemplates.GetById(project.DefaultTemplateId)
+            : Db.DocumentTemplates.GetDefault();
+
+            if (template != null)
+            {
+                newQuote.TermsAndConditions = template.DefaultTermsAndConditions;
+                newQuote.TaxRate = template.TaxRate;
+            }
+        }
+
+        await OpenEditor(newQuote);
+    }
+
+    private async Task OpenEditor(Quote quote)
+    {
+        var parameters = new DialogParameters { ["Quote"] = quote, ["ProjectId"] = ProjectId };
+        var options = new DialogOptions { MaxWidth = MaxWidth.ExtraExtraLarge, FullWidth = true };
+        var dialog = await DialogService.ShowAsync<QuoteEditorDialog>("Edit Quote", parameters, options);
+        var result = await dialog.Result;
+
+        if (result != null && !result.Canceled && result.Data is Quote q)
+        {
+            Db.Quotes.Save(q);
+            Refresh();
+        }
+    }
+
+    private void OpenViewer(Quote quote)
+    {
+        Nav.NavigateTo($"/projects/{ProjectId}/quotes/{quote.Id}");
+    }
+
+    private Project Project;
+    private List<Invoice> Invoices = new();
+    private string CreationMode = "Cost+";
+
+    // Unbilled Tracking
+    private decimal UnbilledLabor = 0;
+    private decimal UnbilledExpenses = 0;
+
+
+    private void UpdateBillingMethod(string method)
+    {
+        Project.BillingMethod = method;
+        Db.Projects.Save(Project);
+        Refresh(); // Recalculate UI
+    }
+
+    private void CalculateUnbilled()
+    {
+        // 1. Get IDs of everything already billed
+        var billedTimeIds = Invoices.SelectMany(i => i.BilledTimeEntryIds).ToHashSet();
+        var billedPoItemIds = Invoices.SelectMany(i => i.BilledPoItemIds).ToHashSet();
+        var billedExpenseItemIds = Invoices.SelectMany(i => i.BilledExpenseItemIds).ToHashSet();
+
+        // 2. Scan Time
+        var allTime = Db.Timesheets.GetAll().SelectMany(t => t.Entries).Where(e => e.ProjectId == ProjectId);
+        var unbilledTime = allTime.Where(e => !billedTimeIds.Contains(e.Id));
+
+        // Calculate Value (Need Rates)
+        UnbilledLabor = 0;
+        foreach (var t in unbilledTime)
+        {
+            var task = Db.WorkTypes.GetById(t.WorkTypeId);
+            // We use the Billing Rate here (Revenue), not the Cost Rate
+            var rate = Project.GetEffectiveRate(t.WorkTypeId, task?.DefaultRate ?? 0);
+            UnbilledLabor += t.Hours * rate;
+        }
+
+        // 3. Scan POs
+        var allPos = Db.Purchases.GetAll();
+        var poItems = allPos.SelectMany(p => p.Items.Where(i => i.ProjectId == ProjectId));
+        var unbilledPoItems = poItems.Where(i => !billedPoItemIds.Contains(i.Id));
+
+        // 4. Scan Expense Reports
+        var allReports = Db.ExpenseReports.GetAll();
+        var expenseItems = allReports
+        .Where(r => r.DateSubmitted.HasValue)
+        .SelectMany(r => r.Items.Where(i => i.ProjectId == ProjectId));
+        var unbilledExpenseItems = expenseItems.Where(i => !billedExpenseItemIds.Contains(i.Id));
+
+        // For Cost+, we usually markup expenses. Let's assume 15% markup for estimation
+        decimal markupRate = 0.15m;
+        if (!string.IsNullOrEmpty(Project.RateCardId))
+        {
+            var card = Db.RateCards.GetById(Project.RateCardId);
+            if (card != null) markupRate = card.MarkupRate;
+        }
+
+        decimal costTotal = unbilledPoItems.Sum(i => i.Total) + unbilledExpenseItems.Sum(i => i.Total);
+        UnbilledExpenses = costTotal * (1 + markupRate);
+    }
+
+    private async Task CreateInvoice()
+    {
+        var profile = Db.CompanyProfile.Get();
+        var template = (!string.IsNullOrEmpty(Project.DefaultTemplateId))
+            ? Db.DocumentTemplates.GetById(Project.DefaultTemplateId)
+            : Db.DocumentTemplates.GetDefault();
+        if (template == null) template = Db.DocumentTemplates.GetDefault();
+
+        var invoice = new Invoice
+        {
+            ProjectId = ProjectId,
+            InvoiceNumber = Db.Invoices.GenerateInvoiceNumber(profile.InvoicePrefix),
+            Date = DateTime.Today,
+            Status = "Draft",
+            TaxRate = template.TaxRate
+        };
+
+        var parameters = new DialogParameters { ["Invoice"] = invoice };
+        var options = new DialogOptions { MaxWidth = MaxWidth.ExtraExtraLarge, FullWidth = true };
+
+        var dialog = await DialogService.ShowAsync<InvoiceMasterDialog>("Create Invoice", parameters, options);
+        var result = await dialog.Result;
+
+        if (!result.Canceled)
+        {
+            Refresh();
+            Snackbar.Add("Invoice Created", Severity.Success);
+        }
+    }
+
+
+    private void OpenInvoice(Invoice inv)
+    {
+        Nav.NavigateTo($"/projects/{ProjectId}/invoices/{inv.Id}");
+    }
+}

@@ -1,0 +1,347 @@
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Data
+@using MudBlazor
+@using Microsoft.AspNetCore.Components.Authorization
+@using Spokes_Server.Core.Constants
+@inject Database Db
+@inject ISnackbar Snackbar
+@inject IJSRuntime JS
+@inject AuthenticationStateProvider AuthStateProvider
+@inject Spokes_Server.Core.Services.Core.UserService UserService
+@inject Spokes_Server.Core.Services.Accounting.FinancialCalculationEngine CalcEngine
+@inject IDialogService DialogService
+
+<MudDialog>
+    <DialogContent>
+        <MudGrid>
+            <!-- Left Side: Form -->
+            <MudItem xs="12" md="@(string.IsNullOrEmpty(Bill.AttachmentPath) ? 12 : 6)">
+                <MudForm>
+                    <MudGrid>
+                        <MudItem xs="12">
+                            <MudAutocomplete T="PurchaseOrder" Label="Link to Purchase Order (Optional)" 
+                                Value="@SelectedPO" ValueChanged="@OnPoSelected"
+                                SearchFunc="@SearchPOs" ToStringFunc="@(p => p==null ? "" : $"{p.PoNumber} - {p.Supplier.BusinessName}")"
+                                Clearable="true" AdornmentIcon="@Icons.Material.Filled.Link" />
+                        </MudItem>
+
+                        <MudItem xs="6">
+                            <MudTextField @bind-Value="Bill.SupplierName" Label="Supplier Name" Required="true" />
+                        </MudItem>
+                        <MudItem xs="6">
+                            <MudTextField @bind-Value="Bill.Description" Label="Description / Invoice #" />
+                        </MudItem>
+
+                        <MudItem xs="6">
+                            <MudDatePicker @bind-Date="Date" Label="Date" />
+                        </MudItem>
+                        <MudItem xs="6">
+                            <MudDatePicker @bind-Date="DueDate" Label="Due Date" />
+                        </MudItem>
+
+                        <MudItem xs="6">
+                            <MudNumericField @bind-Value="Bill.Amount" Label="Total Amount" Format="N2" Adornment="Adornment.Start"
+                                AdornmentIcon="@Icons.Material.Filled.AttachMoney" />
+                            @if (Bill.AmountPaid > 0)
+                            {
+                                <MudText Typo="Typo.caption" Color="Color.Secondary">Amount Paid: @Bill.AmountPaid.ToString("C2")</MudText>
+                                <br />
+                                <MudText Typo="Typo.caption" Color="Color.Warning"><b>Balance Due: @Bill.BalanceDue.ToString("C2")</b></MudText>
+                            }
+                        </MudItem>
+                        <MudItem xs="6">
+                            <MudSelect @bind-Value="Bill.Status" Label="Status">
+                                <MudSelectItem Value="@("Awaiting Approval")">Awaiting Approval</MudSelectItem>
+                                @if (CanApproveBills || Bill.Status == "Approved")
+                                {
+                                    <MudSelectItem Value="@("Approved")">Approved</MudSelectItem>
+                                }
+                                <MudSelectItem Value="@("Unpaid")">Unpaid</MudSelectItem>
+                                <MudSelectItem Value="@("Paid")">Paid</MudSelectItem>
+                                <MudSelectItem Value="@("Void")">Void</MudSelectItem>
+                            </MudSelect>
+                        </MudItem>
+
+                        <MudItem xs="12">
+                            <MudDivider Class="my-2" />
+                            <div class="d-flex align-center justify-space-between">
+                                <MudText Typo="Typo.subtitle2">Payments Recorded (@Bill.AmountPaid.ToString("C2"))</MudText>
+                                @if (Bill.BalanceDue > 0)
+                                {
+                                    <MudButton Variant="Variant.Outlined" Size="Size.Small" Color="Color.Info" StartIcon="@Icons.Material.Filled.Add" OnClick="RecordPayment">Record Payment</MudButton>
+                                }
+                            </div>
+                            @if (Bill.Payments.Any())
+                            {
+                                <MudTable Items="@Bill.Payments" Dense="true" Elevation="0" Outlined="true" Class="mt-2">
+                                    <HeaderContent>
+                                        <MudTh>Date</MudTh>
+                                        <MudTh>Amount</MudTh>
+                                        <MudTh>Method</MudTh>
+                                        <MudTh>Reference</MudTh>
+                                        <MudTh></MudTh>
+                                    </HeaderContent>
+                                    <RowTemplate Context="payment">
+                                        <MudTd>@payment.Date.ToShortDateString()</MudTd>
+                                        <MudTd>@payment.Amount.ToString("C2")</MudTd>
+                                        <MudTd>@payment.Method</MudTd>
+                                        <MudTd>@payment.Reference</MudTd>
+                                        <MudTd>
+                                            <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small" Color="Color.Error" OnClick="@(() => Bill.Payments.Remove(payment))" />
+                                        </MudTd>
+                                    </RowTemplate>
+                                </MudTable>
+                            }
+                            else if (Bill.DatePaid.HasValue)
+                            {
+                                <MudText Typo="Typo.body2" Class="mt-2 text-muted">Legacy payment recorded on @Bill.DatePaid.Value.ToShortDateString() for @Bill.Amount.ToString("C2").</MudText>
+                            }
+                            else
+                            {
+                                <MudText Typo="Typo.caption" Class="text-muted">No payments recorded yet.</MudText>
+                            }
+                        </MudItem>
+
+                        <MudItem xs="12">
+                            <div class="d-flex align-center justify-space-between mt-4">
+                                <MudText Typo="Typo.subtitle2">Line Items</MudText>
+                                @if (SelectedPO != null && !Bill.LineItems.Any())
+                                {
+                                    <MudButton Size="Size.Small" Variant="Variant.Outlined" OnClick="AutoFillLineItems">Auto-fill from PO</MudButton>
+                                }
+                                else
+                                {
+                                    <MudButton Size="Size.Small" Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.Add" OnClick="AddLineItem">Add Item</MudButton>
+                                }
+                            </div>
+                            
+                            @if (Bill.LineItems.Any())
+                            {
+                                <MudTable Items="@Bill.LineItems" Dense="true" Hover="true" Elevation="0" Class="mt-2" Outlined="true">
+                                    <HeaderContent>
+                                        <MudTh>Description</MudTh>
+                                        <MudTh>Qty</MudTh>
+                                        <MudTh>Price</MudTh>
+                                        <MudTh>Total</MudTh>
+                                        <MudTh></MudTh>
+                                    </HeaderContent>
+                                    <RowTemplate Context="lineItem">
+                                        <MudTd><MudTextField @bind-Value="lineItem.Description" Margin="Margin.Dense" DisableUnderLine="true" /></MudTd>
+                                        <MudTd><MudNumericField @bind-Value="lineItem.Quantity" Margin="Margin.Dense" DisableUnderLine="true" /></MudTd>
+                                        <MudTd><MudNumericField @bind-Value="lineItem.UnitPrice" Margin="Margin.Dense" DisableUnderLine="true" /></MudTd>
+                                        <MudTd>@lineItem.Total.ToString("C")</MudTd>
+                                        <MudTd>
+                                            <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small" Color="Color.Error" OnClick="@(() => Bill.LineItems.Remove(lineItem))" />
+                                        </MudTd>
+                                    </RowTemplate>
+                                </MudTable>
+                            }
+                        </MudItem>
+
+                        <MudItem xs="12">
+                            <MudDivider Class="my-2" />
+                            <MudText Typo="Typo.subtitle2">Attachment (Invoice PDF)</MudText>
+
+                            @if (!string.IsNullOrEmpty(Bill.AttachmentPath))
+                            {
+                                <div class="d-flex align-center gap-2 my-2">
+                                    <MudIcon Icon="@Icons.Material.Filled.AttachFile" />
+                                    <MudText Typo="Typo.body1" Color="Color.Primary">
+                                        @(string.IsNullOrEmpty(Bill.AttachmentName) ? "Attached File" : Bill.AttachmentName)
+                                    </MudText>
+                                    <MudIconButton Icon="@Icons.Material.Filled.Delete" Color="Color.Error" Size="Size.Small"
+                                        OnClick="@(() => { Bill.AttachmentPath = ""; Bill.AttachmentName = ""; })" />
+                                </div>
+                            }
+
+                            <ApiFileUpload Category="bills" ContextId="@Bill.Id" MaximumFileCount="1"
+                                           OnUploadCompleted="HandleBillApiUploaded"
+                                           OnUploadError='(e) => Snackbar.Add($"Upload failed: {e}", Severity.Error)'>
+                                <CustomContent>
+                                    <MudButton Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.CloudUpload">
+                                        Upload Invoice
+                                    </MudButton>
+                                </CustomContent>
+                            </ApiFileUpload>
+                        </MudItem>
+
+                    </MudGrid>
+                </MudForm>
+            </MudItem>
+
+            <!-- Right Side: PDF Preview -->
+            @if (!string.IsNullOrEmpty(Bill.AttachmentPath))
+            {
+                <MudItem xs="12" md="6">
+                    <MudPaper Elevation="0" Outlined="true" Class="pa-2" Style="height: 100%; min-height: 600px;">
+                        <iframe src="@Bill.AttachmentPath" style="width:100%; height:100%; border:none;"></iframe>
+                    </MudPaper>
+                </MudItem>
+            }
+        </MudGrid>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Close">Close</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="Submit">Save Bill</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
+    [Parameter] public Bill Bill { get; set; } = default!;
+
+    private PurchaseOrder? SelectedPO;
+    private bool CanApproveBills = false;
+
+    // Nullable Wrappers
+    private DateTime? Date 
+    { 
+        get => Bill.Date; 
+        set 
+        { 
+            if (value.HasValue && Bill.Date != value.Value) 
+            {
+                Bill.Date = value.Value;
+                Bill.DueDate = value.Value.AddMonths(1);
+            } 
+        } 
+    }
+    private DateTime? DueDate { get => Bill.DueDate; set { if (value.HasValue) Bill.DueDate = value.Value; } }
+    private DateTime? DatePaid { get => Bill.DatePaid; set { Bill.DatePaid = value; } }
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (string.IsNullOrEmpty(Bill.Id)) Bill.Id = Guid.NewGuid().ToString();
+
+        CanApproveBills = await UserService.IsAdminAsync() || await UserService.HasPermissionAsync(AppPermissions.Purchases.ApproveBills);
+
+        if (!string.IsNullOrEmpty(Bill.PurchaseOrderId))
+        {
+            SelectedPO = Db.Purchases.GetById(Bill.PurchaseOrderId);
+        }
+    }
+
+    private Task<IEnumerable<PurchaseOrder>> SearchPOs(string value, CancellationToken token)
+    {
+        var allPos = Db.Purchases.GetAll();
+        if (string.IsNullOrEmpty(value)) return Task.FromResult(allPos.OrderByDescending(p => p.PoNumber).Take(50));
+        
+        var filtered = allPos.Where(p => 
+            p.PoNumber.Contains(value, StringComparison.OrdinalIgnoreCase) || 
+            (p.Supplier?.BusinessName?.Contains(value, StringComparison.OrdinalIgnoreCase) == true)
+        ).OrderByDescending(p => p.PoNumber);
+        
+        return Task.FromResult(filtered.AsEnumerable());
+    }
+
+    private void OnPoSelected(PurchaseOrder po)
+    {
+        SelectedPO = po;
+        Bill.PurchaseOrderId = po?.Id;
+        if (po != null)
+        {
+            var linkedBills = Db.Bills.GetByPo(po.Id);
+            var totalBilled = linkedBills.Where(b => b.Id != Bill.Id).Sum(b => b.Amount);
+            var remaining = po.GrandTotal - totalBilled;
+
+            if (string.IsNullOrEmpty(Bill.SupplierName)) Bill.SupplierName = po.Supplier.BusinessName;
+            if (Bill.Amount == 0) Bill.Amount = remaining > 0 ? remaining : 0;
+            if (string.IsNullOrEmpty(Bill.Description)) Bill.Description = $"Invoice for {po.PoNumber}";
+        }
+    }
+
+    private void AddLineItem()
+    {
+        Bill.LineItems.Add(new BillLineItem());
+    }
+
+    private void AutoFillLineItems()
+    {
+        if (SelectedPO == null) return;
+        
+        var linkedBills = Db.Bills.GetByPo(SelectedPO.Id);
+        var alreadyBilledPoItemIds = linkedBills
+            .Where(b => b.Id != Bill.Id)
+            .SelectMany(b => b.LineItems)
+            .Select(li => li.PoItemId)
+            .Where(id => !string.IsNullOrEmpty(id))
+            .ToHashSet();
+
+        Bill.LineItems.Clear();
+        foreach (var item in SelectedPO.Items)
+        {
+            if (alreadyBilledPoItemIds.Contains(item.Id)) continue;
+
+            Bill.LineItems.Add(new BillLineItem
+            {
+                PoItemId = item.Id,
+                Description = item.Description,
+                Quantity = item.Quantity,
+                UnitPrice = item.UnitPrice
+            });
+        }
+
+        if (Bill.LineItems.Count == 0)
+        {
+            Snackbar.Add("All items from this PO have already been billed.", Severity.Info);
+        }
+    }
+
+    [Inject] private Spokes_Server.Core.Services.Core.IFileService FileService { get; set; } = default!;
+
+    private void HandleBillApiUploaded(List<ApiFileUpload.UploadResult> results)
+    {
+        var result = results.FirstOrDefault();
+        if (result != null)
+        {
+            Bill.AttachmentPath = result.FilePath;
+            Bill.AttachmentName = result.FileName;
+            Snackbar.Add("File Uploaded", Severity.Success);
+            StateHasChanged();
+        }
+    }
+
+    private async Task RecordPayment()
+    {
+        var parameters = new DialogParameters<Spokes_Server.Components.Dialogs.RecordPaymentDialog>
+        {
+            { x => x.Message, $"Record payment for {Bill.Description}" },
+            { x => x.MaxAmount, Bill.BalanceDue },
+            { x => x.ExistingPayments, Bill.Payments }
+        };
+        var dialog = await DialogService.ShowAsync<Spokes_Server.Components.Dialogs.RecordPaymentDialog>("Record Payment", parameters);
+        var result = await dialog.Result;
+
+        if (result != null && !result.Canceled && result.Data is PaymentRecord payment)
+        {
+            Bill.Payments.Add(payment);
+            if (Bill.BalanceDue <= 0)
+            {
+                Bill.Status = "Paid";
+                Bill.DatePaid = payment.Date;
+            }
+            StateHasChanged();
+        }
+    }
+
+    private void Close() => MudDialog.Cancel();
+    
+    private void Submit()
+    {
+        if (Bill.BalanceDue <= 0 && Bill.Amount > 0 && Bill.Status != "Paid")
+        {
+            Bill.Status = "Paid";
+            Bill.DatePaid = Bill.DatePaid ?? DateTime.Today;
+        }
+        else if (Bill.Status == "Paid" && Bill.BalanceDue > 0)
+        {
+            Bill.Status = "Unpaid";
+            if (!Bill.Payments.Any()) Bill.DatePaid = null;
+        }
+        MudDialog.Close(DialogResult.Ok(Bill));
+    }
+}

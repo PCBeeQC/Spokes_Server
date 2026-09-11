@@ -1,0 +1,766 @@
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Data
+@inject Database Db
+@inject NavigationManager Nav
+@inject Spokes_Server.Core.Services.Accounting.FinancialCalculationEngine CalcEngine
+
+<MudGrid Class="mb-6">
+
+    @* --- TIMELINE & RISK INDICATORS --- *@
+    <MudItem xs="12">
+        <div class="d-flex flex-wrap gap-4 align-center mb-4">
+            @* Timeline Context *@
+            @if (ProjectStartDate.HasValue || ProjectDeadline.HasValue)
+            {
+                <div class="d-flex gap-4 align-center">
+                    @if (ProjectStartDate.HasValue)
+                    {
+                        <MudChip T="string" Icon="@Icons.Material.Filled.PlayArrow" Color="Color.Info"
+                            Variant="Variant.Outlined" Size="Size.Small">
+                            @if (ProjectStartDate.Value <= DateOnly.FromDateTime(DateTime.Today))
+                            {
+                                @($"Day {DaysSinceStart}")
+                            }
+                            else
+                            {
+                                @($"Starts {ProjectStartDate.Value:MMM dd}")
+                            }
+                        </MudChip>
+                    }
+                    @if (ProjectDeadline.HasValue)
+                    {
+                        var daysLeft = DaysToDeadline;
+                        var deadlineColor = daysLeft < 0 ? Color.Error : (daysLeft <= 7 ? Color.Warning : Color.Success);
+                        <MudChip T="string" Icon="@Icons.Material.Filled.Flag" Color="@deadlineColor" Variant="Variant.Outlined"
+                            Size="Size.Small">
+                            @if (daysLeft < 0)
+                            {
+                                @($"{Math.Abs(daysLeft)} days overdue")
+                            }
+                            else if (daysLeft == 0)
+                            {
+                                @("Due today!")
+                            }
+                            else
+                            {
+                                @($"{daysLeft} days left")
+                            }
+                        </MudChip>
+                    }
+                </div>
+            }
+
+            @* Risk Indicators *@
+            @if (IsLaborOverBudget)
+            {
+                <MudChip T="string" Icon="@Icons.Material.Filled.Warning" Color="Color.Error" Variant="Variant.Filled"
+                    Size="Size.Small">
+                    Labor Over Budget (@LaborEfficiency.ToString("N0")%)
+                </MudChip>
+            }
+            @if (HasAgingReceivables)
+            {
+                <MudChip T="string" Icon="@Icons.Material.Filled.Schedule" Color="Color.Warning" Variant="Variant.Filled"
+                    Size="Size.Small">
+                    AR Aging > 30 days
+                </MudChip>
+            }
+        </div>
+    </MudItem>
+
+    @* --- TOP KPI SECTION: PROFITABILITY --- *@
+    <MudItem xs="12">
+        <MudText Typo="Typo.h5" Class="mb-4" Color="Color.Primary">Current Profitability Estimate</MudText>
+        <MudGrid>
+            <MudItem xs="12" sm="6" md="2">
+                <MudCard Outlined="true" Elevation="0" Class="pa-4 border-l-4 border-solid"
+                    Style="border-color: var(--mud-palette-primary);">
+                    <MudText Typo="Typo.caption" Class="mud-text-secondary">Expected Revenue</MudText>
+                    <MudText Typo="Typo.h5">@TotalRevenue.ToString("C0")</MudText>
+                    <MudText Typo="Typo.caption" Color="Color.Info">From Accepted Quote</MudText>
+                </MudCard>
+            </MudItem>
+            <MudItem xs="12" sm="6" md="2">
+                <MudCard Outlined="true" Elevation="0" Class="pa-4 border-l-4 border-solid"
+                    Style="border-color: var(--mud-palette-error);">
+                    <MudText Typo="Typo.caption" Class="mud-text-secondary">Actual Labor</MudText>
+                    <MudText Typo="Typo.h5">@TotalLaborCost.ToString("C0")</MudText>
+                    <MudProgressLinear Color="Color.Error" Value="@((double)LaborEfficiency)" Size="Size.Small"
+                        Class="mt-2" />
+                </MudCard>
+            </MudItem>
+            <MudItem xs="12" sm="6" md="2">
+                <MudCard Outlined="true" Elevation="0" Class="pa-4 border-l-4 border-solid"
+                    Style="border-color: var(--mud-palette-warning);">
+                    <MudText Typo="Typo.caption" Class="mud-text-secondary">Actual Purchases</MudText>
+                    <MudText Typo="Typo.h5">@TotalPurchaseCost.ToString("C0")</MudText>
+                    <MudText Typo="Typo.caption">@PurchaseRows.Count Orders</MudText>
+                </MudCard>
+            </MudItem>
+            <MudItem xs="12" sm="6" md="2">
+                <MudCard Outlined="true" Elevation="0" Class="pa-4 border-l-4 border-solid"
+                    Style="border-color: var(--mud-palette-secondary);">
+                    <MudText Typo="Typo.caption" Class="mud-text-secondary">Commissions</MudText>
+                    <MudText Typo="Typo.h5">@TotalCommissions.ToString("C0")</MudText>
+                    <MudText Typo="Typo.caption">Total Derived</MudText>
+                </MudCard>
+            </MudItem>
+            <MudItem xs="12" sm="6" md="2">
+                <MudCard Outlined="true" Elevation="0" Class="pa-4 border-l-4 border-solid"
+                    Style="border-color: var(--mud-palette-info);">
+                    <MudText Typo="Typo.caption" Class="mud-text-secondary">Expenses</MudText>
+                    <MudText Typo="Typo.h5">@TotalExpenseCost.ToString("C0")</MudText>
+                    <MudText Typo="Typo.caption">@ExpenseRows.Count Items</MudText>
+                </MudCard>
+            </MudItem>
+            <MudItem xs="12" sm="6" md="2">
+                <MudCard Outlined="true" Elevation="0" Class="pa-4 mud-theme-primary overflow-hidden relative">
+                    <MudText Typo="Typo.caption" Style="color: rgba(255,255,255,0.7)">Estimated Net Profit</MudText>
+                    <div class="d-flex align-end justify-space-between mt-1">
+                        <MudText Typo="Typo.h4" Style="font-weight: 700;">@NetProfit.ToString("C0")</MudText>
+                        <MudChip T="string" Color="Color.Surface" Size="Size.Small" Variant="Variant.Filled"
+                            Style="color: var(--mud-palette-primary); font-weight: bold;">@NetMargin.ToString("N1")%
+                            Margin</MudChip>
+                    </div>
+                    <MudIcon Icon="@Icons.Material.Filled.TrendingUp"
+                        Style="position:absolute; right: -10px; bottom: -10px; font-size: 5rem; opacity: 0.2;" />
+                </MudCard>
+            </MudItem>
+        </MudGrid>
+    </MudItem>
+
+    @* --- CASH FLOW SECTION: SPENT VS PAID --- *@
+    <MudItem xs="12" md="8">
+        <MudPaper Class="pa-4 h-100" Outlined="true" Elevation="0">
+            <div class="d-flex justify-space-between align-center mb-4">
+                <MudText Typo="Typo.h6">Financial Position (Spent vs Paid)</MudText>
+                <MudChip T="string" Color="@(IsCashFlowPositive ? Color.Success : Color.Error)" Variant="Variant.Text"
+                    StartIcon="@(IsCashFlowPositive ? Icons.Material.Filled.ArrowUpward : Icons.Material.Filled.ArrowDownward)">
+                    @(IsCashFlowPositive ? "Cash Positive" : "Cash Negative")
+                </MudChip>
+            </div>
+
+            <MudGrid>
+                <MudItem xs="12" sm="4">
+                    <div class="pa-4 rounded mud-background-gray">
+                        <MudText Typo="Typo.caption" Class="mud-text-secondary">Total Paid by Client</MudText>
+                        <MudText Typo="Typo.h5" Color="Color.Success" Style="font-weight: bold;">
+                            @TotalPaid.ToString("C0")</MudText>
+                    </div>
+                </MudItem>
+                <MudItem xs="12" sm="4">
+                    <div class="pa-4 rounded mud-background-gray">
+                        <MudText Typo="Typo.caption" Class="mud-text-secondary">Total Project Spent</MudText>
+                        <MudText Typo="Typo.h5" Color="Color.Error" Style="font-weight: bold;">
+                            @TotalSpent.ToString("C0")</MudText>
+                    </div>
+                </MudItem>
+                <MudItem xs="12" sm="4">
+                    <div class="pa-4 rounded"
+                        style="@($"background-color: {(CashPosition >= 0 ? "rgba(76, 175, 80, 0.1)" : "rgba(244, 67, 54, 0.1)")};")">
+                        <MudText Typo="Typo.caption" Class="mud-text-secondary">Cash Position</MudText>
+                        <MudText Typo="Typo.h5" Color="@(CashPosition >= 0 ? Color.Success : Color.Error)"
+                            Style="font-weight: 900;">@CashPosition.ToString("C0")</MudText>
+                    </div>
+                </MudItem>
+
+                <MudItem xs="12" Class="mt-2">
+                    <MudText Typo="Typo.caption" GutterBottom="true">Relative Expenditure to Income</MudText>
+                    <MudProgressLinear Color="@(TotalPaid >= TotalSpent ? Color.Success : Color.Warning)"
+                        Value="@((double)SpentVsPaidRatio)" Size="Size.Large" Rounded="true">
+                        <MudText Typo="Typo.caption" Style="color: white; padding-left: 10px;">
+                            <b>@SpentVsPaidRatio.ToString("N0")% Covered</b>
+                        </MudText>
+                    </MudProgressLinear>
+                    <MudText Typo="Typo.caption" Class="mt-1 d-block">This tracks if client payments are covering the
+                        project's actual costs to date.</MudText>
+                </MudItem>
+            </MudGrid>
+        </MudPaper>
+    </MudItem>
+
+    @* --- INVOICING SUMMARY --- *@
+    <MudItem xs="12" md="4">
+        <MudPaper Class="pa-4 h-100" Outlined="true" Elevation="0">
+            <MudText Typo="Typo.h6" Class="mb-4">Billing Status</MudText>
+            <div class="d-flex flex-column gap-3">
+                <div class="d-flex justify-space-between align-center">
+                    <MudText Typo="Typo.body2">Total Invoiced</MudText>
+                    <MudText Typo="Typo.body1" Style="font-weight: bold;">@TotalInvoiced.ToString("C0")</MudText>
+                </div>
+                <div class="d-flex justify-space-between align-center">
+                    <MudText Typo="Typo.body2">Collection Progress</MudText>
+                    <MudText Typo="Typo.body1">@((TotalInvoiced > 0 ? (TotalPaid / TotalInvoiced * 100) :
+                        0).ToString("N0"))%</MudText>
+                </div>
+                <MudDivider />
+                <div class="d-flex justify-space-between align-center">
+                    <MudText Typo="Typo.body2" Color="Color.Error">Accounts Receivable</MudText>
+                    <MudText Typo="Typo.h6" Color="Color.Error" Style="font-weight: bold;">@BalanceDue.ToString("C0")
+                    </MudText>
+                </div>
+
+                @if (TotalRevenue > TotalInvoiced)
+                {
+                    <MudAlert Severity="Severity.Info" Dense="true" Class="mt-2 text-xs">
+                        @((TotalRevenue - TotalInvoiced).ToString("C0")) remaining to be billed.
+                    </MudAlert>
+                }
+
+                @* Quick Actions *@
+                <MudDivider Class="my-3" />
+                <div class="d-flex gap-2 flex-wrap">
+                    @if (AcceptedQuote != null)
+                    {
+                        <MudButton Variant="Variant.Outlined" Size="Size.Small" Color="Color.Primary"
+                            StartIcon="@Icons.Material.Filled.Visibility"
+                            OnClick="@(() => Nav.NavigateTo($"/projects/{ProjectId}/quote/{AcceptedQuote.Id}"))">
+                            View Quote
+                        </MudButton>
+                    }
+                    <MudButton Variant="Variant.Outlined" Size="Size.Small" Color="Color.Success"
+                        StartIcon="@Icons.Material.Filled.Receipt"
+                        OnClick="@(() => Nav.NavigateTo($"/projects/{ProjectId}?tab=invoices"))">
+                        Invoices
+                    </MudButton>
+                </div>
+            </div>
+        </MudPaper>
+    </MudItem>
+
+    @* --- COMMISSIONS TABLE --- *@
+    <MudItem xs="12">
+        <MudPaper Elevation="0" Outlined="true">
+            <MudExpansionPanels Outlined="false" Elevation="0" MultiExpansion="true">
+                <MudExpansionPanel Icon="@Icons.Material.Filled.KeyboardArrowUp" IsInitiallyExpanded="false">
+                    <TitleContent>
+                        <MudText Typo="Typo.h6">Commissions Breakdown</MudText>
+                    </TitleContent>
+                    <ChildContent>
+                        <MudCard Outlined="true" Elevation="0" Class="mb-4" Style="background-color: var(--mud-palette-background-grey);">
+                            <MudCardContent>
+                                <MudGrid>
+                                    <MudItem xs="12" sm="3">
+                                        <MudText Typo="Typo.caption">Total Income (Invoiced)</MudText>
+                                        <MudText Typo="Typo.h6">@((TotalInvoiced > 0 ? TotalInvoiced : TotalRevenue).ToString("C"))</MudText>
+                                    </MudItem>
+                                    <MudItem xs="12" sm="3">
+                                        <MudText Typo="Typo.caption">Total POs (Materials/Subs)</MudText>
+                                        <MudText Typo="Typo.h6" Color="Color.Error">- @TotalPurchaseCost.ToString("C")</MudText>
+                                    </MudItem>
+                                    <MudItem xs="12" sm="3">
+                                        <MudText Typo="Typo.caption">Total Expenses</MudText>
+                                        <MudText Typo="Typo.h6" Color="Color.Error">- @TotalExpenseCost.ToString("C")</MudText>
+                                    </MudItem>
+                                    <MudItem xs="12" sm="3">
+                                        <MudText Typo="Typo.caption">Gross Margin</MudText>
+                                        <MudText Typo="Typo.h6" Color="Color.Success"><b>@ProjectGrossMargin.ToString("C")</b></MudText>
+                                    </MudItem>
+                                </MudGrid>
+                            </MudCardContent>
+                        </MudCard>
+
+                        @if (CommissionRows == null || !CommissionRows.Any())
+                        {
+                            <MudAlert Severity="Severity.Info" Dense="true">No commissions configured or profit margin is negligible.</MudAlert>
+                        }
+                        else
+                        {
+                            <MudTable Items="@CommissionRows" Hover="true" Dense="true" Elevation="0" Outlined="true">
+                                <HeaderContent>
+                                    <MudTh>Beneficiary</MudTh>
+                                    <MudTh>Basis</MudTh>
+                                    <MudTh>Commission Base</MudTh>
+                                    <MudTh>Rate</MudTh>
+                                    <MudTh>Commission Amount</MudTh>
+                                    <MudTh>Status</MudTh>
+                                </HeaderContent>
+                                <RowTemplate>
+                                    <MudTd>@context.BeneficiaryName</MudTd>
+                                    <MudTd>@context.Basis</MudTd>
+                                    <MudTd>@context.BaseAmount.ToString("C")</MudTd>
+                                    <MudTd>@context.Percentage.ToString("N2")%</MudTd>
+                                    <MudTd><b>@context.CommissionAmount.ToString("C")</b></MudTd>
+                                    <MudTd>
+                                        <MudChip Size="Size.Small" T="string" Color="@(context.Status.Contains("Est") ? Color.Warning : Color.Success)">@context.Status</MudChip>
+                                    </MudTd>
+                                </RowTemplate>
+                            </MudTable>
+                            <div class="d-flex justify-end mt-4">
+                                <MudText Typo="Typo.h6">Total Commission Output: <b>@TotalCommissions.ToString("C")</b></MudText>
+                            </div>
+                        }
+                    </ChildContent>
+                
+                    
+                </MudExpansionPanel>
+            </MudExpansionPanels>
+        </MudPaper>
+        
+    </MudItem>
+
+    @* --- LABOR PROGRESS --- *@
+    <MudItem xs="12">
+        <MudText Typo="Typo.h6" Class="mt-4 mb-2">Detailed Labor Progress</MudText>
+        <MudTable Items="@LaborRows" Hover="true" Dense="true" Outlined="true" Elevation="0">
+            <HeaderContent>
+                <MudTh>Task</MudTh>
+                <MudTh>Budget (Hrs)</MudTh>
+                <MudTh>Actual (Hrs)</MudTh>
+                <MudTh>Internal Cost</MudTh>
+                <MudTh>Usage</MudTh>
+            </HeaderContent>
+            <RowTemplate>
+                <MudTd>@context.DisplayName</MudTd>
+                <MudTd>@(context.QuotedHours > 0 ? context.QuotedHours.ToString("N1") : "-")</MudTd>
+                    <MudTd>
+                        <MudText Color="@(context.IsOver? Color.Error: Color.Default)" Style="font-weight:bold;">
+                            @context.ActualHours.ToString("N1")
+                        </MudText>
+                    </MudTd>
+                    <MudTd>@context.CostIncurred.ToString("C0")</MudTd>
+                    <MudTd Style="width: 250px;">
+                        @if (context.QuotedHours > 0)
+                    {
+                        <div class="d-flex align-center gap-2">
+                            <MudProgressLinear Color="@(context.IsOver? Color.Error: Color.Success)"
+                                Value="@(Math.Min((double)(context.ActualHours / context.QuotedHours * 100), 100))"
+                                Size="Size.Large" Rounded="true" />
+                            <MudText Typo="Typo.caption">@((context.ActualHours / context.QuotedHours *
+                            100).ToString("N0"))%</MudText>
+                        </div>
+                    }
+                    else
+                    {
+                        <MudText Typo="Typo.caption" Color="Color.Warning">Not in Quote</MudText>
+                    }
+                </MudTd>
+            </RowTemplate>
+        </MudTable>
+    </MudItem>
+
+    @* --- PURCHASES --- *@
+    <MudItem xs="12">
+        <MudText Typo="Typo.h6" Class="mt-4 mb-2">Project Procurement</MudText>
+        @if (!PurchaseRows.Any())
+        {
+            <MudAlert Severity="Severity.Info" Dense="true">No purchase orders found for this project.</MudAlert>
+        }
+        else
+        {
+            <MudTable Items="@PurchaseRows" Hover="true" Dense="true" Outlined="true" Elevation="0">
+                <HeaderContent>
+                    <MudTh>Date</MudTh>
+                    <MudTh>PO #</MudTh>
+                    <MudTh>Description</MudTh>
+                    <MudTh>Net Cost</MudTh>
+                    <MudTh>Tax</MudTh>
+                    <MudTh>Total</MudTh>
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd>@context.Date.ToShortDateString()</MudTd>
+                    <MudTd><b>@context.PoNumber</b></MudTd>
+                    <MudTd>
+                        @context.Description
+                        @if (!string.IsNullOrEmpty(context.PartNumber))
+                        {
+                            <MudText Typo="Typo.caption" Class="ml-2" Color="Color.Secondary">Ref: @context.PartNumber</MudText>
+                        }
+                    </MudTd>
+                    <MudTd>@context.NetTotal.ToString("C")</MudTd>
+                    <MudTd>@context.TaxAmount.ToString("C")</MudTd>
+                    <MudTd><b>@context.GrandTotal.ToString("C")</b></MudTd>
+                </RowTemplate>
+                <FooterContent>
+                    <MudTd colspan="5"><b>Total Procurement Cost</b></MudTd>
+                    <MudTd><b>@TotalPurchaseCost.ToString("C")</b></MudTd>
+                </FooterContent>
+            </MudTable>
+        }
+    </MudItem>
+
+    @* --- EXPENSES --- *@
+    <MudItem xs="12">
+        <MudText Typo="Typo.h6" Class="mt-4 mb-2">Employee Expenses</MudText>
+        @if (!ExpenseRows.Any())
+        {
+            <MudAlert Severity="Severity.Info" Dense="true">No expenses filed for this project.</MudAlert>
+        }
+        else
+        {
+            <MudTable Items="@ExpenseRows" Hover="true" Dense="true" Outlined="true" Elevation="0">
+                <HeaderContent>
+                    <MudTh>Date</MudTh>
+                    <MudTh>Report</MudTh>
+                    <MudTh>Employee</MudTh>
+                    <MudTh>Description</MudTh>
+                    <MudTh>Type</MudTh>
+                    <MudTh>Total</MudTh>
+                    <MudTh>Receipt</MudTh>
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd>@context.Date.ToShortDateString()</MudTd>
+                    <MudTd>@context.ReportNumber</MudTd>
+                    <MudTd>@context.EmployeeName</MudTd>
+                    <MudTd>@context.Description</MudTd>
+                    <MudTd>@(context.IsKilometrage ? "Km" : "Receipt")</MudTd>
+                        <MudTd><b>@context.Total.ToString("C")</b></MudTd>
+                        <MudTd>
+                            @if (!string.IsNullOrEmpty(context.ReceiptPath))
+                        {
+                            <MudIconButton Icon="@Icons.Material.Filled.AttachFile" Size="Size.Small"
+                                Href="@context.ReceiptPath" Target="_blank" />
+                        }
+                    </MudTd>
+                </RowTemplate>
+                <FooterContent>
+                    <MudTd colspan="6"><b>Total Expenses</b></MudTd>
+                    <MudTd><b>@TotalExpenseCost.ToString("C")</b></MudTd>
+                </FooterContent>
+            </MudTable>
+        }
+    </MudItem>
+
+</MudGrid>
+
+@code {
+    [Parameter] public string ProjectId { get; set; }
+
+    class LaborRow
+    {
+        public string TaskName { get; set; }
+        public string SubTaskName { get; set; }
+        public decimal ActualHours { get; set; }
+        public decimal QuotedHours { get; set; }
+        public decimal CostIncurred { get; set; } // New field
+        public bool IsOver => QuotedHours > 0 && ActualHours > QuotedHours;
+
+        public string DisplayName => string.IsNullOrEmpty(SubTaskName) || SubTaskName == "General"
+        ? TaskName
+        : $"{TaskName}: {SubTaskName}";
+    }
+
+    class PurchaseRow
+    {
+        public DateTime Date { get; set; }
+        public string PoNumber { get; set; }
+        public string Description { get; set; }
+        public string PartNumber { get; set; }
+
+        // Financials
+        public decimal NetTotal { get; set; }
+        public decimal TaxAmount { get; set; }
+        public decimal GrandTotal => NetTotal + TaxAmount;
+    }
+
+    private List<LaborRow> LaborRows = new();
+    private List<PurchaseRow> PurchaseRows = new();
+
+    private decimal TotalRevenue = 0;
+    private decimal TotalLaborCost => LaborRows.Sum(r => r.CostIncurred);
+    private decimal TotalPurchaseCost => PurchaseRows.Sum(p => p.GrandTotal);
+    
+    // Macro Profitability
+    private decimal ProjectGrossMargin => (TotalInvoiced > 0 ? TotalInvoiced : TotalRevenue) - TotalPurchaseCost - TotalExpenseCost;
+
+    // Profitability
+    private decimal TotalCommissions = 0;
+    private decimal NetProfit => TotalRevenue - TotalLaborCost - TotalPurchaseCost - TotalExpenseCost - TotalCommissions;
+    private decimal NetMargin => TotalRevenue > 0 ? (NetProfit / TotalRevenue * 100) : 0;
+    private decimal LaborEfficiency => LaborRows.Sum(r => r.QuotedHours) > 0
+    ? (LaborRows.Sum(r => r.ActualHours) / LaborRows.Sum(r => r.QuotedHours) * 100)
+    : 0;
+
+    // Cash Flow
+    private decimal TotalSpent => TotalLaborCost + TotalPurchaseCost + TotalExpenseCost;
+    private decimal CashPosition => TotalPaid - TotalSpent;
+    private bool IsCashFlowPositive => CashPosition >= 0;
+    private decimal SpentVsPaidRatio => TotalSpent > 0 ? (TotalPaid / TotalSpent * 100) : (TotalPaid > 0 ? 100 : 0);
+
+    private decimal TotalInvoiced = 0;
+    private decimal TotalPaid = 0;
+    private decimal BalanceDue => TotalInvoiced - TotalPaid;
+    private Project CurrentProject;
+    private bool IsCommissionPayable = false;
+
+    // Timeline Context
+    private Quote? AcceptedQuote = null;
+    private DateOnly? ProjectStartDate => AcceptedQuote?.StartDate;
+    private DateOnly? ProjectDeadline => AcceptedQuote?.Deadline;
+    private int DaysSinceStart => ProjectStartDate.HasValue
+    ? (DateTime.Today - ProjectStartDate.Value.ToDateTime(TimeOnly.MinValue)).Days
+    : 0;
+    private int DaysToDeadline => ProjectDeadline.HasValue
+    ? (ProjectDeadline.Value.ToDateTime(TimeOnly.MinValue) - DateTime.Today).Days
+    : 0;
+
+    // Risk Indicators
+    private bool IsLaborOverBudget => LaborRows.Sum(r => r.QuotedHours) > 0 && LaborEfficiency > 100;
+    private bool HasAgingReceivables = false;
+    private DateTime? OldestUnpaidInvoiceDate = null;
+
+    protected override void OnInitialized()
+    {
+        CurrentProject = Db.Projects.GetById(ProjectId);
+        AcceptedQuote = Db.Quotes.GetByProject(ProjectId).FirstOrDefault(q => q.Status == "Accepted");
+        LoadLabor();
+        LoadPurchases();
+        LoadExpenses();
+        LoadInvoicing(); // Also checks commission status and aging AR
+        LoadCommissions();
+    }
+
+    class CommissionBreakdownRow
+    {
+        public string BeneficiaryName { get; set; }
+        public string Basis { get; set; }
+        public decimal Percentage { get; set; }
+        public decimal BaseAmount { get; set; }
+        public decimal CommissionAmount { get; set; }
+        public string Status { get; set; }
+    }
+
+    private List<CommissionBreakdownRow> CommissionRows = new();
+
+    private void LoadCommissions()
+    {
+        CommissionRows.Clear();
+        TotalCommissions = 0;
+        if (CurrentProject == null || !CurrentProject.Commissions.Any()) return;
+        
+        var ledgers = Db.CommissionLedgerRecords.GetByProject(ProjectId).Where(l => l.Status != CommissionStatus.Clawback).ToList();
+
+        if (ledgers.Any())
+        {
+            foreach(var l in ledgers)
+            {
+                CommissionRows.Add(new CommissionBreakdownRow
+                {
+                    BeneficiaryName = l.BeneficiaryName,
+                    Basis = "Ledger",
+                    Percentage = CurrentProject.Commissions.FirstOrDefault(c => string.Equals(c.Name, l.BeneficiaryName, StringComparison.OrdinalIgnoreCase) || string.Equals(c.EmployeeId, l.BeneficiaryId, StringComparison.OrdinalIgnoreCase))?.Percentage ?? 0,
+                    BaseAmount = l.BaseAmount,
+                    CommissionAmount = l.CommissionAmount,
+                    Status = l.Status
+                });
+            }
+        }
+        else 
+        {
+            var baseIncome = TotalInvoiced > 0 ? TotalInvoiced : TotalRevenue;
+            
+            foreach(var comm in CurrentProject.Commissions)
+            {
+                var basis = string.IsNullOrEmpty(comm.CommissionBasis) ? CommissionBasisTypes.Revenue : comm.CommissionBasis;
+                decimal baseAmount = basis.Contains("Margin") ? ProjectGrossMargin : baseIncome;
+                
+                if (baseAmount <= 0) continue;
+                
+                CommissionRows.Add(new CommissionBreakdownRow
+                {
+                    BeneficiaryName = comm.Name,
+                    Basis = basis,
+                    Percentage = comm.Percentage,
+                    BaseAmount = baseAmount,
+                    CommissionAmount = baseAmount * (comm.Percentage / 100m),
+                    Status = "Est. (Pending Completion)"
+                });
+            }
+        }
+        
+        TotalCommissions = CommissionRows.Sum(r => r.CommissionAmount);
+    }
+
+    private void LoadInvoicing()
+    {
+        var projectInvoices = Db.Invoices.GetByProject(ProjectId)
+        .Where(i => i.Status != "Void")
+        .ToList();
+
+        TotalInvoiced = projectInvoices.Sum(i => i.GrandTotal);
+        TotalPaid = projectInvoices.Sum(i => i.AmountPaid);
+
+        // Check Commission Status
+        if (CurrentProject != null)
+        {
+            var profile = Db.CompanyProfile.Get();
+            IsCommissionPayable = CurrentProject.IsCommissionPayable(projectInvoices, profile.ProjectStatuses);
+        }
+
+        // Check for Aging Receivables (> 30 days old with balance due)
+        var unpaidInvoices = projectInvoices
+        .Where(i => i.Status != "Paid" && i.Status != "Void" && i.BalanceDue > 0)
+        .OrderBy(i => i.Date)
+        .ToList();
+
+        if (unpaidInvoices.Any())
+        {
+            OldestUnpaidInvoiceDate = unpaidInvoices.First().Date;
+            HasAgingReceivables = OldestUnpaidInvoiceDate.HasValue
+            && (DateTime.Today - OldestUnpaidInvoiceDate.Value).Days > 30;
+        }
+    }
+
+    private void LoadLabor()
+    {
+        // 1. Get Actuals Grouped by WorkType AND SubTask
+        var entries = Db.Timesheets.GetAll()
+        .SelectMany(t => t.Entries)
+        .Where(e => e.ProjectId == ProjectId)
+        .ToList();
+
+        var actuals = entries
+        .GroupBy(e => new { e.WorkTypeId, e.SubTaskId })
+        .ToDictionary(g => g.Key, g => g.Sum(e => e.Hours));
+
+        // 2. Get Quoted Data (Grouped by WorkType - Quote doesn't have SubTask yet)
+        var acceptedQuote = Db.Quotes.GetByProject(ProjectId).FirstOrDefault(q => q.Status == "Accepted");
+        var budgets = new Dictionary<string, decimal>();
+        if (acceptedQuote != null)
+        {
+            budgets = acceptedQuote.LaborItems
+            .GroupBy(l => l.WorkTypeId)
+            .ToDictionary(g => g.Key, g => g.Sum(l => l.Hours));
+
+            TotalRevenue = acceptedQuote.GrandTotal;
+        }
+
+        // 3. Merge & Calculate Cost
+        var allTasks = Db.WorkTypes.GetAll().ToDictionary(t => t.Id, t => t);
+
+        // We iterate over actuals first to split by sub-task
+        foreach (var actual in actuals)
+        {
+            var wid = actual.Key.WorkTypeId;
+            var stid = actual.Key.SubTaskId;
+            var actHours = actual.Value;
+
+            var taskDef = allTasks.ContainsKey(wid) ? allTasks[wid] : new WorkType { Name = "Unknown" };
+            var subTaskName = taskDef.SubTasks.FirstOrDefault(s => s.Id == stid)?.Name ?? "General";
+
+            // For now, we only attribute budget to the "General" or first sub-task encountered?
+            // Actually, better: if actuals are split, budget probably should be viewed against the total Task?
+            // User asked to "split the tasks by sub-task".
+            // So we show budget only on the first occurrence or split it?
+            // Usually, if budget is $100 for "Development", and actuals are "Dev: Task A" (50) and "Dev: Task B" (60),
+            // it's hard to compare unless we sum them.
+            // But the request is to split them.
+
+            LaborRows.Add(new LaborRow
+                {
+                    TaskName = taskDef.Name,
+                    SubTaskName = subTaskName,
+                    ActualHours = actHours,
+                    QuotedHours = 0, // We'll handle budget separately
+                    CostIncurred = actHours * taskDef.CostRate
+                });
+        }
+
+        // Now handle tasks that have budget but NO actuals
+        foreach (var budget in budgets)
+        {
+            var wid = budget.Key;
+            var qtdHours = budget.Value;
+
+            // Check if we already have a row for this task
+            var existingRows = LaborRows.Where(r => allTasks.ContainsKey(wid) && r.TaskName == allTasks[wid].Name).ToList();
+
+            if (existingRows.Any())
+            {
+                // Attribute budget to the first row (simplification) or the "General" row
+                var generalRow = existingRows.FirstOrDefault(r => r.SubTaskName == "General") ?? existingRows.First();
+                generalRow.QuotedHours = qtdHours;
+            }
+            else
+            {
+                // New task with only budget
+                var taskDef = allTasks.ContainsKey(wid) ? allTasks[wid] : new WorkType { Name = "Unknown" };
+                LaborRows.Add(new LaborRow
+                    {
+                        TaskName = taskDef.Name,
+                        SubTaskName = "General",
+                        ActualHours = 0,
+                        QuotedHours = qtdHours,
+                        CostIncurred = 0
+                    });
+            }
+        }
+
+        LaborRows = LaborRows.OrderBy(r => r.TaskName).ThenBy(r => r.SubTaskName).ToList();
+    }
+
+    private void LoadPurchases()
+    {
+        var allPos = Db.Purchases.GetAll();
+
+        foreach (var po in allPos)
+        {
+            var myItems = po.Items.Where(i => i.ProjectId == ProjectId);
+
+            foreach (var item in myItems)
+            {
+                // FIX 2: Calculate Tax share for this specific item
+                decimal taxForThisItem = 0;
+                if (po.ApplyTax)
+                {
+                    taxForThisItem = item.Total * po.TaxRate;
+                }
+
+                PurchaseRows.Add(new PurchaseRow
+                    {
+                        Date = po.Date,
+                        PoNumber = po.PoNumber,
+                        Description = item.Description,
+                        PartNumber = item.PartNumber,
+                        NetTotal = item.Total,
+                        TaxAmount = taxForThisItem
+                    });
+            }
+        }
+
+        PurchaseRows = PurchaseRows.OrderByDescending(x => x.Date).ToList();
+    }
+
+    class ExpenseRow
+    {
+        public DateTime Date { get; set; }
+        public string ReportNumber { get; set; }
+        public string EmployeeName { get; set; }
+        public string Description { get; set; }
+        public bool IsKilometrage { get; set; }
+        public decimal Total { get; set; }
+        public string ReceiptPath { get; set; }
+    }
+
+    private List<ExpenseRow> ExpenseRows = new();
+    private decimal TotalExpenseCost => ExpenseRows.Sum(e => e.Total);
+
+    private void LoadExpenses()
+    {
+        var allReports = Db.ExpenseReports.GetAll();
+        ExpenseRows = allReports
+        .SelectMany(r => r.Items.Select(i => new
+        {
+            Item = i,
+            ReportNumber = r.ReportNumber,
+            EmployeeName = r.EmployeeName
+        }))
+        .Where(x => x.Item.ProjectId == ProjectId)
+        .Select(x => new ExpenseRow
+            {
+                Date = x.Item.Date,
+                ReportNumber = x.ReportNumber,
+                EmployeeName = x.EmployeeName,
+                Description = x.Item.Description,
+                IsKilometrage = x.Item.IsKilometrage,
+                Total = x.Item.Total,
+                ReceiptPath = x.Item.ReceiptPath
+            })
+        .OrderByDescending(e => e.Date)
+        .ToList();
+    }
+}

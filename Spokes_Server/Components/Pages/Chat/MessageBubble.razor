@@ -1,0 +1,1123 @@
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Data
+@using Microsoft.AspNetCore.DataProtection
+@using Spokes_Server.Core.Services.Security
+@using static Spokes_Server.Core.Helpers.FileHelper
+@inject LinkPreviewService LinkPreviews
+@inject IJSRuntime JS
+@inject Database Db
+@inject ISnackbar Snackbar
+@inject Microsoft.AspNetCore.DataProtection.IDataProtectionProvider DataProtection
+@inject NavigationManager NavManager
+@inject FileTokenService FileTokens
+@inject ScopedKeystoreService ScopedKeystore
+@inject Spokes_Server.Core.Services.UI.ImageRecoveryService ImageRecovery
+@implements IDisposable
+
+<div style="width: 100%;" class="@(!IsGrouped ? "mt-2" : "")">
+@* Reply preview above message content (when this is a reply to another message) *@
+@if (!string.IsNullOrEmpty(Message.ReplyToId) && ReplyToMessage != null)
+{
+    <div class="reply-preview-row" @onclick="@(() => OnScrollToMessage.InvokeAsync(Message.ReplyToId))">
+        <div class="reply-spine" style="@(IsGrouped ? "bottom: 0px;" : "bottom: -8px;")"></div>
+        <EmployeeAvatar Employee="ReplyToSender" Size="Size.Small" ShowPresence="false" Style="width: 16px; height: 16px; min-width: 16px; min-height: 16px; flex-shrink: 0;" />
+        <MudText Typo="Typo.caption" Class="mt-1" Style="font-weight: 600; color: var(--mud-palette-text-secondary); white-space: nowrap; margin-right: 4px;">
+            @(ReplyToSender?.FullName ?? "Unknown")
+        </MudText>
+        <MudText Typo="Typo.caption" Class="reply-text mt-1">
+            @GetReplyPreview(DecryptedReplyContent ?? ReplyToMessage.Content)
+        </MudText>
+    </div>
+}
+
+@* When grouped (same sender within 5 min), collapse avatar/name and show compact layout *@
+@if (IsGrouped)
+{
+    <div class="py-0 pr-2 message-row message-row-grouped" data-message-id="@Message.Id" style="position: relative; padding-left: 64px; width: 100%;">
+        @* Invisible spacer matching avatar width for alignment *@
+        <div class="message-avatar-spacer" style="position: absolute; left: 8px; top: 0; width: 40px; display: flex; align-items: flex-start; justify-content: center;">
+            <MudText Typo="Typo.caption" Class="message-hover-time"
+                Style="color: var(--mud-palette-text-disabled); font-size: 0.65rem; opacity: 0; white-space: nowrap;">
+                @Message.SentAt.ToLocalTime().ToString("h:mm tt")
+            </MudText>
+        </div>
+
+        @{
+            var txt = DecryptedContent ?? Message.Content ?? "";
+            bool isInlineMedia = txt.Contains("![") || txt.Contains(".gif") || txt.Contains("tenor.com") || txt.Contains("giphy.com");
+            bool hasVisualMedia = HasMediaAttachments || _linkPreviews.Any() || isInlineMedia;
+        }
+        <div class="message-content-wrapper @(hasVisualMedia ? "has-media" : "")">
+            @* Message Body (no header) *@
+            <div style="flex-grow: 1; min-width: 0;">
+                @if (IsEditing)
+                {
+                    <div class="mt-2 mb-2 w-100">
+                        <ChatComposer @key="@($"edit-{Message.Id}")"
+                            ChannelId="@Message.ChannelId" 
+                            CurrentUserId="@CurrentUserId" 
+                            IsEditMode="true" 
+                            InitialText="@(DecryptedContent ?? Message.Content)" 
+                            IdSuffix="@Message.Id"
+                            Employees="Employees"
+                            Teams="Teams"
+                            OnSendMessage="@(async args => await OnSaveEdit.InvokeAsync((Message, args.Content)))"
+                            OnCancelEdit="@(async () => await OnCancelEdit.InvokeAsync())" />
+                    </div>
+                }
+                else if (Message.MessageType == "CallInvite")
+                {
+                    <MudCard Class="pa-3 mt-1 mb-1" Style="max-width: 350px; background: var(--mud-palette-background-grey); box-shadow: none; border: 1px solid var(--mud-palette-divider);">
+                        <div class="d-flex align-center gap-3">
+                            <MudIcon Icon="@Icons.Material.Filled.Phone" Color="Color.Info" Size="Size.Medium" />
+                            <div>
+                                <MudText Typo="Typo.subtitle2"><b>Voice Call Started</b></MudText>
+                                @if (Message.CallStatus == "Declined")
+                                {
+                                    <MudText Typo="Typo.body2" Color="Color.Error">Call was declined.</MudText>
+                                }
+                                else if (Message.CallStatus == "Ended")
+                                {
+                                    <MudText Typo="Typo.body2" Color="Color.Secondary">Call ended.</MudText>
+                                }
+                                else
+                                {
+                                    <MudText Typo="Typo.caption" Color="Color.Secondary">Join the conversation!</MudText>
+                                }
+                            </div>
+                        </div>
+                        @if (Message.CallStatus != "Declined" && Message.CallStatus != "Ended")
+                        {
+                            <div class="d-flex justify-end gap-2 mt-2">
+                                @if (CurrentUserId != Message.SenderId)
+                                {
+                                    <MudButton Variant="Variant.Text" Color="Color.Error" Size="Size.Small" OnClick="@(() => OnDeclineCall.InvokeAsync(Message))">Decline</MudButton>
+                                }
+                                <MudButton Variant="Variant.Filled" Color="Color.Success" Size="Size.Small" OnClick="@(() => OnJoinCall.InvokeAsync(Message))">Join Call</MudButton>
+                            </div>
+                        }
+                    </MudCard>
+                }
+                else if (Message.IsEncrypted && DecryptedContent == null && !string.IsNullOrEmpty(Message.Content))
+                {
+                    <div class="d-flex align-center gap-2" style="opacity: 0.6; font-style: italic;">
+                        <MudIcon Icon="@Icons.Material.Filled.Lock" Size="Size.Small" />
+                        <MudText Typo="Typo.body2">Encrypted message</MudText>
+                    </div>
+                }
+                else if (!string.IsNullOrWhiteSpace(DecryptedContent ?? Message.Content))
+                {
+                    var rawContent = DecryptedContent ?? Message.Content ?? "";
+                    bool isTruncated = !_isExpanded && rawContent.Length > MaxMessageLength;
+                    var displayContent = isTruncated ? rawContent.Substring(0, MaxMessageLength) + "..." : rawContent;
+                    if (isTruncated)
+                    {
+                        var codeStarts = System.Text.RegularExpressions.Regex.Matches(displayContent, @"\[code", System.Text.RegularExpressions.RegexOptions.IgnoreCase).Count;
+                        var codeEnds = System.Text.RegularExpressions.Regex.Matches(displayContent, @"\[/code\]", System.Text.RegularExpressions.RegexOptions.IgnoreCase).Count;
+                        if (codeStarts > codeEnds) displayContent += "\n[/code]";
+                    }
+                    <ChatMarkdownRenderer Content="@displayContent" FullContent="@rawContent" CurrentUserId="@CurrentUserId" ChannelId="@Message.ChannelId" SessionId="@SessionId" Employees="Employees" IsEdited="@Message.EditedAt.HasValue" ChannelKey="@ChannelKey" />
+                    if (rawContent.Length > MaxMessageLength)
+                    {
+                        <MudButton Variant="Variant.Text" Color="Color.Primary" Size="Size.Small" OnClick="() => _isExpanded = !_isExpanded" Class="mt-1 px-1" Style="min-width: unset;">
+                            @(_isExpanded ? "Show Less" : "Read More")
+                        </MudButton>
+                    }
+                }
+                @RenderLinkPreviews()
+                @if (Message.Attachments.Any())
+                {
+                    <div class="d-flex flex-wrap gap-2 mt-1">
+                        @foreach (var attachment in Message.Attachments)
+                        {
+                            @RenderAttachment(attachment)
+                        }
+                    </div>
+                }
+                @if (Message.MentionedEventIds != null && Message.MentionedEventIds.Any())
+                {
+                    <div class="d-flex flex-wrap gap-2 mt-2 w-100">
+                        @foreach (var eventId in Message.MentionedEventIds)
+                        {
+                            <EventMentionCard EventId="@eventId" CurrentUserId="@CurrentUserId" Employees="Employees" />
+                        }
+                    </div>
+                }
+                @if (Message.MentionedAlbumIds != null && Message.MentionedAlbumIds.Any())
+                {
+                    <div class="d-flex flex-wrap gap-2 mt-2 w-100">
+                        @foreach (var albumId in Message.MentionedAlbumIds)
+                        {
+                            <AlbumMentionCard AlbumId="@albumId" CurrentUserId="@CurrentUserId" SessionId="@SessionId" Employees="Employees" ChannelId="@Message.ChannelId" />
+                        }
+                    </div>
+                }
+                @if (Message.Reactions.Any() || ReadReceiptUserIds.Any(id => id != Message.SenderId && id != CurrentUserId))
+                {
+                    <div class="d-flex justify-space-between align-center w-100 mt-1">
+                        <div class="reactions-container">
+                            @if (Message.Reactions.Any())
+                            {
+                                <div class="d-flex flex-wrap gap-1">
+                                    @foreach (var reactionGroup in GetReactionGroups())
+                                    {
+                                        <MudTooltip Text="@GetReactionTooltip(reactionGroup.Emoji)" Placement="Placement.Top">
+                                            <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="@(reactionGroup.HasReacted ? Color.Primary : Color.Default)"
+                                                OnClick="@(() => OnReact.InvokeAsync((Message.Id, reactionGroup.Emoji)))"
+                                                Style="border-radius: 12px; height: 24px;">
+                                                @reactionGroup.Emoji <span class="ml-1">@reactionGroup.Count</span>
+                                            </MudChip>
+                                        </MudTooltip>
+                                    }
+                                </div>
+                            }
+                        </div>
+                        
+                        <div class="message-read-receipts d-flex align-center justify-end gap-1">
+                            @if (ReadReceiptUserIds.Any(id => id != Message.SenderId && id != CurrentUserId))
+                            {
+                                @RenderReadReceipts()
+                            }
+                        </div>
+                    </div>
+                }
+            </div>
+
+            @* Actions Stack (Desktop float right) *@
+            <div class="message-actions-stack ml-2">
+                <div class="message-actions d-flex align-center @(_showEmojiPicker ? "force-visible" : "")">
+                    @RenderMessageActions()
+                </div>
+            </div>
+        </div>
+    </div>
+}
+else
+{
+    <div class="mb-0 py-1 pr-2 message-row" data-message-id="@Message.Id" style="position: relative; padding-left: 64px; width: 100%;">
+        @* Avatar *@
+        <div @onclick="@(() => OnAvatarClicked.InvokeAsync(Sender))" style="position: absolute; left: 8px; top: 4px; cursor: pointer;">
+            <EmployeeAvatar Employee="@Sender" Size="Size.Medium" Style="flex-shrink: 0; cursor: pointer;" />
+        </div>
+
+        @{
+            var txt = DecryptedContent ?? Message.Content ?? "";
+            bool isInlineMedia = txt.Contains("![") || txt.Contains(".gif") || txt.Contains("tenor.com") || txt.Contains("giphy.com");
+            bool hasVisualMedia = HasMediaAttachments || _linkPreviews.Any() || isInlineMedia;
+        }
+        <div class="message-content-wrapper @(hasVisualMedia ? "has-media" : "")">
+            @* Message Body *@
+            <div style="flex-grow: 1; min-width: 0;">
+                @* Header: Name + Time *@
+                <div class="d-flex align-center gap-2">
+                    <MudText Typo="Typo.subtitle2" Style="font-weight: 700; color: var(--mud-palette-text-primary); cursor: pointer;" @onclick="@(() => OnAvatarClicked.InvokeAsync(Sender))">
+                        @(Sender?.FullName ?? "Unknown User")
+                    </MudText>
+                    <MudText Typo="Typo.caption" Style="color: var(--mud-palette-text-secondary);">
+                        @{
+                            var localTime = Message.SentAt.ToLocalTime();
+                            var isToday = localTime.Date == DateTime.Now.Date;
+                        }
+                        @localTime.ToString(isToday ? "h:mm tt" : "MMM dd, h:mm tt")
+                    </MudText>
+                </div>
+
+                @if (IsEditing)
+                {
+                    <div class="mt-2 mb-2 w-100">
+                        <ChatComposer @key="@($"edit-{Message.Id}")"
+                            ChannelId="@Message.ChannelId" 
+                            CurrentUserId="@CurrentUserId" 
+                            IsEditMode="true" 
+                            InitialText="@(DecryptedContent ?? Message.Content)" 
+                            IdSuffix="@Message.Id"
+                            Employees="Employees"
+                            Teams="Teams"
+                            OnSendMessage="@(async args => await OnSaveEdit.InvokeAsync((Message, args.Content)))"
+                            OnCancelEdit="@(async () => await OnCancelEdit.InvokeAsync())" />
+                    </div>
+                }
+                else if (Message.MessageType == "CallInvite")
+                {
+                    <MudCard Class="pa-3 mt-1 mb-1" Style="max-width: 350px; background: var(--mud-palette-background-grey); box-shadow: none; border: 1px solid var(--mud-palette-divider);">
+                        <div class="d-flex align-center gap-3">
+                            <MudIcon Icon="@Icons.Material.Filled.Phone" Color="Color.Info" Size="Size.Medium" />
+                            <div>
+                                <MudText Typo="Typo.subtitle2"><b>Voice Call Started</b></MudText>
+                                @if (Message.CallStatus == "Declined")
+                                {
+                                    <MudText Typo="Typo.body2" Color="Color.Error">Call was declined.</MudText>
+                                }
+                                else if (Message.CallStatus == "Ended")
+                                {
+                                    <MudText Typo="Typo.body2" Color="Color.Secondary">Call ended.</MudText>
+                                }
+                                else
+                                {
+                                    <MudText Typo="Typo.caption" Color="Color.Secondary">Join the conversation!</MudText>
+                                }
+                            </div>
+                        </div>
+                        @if (Message.CallStatus != "Declined" && Message.CallStatus != "Ended")
+                        {
+                            <div class="d-flex justify-end gap-2 mt-2">
+                                @if (CurrentUserId != Message.SenderId)
+                                {
+                                    <MudButton Variant="Variant.Text" Color="Color.Error" Size="Size.Small" OnClick="@(() => OnDeclineCall.InvokeAsync(Message))">Decline</MudButton>
+                                }
+                                <MudButton Variant="Variant.Filled" Color="Color.Success" Size="Size.Small" OnClick="@(() => OnJoinCall.InvokeAsync(Message))">Join Call</MudButton>
+                            </div>
+                        }
+                    </MudCard>
+                }
+                else if (Message.IsEncrypted && DecryptedContent == null && !string.IsNullOrEmpty(Message.Content))
+                {
+                    <div class="d-flex align-center gap-2" style="opacity: 0.6; font-style: italic;">
+                        <MudIcon Icon="@Icons.Material.Filled.Lock" Size="Size.Small" />
+                        <MudText Typo="Typo.body2">Encrypted message</MudText>
+                    </div>
+                }
+                else if (!string.IsNullOrWhiteSpace(DecryptedContent ?? Message.Content))
+                {
+                    var rawContent = DecryptedContent ?? Message.Content ?? "";
+                    bool isTruncated = !_isExpanded && rawContent.Length > MaxMessageLength;
+                    var displayContent = isTruncated ? rawContent.Substring(0, MaxMessageLength) + "..." : rawContent;
+                    if (isTruncated)
+                    {
+                        var codeStarts = System.Text.RegularExpressions.Regex.Matches(displayContent, @"\[code", System.Text.RegularExpressions.RegexOptions.IgnoreCase).Count;
+                        var codeEnds = System.Text.RegularExpressions.Regex.Matches(displayContent, @"\[/code\]", System.Text.RegularExpressions.RegexOptions.IgnoreCase).Count;
+                        if (codeStarts > codeEnds) displayContent += "\n[/code]";
+                    }
+                    <ChatMarkdownRenderer Content="@displayContent" FullContent="@rawContent" CurrentUserId="@CurrentUserId" Employees="Employees" IsEdited="@Message.EditedAt.HasValue" ChannelKey="@ChannelKey" />
+                    if (rawContent.Length > MaxMessageLength)
+                    {
+                        <MudButton Variant="Variant.Text" Color="Color.Primary" Size="Size.Small" OnClick="() => _isExpanded = !_isExpanded" Class="mt-1 px-1" Style="min-width: unset;">
+                            @(_isExpanded ? "Show Less" : "Read More")
+                        </MudButton>
+                    }
+                }
+                @RenderLinkPreviews()
+                @if (Message.Attachments.Any())
+                {
+                    <div class="d-flex flex-wrap gap-2 mt-2">
+                        @foreach (var attachment in Message.Attachments)
+                        {
+                            @RenderAttachment(attachment)
+                        }
+                    </div>
+                }
+                @if (Message.MentionedEventIds != null && Message.MentionedEventIds.Any())
+                {
+                    <div class="d-flex flex-wrap gap-2 mt-2 w-100">
+                        @foreach (var eventId in Message.MentionedEventIds)
+                        {
+                            <EventMentionCard EventId="@eventId" CurrentUserId="@CurrentUserId" Employees="Employees" />
+                        }
+                    </div>
+                }
+                @if (Message.MentionedAlbumIds != null && Message.MentionedAlbumIds.Any())
+                {
+                    <div class="d-flex flex-wrap gap-2 mt-2 w-100">
+                        @foreach (var albumId in Message.MentionedAlbumIds)
+                        {
+                            <AlbumMentionCard AlbumId="@albumId" CurrentUserId="@CurrentUserId" SessionId="@SessionId" Employees="Employees" ChannelId="@Message.ChannelId" />
+                        }
+                    </div>
+                }
+                @if (Message.Reactions.Any() || ReadReceiptUserIds.Any(id => id != Message.SenderId && id != CurrentUserId))
+                {
+                    <div class="d-flex justify-space-between align-center w-100 mt-1">
+                        <div class="reactions-container">
+                            @if (Message.Reactions.Any())
+                            {
+                                <div class="d-flex flex-wrap gap-1">
+                                    @foreach (var reactionGroup in GetReactionGroups())
+                                    {
+                                        <MudTooltip Text="@GetReactionTooltip(reactionGroup.Emoji)" Placement="Placement.Top">
+                                            <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="@(reactionGroup.HasReacted ? Color.Primary : Color.Default)"
+                                                OnClick="@(() => OnReact.InvokeAsync((Message.Id, reactionGroup.Emoji)))"
+                                                Style="border-radius: 12px; height: 24px;">
+                                                @reactionGroup.Emoji <span class="ml-1">@reactionGroup.Count</span>
+                                            </MudChip>
+                                        </MudTooltip>
+                                    }
+                                </div>
+                            }
+                        </div>
+                        
+                        <div class="message-read-receipts d-flex align-center justify-end gap-1">
+                            @if (ReadReceiptUserIds.Any(id => id != Message.SenderId && id != CurrentUserId))
+                            {
+                                @RenderReadReceipts()
+                            }
+                        </div>
+                    </div>
+                }
+            </div>
+
+            @* Actions Stack (Desktop float right) *@
+            <div class="message-actions-stack ml-2">
+                <div class="message-actions d-flex align-center @(_showEmojiPicker ? "force-visible" : "")">
+                    @RenderMessageActions()
+                </div>
+            </div>
+        </div>
+    </div>
+}
+</div>
+
+<style>
+    /* ─── Reply Line & Snippet ─── */
+    .reply-preview-row {
+        position: relative;
+        width: 100%;
+        padding-left: 64px; /* Align with message text (8px + 40px avatar + 16px gap) */
+        padding-top: 2px;
+        padding-bottom: 2px;
+        display: flex;
+        font-family: inherit;
+        align-items: center;
+        gap: 4px;
+        cursor: pointer;
+    }
+
+    .reply-spine {
+        position: absolute;
+        left: 28px; /* Center of the main message avatar (8px padding + 20px half avatar) */
+        top: 50%;
+        width: 30px;
+        border-left: 2px solid var(--mud-palette-action-disabled);
+        border-top: 2px solid var(--mud-palette-action-disabled);
+        border-top-left-radius: 6px;
+        box-sizing: border-box;
+        pointer-events: none;
+        transition: border-color 0.1s;
+    }
+
+    .reply-preview-row:hover .reply-spine {
+        border-color: var(--mud-palette-primary);
+    }
+
+    .reply-text {
+        color: var(--mud-palette-text-primary);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-size: 0.75rem;
+        max-width: calc(100% - 150px);
+        opacity: 0.9;
+    }
+
+    /* ─── Desktop: actions float right, hidden until hover ─── */
+    .message-content-wrapper {
+        display: flex;
+        flex-direction: row;
+        flex-grow: 1;
+        min-width: 0;
+    }
+
+    .message-row {
+        border-radius: 4px;
+        transition: background-color 0.1s ease-in-out;
+    }
+
+    .message-row:hover {
+        background-color: var(--mud-palette-action-default-hover); /* Fallback */
+        background-color: color-mix(in srgb, var(--mud-palette-text-primary) 6%, transparent);
+    }
+    
+    /* Right side blur overlay on hover */
+    .message-row::after {
+        content: '';
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        right: 0;
+        width: 100%;
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 0.15s ease-in-out;
+        z-index: 5;
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+        
+        /* Elliptical radial gradient ensures it fades to the left AND fades to the top/bottom */
+            mask-image: radial-gradient(ellipse 175px 50px at right bottom, black 85%, transparent 175%);
+            -webkit-mask-image: radial-gradient(ellipse 175px 50px at right bottom, black 85%, transparent 175%);
+        
+        /* Very subtle tint to improve button contrast */
+            /* background: radial-gradient(ellipse 250px 70px at right bottom, color-mix(in srgb, var(--mud-palette-background) 25%, transparent) 25%, transparent 175%); */
+        
+        /* Match container corners */
+        border-top-right-radius: 4px;
+        border-bottom-right-radius: 4px;
+    }
+    
+    .message-row:hover::after {
+        opacity: 1;
+    }
+    
+    .message-actions-stack {
+        position: absolute;
+        right: 8px;
+        top: auto;
+        /* Centers mathematically (shifted up 4px from true center), but caps at 8px from the bottom on tall messages */
+        bottom: min(calc(50% - 14px), 8px);
+        margin: 0;
+        height: fit-content;
+        z-index: 10;
+        display: flex;
+        align-items: center;
+    }
+
+    .message-row .message-actions {
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 0.1s ease-in-out;
+        flex-shrink: 0;
+    }
+
+    .message-row:hover .message-actions,
+    .message-actions.force-visible {
+        opacity: 1;
+        pointer-events: auto;
+    }
+
+    .message-row .message-read-receipts {
+        transition: opacity 0.1s ease-in-out;
+        opacity: 1;
+    }
+    @@media (min-width: 960px) {
+        .message-row:hover .message-read-receipts {
+            opacity: 0;
+            pointer-events: none;
+        }
+    }
+
+    /* Show hover timestamp on grouped messages */
+    .message-row:hover .message-hover-time {
+        opacity: 1 !important;
+    }
+
+    /* ─── Mobile: hide inline actions (long-press bottom sheet handles them) ─── */
+    @@media (max-width: 959.98px) {
+        .message-row .message-actions {
+            display: none !important;
+        }
+        .message-row::after {
+            display: none !important;
+        }
+        .message-content-wrapper.has-media {
+            flex-direction: column;
+        }
+
+        .message-content-wrapper.has-media .message-actions-stack {
+            align-self: flex-end;
+            margin-top: 4px;
+        }
+    }
+
+    /* Mention styles */
+    .chat-markdown .mention {
+        background-color: rgba(var(--mud-palette-primary-rgb), 0.15);
+        color: var(--mud-palette-primary);
+        padding: 0 0.2em;
+        border-radius: 3px;
+        font-weight: 600;
+    }
+
+    .chat-markdown .mention-self {
+        background-color: rgba(255, 193, 7, 0.25);
+        color: #b8860b;
+    }
+
+    .chat-markdown .mention-special {
+        background-color: rgba(255, 152, 0, 0.2);
+        color: #e65100;
+        font-weight: 700;
+    }
+
+    .chat-markdown img {
+        max-width: 100%;
+        max-height: 500px;
+        width: auto;
+        height: auto;
+        border-radius: 8px;
+        display: block;
+        object-fit: contain;
+        -webkit-touch-callout: none;
+        -webkit-user-select: none;
+        user-select: none;
+    }
+
+    /* Markdown styles */
+    .chat-markdown p {
+        margin: 0;
+        color: var(--mud-palette-text-primary);
+        font-size: 0.875rem;
+        line-height: 1.43;
+        word-break: break-word;
+    }
+
+    .chat-markdown strong {
+        font-weight: 700;
+    }
+
+    .chat-markdown em {
+        font-style: italic;
+    }
+
+    .chat-markdown del {
+        text-decoration: line-through;
+    }
+
+    .chat-markdown code {
+        background-color: var(--mud-palette-background-grey);
+        padding: 0.15em 0.4em;
+        border-radius: 4px;
+        font-size: 0.85em;
+        font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+    }
+
+    .chat-markdown pre {
+        background-color: #1e1e1e !important;
+        border: 1px solid var(--mud-palette-divider);
+        border-radius: 6px;
+        padding: 0.75em 1em;
+        margin: 0;
+        overflow-x: auto;
+    }
+
+    .chat-markdown pre code {
+        background: none;
+        padding: 0;
+        border-radius: 0;
+        font-size: 0.85em;
+        color: #d4d4d4; /* Default dark mode text color for un-highlighted code */
+    }
+
+    .code-block-wrapper {
+        position: relative;
+        margin: 0.5em 0;
+        border-radius: 6px;
+        overflow: hidden;
+    }
+
+    .code-block-wrapper .copy-code-btn {
+        position: absolute;
+        top: 8px;
+        right: 8px;
+        background-color: rgba(255, 255, 255, 0.1);
+        color: #d4d4d4;
+        border: 1px solid rgba(255, 255, 255, 0.2);
+        border-radius: 4px;
+        padding: 4px 8px;
+        font-size: 0.75rem;
+        cursor: pointer;
+        opacity: 0;
+        transition: opacity 0.2s, background-color 0.2s;
+        display: flex;
+        align-items: center;
+        z-index: 10;
+    }
+
+    .code-block-wrapper:hover .copy-code-btn {
+        opacity: 1;
+    }
+
+    .code-block-wrapper .copy-code-btn:hover {
+        background-color: rgba(255, 255, 255, 0.2);
+        color: #fff;
+    }
+    
+    /* Syntax Highlighting Base Colors (ColorCode generates inline styles, but we ensure consistency) */
+    .chat-markdown pre code span {
+        font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+    }
+
+    .chat-markdown blockquote {
+        border-left: 3px solid var(--mud-palette-primary);
+        margin: 0.5em 0;
+        padding: 0.25em 0.75em;
+        color: var(--mud-palette-text-secondary);
+    }
+
+    .chat-markdown a {
+        color: var(--mud-palette-primary);
+        text-decoration: none;
+    }
+
+    .chat-markdown a:hover {
+        text-decoration: underline;
+    }
+
+    .chat-markdown ul,
+    .chat-markdown ol {
+        margin: 0.25em 0;
+        padding-left: 1.5em;
+    }
+
+    .chat-markdown table {
+        border-collapse: collapse;
+        margin: 0.5em 0;
+    }
+
+    .chat-markdown th,
+    .chat-markdown td {
+        border: 1px solid var(--mud-palette-divider);
+        padding: 0.35em 0.75em;
+        font-size: 0.875rem;
+    }
+
+    .chat-markdown th {
+        background-color: var(--mud-palette-background-grey);
+        font-weight: 600;
+    }
+    .message-row .message-actions-stack .message-read-receipts {
+        opacity: 1;
+        transition: opacity 0s;
+        pointer-events: auto;
+    }
+
+    @@media (min-width: 960px) {
+        .message-row:hover .message-actions-stack .message-read-receipts,
+        .message-actions-stack .message-read-receipts.force-hidden {
+            opacity: 0;
+            pointer-events: none;
+        }
+    }
+
+    .attachment-image .needs-fade {
+        opacity: 0;
+        transition: opacity 0.3s ease-in-out;
+    }
+    .attachment-image.is-loaded .needs-fade {
+        opacity: 1;
+    }
+    .attachment-image.is-loaded .attachment-skeleton {
+        display: none !important;
+    }
+</style>
+
+@code {
+    [Parameter] public ChatMessage Message { get; set; } = new();
+    [Parameter] public string DataFingerprint { get; set; } = string.Empty;
+    [Parameter] public string? DecryptedContent { get; set; }
+    [Parameter] public string? DecryptedReplyContent { get; set; }
+    [Parameter] public Employee? Sender { get; set; }
+    [Parameter] public bool IsOwnMessage { get; set; }
+    [Parameter] public bool IsGrouped { get; set; }
+    [Parameter] public string? CurrentUserId { get; set; }
+    [Parameter] public string? SessionId { get; set; }
+    [Parameter] public List<Employee> Employees { get; set; } = new();
+    [Parameter] public List<Team> Teams { get; set; } = new();
+    [Parameter] public bool IsEditing { get; set; }
+    [Parameter] public EventCallback<(ChatMessage Message, string Content)> OnSaveEdit { get; set; }
+    [Parameter] public EventCallback OnCancelEdit { get; set; }
+    [Parameter] public ChatMessage? ReplyToMessage { get; set; }
+    [Parameter] public Employee? ReplyToSender { get; set; }
+    [Parameter] public EventCallback<ChatMessage> OnEdit { get; set; }
+    [Parameter] public EventCallback<ChatMessage> OnDelete { get; set; }
+    [Parameter] public EventCallback<ChatMessage> OnReply { get; set; }
+    [Parameter] public EventCallback<ChatMessage> OnViewReactions { get; set; }
+    [Parameter] public EventCallback<ChatMessage> OnViewReadReceipts { get; set; }
+    [Parameter] public EventCallback<string> OnScrollToMessage { get; set; }
+    [Parameter] public EventCallback<(string MessageId, string Emoji)> OnReact { get; set; }
+    [Parameter] public EventCallback<(ChatMessage Message, List<ChatAttachment> Images, int Index)> OnOpenLightbox { get; set; }
+    [Parameter] public EventCallback<ChatMessage> OnJoinCall { get; set; }
+    [Parameter] public EventCallback<ChatMessage> OnDeclineCall { get; set; }
+    [Parameter] public EventCallback<Employee?> OnAvatarClicked { get; set; }
+    [Parameter] public List<string> ReadReceiptUserIds { get; set; } = new();
+    [Parameter] public List<string> CumulativeReadReceiptUserIds { get; set; } = new();
+    [Parameter] public EventCallback<ChatMessage> OnBlockUser { get; set; }
+    [Parameter] public EventCallback<ChatMessage> OnReportMessage { get; set; }
+    [Parameter] public EventCallback<ChatMessage> OnDownloadMedia { get; set; }
+    [Parameter] public EventCallback<ChatMessage> OnShareMedia { get; set; }
+    [Parameter]
+    public string? ChannelKey { get; set; }
+
+    private bool _isExpanded = false;
+    private const int MaxMessageLength = 1000;
+
+    private bool _showEmojiPicker;
+    private List<LinkPreview> _linkPreviews = new();
+    private int _skeletonCount = 0;
+    private bool _scrollAfterPreview;
+    private string? _lastPreviewedFingerprint;
+
+    private bool HasMediaAttachments => Message.Attachments?.Any(a => IsImageFile(a.FileName) || IsVideoFile(a.FileName)) ?? false;
+
+    private async Task CopyMessageText()
+    {
+        var textToCopy = DecryptedContent ?? Message.Content ?? "";
+        if (!string.IsNullOrWhiteSpace(textToCopy))
+        {
+            await JS.InvokeVoidAsync("navigator.clipboard.writeText", textToCopy);
+            Snackbar.Add("Message text copied to clipboard", Severity.Success);
+        }
+    }
+
+    // Tracks whether the component needs to re-render.
+    // Without this, every Chat.razor StateHasChanged() causes ALL MessageBubbles
+    // to re-render, producing massive DOM diffs that saturate the SignalR connection.
+    private string? _lastRenderFingerprint;
+    private bool _forceRender = true; // always render on first pass
+
+    protected override bool ShouldRender()
+    {
+        if (_forceRender)
+        {
+            _forceRender = false;
+            return true;
+        }
+
+        // Build a fingerprint of everything that affects the visual output
+        var readersKey = ReadReceiptUserIds == null || ReadReceiptUserIds.Count == 0 ? "0" : string.Join(",", ReadReceiptUserIds);
+        var fingerprint = $"{DataFingerprint}|{IsEditing}|{IsGrouped}|{IsOwnMessage}|{DecryptedContent}|{readersKey}|{_linkPreviews.Count}|{_skeletonCount}|{_showEmojiPicker}|{_isExpanded}";
+
+        if (fingerprint == _lastRenderFingerprint)
+            return false;
+
+        _lastRenderFingerprint = fingerprint;
+        return true;
+    }
+
+    protected override void OnParametersSet()
+    {
+        // Only reload link previews when the message content actually changes.
+        // This prevents re-creating LinkPreviewCard components (which resets
+        // their _faviconFailed / _imageFailed error-suppression state).
+        if (_lastPreviewedFingerprint != DataFingerprint)
+        {
+            _lastPreviewedFingerprint = DataFingerprint;
+            _forceRender = true; // ensure we re-render after fetching
+            _ = LoadLinkPreviewsAsync();
+        }
+    }
+
+    private async Task LoadLinkPreviewsAsync()
+    {
+        await LoadLinkPreviews();
+        _forceRender = true;
+        await InvokeAsync(StateHasChanged);
+    }
+
+    protected override Task OnAfterRenderAsync(bool firstRender)
+    {
+        // No-op: CSS overflow-anchor handles scroll-after-preview natively.
+        // Removed OnMediaLoaded.InvokeAsync() call because EventCallback.InvokeAsync()
+        // implicitly triggers StateHasChanged on the parent, causing a cascade.
+        _scrollAfterPreview = false;
+        return Task.CompletedTask;
+    }
+
+    private async Task LoadLinkPreviews()
+    {
+        _linkPreviews.Clear();
+        _skeletonCount = 0;
+        var contentToPreview = DecryptedContent ?? Message.Content;
+        if (string.IsNullOrWhiteSpace(contentToPreview)) return;
+
+        var urls = LinkPreviews.ExtractUrls(contentToPreview);
+        var urlsToFetch = new List<string>();
+        foreach (var url in urls)
+        {
+            var preview = LinkPreviews.GetPreview(url);
+            if (preview != null)
+            {
+                _linkPreviews.Add(preview);
+            }
+            else
+            {
+                urlsToFetch.Add(url);
+            }
+        }
+
+        if (urlsToFetch.Any())
+        {
+            _skeletonCount = urlsToFetch.Count;
+            // Force a render pass to show the skeletons immediately
+            await InvokeAsync(StateHasChanged);
+
+            foreach (var url in urlsToFetch)
+            {
+                var fetched = await LinkPreviews.FetchPreviewAsync(url);
+                if (fetched != null)
+                {
+                    _linkPreviews.Add(fetched);
+                }
+            }
+            
+            _skeletonCount = 0;
+            if (_linkPreviews.Any())
+            {
+                _scrollAfterPreview = true;
+            }
+        }
+    }
+
+    private RenderFragment RenderLinkPreviews() => __builder =>
+    {
+        foreach (var preview in _linkPreviews)
+        {
+            <LinkPreviewCard @key="preview.Url" Preview="preview" />
+        }
+        for (int i = 0; i < _skeletonCount; i++)
+        {
+            <LinkPreviewSkeleton />
+        }
+    };
+
+    private RenderFragment RenderAttachment(ChatAttachment attachment) => __builder =>
+    {
+        if (IsImageFile(attachment.FileName))
+        {
+            var imageAttachments = Message.Attachments.Where(a => IsImageFile(a.FileName)).ToList();
+            var imageIndex = imageAttachments.IndexOf(attachment);
+            bool hasDimensions = attachment.ImageWidth.HasValue && attachment.ImageHeight.HasValue && attachment.ImageHeight.Value > 0;
+            
+            string dimensionStyle = "";
+            if (hasDimensions)
+            {
+                var targetWidth = Math.Round(500.0 * attachment.ImageWidth!.Value / attachment.ImageHeight!.Value);
+                dimensionStyle = $"width: {targetWidth}px; max-width: 100%; aspect-ratio: {attachment.ImageWidth} / {attachment.ImageHeight}; max-height: 500px;";
+            }
+
+            var token = FileTokens.GenerateAccessToken("chat", Message.ChannelId, attachment.FilePath, ChannelKey);
+            var thumbUrl = attachment.ThumbnailUrl.Contains("?") ? $"{attachment.ThumbnailUrl}&t={token}" : $"{attachment.ThumbnailUrl}?t={token}";
+
+            <div class="attachment-image" @onclick="@(() => OnOpenLightbox.InvokeAsync((Message, imageAttachments, imageIndex)))"
+                style="cursor: pointer; position: relative; display: inline-block; @dimensionStyle">
+                
+                @if (hasDimensions)
+                {
+                    <MudSkeleton SkeletonType="SkeletonType.Rectangle" Width="100%" Height="100%" Class="attachment-skeleton" Style="position: absolute; top: 0; left: 0; border-radius: 8px;" Animation="Animation.Wave" />
+                }
+                
+                <img src="@thumbUrl" alt="@attachment.FileName"
+                    onload="this.parentElement.classList.add('is-loaded');"
+                    class="@(hasDimensions ? "needs-fade" : "")"
+                    style="max-width: 100%; max-height: 500px; width: auto; height: 100%; border-radius: 8px; display: block; object-fit: contain; -webkit-touch-callout: none; -webkit-user-select: none; user-select: none;" />
+            </div>
+        }
+        else if (IsVideoFile(attachment.FileName))
+        {
+            <ChatVideoAttachment Attachment="attachment" CurrentUserId="@CurrentUserId" ChannelId="@Message.ChannelId" ChannelKey="@ChannelKey" />
+        }
+        else if (IsAudioFile(attachment.FileName) || (attachment.ContentType != null && attachment.ContentType.StartsWith("audio/")))
+        {
+            var token = FileTokens.GenerateAccessToken("chat", Message.ChannelId, attachment.FilePath, ChannelKey);
+            var audioUrl = attachment.FilePath.Contains("?") ? $"{attachment.FilePath}&t={token}" : $"{attachment.FilePath}?t={token}";
+            <VoiceMessagePlayer AudioUrl="@audioUrl" />
+        }
+        else
+        {
+            <MudPaper Elevation="1" Class="pa-2 d-flex align-center gap-2" Style="border-radius: 8px;">
+                <MudIcon Icon="@GetFileIcon(attachment.FileName)" Color="Color.Primary" />
+                <div style="flex-grow: 1;" @onclick="@(() => DownloadOrOpenDocument(attachment))">
+                    <MudText Typo="Typo.body2" Color="Color.Primary" Style="font-weight: 500; cursor: pointer;" Class="mud-link-underline-hover">
+                        @attachment.FileName
+                    </MudText>
+                    <MudText Typo="Typo.caption" Color="Color.Secondary" Style="cursor: pointer;">
+                        @FormatFileSize(attachment.FileSizeBytes)
+                    </MudText>
+                </div>
+                <MudIconButton Icon="@Icons.Material.Filled.Share" Size="Size.Small" Color="Color.Secondary" OnClick="@(() => ShareDocument(attachment))" />
+            </MudPaper>
+        }
+    };
+
+    private RenderFragment RenderMessageActions() => __builder =>
+    {
+        var currentEmployee = Employees.FirstOrDefault(e => e.Id == CurrentUserId);
+        var recentEmojis = currentEmployee?.RecentEmojis?.ToList() ?? new List<string>();
+        
+        var defaultEmojis = new[] { "👍", "❤️", "😂" };
+        var top3Emojis = recentEmojis.Concat(defaultEmojis).Distinct().Take(3).ToList();
+
+        foreach (var emoji in top3Emojis)
+        {
+            <MudIconButton Size="Size.Small" Style="font-size: 1.1rem; color: var(--mud-palette-text-primary);" OnClick="@(() => OnReact.InvokeAsync((Message.Id, emoji)))">
+                @emoji
+            </MudIconButton>
+        }
+
+        <div style="position: relative;">
+            <MudIconButton Icon="@Icons.Material.Outlined.AddReaction" Size="Size.Small" Color="Color.Secondary"
+                OnClick="@(() => _showEmojiPicker = !_showEmojiPicker)" />
+            <MudPopover Open="@_showEmojiPicker" AnchorOrigin="Origin.TopRight" TransformOrigin="Origin.BottomRight" OverflowBehavior="OverflowBehavior.FlipAlways">
+                <EmojiPicker IsOpen="@true"
+                    OnEmojiSelected="@(async (emoji) => { _showEmojiPicker = false; await OnReact.InvokeAsync((Message.Id, emoji)); })"
+                    OnClose="@(() => _showEmojiPicker = false)"
+                    DisableGifs="true"
+                    ContainerStyle="position: relative; margin: 0; box-shadow: none;" />
+            </MudPopover>
+        </div>
+
+        <MudIconButton Icon="@Icons.Material.Filled.Reply" Size="Size.Small" Color="Color.Secondary"
+            OnClick="@(() => OnReply.InvokeAsync(Message))" Style="transform: scaleX(-1);" />
+
+        <MudMenu Icon="@Icons.Material.Filled.MoreVert" Size="Size.Small" Dense="true" IconColor="Color.Secondary">
+            @if (Message.Reactions.Any())
+            {
+                <MudMenuItem OnClick="@(() => OnViewReactions.InvokeAsync(Message))">
+                    <MudIcon Icon="@Icons.Material.Filled.People" Size="Size.Small" Class="mr-2" />
+                    View Reactions
+                </MudMenuItem>
+            }
+            @if (CumulativeReadReceiptUserIds.Any(id => id != Message.SenderId && id != CurrentUserId))
+            {
+                <MudMenuItem OnClick="@(() => OnViewReadReceipts.InvokeAsync(Message))">
+                    <MudIcon Icon="@Icons.Material.Filled.DoneAll" Size="Size.Small" Class="mr-2" />
+                    View Read Receipts
+                </MudMenuItem>
+            }
+            <MudMenuItem OnClick="@CopyMessageText">
+                <MudIcon Icon="@Icons.Material.Filled.ContentCopy" Size="Size.Small" Class="mr-2" />
+                Copy Text
+            </MudMenuItem>
+            @if (Message.Attachments.Any())
+            {
+                <MudMenuItem OnClick="@(() => OnShareMedia.InvokeAsync(Message))">
+                    <MudIcon Icon="@Icons.Material.Filled.Share" Size="Size.Small" Class="mr-2" />
+                    Share
+                </MudMenuItem>
+            }
+            @if (HasMediaAttachments)
+            {
+                <MudMenuItem OnClick="@(() => OnDownloadMedia.InvokeAsync(Message))">
+                    <MudIcon Icon="@Icons.Material.Filled.Download" Size="Size.Small" Class="mr-2" />
+                    Download
+                </MudMenuItem>
+            }
+            @if (IsOwnMessage)
+            {
+                <MudMenuItem OnClick="@(() => OnEdit.InvokeAsync(Message))">
+                    <MudIcon Icon="@Icons.Material.Filled.Edit" Size="Size.Small" Class="mr-2" />
+                    Edit
+                </MudMenuItem>
+                <MudMenuItem OnClick="@(() => OnDelete.InvokeAsync(Message))">
+                    <MudIcon Icon="@Icons.Material.Filled.Delete" Size="Size.Small" Class="mr-2" Color="Color.Error" />
+                    Delete
+                </MudMenuItem>
+            }
+            else
+            {
+                <MudMenuItem OnClick="@(() => OnBlockUser.InvokeAsync(Message))">
+                    <MudIcon Icon="@Icons.Material.Filled.Block" Size="Size.Small" Class="mr-2" Color="Color.Error" />
+                    Block User
+                </MudMenuItem>
+                @if (Message.ChannelType != Spokes_Server.Core.Models.Communication.ChatChannelType.Direct)
+                {
+                    <MudMenuItem OnClick="@(() => OnReportMessage.InvokeAsync(Message))">
+                        <MudIcon Icon="@Icons.Material.Filled.Flag" Size="Size.Small" Class="mr-2" Color="Color.Warning" />
+                        Report Message
+                    </MudMenuItem>
+                }
+            }
+        </MudMenu>
+    };
+    
+    private RenderFragment RenderReadReceipts() => __builder =>
+    {
+        var readers = ReadReceiptUserIds.Where(id => id != Message.SenderId && id != CurrentUserId).ToList();
+        foreach (var readerId in readers.Take(3))
+        {
+            var emp = Employees.FirstOrDefault(e => e.Id == readerId);
+            if (emp != null)
+            {
+                <EmployeeAvatar Employee="emp" Size="Size.Small" ShowPresence="false" Style="width: 14px; height: 14px; min-width: 14px; min-height: 14px; font-size: 0.5rem;" />
+            }
+        }
+        if (readers.Count > 3)
+        {
+            <div style="font-size: 0.65rem; color: var(--mud-palette-text-secondary); margin-left: 2px;">+@(readers.Count - 3)</div>
+        }
+    };
+
+    private string GetTokenizedUrl(ChatAttachment attachment)
+    {
+        var token = FileTokens.GenerateAccessToken("chat", Message.ChannelId, attachment.FilePath, ChannelKey);
+        return attachment.FilePath.Contains("?") ? $"{attachment.FilePath}&t={token}" : $"{attachment.FilePath}?t={token}";
+    }
+
+    private async Task ShareDocument(ChatAttachment attachment)
+    {
+        await JS.InvokeVoidAsync("shareFileFromUrl", attachment.FileName, GetTokenizedUrl(attachment));
+    }
+
+    private async Task DownloadOrOpenDocument(ChatAttachment attachment)
+    {
+        await JS.InvokeVoidAsync("downloadOrOpenDocument", attachment.FileName, GetTokenizedUrl(attachment));
+    }
+
+    private IEnumerable<(string Emoji, int Count, bool HasReacted)> GetReactionGroups()
+    {
+        return Message.Reactions
+            .Select(r => r.Split(':'))
+            .Where(parts => parts.Length >= 2)
+            .GroupBy(parts => parts[0])
+            .Select(g => (
+                Emoji: g.Key,
+                Count: g.Count(),
+                HasReacted: g.Any(parts => parts[1] == CurrentUserId)
+            ));
+    }
+
+    private string GetReactionTooltip(string emoji)
+    {
+        var userIds = Message.Reactions
+            .Where(r => r.StartsWith(emoji + ":"))
+            .Select(r => r.Split(':')[1])
+            .ToList();
+
+        var names = userIds.Select(id => Employees.FirstOrDefault(e => e.Id == id)?.FullName ?? "Unknown User").ToList();
+        
+        if (names.Count == 0) return "";
+        if (names.Count <= 3) return $"Reacted by {string.Join(", ", names)}";
+        return $"Reacted by {string.Join(", ", names.Take(3))} and {names.Count - 3} others";
+    }
+
+    private string GetReplyPreview(string content)
+    {
+        if (string.IsNullOrEmpty(content)) return "";
+        // Collapse newlines into spaces for clean single-line previewing
+        var singleLine = content.Replace("\r\n", " ").Replace("\n", " ").Replace("\r", " ");
+        // Clean database-specific brackets so @[John Doe] displays cleanly as @John Doe (preserving the name)
+        return System.Text.RegularExpressions.Regex.Replace(singleLine, @"@\[([^\]]+)\]", "@$1");
+    }
+
+    private string TruncateContent(string content, int maxLength)
+    {
+        if (string.IsNullOrEmpty(content)) return "";
+        // Strip mention tokens for display
+        var clean = System.Text.RegularExpressions.Regex.Replace(content, @"@\[([^\]]+)\]", "@$1");
+        return clean.Length <= maxLength ? clean : clean[..maxLength] + "…";
+    }
+
+    private string FormatFileSize(long bytes)
+    {
+        if (bytes < 1024) return $"{bytes} B";
+        if (bytes < 1024 * 1024) return $"{bytes / 1024.0:F1} KB";
+        return $"{bytes / (1024.0 * 1024.0):F1} MB";
+    }
+
+    protected override void OnInitialized()
+    {
+        ImageRecovery.OnTokensWiped += HandleTokensWiped;
+    }
+
+    private void HandleTokensWiped()
+    {
+        InvokeAsync(StateHasChanged);
+    }
+
+    public void Dispose()
+    {
+        ImageRecovery.OnTokensWiped -= HandleTokensWiped;
+    }
+}

@@ -1,0 +1,134 @@
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Models.Core
+@inject Spokes_Server.Aggregate.Database Db
+@inject NavigationManager NavManager
+@using Spokes_Server.Core.Services.Security
+@inject FileTokenService FileTokenService
+@inject Spokes_Server.Core.Services.Security.ScopedKeystoreService ScopedKeystoreService
+@inject Spokes_Server.Core.Services.Communication.Chat.AlbumService AlbumService
+
+@if (_album == null || !_isAvailableInContext)
+{
+    <MudCard Class="pa-3" Style="width: 100%; max-width: 350px; border-radius: 8px; border: 1px dashed var(--mud-palette-divider); box-shadow: none; background: transparent;">
+        <div class="d-flex align-center gap-3">
+            <MudIcon Icon="@Icons.Material.Filled.BrokenImage" Color="Color.Secondary" />
+            <MudText Typo="Typo.body2" Color="Color.Secondary" Style="font-style: italic;">This album is no longer available.</MudText>
+        </div>
+    </MudCard>
+}
+else
+{
+    <MudCard Class="pa-3 cursor-pointer" Style="width: 100%; max-width: 350px; border-radius: 8px; border: 1px solid var(--mud-palette-divider); box-shadow: none;" @onclick="NavigateToAlbum">
+        <div class="d-flex align-center justify-space-between gap-2 mb-2">
+            <div class="d-flex align-center gap-3" style="overflow: hidden;">
+                <MudAvatar Size="Size.Medium" Style="background: color-mix(in srgb, var(--mud-palette-success) 15%, transparent); color: var(--mud-palette-success);">
+                    <MudIcon Icon="@Icons.Material.Filled.PhotoAlbum" Size="Size.Small" />
+                </MudAvatar>
+                <div style="overflow: hidden;">
+                    <MudText Typo="Typo.subtitle2" Style="font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">@_album.Title</MudText>
+                    <MudText Typo="Typo.caption" Color="Color.Secondary">
+                        @(Employees.FirstOrDefault(e => e.Id == _album.OwnerId)?.FullName ?? "Unknown")
+                    </MudText>
+                </div>
+            </div>
+            <MudButton OnClick="NavigateToAlbum" Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small" Class="flex-shrink-0 py-1 px-2" Style="text-transform: none; border-radius: 6px; font-size: 0.75rem; font-weight: 600;">Go to album</MudButton>
+        </div>
+        @if (_album.Media.Any())
+        {
+            <div class="mt-2" style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; border-radius: 4px; overflow: hidden;">
+                @foreach (var media in _album.Media.Take(9))
+                {
+                    <div style="aspect-ratio: 1 / 1;">
+                        @if (media.ContentType.StartsWith("image/"))
+                        {
+                            <MudImage Src="@GetTokenizedUrl(media, true)" 
+                                        ObjectFit="ObjectFit.Cover" 
+                                        Style="width: 100%; height: 100%; object-fit: cover;" />
+                        }
+                        else if (media.ContentType.StartsWith("video/"))
+                        {
+                            <div class="d-flex align-center justify-center" style="width: 100%; height: 100%; background: #000;">
+                                <MudIcon Icon="@Icons.Material.Filled.PlayCircle" Color="Color.Surface" Size="Size.Large" />
+                            </div>
+                        }
+                    </div>
+                }
+            </div>
+        }
+    </MudCard>
+}
+
+@code {
+    [Parameter, EditorRequired]
+    public string AlbumId { get; set; } = "";
+
+    [Parameter]
+    public string? CurrentUserId { get; set; }
+
+    [Parameter]
+    public string? SessionId { get; set; }
+
+    [Parameter]
+    public string? ChannelId { get; set; }
+
+    [Parameter, EditorRequired]
+    public List<Employee> Employees { get; set; } = new();
+
+    private Album? _album;
+    private bool _isAvailableInContext;
+    private string? _cachedPlainAlbumKey;
+
+    protected override void OnParametersSet()
+    {
+        _album = Db.Albums.GetById(AlbumId);
+        if (_album != null)
+        {
+            if (!string.IsNullOrEmpty(ChannelId))
+            {
+                _isAvailableInContext = _album.SharedWithChannelIds.Contains(ChannelId);
+            }
+            else
+            {
+                _isAvailableInContext = _album.OwnerId == CurrentUserId || _album.ContributorUserIds.Contains(CurrentUserId ?? "");
+            }
+
+            if (_isAvailableInContext && _album.IsEncrypted && !string.IsNullOrEmpty(CurrentUserId))
+            {
+                var privateKey = ScopedKeystoreService.IsUnlocked ? ScopedKeystoreService.GetPrivateKey() : null;
+                _cachedPlainAlbumKey = AlbumService.GetPlainAlbumKey(_album, CurrentUserId, privateKey);
+            }
+            else
+            {
+                _cachedPlainAlbumKey = null;
+            }
+        }
+        else
+        {
+            _cachedPlainAlbumKey = null;
+        }
+    }
+
+    private void NavigateToAlbum()
+    {
+        if (_isAvailableInContext)
+        {
+            if (!string.IsNullOrEmpty(ChannelId))
+            {
+                NavManager.NavigateTo($"/albums/{AlbumId}?fromChannel={ChannelId}");
+            }
+            else
+            {
+                NavManager.NavigateTo($"/albums/{AlbumId}");
+            }
+        }
+    }
+
+    private string GetTokenizedUrl(AlbumMedia media, bool isThumbnail = true)
+    {
+        if (_album == null || string.IsNullOrEmpty(CurrentUserId)) return isThumbnail ? media.ThumbnailUrl : media.FilePath;
+        
+        string baseUrl = isThumbnail ? media.ThumbnailUrl : media.FilePath;
+        string token = FileTokenService.GenerateAccessToken("albums", _album.Id, baseUrl, _cachedPlainAlbumKey);
+        return $"{baseUrl}?t={token}";
+    }
+}

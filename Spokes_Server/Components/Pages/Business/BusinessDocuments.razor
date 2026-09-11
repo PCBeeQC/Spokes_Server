@@ -1,0 +1,177 @@
+@page "/business/documents"
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Data
+@using Spokes_Server.Core.Constants
+@using Spokes_Server.Components.Shared
+@inject Database Db
+@inject IDialogService DialogService
+@inject ISnackbar Snackbar
+@inject NavigationManager Nav
+@using Microsoft.AspNetCore.Components.Authorization
+@inject UserService UserService
+
+<PageTitle>Business Documents</PageTitle>
+
+<MudPaper Class="pa-4 mb-4" Elevation="0" Outlined="true">
+    <MudGrid Class="align-center">
+        <MudItem xs="6">
+            <MudText Typo="Typo.h5" Color="Color.Primary">Business Documents</MudText>
+            <MudText Typo="Typo.body2">Manage general documents not linked to specific projects.</MudText>
+        </MudItem>
+        <MudItem xs="6" Class="d-flex justify-end gap-2">
+            @if (CanEdit)
+            {
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.NoteAdd"
+                    OnClick="CreateBlankDocument">Blank Document</MudButton>
+            }
+        </MudItem>
+    </MudGrid>
+</MudPaper>
+
+<MudPaper Elevation="0" Outlined="true" Class="pa-4">
+    <MudTable Items="@_documents" Hover="true" Dense="true" Striped="true" Outlined="true" Elevation="0">
+        <HeaderContent>
+            <MudTh>Name</MudTh>
+            <MudTh>Created</MudTh>
+            <MudTh>Status</MudTh>
+            <MudTh Style="width: 120px;">Actions</MudTh>
+        </HeaderContent>
+        <RowTemplate Context="doc">
+            <MudTd DataLabel="Name">@doc.Name</MudTd>
+            <MudTd DataLabel="Created">@doc.CreatedAt.ToLocalTime().ToString("g")</MudTd>
+            <MudTd DataLabel="Status">
+                <MudChip T="string" Size="Size.Small" Color="@(doc.Status == "Final" ? Color.Success : Color.Info)">
+                    @doc.Status
+                </MudChip>
+            </MudTd>
+            <MudTd>
+                <div class="d-flex gap-1">
+                    <MudButton Variant="Variant.Outlined" Size="Size.Small" StartIcon="@Icons.Material.Filled.Visibility" OnClick="@(() => OpenViewer(doc))">View</MudButton>
+                    @if (CanEdit && doc.Status != "Final")
+                    {
+                        <MudTooltip Text="Rename">
+                            <MudIconButton Icon="@Icons.Material.Filled.Edit" Size="Size.Small"
+                                            OnClick="@(() => RenameDocument(doc))" />
+                        </MudTooltip>
+                        <MudTooltip Text="Delete">
+                            <MudIconButton Icon="@Icons.Material.Filled.Delete" Color="Color.Error" Size="Size.Small"
+                                            OnClick="@(() => OnDelete(doc))" />
+                        </MudTooltip>
+                    }
+                </div>
+            </MudTd>
+        </RowTemplate>
+        <NoRecordsContent>
+            <MudText Align="Align.Center" Class="pa-4">No business documents found.</MudText>
+        </NoRecordsContent>
+    </MudTable>
+</MudPaper>
+
+@code {
+    private List<ProjectDocument> _documents = new();
+    private bool CanEdit = false;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadPermissions();
+        if (!CanEdit)
+        {
+            Nav.NavigateTo("/");
+            return;
+        }
+        Reload();
+    }
+
+    private async Task LoadPermissions()
+    {
+        var emp = await UserService.GetEmployeeAsync();
+        if (emp != null) CanEdit = emp.HasPermission(AppPermissions.BusinessDocuments.View);
+    }
+
+    private void Reload()
+    {
+        _documents = Db.ProjectDocuments.GetBusinessDocuments();
+    }
+
+    private async Task CreateBlankDocument()
+    {
+        var name = await PromptForName("Untitled Document");
+        if (name == null) return;
+
+        var doc = new ProjectDocument
+            {
+                ProjectId = string.Empty,
+                StandardDocumentId = string.Empty,
+                Name = name,
+                ResolvedBody = "",
+                Status = "Draft",
+                IsManualEdit = true,
+                CreatedAt = DateTime.UtcNow,
+                UpdatedAt = DateTime.UtcNow
+            };
+
+        Db.ProjectDocuments.Save(doc);
+        Snackbar.Add("Blank document created", Severity.Success);
+        Reload();
+        OpenViewer(doc);
+    }
+
+    private async Task<string?> PromptForName(string defaultName)
+    {
+        var parameters = new DialogParameters
+            {
+                ["CurrentName"] = defaultName,
+                ["Label"] = "Document Name",
+                ["SubmitLabel"] = "Create"
+            };
+        var options = new DialogOptions { CloseButton = true, MaxWidth = MaxWidth.Small, FullWidth = true };
+        var dialog = await DialogService.ShowAsync<RenameDialog>("Name Your Document", parameters, options);
+        var result = await dialog.Result;
+
+        if (result != null && !result.Canceled && result.Data is string name && !string.IsNullOrWhiteSpace(name))
+            return name;
+
+        return null;
+    }
+
+    private async Task RenameDocument(ProjectDocument doc)
+    {
+        var parameters = new DialogParameters
+            {
+                ["ContentText"] = "Enter a new name for this document:",
+                ["CurrentName"] = doc.Name
+            };
+        var options = new DialogOptions { CloseButton = true, MaxWidth = MaxWidth.Small, FullWidth = true };
+        var dialog = await DialogService.ShowAsync<RenameDialog>("Rename Document", parameters, options);
+        var result = await dialog.Result;
+
+        if (result != null && !result.Canceled && result.Data is string newName && !string.IsNullOrWhiteSpace(newName))
+        {
+            doc.Name = newName;
+            doc.UpdatedAt = DateTime.UtcNow;
+            Db.ProjectDocuments.Save(doc);
+            Snackbar.Add($"Document renamed to '{newName}'", Severity.Success);
+            Reload();
+        }
+    }
+
+    private void OpenViewer(ProjectDocument doc)
+    {
+        Nav.NavigateTo($"/business/documents/{doc.Id}");
+    }
+
+    private async Task OnDelete(ProjectDocument doc)
+    {
+        var confirm = await DialogService.ShowMessageBoxAsync("Delete Document",
+        $"Are you sure you want to delete '{doc.Name}'?",
+        yesText: "Delete", cancelText: "Cancel");
+
+        if (confirm == true)
+        {
+            Db.ProjectDocuments.Delete(doc.Id);
+            Snackbar.Add("Document deleted", Severity.Info);
+            Reload();
+        }
+    }
+}

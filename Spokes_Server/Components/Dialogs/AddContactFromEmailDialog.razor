@@ -1,0 +1,239 @@
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Data
+@using MudBlazor
+@using Microsoft.AspNetCore.Components.Authorization
+@using System.Security.Claims
+@inject Database Db
+@inject IDialogService DialogService
+@inject ISnackbar Snackbar
+@inject AuthenticationStateProvider AuthStateProvider
+
+<MudDialog>
+    <DialogContent>
+        <MudText Typo="Typo.body1" Class="mb-4">Where would you like to save <b>@Email</b>?</MudText>
+
+        @if (string.IsNullOrEmpty(_selectedOption))
+        {
+            <div class="d-flex flex-column gap-3">
+                <MudButton Variant="Variant.Outlined" Color="Color.Primary" OnClick="@(() => SelectOption("company"))" FullWidth="true" Class="justify-start py-3">
+                    <MudIcon Icon="@Icons.Material.Filled.Business" Class="mr-3" />
+                    <div class="d-flex flex-column align-start">
+                        <MudText Typo="Typo.subtitle1">Add to Company / CRM</MudText>
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">Add this person to an existing or new company</MudText>
+                    </div>
+                </MudButton>
+
+                <MudButton Variant="Variant.Outlined" Color="Color.Info" OnClick="@(() => SelectOption("public"))" FullWidth="true" Class="justify-start py-3" Disabled="@_existsInPublic">
+                    <MudIcon Icon="@Icons.Material.Filled.Public" Class="mr-3" />
+                    <div class="d-flex flex-column align-start">
+                        <MudText Typo="Typo.subtitle1">
+                            Add as Public Contact 
+                            @if(_existsInPublic) { <MudChip T="string" Size="Size.Small" Color="Color.Warning" Class="ml-2 py-0">Already Exists</MudChip> }
+                        </MudText>
+                        <MudText Typo="Typo.caption" Color="@(_existsInPublic ? Color.Warning : Color.Secondary)">
+                            @(_existsInPublic ? "Contact is already in the public directory." : "A standalone contact visible to the whole company")
+                        </MudText>
+                    </div>
+                </MudButton>
+
+                <MudButton Variant="Variant.Outlined" Color="Color.Secondary" OnClick="@(() => SelectOption("private"))" FullWidth="true" Class="justify-start py-3" Disabled="@_existsInPrivate">
+                    <MudIcon Icon="@Icons.Material.Filled.Lock" Class="mr-3" />
+                    <div class="d-flex flex-column align-start">
+                        <MudText Typo="Typo.subtitle1">
+                            Add as Private Contact
+                            @if(_existsInPrivate) { <MudChip T="string" Size="Size.Small" Color="Color.Warning" Class="ml-2 py-0">Already Exists</MudChip> }
+                        </MudText>
+                        <MudText Typo="Typo.caption" Color="@(_existsInPrivate ? Color.Warning : Color.Secondary)">
+                            @(_existsInPrivate ? "Contact is already in your private list." : "Only visible to you, stored in your personal list")
+                        </MudText>
+                    </div>
+                </MudButton>
+            </div>
+        }
+        else if (_selectedOption == "company")
+        {
+            <MudAutocomplete T="Supplier" Label="Search existing companies..." 
+                            SearchFunc="@SearchSuppliers" 
+                            ToStringFunc="@(s => s == null ? null : s.Info.BusinessName)"
+                            ValueChanged="OnSupplierSelected"
+                            Variant="Variant.Outlined" Class="mb-4" MaxItems="null" />
+                            
+            <MudDivider Class="my-4" />
+            <MudText Typo="Typo.body2" Class="mb-2">Or</MudText>
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="CreateNewCompany">Create New Company</MudButton>
+        }
+        else if (_selectedOption == "public" || _selectedOption == "private")
+        {
+            <MudForm @ref="_form" @bind-IsValid="@_success">
+                <MudTextField @bind-Value="_contact.Name" Label="Full Name" Required="true" Variant="Variant.Outlined" Class="mb-3" />
+                <MudTextField @bind-Value="_contact.Title" Label="Job Title" Variant="Variant.Outlined" Class="mb-3" />
+                <MudTextField @bind-Value="_contact.Phone" Label="Phone" Variant="Variant.Outlined" Class="mb-3" />
+            </MudForm>
+        }
+    </DialogContent>
+    <DialogActions>
+        @if (!string.IsNullOrEmpty(_selectedOption))
+        {
+            <MudButton OnClick="@(() => _selectedOption = "")" Class="mr-auto">Back</MudButton>
+        }
+        <MudButton OnClick="Close">Close</MudButton>
+        @if (_selectedOption == "public" || _selectedOption == "private")
+        {
+            <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="SaveDirectContact">Save Contact</MudButton>
+        }
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
+    
+    [Parameter] public string Email { get; set; } = "";
+    [Parameter] public string DisplayName { get; set; } = "";
+
+    private string _selectedOption = "";
+    private MudForm _form = default!;
+    private bool _success;
+    private ContactPerson _contact = new();
+
+    private bool _existsInPublic = false;
+    private bool _existsInPrivate = false;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _contact.Email = Email;
+        _contact.Name = DisplayName;
+        
+        // Check Public
+        _existsInPublic = Db.PublicContacts.GetAll().Any(c => c.Email.Equals(Email, StringComparison.OrdinalIgnoreCase));
+        
+        // Check Private
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        var user = authState.User;
+        var subId = user.Claims.FirstOrDefault(c => c.Type == ClaimTypes.NameIdentifier)?.Value;
+        if (!string.IsNullOrEmpty(subId))
+        {
+            var openId = Db.OpenIdAccounts.GetBySub(subId);
+            var employee = (openId != null && !string.IsNullOrEmpty(openId.LinkedEmployeeId))
+                ? Db.Employees.GetById(openId.LinkedEmployeeId)
+                : null;
+            if (employee != null)
+            {
+                _existsInPrivate = Db.PrivateContacts.GetAllForEmployee(employee.Id)
+                    .Any(c => c.Email.Equals(Email, StringComparison.OrdinalIgnoreCase));
+            }
+        }
+    }
+
+    private void SelectOption(string option)
+    {
+        _selectedOption = option;
+    }
+
+    private async Task<IEnumerable<Supplier>> SearchSuppliers(string value, CancellationToken token)
+    {
+        var all = Db.Suppliers.GetAll();
+        if (string.IsNullOrWhiteSpace(value)) return all;
+        
+        return all.Where(s => s.Info.BusinessName.Contains(value, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private async Task OnSupplierSelected(Supplier supplier)
+    {
+        if (supplier == null) return;
+        
+        // Open the dialog to let them add the specifics 
+        var newContact = new ContactPerson { Email = Email, Name = DisplayName };
+        var options = new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true };
+        var dialog = await DialogService.ShowAsync<ContactPersonDialog>($"Add to {supplier.Info.BusinessName}", new DialogParameters
+        {
+            ["Contact"] = newContact
+        }, options);
+        var result = await dialog.Result;
+
+        if (!result.Canceled)
+        {
+            var contact = (ContactPerson)result.Data;
+            if (supplier.Contacts.Count == 0) contact.IsPrimary = true;
+            supplier.Contacts.Add(contact);
+            Db.Suppliers.Save(supplier);
+            
+            Snackbar.Add($"Added {contact.Name} to {supplier.Info.BusinessName}", Severity.Success);
+            MudDialog.Close(DialogResult.Ok(true));
+        }
+    }
+
+    private async Task CreateNewCompany()
+    {
+        var newSupplier = new Supplier();
+        // Prefill the primary contact (legacy fields)
+        newSupplier.Info.ContactPersonName = DisplayName;
+        newSupplier.Info.ContactPersonEmail = Email;
+        
+        // Ensure the contact is actively added to the new contact list
+        newSupplier.Contacts.Add(new ContactPerson
+        {
+            Name = DisplayName,
+            Email = Email,
+            IsPrimary = true
+        });
+        
+        var options = new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true };
+        var dialog = await DialogService.ShowAsync<SupplierDialog>("Create New Company", new DialogParameters
+        {
+            ["Supplier"] = newSupplier
+        }, options);
+        
+        var result = await dialog.Result;
+        if (!result.Canceled)
+        {
+            var created = (Supplier)result.Data;
+            Db.Suppliers.Save(created);
+            Snackbar.Add("Company created and contact added", Severity.Success);
+            MudDialog.Close(DialogResult.Ok(true));
+        }
+    }
+
+    private async Task SaveDirectContact()
+    {
+        _form.Validate();
+        if (!_success) return;
+
+        if (_selectedOption == "public")
+        {
+            Db.PublicContacts.Save(_contact);
+            Snackbar.Add("Added to Public Contacts", Severity.Success);
+            MudDialog.Close(DialogResult.Ok(true));
+        }
+        else if (_selectedOption == "private")
+        {
+            var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+            var user = authState.User;
+            var subId = user.Claims.FirstOrDefault(c => c.Type == ClaimTypes.NameIdentifier)?.Value;
+            
+            if (!string.IsNullOrEmpty(subId))
+            {
+                var openId = Db.OpenIdAccounts.GetBySub(subId);
+                var employee = (openId != null && !string.IsNullOrEmpty(openId.LinkedEmployeeId))
+                    ? Db.Employees.GetById(openId.LinkedEmployeeId)
+                    : null;
+                if (employee != null)
+                {
+                    Db.PrivateContacts.Save(employee.Id, _contact);
+                    Snackbar.Add("Added to Private Contacts", Severity.Success);
+                    MudDialog.Close(DialogResult.Ok(true));
+                }
+                else
+                {
+                    Snackbar.Add("Could not identify current employee account.", Severity.Error);
+                }
+            }
+        }
+    }
+
+    private void Close() => MudDialog.Cancel();
+}
+

@@ -1,0 +1,789 @@
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Data
+@using Spokes_Server.Core.Constants
+@using Spokes_Server.Components.Shared
+@inject Database Db
+@inject IDialogService DialogService
+@inject ISnackbar Snackbar
+@inject IJSRuntime JS
+@inject UserService UserService
+
+<div class="expense-mobile-view px-1">
+    @* ══════════════════════════════════════════════════════════════════
+       SECTION 1: ACTIVE DRAFT REPORT (HERO CARD)
+       ══════════════════════════════════════════════════════════════════ *@
+    @if (_activeReport != null)
+    {
+        <MudCard Elevation="0" Outlined="true" Class="mb-4" Style="border-radius: 16px; border: 1.5px solid var(--mud-palette-primary);">
+            <MudCardContent Class="pa-4">
+                <div class="d-flex justify-space-between align-center mb-1">
+                    <div class="d-flex align-center gap-2">
+                        <MudText Typo="Typo.h6" Style="font-weight: 700;">#@_activeReport.ReportNumber</MudText>
+                        <MudChip T="string" Size="Size.Small" Color="Color.Default" Variant="Variant.Filled">Draft</MudChip>
+                    </div>
+
+                    <div class="d-flex align-center">
+                        @if (DraftReports.Count > 1)
+                        {
+                            <MudMenu Icon="@Icons.Material.Filled.SwapHoriz" Size="Size.Small" Title="Switch Draft Report" Dense="true">
+                                @foreach (var draft in DraftReports)
+                                {
+                                    <MudMenuItem OnClick="@(() => SetActiveReport(draft))">
+                                        #@draft.ReportNumber (@draft.TotalAmount.ToString("C"))
+                                    </MudMenuItem>
+                                }
+                            </MudMenu>
+                        }
+                        <MudMenu Icon="@Icons.Material.Filled.MoreVert" Size="Size.Small" Dense="true">
+                            <MudMenuItem Icon="@Icons.Material.Filled.Add" OnClick="CreateNewDraftReport">New Draft Report</MudMenuItem>
+                            <MudMenuItem Icon="@Icons.Material.Filled.Delete" IconColor="Color.Error" OnClick="DeleteActiveReport">Delete Report</MudMenuItem>
+                        </MudMenu>
+                    </div>
+                </div>
+
+                <MudText Typo="Typo.caption" Color="Color.Secondary">Created @_activeReport.DateCreated.ToShortDateString()</MudText>
+
+                <div class="d-flex justify-space-between align-end mt-4 mb-2">
+                    <div>
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">TOTAL EXPENSES</MudText>
+                        <MudText Typo="Typo.h4" Color="Color.Primary" Style="font-weight: 800;">@_activeReport.TotalAmount.ToString("C")</MudText>
+                    </div>
+                    <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-1">
+                        @_activeReport.Items.Count @(_activeReport.Items.Count == 1 ? "expense" : "expenses")
+                    </MudText>
+                </div>
+            </MudCardContent>
+
+            <MudCardActions Class="px-4 pb-4 pt-0">
+                <MudButton Variant="Variant.Filled"
+                           Color="Color.Primary"
+                           FullWidth="true"
+                           Class="rounded-pill"
+                           Style="font-weight: 600; text-transform: none; height: 44px;"
+                           Disabled="@(!_activeReport.Items.Any())"
+                           StartIcon="@Icons.Material.Filled.Send"
+                           OnClick="SubmitActiveReport">
+                    Submit for Approval
+                </MudButton>
+            </MudCardActions>
+        </MudCard>
+
+        @* ══════════════════════════════════════════════════════════════════
+           SECTION 2: INLINE QUICK EXPENSE ENTRY CARD
+           ══════════════════════════════════════════════════════════════════ *@
+        <MudCard Elevation="0" Outlined="true" Class="mb-4" Style="border-radius: 16px;">
+            <MudCardContent Class="pa-4">
+                <div class="d-flex justify-space-between align-center mb-3">
+                    <div class="d-flex align-center gap-2">
+                        <MudIcon Icon="@(string.IsNullOrEmpty(_editingItemId) ? Icons.Material.Filled.AddCircleOutline : Icons.Material.Filled.Edit)" Color="Color.Primary" Size="Size.Small" />
+                        <MudText Typo="Typo.subtitle1" Style="font-weight: 700;">
+                            @(string.IsNullOrEmpty(_editingItemId) ? "Add Expense" : "Edit Expense")
+                        </MudText>
+                    </div>
+                    @if (!string.IsNullOrEmpty(_editingItemId))
+                    {
+                        <MudButton Size="Size.Small" Variant="Variant.Text" Color="Color.Secondary" OnClick="CancelEdit">Cancel</MudButton>
+                    }
+                </div>
+
+                @* Hidden ApiFileUpload instances for Camera and File/Photo *@
+                <ApiFileUpload Id="expense-receipt-camera"
+                               Category="expenses"
+                               ContextId="@_activeReport.Id"
+                               Accept="image/*"
+                               Capture="environment"
+                               OnUploadStarted="HandleUploadStarted"
+                               OnUploadCompleted="HandleUploadCompleted"
+                               OnUploadError="HandleUploadError"
+                               OnProgressUpdate="HandleUploadProgress"
+                               Style="display: none;" />
+
+                <ApiFileUpload Id="expense-receipt-file"
+                               Category="expenses"
+                               ContextId="@_activeReport.Id"
+                               Accept="image/*,application/pdf"
+                               OnUploadStarted="HandleUploadStarted"
+                               OnUploadCompleted="HandleUploadCompleted"
+                               OnUploadError="HandleUploadError"
+                               OnProgressUpdate="HandleUploadProgress"
+                               Style="display: none;" />
+
+                @* Receipt Upload / Preview Bar *@
+                @if (_isUploadingReceipt)
+                {
+                    <div class="pa-3 mb-3 rounded-lg" style="background-color: var(--mud-palette-background-grey); border: 1px dashed var(--mud-palette-primary);">
+                        <div class="d-flex align-center gap-2 mb-1">
+                            <MudProgressCircular Size="Size.Small" Color="Color.Primary" Indeterminate="@(_uploadProgress <= 0)" Value="@_uploadProgress" Max="100" />
+                            <MudText Typo="Typo.body2" Color="Color.Primary" Style="font-weight: 600;">
+                                Uploading receipt... @(_uploadProgress > 0 ? $"{Math.Round(_uploadProgress)}%" : "")
+                            </MudText>
+                        </div>
+                        <MudProgressLinear Color="Color.Primary" Value="@_uploadProgress" Max="100" Class="rounded" />
+                    </div>
+                }
+                else if (!string.IsNullOrEmpty(_itemReceiptPath))
+                {
+                    <div class="pa-2 mb-3 rounded-lg d-flex align-center justify-space-between" style="background-color: var(--mud-palette-background-grey); border: 1px solid var(--mud-palette-lines-default);">
+                        <div class="d-flex align-center gap-3 cursor-pointer" @onclick="OpenCurrentReceipt">
+                            @if (IsImageFile(_itemReceiptPath))
+                            {
+                                <MudImage Src="@_itemReceiptPath" Width="44" Height="44" ObjectFit="ObjectFit.Cover" Class="rounded-lg" Elevation="1" />
+                            }
+                            else
+                            {
+                                <MudAvatar Color="Color.Error" Variant="Variant.Filled" Rounded="true" Size="Size.Medium">
+                                    <MudIcon Icon="@Icons.Material.Filled.PictureAsPdf" Size="Size.Small" />
+                                </MudAvatar>
+                            }
+                            <div>
+                                <MudText Typo="Typo.body2" Style="font-weight: 600;">Receipt Attached</MudText>
+                                <MudText Typo="Typo.caption" Color="Color.Secondary">Tap to preview</MudText>
+                            </div>
+                        </div>
+                        <div class="d-flex align-center">
+                            <MudIconButton Icon="@Icons.Material.Filled.OpenInNew" Size="Size.Small" Color="Color.Primary" OnClick="OpenCurrentReceipt" Title="View Receipt" />
+                            <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small" Color="Color.Error" OnClick="RemoveCurrentReceipt" Title="Remove Receipt" />
+                        </div>
+                    </div>
+                }
+                else
+                {
+                    <div class="d-flex gap-2 mb-3">
+                        <MudButton Variant="Variant.Outlined"
+                                   Color="Color.Primary"
+                                   FullWidth="true"
+                                   Class="rounded-lg py-2"
+                                   StartIcon="@Icons.Material.Filled.PhotoCamera"
+                                   OnClick="@(() => TriggerUpload("expense-receipt-camera"))">
+                            Take Photo
+                        </MudButton>
+                        <MudButton Variant="Variant.Outlined"
+                                   Color="Color.Default"
+                                   FullWidth="true"
+                                   Class="rounded-lg py-2"
+                                   StartIcon="@Icons.Material.Filled.PhotoLibrary"
+                                   OnClick="@(() => TriggerUpload("expense-receipt-file"))">
+                            Photo / PDF
+                        </MudButton>
+                    </div>
+                }
+
+                @* Expense Form Fields *@
+                <MudGrid Spacing="2">
+                    <MudItem xs="12">
+                        <div class="d-flex align-center justify-space-between">
+                            <MudSwitch T="bool" @bind-Value="_itemIsKilometrage" Color="Color.Primary" Label="Kilometrage?" />
+                            @if (_itemIsKilometrage)
+                            {
+                                <MudChip T="string" Size="Size.Small" Color="Color.Info" Variant="Variant.Outlined">
+                                    @_kilometrageRate.ToString("C")/km
+                                </MudChip>
+                            }
+                        </div>
+                    </MudItem>
+
+                    @if (_itemIsKilometrage)
+                    {
+                        <MudItem xs="6">
+                            <MudNumericField @bind-Value="_itemKilometers"
+                                             Label="Distance"
+                                             Variant="Variant.Outlined"
+                                             Margin="Margin.Dense"
+                                             Adornment="Adornment.End"
+                                             AdornmentText="km"
+                                             Min="0m"
+                                             ShrinkLabel="true" />
+                        </MudItem>
+                        <MudItem xs="6" Class="d-flex flex-column justify-center">
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">CALCULATED TOTAL</MudText>
+                            <MudText Typo="Typo.h6" Color="Color.Primary" Style="font-weight: 700;">
+                                @((_itemKilometers * _kilometrageRate).ToString("C"))
+                            </MudText>
+                        </MudItem>
+                    }
+                    else
+                    {
+                        <MudItem xs="12">
+                            <MudNumericField @bind-Value="_itemAmount"
+                                             Label="Amount"
+                                             Variant="Variant.Outlined"
+                                             Margin="Margin.Dense"
+                                             Adornment="Adornment.Start"
+                                             AdornmentIcon="@Icons.Material.Filled.AttachMoney"
+                                             Min="0m"
+                                             Format="N2"
+                                             ShrinkLabel="true" />
+                        </MudItem>
+                    }
+
+                    <MudItem xs="12">
+                        <MudSelect T="string"
+                                   @bind-Value="_itemProjectId"
+                                   Label="Project"
+                                   Variant="Variant.Outlined"
+                                   Margin="Margin.Dense"
+                                   AnchorOrigin="Origin.BottomCenter"
+                                   Clearable="true"
+                                   ShrinkLabel="true">
+                            <MudSelectItem T="string" Value="@("")">-- No Project (General) --</MudSelectItem>
+                            @foreach (var p in _projects)
+                            {
+                                <MudSelectItem T="string" Value="@p.Id">@p.DisplayName</MudSelectItem>
+                            }
+                        </MudSelect>
+                    </MudItem>
+
+                    <MudItem xs="12">
+                        <MudTextField @bind-Value="_itemDescription"
+                                      Label="Description"
+                                      Placeholder="e.g. Lunch with client, Fuel, Hardware store"
+                                      Variant="Variant.Outlined"
+                                      Margin="Margin.Dense"
+                                      Lines="2"
+                                      ShrinkLabel="true" />
+                    </MudItem>
+
+                    <MudItem xs="12">
+                        <MudDatePicker @bind-Date="_itemDate"
+                                       Label="Date"
+                                       Variant="Variant.Outlined"
+                                       Margin="Margin.Dense"
+                                       DateFormat="yyyy-MM-dd"
+                                       ShrinkLabel="true" />
+                    </MudItem>
+                </MudGrid>
+
+                <MudButton Variant="Variant.Filled"
+                           Color="Color.Primary"
+                           FullWidth="true"
+                           Class="rounded-pill mt-3"
+                           Style="font-weight: 600; text-transform: none; height: 42px;"
+                           StartIcon="@(string.IsNullOrEmpty(_editingItemId) ? Icons.Material.Filled.Add : Icons.Material.Filled.Check)"
+                           OnClick="SaveExpenseItem">
+                    @(string.IsNullOrEmpty(_editingItemId) ? "Add to Report" : "Save Changes")
+                </MudButton>
+            </MudCardContent>
+        </MudCard>
+
+        @* ══════════════════════════════════════════════════════════════════
+           SECTION 3: ACTIVE REPORT ITEMS FEED
+           ══════════════════════════════════════════════════════════════════ *@
+        <div class="d-flex justify-space-between align-center mt-2 mb-2">
+            <MudText Typo="Typo.subtitle1" Style="font-weight: 700;">
+                Expenses in Report (@_activeReport.Items.Count)
+            </MudText>
+        </div>
+
+        @if (!_activeReport.Items.Any())
+        {
+            <MudPaper Class="pa-6 text-center mb-4" Elevation="0" Outlined="true" Style="border-radius: 16px; border-style: dashed;">
+                <MudIcon Icon="@Icons.Material.Filled.ReceiptLong" Size="Size.Large" Color="Color.Secondary" Class="mb-2" />
+                <MudText Typo="Typo.body2" Color="Color.Secondary">
+                    No expenses logged in this report yet.
+                </MudText>
+                <MudText Typo="Typo.caption" Color="Color.Secondary">
+                    Snap a photo of your receipt or enter details above.
+                </MudText>
+            </MudPaper>
+        }
+        else
+        {
+            <MudGrid Spacing="2" Class="mb-4">
+                @foreach (var item in _activeReport.Items.OrderByDescending(i => i.Date))
+                {
+                    var projName = GetProjectName(item.ProjectId);
+                    <MudItem xs="12">
+                        <MudCard Elevation="0" Outlined="true" Style="border-radius: 16px;">
+                            <MudCardContent Class="pa-3">
+                                <div class="d-flex justify-space-between align-start mb-1">
+                                    <div>
+                                        <MudText Typo="Typo.subtitle2" Style="font-weight: 700;">@projName</MudText>
+                                        <MudText Typo="Typo.caption" Color="Color.Secondary">@item.Date.ToShortDateString()</MudText>
+                                    </div>
+                                    <MudText Typo="Typo.h6" Color="Color.Primary" Style="font-weight: 800;">
+                                        @item.Total.ToString("C")
+                                    </MudText>
+                                </div>
+
+                                @if (!string.IsNullOrWhiteSpace(item.Description))
+                                {
+                                    <MudText Typo="Typo.body2" Class="mb-2" Style="color: var(--mud-palette-text-primary);">
+                                        @item.Description
+                                    </MudText>
+                                }
+
+                                <div class="d-flex justify-space-between align-center mt-1">
+                                    <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Default">
+                                        @(item.IsKilometrage ? $"{item.Kilometers} km @ {item.KilometrageRate:C}/km" : "Direct Expense")
+                                    </MudChip>
+
+                                    @if (!string.IsNullOrEmpty(item.ReceiptPath))
+                                    {
+                                        <div class="d-flex align-center gap-1 cursor-pointer" @onclick="@(() => OpenReceipt(item.ReceiptPath))">
+                                            @if (IsImageFile(item.ReceiptPath))
+                                            {
+                                                <MudImage Src="@item.ReceiptPath" Width="36" Height="36" ObjectFit="ObjectFit.Cover" Class="rounded" Elevation="1" />
+                                            }
+                                            else
+                                            {
+                                                <MudIcon Icon="@Icons.Material.Filled.AttachFile" Size="Size.Small" Color="Color.Primary" />
+                                            }
+                                            <MudText Typo="Typo.caption" Color="Color.Primary" Style="font-weight: 600;">Receipt</MudText>
+                                        </div>
+                                    }
+                                </div>
+                            </MudCardContent>
+                            <MudCardActions Class="px-3 pb-2 pt-0 d-flex justify-end gap-1">
+                                <MudButton Size="Size.Small" Variant="Variant.Text" Color="Color.Error" OnClick="@(() => DeleteItem(item))">Delete</MudButton>
+                                <MudButton Size="Size.Small" Variant="Variant.Text" Color="Color.Primary" OnClick="@(() => StartEditItem(item))">Edit</MudButton>
+                            </MudCardActions>
+                        </MudCard>
+                    </MudItem>
+                }
+            </MudGrid>
+        }
+    }
+    else
+    {
+        @* ══════════════════════════════════════════════════════════════════
+           EMPTY STATE: NO ACTIVE DRAFT REPORT
+           ══════════════════════════════════════════════════════════════════ *@
+        <MudCard Elevation="0" Outlined="true" Class="mb-4 text-center pa-6" Style="border-radius: 16px;">
+            <MudIcon Icon="@Icons.Material.Filled.Receipt" Size="Size.Large" Color="Color.Primary" Class="mb-2" />
+            <MudText Typo="Typo.h6" Style="font-weight: 700;">No Open Draft Report</MudText>
+            <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-4">
+                Start an expense report to log receipts and kilometrage on the go.
+            </MudText>
+            @if (CanCreateReport)
+            {
+                <MudButton Variant="Variant.Filled"
+                           Color="Color.Primary"
+                           Class="rounded-pill px-6"
+                           StartIcon="@Icons.Material.Filled.Add"
+                           OnClick="CreateNewDraftReport">
+                    Start New Expense Report
+                </MudButton>
+            }
+        </MudCard>
+    }
+
+    @* ══════════════════════════════════════════════════════════════════
+       SECTION 4: PAST REPORTS (SUBMITTED / PAID)
+       ══════════════════════════════════════════════════════════════════ *@
+    @if (PastReports.Any())
+    {
+        <MudText Typo="Typo.subtitle1" Style="font-weight: 700;" Class="mt-6 mb-2">
+            Past Reports (@PastReports.Count)
+        </MudText>
+
+        <MudGrid Spacing="2">
+            @foreach (var report in PastReports)
+            {
+                <MudItem xs="12">
+                    <MudCard Elevation="0" Outlined="true" Style="border-radius: 16px;">
+                        <MudCardContent Class="pa-3">
+                            <div class="d-flex justify-space-between align-center mb-1">
+                                <MudText Typo="Typo.subtitle2" Style="font-weight: 700;">#@report.ReportNumber</MudText>
+                                @if (report.Status == ExpenseReportStatus.Submitted)
+                                {
+                                    <MudChip T="string" Size="Size.Small" Color="Color.Warning">Submitted</MudChip>
+                                }
+                                else if (report.Status == ExpenseReportStatus.Paid)
+                                {
+                                    <MudChip T="string" Size="Size.Small" Color="Color.Success" Icon="@Icons.Material.Filled.Check">Paid</MudChip>
+                                }
+                            </div>
+                            <div class="d-flex justify-space-between align-end mt-2">
+                                <div>
+                                    <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                        @(report.DateSubmitted?.ToShortDateString() ?? report.DateCreated.ToShortDateString())
+                                        • @report.Items.Count @(report.Items.Count == 1 ? "item" : "items")
+                                    </MudText>
+                                    <MudText Typo="Typo.h6" Color="Color.Primary" Style="font-weight: 700;">
+                                        @report.TotalAmount.ToString("C")
+                                    </MudText>
+                                </div>
+                                <MudButton Variant="Variant.Outlined"
+                                           Color="Color.Primary"
+                                           Size="Size.Small"
+                                           Class="rounded-pill"
+                                           OnClick="@(() => ViewPastReport(report))">
+                                    View
+                                </MudButton>
+                            </div>
+                        </MudCardContent>
+                    </MudCard>
+                </MudItem>
+            }
+        </MudGrid>
+    }
+</div>
+
+@code {
+    [Parameter] public List<ExpenseReport> MyReports { get; set; } = new();
+    [Parameter] public string EmployeeId { get; set; } = "";
+    [Parameter] public string EmployeeName { get; set; } = "";
+    [Parameter] public bool CanCreateReport { get; set; } = false;
+    [Parameter] public EventCallback OnReportUpdated { get; set; }
+
+    private ExpenseReport? _activeReport;
+    private List<ExpenseReport> DraftReports => MyReports.Where(r => r.Status == ExpenseReportStatus.Draft).ToList();
+    private List<ExpenseReport> PastReports => MyReports.Where(r => r.Status != ExpenseReportStatus.Draft).ToList();
+
+    private List<Project> _projects = new();
+    private decimal _kilometrageRate = 0.65m;
+
+    // Inline form state
+    private string _editingItemId = "";
+    private DateTime? _itemDate = DateTime.Today;
+    private string _itemProjectId = "";
+    private string _itemDescription = "";
+    private decimal _itemAmount = 0;
+    private bool _itemIsKilometrage = false;
+    private decimal _itemKilometers = 0;
+    private string _itemReceiptPath = "";
+    private bool _isUploadingReceipt = false;
+    private double _uploadProgress = 0;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadProjectsAndRateAsync();
+        SelectActiveReport();
+    }
+
+    protected override void OnParametersSet()
+    {
+        // Re-evaluate active report if current active report was deleted or submitted
+        if (_activeReport != null)
+        {
+            var updated = MyReports.FirstOrDefault(r => r.Id == _activeReport.Id);
+            if (updated != null && updated.Status == ExpenseReportStatus.Draft)
+            {
+                _activeReport = updated;
+            }
+            else
+            {
+                SelectActiveReport();
+            }
+        }
+        else
+        {
+            SelectActiveReport();
+        }
+    }
+
+    private void SelectActiveReport()
+    {
+        _activeReport = DraftReports.OrderByDescending(r => r.DateCreated).FirstOrDefault();
+    }
+
+    private void SetActiveReport(ExpenseReport report)
+    {
+        _activeReport = report;
+        CancelEdit();
+    }
+
+    private async Task LoadProjectsAndRateAsync()
+    {
+        var user = await UserService.GetEmployeeAsync();
+        if (user != null)
+        {
+            if (user.IsAdmin)
+            {
+                _projects = Db.Projects.GetAll().Where(p => p.IsActive).OrderBy(p => p.DisplayName).ToList();
+            }
+            else
+            {
+                var all = Db.Projects.GetAll().Where(p => p.IsActive);
+                var filtered = new List<Project>();
+                foreach (var p in all)
+                {
+                    if (p.AccessPolicy == "Public")
+                    {
+                        filtered.Add(p);
+                    }
+                    else
+                    {
+                        if (p.AllowedUserIds.Contains(user.Id) ||
+                            (!string.IsNullOrEmpty(user.TeamId) && p.AllowedTeamIds.Contains(user.TeamId)))
+                        {
+                            filtered.Add(p);
+                        }
+                    }
+                }
+                _projects = filtered.OrderBy(p => p.DisplayName).ToList();
+            }
+        }
+
+        var profile = Db.CompanyProfile.Get();
+        if (profile?.KilometrageRate > 0)
+        {
+            _kilometrageRate = profile.KilometrageRate;
+        }
+    }
+
+    private string GetProjectName(string? projectId)
+    {
+        if (string.IsNullOrEmpty(projectId)) return "No Project";
+        var proj = Db.Projects.GetById(projectId);
+        return proj?.DisplayName ?? "No Project";
+    }
+
+    private bool IsImageFile(string? path)
+    {
+        if (string.IsNullOrEmpty(path)) return false;
+        var ext = Path.GetExtension(path).ToLowerInvariant();
+        return ext is ".jpg" or ".jpeg" or ".png" or ".webp" or ".gif" or ".bmp" or ".heic";
+    }
+
+    private async Task TriggerUpload(string inputId)
+    {
+        try
+        {
+            await JS.InvokeVoidAsync("spokesUpload.openFilePicker", inputId);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[ExpenseMobileView] Error triggering upload: {ex.Message}");
+        }
+    }
+
+    private void HandleUploadStarted()
+    {
+        _isUploadingReceipt = true;
+        _uploadProgress = 0;
+        StateHasChanged();
+    }
+
+    private void HandleUploadProgress(double progress)
+    {
+        _uploadProgress = progress;
+        StateHasChanged();
+    }
+
+    private void HandleUploadCompleted(List<ApiFileUpload.UploadResult> results)
+    {
+        _isUploadingReceipt = false;
+        var result = results.FirstOrDefault();
+        if (result != null)
+        {
+            _itemReceiptPath = result.FilePath;
+            Snackbar.Add("Receipt attached successfully", Severity.Success);
+        }
+        StateHasChanged();
+    }
+
+    private void HandleUploadError(string error)
+    {
+        _isUploadingReceipt = false;
+        Snackbar.Add($"Upload failed: {error}", Severity.Error);
+        StateHasChanged();
+    }
+
+    private async Task OpenReceipt(string? path)
+    {
+        if (string.IsNullOrEmpty(path)) return;
+        try
+        {
+            await JS.InvokeVoidAsync("open", path, "_blank");
+        }
+        catch { }
+    }
+
+    private async Task OpenCurrentReceipt()
+    {
+        await OpenReceipt(_itemReceiptPath);
+    }
+
+    private void RemoveCurrentReceipt()
+    {
+        _itemReceiptPath = "";
+        StateHasChanged();
+    }
+
+    private async Task CreateNewDraftReport()
+    {
+        if (!CanCreateReport) return;
+
+        var newReport = new ExpenseReport
+        {
+            EmployeeId = EmployeeId,
+            EmployeeName = EmployeeName
+        };
+
+        Db.ExpenseReports.Save(newReport);
+        _activeReport = newReport;
+        CancelEdit();
+        Snackbar.Add($"Draft report #{newReport.ReportNumber} created", Severity.Success);
+        await OnReportUpdated.InvokeAsync();
+        StateHasChanged();
+    }
+
+    private async Task DeleteActiveReport()
+    {
+        if (_activeReport == null) return;
+
+        var result = await DialogService.ShowMessageBoxAsync(
+            "Delete Report",
+            $"Are you sure you want to delete report #{_activeReport.ReportNumber} and all its items?",
+            yesText: "Delete", cancelText: "Cancel");
+
+        if (result == true)
+        {
+            Db.ExpenseReports.Delete(_activeReport.Id);
+            _activeReport = null;
+            CancelEdit();
+            Snackbar.Add("Report deleted", Severity.Success);
+            await OnReportUpdated.InvokeAsync();
+            SelectActiveReport();
+            StateHasChanged();
+        }
+    }
+
+    private async Task SubmitActiveReport()
+    {
+        if (_activeReport == null || !_activeReport.Items.Any()) return;
+
+        var result = await DialogService.ShowMessageBoxAsync(
+            "Submit Report",
+            $"Submit report #{_activeReport.ReportNumber} ({_activeReport.TotalAmount:C}, {_activeReport.Items.Count} items) for approval?",
+            yesText: "Submit", cancelText: "Cancel");
+
+        if (result == true)
+        {
+            _activeReport.DateSubmitted = DateTime.Now;
+            Db.ExpenseReports.Save(_activeReport);
+            Snackbar.Add($"Report #{_activeReport.ReportNumber} submitted for approval!", Severity.Success);
+            CancelEdit();
+            await OnReportUpdated.InvokeAsync();
+            SelectActiveReport();
+            StateHasChanged();
+        }
+    }
+
+    private async Task SaveExpenseItem()
+    {
+        if (_activeReport == null) return;
+
+        // Validation
+        if (_itemIsKilometrage && _itemKilometers <= 0)
+        {
+            Snackbar.Add("Please enter distance in kilometers", Severity.Warning);
+            return;
+        }
+
+        if (!_itemIsKilometrage && _itemAmount <= 0)
+        {
+            Snackbar.Add("Please enter an expense amount", Severity.Warning);
+            return;
+        }
+
+        if (!string.IsNullOrEmpty(_editingItemId))
+        {
+            // Update existing item
+            var existing = _activeReport.Items.FirstOrDefault(i => i.Id == _editingItemId);
+            if (existing != null)
+            {
+                existing.Date = _itemDate ?? DateTime.Today;
+                existing.ProjectId = _itemProjectId;
+                existing.Description = _itemDescription;
+                existing.IsKilometrage = _itemIsKilometrage;
+                existing.Kilometers = _itemKilometers;
+                existing.KilometrageRate = _kilometrageRate;
+                existing.Amount = _itemAmount;
+                existing.ReceiptPath = _itemReceiptPath;
+            }
+            Snackbar.Add("Expense updated", Severity.Success);
+        }
+        else
+        {
+            // Add new item
+            var newItem = new ExpenseItem
+            {
+                Date = _itemDate ?? DateTime.Today,
+                ProjectId = _itemProjectId,
+                Description = _itemDescription,
+                IsKilometrage = _itemIsKilometrage,
+                Kilometers = _itemKilometers,
+                KilometrageRate = _kilometrageRate,
+                Amount = _itemAmount,
+                ReceiptPath = _itemReceiptPath
+            };
+            _activeReport.Items.Add(newItem);
+            Snackbar.Add("Expense added to report", Severity.Success);
+        }
+
+        // Save immediately to JSON repository
+        Db.ExpenseReports.Save(_activeReport);
+
+        ResetForm();
+        await OnReportUpdated.InvokeAsync();
+        StateHasChanged();
+    }
+
+    private void StartEditItem(ExpenseItem item)
+    {
+        _editingItemId = item.Id;
+        _itemDate = item.Date;
+        _itemProjectId = item.ProjectId;
+        _itemDescription = item.Description;
+        _itemIsKilometrage = item.IsKilometrage;
+        _itemKilometers = item.Kilometers;
+        _itemAmount = item.Amount;
+        _itemReceiptPath = item.ReceiptPath;
+        StateHasChanged();
+    }
+
+    private void CancelEdit()
+    {
+        ResetForm();
+        StateHasChanged();
+    }
+
+    private void ResetForm()
+    {
+        _editingItemId = "";
+        _itemDate = DateTime.Today;
+        _itemProjectId = "";
+        _itemDescription = "";
+        _itemAmount = 0;
+        _itemIsKilometrage = false;
+        _itemKilometers = 0;
+        _itemReceiptPath = "";
+        _isUploadingReceipt = false;
+    }
+
+    private async Task DeleteItem(ExpenseItem item)
+    {
+        if (_activeReport == null) return;
+
+        var result = await DialogService.ShowMessageBoxAsync(
+            "Delete Expense",
+            $"Delete this {item.Total:C} expense?",
+            yesText: "Delete", cancelText: "Cancel");
+
+        if (result == true)
+        {
+            _activeReport.Items.Remove(item);
+            Db.ExpenseReports.Save(_activeReport);
+            if (_editingItemId == item.Id)
+            {
+                ResetForm();
+            }
+            Snackbar.Add("Expense deleted", Severity.Success);
+            await OnReportUpdated.InvokeAsync();
+            StateHasChanged();
+        }
+    }
+
+    private async Task ViewPastReport(ExpenseReport report)
+    {
+        var parameters = new DialogParameters { ["Report"] = report, ["IsReadOnly"] = true };
+        var options = new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true };
+        await DialogService.ShowAsync<ExpenseReportDialog>("View Report", parameters, options);
+    }
+}

@@ -1,0 +1,176 @@
+@using Spokes_Server.Core.Services
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Models.HR
+@inject SearchService SearchService
+@inject NavigationManager Nav
+@implements IDisposable
+
+<div style="position: relative; width: 500px; margin: 0 8px;" @onfocusout="HandleFocusOut" @onfocusin="HandleFocusIn"
+    tabindex="-1">
+    <MudTextField @bind-Value="_query" Placeholder="Search... (Ctrl+K)" Variant="Variant.Outlined" Margin="Margin.Dense"
+        Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search" Immediate="true"
+        TextChanged="OnSearchTextChanged" @ref="_searchField" OnKeyDown="OnKeyDown" Clearable="true" UserAttributes="@_inputAttributes" />
+
+    @if (_showResults && _results.Any())
+    {
+        <MudPaper
+            Style="position: absolute; top: 100%; left: 0; right: 0; max-height: 420px; overflow-y: auto; z-index: 2000; margin-top: 4px; border-radius: 8px;"
+            Elevation="8">
+            @{
+                var idx = 0;
+            }
+            @foreach (var group in _results.GroupBy(r => r.Type))
+            {
+                <MudText Typo="Typo.overline" Class="px-3 pt-2" Color="Color.Secondary">@group.Key</MudText>
+                @foreach (var result in group)
+                {
+                    var localIdx = idx;
+                    <MudButton OnClick="@(() => NavigateTo(result))" FullWidth="true"
+                        Style="justify-content: flex-start; text-transform: none; padding: 8px 12px;"
+                        Variant="@(localIdx == _selectedIndex ? Variant.Filled : Variant.Text)"
+                        Color="@(localIdx == _selectedIndex ? Color.Primary : Color.Default)"
+                    @onmouseenter="@(() => _selectedIndex = localIdx)">
+                        <MudIcon Icon="@result.Icon" Size="Size.Small" Class="mr-2" Color="Color.Primary" />
+                        <div class="d-flex flex-column" style="min-width: 0; text-align: left;">
+                            <MudText Typo="Typo.body2" Style="font-weight: 500;">@result.Title</MudText>
+                            @if (!string.IsNullOrEmpty(result.Subtitle))
+                            {
+                                <MudText Typo="Typo.caption" Color="Color.Secondary"
+                                    Style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                                    @result.Subtitle
+                                </MudText>
+                            }
+                        </div>
+                    </MudButton>
+                    idx++;
+                }
+            }
+        </MudPaper>
+    }
+    else if (_showResults && !string.IsNullOrEmpty(_query) && _query.Length >= 2)
+    {
+        <MudPaper
+            Style="position: absolute; top: 100%; left: 0; right: 0; z-index: 2000; margin-top: 4px; border-radius: 8px;"
+            Elevation="8">
+            <div class="pa-4 d-flex flex-column align-center">
+                <MudIcon Icon="@Icons.Material.Outlined.SearchOff" Color="Color.Secondary" />
+                <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mt-1">No results found</MudText>
+            </div>
+        </MudPaper>
+    }
+</div>
+
+@code {
+    private string _query = string.Empty;
+    private List<SearchResult> _results = new();
+    private bool _showResults;
+    private int _selectedIndex = -1;
+    private MudTextField<string>? _searchField;
+    private System.Timers.Timer? _debounceTimer;
+    private bool _hasFocus;
+
+    private Dictionary<string, object> _inputAttributes = new()
+    {
+        { "autocomplete", "off" },
+        { "data-lpignore", "true" },
+        { "data-1p-ignore", "true" },
+        { "data-bwignore", "true" },
+        { "data-form-type", "other" }
+    };
+
+    private void OnSearchTextChanged(string value)
+    {
+        _query = value ?? string.Empty;
+        _selectedIndex = -1;
+
+        _debounceTimer?.Stop();
+        _debounceTimer?.Dispose();
+
+        if (string.IsNullOrWhiteSpace(_query) || _query.Length < 2)
+        {
+            _results.Clear();
+            _showResults = false;
+            StateHasChanged();
+            return;
+        }
+
+        _debounceTimer = new System.Timers.Timer(200);
+        _debounceTimer.Elapsed += (_, _) =>
+        {
+            _debounceTimer?.Stop();
+            InvokeAsync(() =>
+    {
+    _results = SearchService.Search(_query, 25);
+    _showResults = _results.Any() || _query.Length >= 2;
+    StateHasChanged();
+            });
+        };
+        _debounceTimer.AutoReset = false;
+        _debounceTimer.Start();
+    }
+
+    private void OnKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "ArrowDown")
+        {
+            _selectedIndex = Math.Min(_selectedIndex + 1, _results.Count - 1);
+        }
+        else if (e.Key == "ArrowUp")
+        {
+            _selectedIndex = Math.Max(_selectedIndex - 1, 0);
+        }
+        else if (e.Key == "Enter" && _selectedIndex >= 0 && _selectedIndex < _results.Count)
+        {
+            NavigateTo(_results[_selectedIndex]);
+        }
+        else if (e.Key == "Escape")
+        {
+            _showResults = false;
+            _query = string.Empty;
+        }
+    }
+
+    private void NavigateTo(SearchResult result)
+    {
+        _showResults = false;
+        _query = string.Empty;
+        Nav.NavigateTo(result.Url, forceLoad: true);
+    }
+
+    private void HandleFocusIn()
+    {
+        _hasFocus = true;
+        if (_results.Any())
+            _showResults = true;
+    }
+
+    private async void HandleFocusOut()
+    {
+        _hasFocus = false;
+        // Small delay to allow click events on results to fire before closing
+        await Task.Delay(200);
+        if (!_hasFocus)
+        {
+            _showResults = false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    public async Task FocusSearchField()
+    {
+        if (_searchField != null)
+        {
+            await _searchField.FocusAsync();
+        }
+    }
+
+    public void Dispose()
+    {
+        _debounceTimer?.Stop();
+        _debounceTimer?.Dispose();
+    }
+}
+

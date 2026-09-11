@@ -1,0 +1,574 @@
+@page "/projects"
+<PageTitle>Projects</PageTitle>
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Data
+@using Spokes_Server.Core.Constants
+@using Microsoft.AspNetCore.Components.Authorization
+@inject Database Db
+@inject IDialogService DialogService
+@using Spokes_Server.Core.Services
+@inject ISnackbar Snackbar
+@inject UserService UserService
+@inject AuthenticationStateProvider AuthStateProvider
+
+<MudText Class="mt-2" Typo="Typo.h4" GutterBottom="true">Projects</MudText>
+
+
+
+<MudPaper Class="pa-4 mt-4 mb-4" Elevation="0" Outlined="true">
+    <div class="d-flex justify-space-between align-center">
+        <MudText Typo="Typo.h6" Color="Color.Default">Project Search</MudText>
+
+        <MudChipSet T="string" @bind-SelectedValue="SelectedFilter" CheckMark="true"
+                    SelectionMode="SelectionMode.SingleSelection">
+            <MudChip T="string" Text="All" Value="@("All")" Default="true" Color="Color.Default">All</MudChip>
+            @foreach (var status in Statuses)
+            {
+                // Parse color string to Enum
+                Color chipColor = Color.Default;
+                Enum.TryParse(status.Color, out chipColor);
+
+                <MudChip T="string" Text="@status.Name" Value="@status.Name" Color="@chipColor">@status.Name</MudChip>
+            }
+        </MudChipSet>
+    </div>
+
+    @* <MudText Typo="Typo.h6" Color="Color.Default">Project Search</MudText> *@
+    <MudTextField @bind-Value="globalSearchString" Margin="Margin.Dense" Variant="Variant.Outlined"
+        Placeholder="Search All Projects and Groups..." Adornment="Adornment.Start"
+        AdornmentIcon="@Icons.Material.Filled.Search" IconSize="Size.Medium" Immediate="true" Clearable="true">
+    </MudTextField>
+
+    @if (!string.IsNullOrWhiteSpace(globalSearchString))
+    {
+        <MudTable Dense="true" Striped="true" Bordered="true" Items="@GlobalSearchResults" Hover="true" Outlined="true"
+                  Elevation="0" Breakpoint="Breakpoint.Sm" Class="mt-4" SortLabel="Sort By">
+            <HeaderContent>
+                <MudTh><MudTableSortLabel SortBy="new Func<GlobalSearchResult, object>(x => x.Type)">Type</MudTableSortLabel></MudTh>
+                <MudTh><MudTableSortLabel SortBy="new Func<GlobalSearchResult, object>(x => x.Name)">Name</MudTableSortLabel></MudTh>
+                <MudTh><MudTableSortLabel SortBy="new Func<GlobalSearchResult, object>(x => x.Description)">Client / Description</MudTableSortLabel></MudTh>
+                <MudTh><MudTableSortLabel SortBy="new Func<GlobalSearchResult, object>(x => x.CreatedAt)">Date Created</MudTableSortLabel></MudTh>
+                <MudTh><MudTableSortLabel InitialDirection="SortDirection.Descending" SortBy="new Func<GlobalSearchResult, object>(x => x.LastEdited)">Last Edited</MudTableSortLabel></MudTh>
+                <MudTh><MudTableSortLabel SortBy="new Func<GlobalSearchResult, object>(x => x.Status)">Status</MudTableSortLabel></MudTh>
+                <MudTh>Actions</MudTh>
+            </HeaderContent>
+            <RowTemplate>
+                <MudTd DataLabel="Type">
+                    <MudChip T="string" Size="Size.Small" Color="@context.TypeColor">@context.Type</MudChip>
+                </MudTd>
+                <MudTd DataLabel="Name">
+                    <MudLink Href="@context.Url" Typo="Typo.body2">@context.Name</MudLink>
+                </MudTd>
+                <MudTd DataLabel="Client / Description">@context.Description</MudTd>
+                <MudTd DataLabel="Date Created">@context.CreatedAt.ToString("MMM dd, yyyy")</MudTd>
+                <MudTd DataLabel="Last Edited">
+                    @context.LastEdited.ToString("MMM dd, yyyy")
+                </MudTd>
+                <MudTd DataLabel="Status">
+                    @if (!string.IsNullOrEmpty(context.Status))
+                    {
+                        <MudChip T="string" Size="Size.Small" Color="@context.StatusColor">@context.Status</MudChip>
+                    }
+                    else
+                    {
+                        <span>-</span>
+                    }
+                </MudTd>
+                <MudTd DataLabel="Actions">
+                    <MudTooltip Text="Open Dashboard">
+                        <MudIconButton Icon="@Icons.Material.Filled.ArrowForward" Color="@context.TypeColor" Href="@context.Url" />
+                    </MudTooltip>
+                </MudTd>
+            </RowTemplate>
+        </MudTable>
+    }
+</MudPaper>
+
+@* <div class="d-flex justify-space-between align-center">
+    @if (CanCreate)
+    {
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="OpenCreateDialog">
+            Create New Project
+        </MudButton>
+    }
+    else
+    {
+        <MudSpacer />
+    }
+
+    <MudChipSet T="string" @bind-SelectedValue="SelectedFilter" CheckMark="true"
+                SelectionMode="SelectionMode.SingleSelection">
+        <MudChip T="string" Text="All" Value="@("All")" Default="true" Color="Color.Default">All</MudChip>
+        @foreach (var status in Statuses)
+        {
+            // Parse color string to Enum
+            Color chipColor = Color.Default;
+            Enum.TryParse(status.Color, out chipColor);
+
+            <MudChip T="string" Text="@status.Name" Value="@status.Name" Color="@chipColor">@status.Name</MudChip>
+        }
+    </MudChipSet>
+</div> *@
+
+<MudTable Dense="true" Striped="true" Bordered="true" Items="@ExternalProjects" Hover="true" Outlined="true"
+    Elevation="0" Breakpoint="Breakpoint.Sm" Class="mt-2" SortLabel="Sort By">
+    <ToolBarContent>
+        <MudText Typo="Typo.h5" Class="mr-4" Color="Color.Primary">Client Projects</MudText>
+        @if (CanCreate)
+        {
+            <MudButton Variant="Variant.Outlined" Size="Size.Small" StartIcon="@Icons.Material.Filled.Add" Color="Color.Primary" OnClick="OpenCreateDialog">
+                Create Project
+            </MudButton>
+        }
+        <MudSpacer />
+    </ToolBarContent>
+    <HeaderContent>
+        <MudTh>
+            <MudTableSortLabel SortBy="new Func<Project, object>(x=>x.DisplayName)">Name</MudTableSortLabel>
+        </MudTh>
+        <MudTh>
+            <MudTableSortLabel SortBy="new Func<Project, object>(x=>x.Client?.BusinessName ?? string.Empty)">Client
+            </MudTableSortLabel>
+        </MudTh>
+        <MudTh>
+            <MudTableSortLabel SortBy="new Func<Project, object>(x=>GetGroupName(x.ProjectGroupId))">Group
+            </MudTableSortLabel>
+        </MudTh>
+        <MudTh>
+            <MudTableSortLabel SortBy="new Func<Project, object>(x=>x.CreatedAt)">Date Created</MudTableSortLabel>
+        </MudTh>
+        <MudTh>
+            <MudTableSortLabel InitialDirection="SortDirection.Descending" SortBy="new Func<Project, object>(x=>x.LastEdited)">Last Edited
+            </MudTableSortLabel>
+        </MudTh>
+        <MudTh>
+            <MudTableSortLabel SortBy="new Func<Project, object>(x=>x.Status)">Status</MudTableSortLabel>
+        </MudTh>
+        <MudTh>Actions</MudTh>
+    </HeaderContent>
+    <RowTemplate>
+        <MudTd DataLabel="Name">@context.DisplayName</MudTd>
+        <MudTd DataLabel="Client">@context.Client?.BusinessName</MudTd>
+        <MudTd DataLabel="Group">
+            @if (!string.IsNullOrEmpty(context.ProjectGroupId))
+            {
+                <MudLink Href="@($"/project-groups/{context.ProjectGroupId}")">
+                    @GetGroupName(context.ProjectGroupId)
+                </MudLink>
+            }
+            else
+            {
+                <span class="text-muted">None</span>
+            }
+        </MudTd>
+        <MudTd DataLabel="Date Created">@context.CreatedAt.ToString("MMM dd, yyyy")</MudTd>
+
+        <MudTd DataLabel="Last Edited">
+            @context.LastEdited.ToString("MMM dd, yyyy")
+        </MudTd>
+
+        <MudTd DataLabel="Status">
+            <MudChip T="string" Size="Size.Small" Color="@GetStatusColor(context.Status)">@context.Status</MudChip>
+        </MudTd>
+        <MudTd>
+            <MudTooltip Text="Open Dashboard">
+                <MudIconButton Icon="@Icons.Material.Filled.ArrowForward" Color="Color.Primary"
+                    Href="@($"/projects/{context.Id}")" />
+            </MudTooltip>
+        </MudTd>
+    </RowTemplate>
+</MudTable>
+
+
+
+@* <div class="d-flex justify-space-between align-center mt-8">
+
+</div> *@
+
+<MudTable Dense="true" Striped="true" Bordered Items="@ProjectGroups" Hover="true" Outlined="true" Elevation="0"
+     Breakpoint="Breakpoint.Sm" Class="mt-8" SortLabel="Sort By">
+     <ToolBarContent>
+         <MudText Class="mr-4" Typo="Typo.h5" Color="Color.Tertiary">Project Groups</MudText>
+         @if (CanCreate)
+        {
+            <MudButton Variant="Variant.Outlined" Color="Color.Tertiary" StartIcon="@Icons.Material.Filled.Add"
+                OnClick="CreateGroup" Size="Size.Small">Create Group</MudButton>
+        }
+        <MudSpacer />
+    </ToolBarContent>
+    <HeaderContent>
+        <MudTh>
+            <MudTableSortLabel SortBy="new Func<ProjectGroup, object>(x=>x.Name)">Name</MudTableSortLabel>
+        </MudTh>
+        <MudTh>
+            <MudTableSortLabel SortBy="new Func<ProjectGroup, object>(x=>x.Client?.BusinessName ?? string.Empty)">Client
+            </MudTableSortLabel>
+        </MudTh>
+        <MudTh>
+            <MudTableSortLabel SortBy="new Func<ProjectGroup, object>(x=>x.ProjectIds.Count)">Projects
+            </MudTableSortLabel>
+        </MudTh>
+
+        <MudTh>
+            <MudTableSortLabel InitialDirection="SortDirection.Descending"
+                SortBy="new Func<ProjectGroup, object>(x=>x.CreatedAt)">Created</MudTableSortLabel>
+        </MudTh>
+        <MudTh>Actions</MudTh>
+    </HeaderContent>
+    <RowTemplate>
+        <MudTd DataLabel="Name">
+            <MudLink Href="@($"/project-groups/{context.Id}")">@context.Name</MudLink>
+        </MudTd>
+        <MudTd DataLabel="Client">@context.Client?.BusinessName</MudTd>
+        <MudTd DataLabel="Projects">
+            <MudChip T="string" Size="Size.Small" Color="Color.Tertiary">@context.ProjectIds.Count projects</MudChip>
+        </MudTd>
+
+        <MudTd DataLabel="Created">@context.CreatedAt.ToString("MMM dd, yyyy")</MudTd>
+        <MudTd DataLabel="Actions">
+            <MudTooltip Text="View Group">
+                <MudIconButton Icon="@Icons.Material.Filled.ArrowForward" Color="Color.Tertiary"
+                    Href="@($"/project-groups/{context.Id}")" />
+            </MudTooltip>
+        </MudTd>
+    </RowTemplate>
+</MudTable>
+
+<MudTable Items="@InternalProjects" Hover="true" Outlined="true" Elevation="0" Breakpoint="Breakpoint.Sm" Class="mt-8" SortLabel="Sort By">
+    <ToolBarContent>
+        <MudText Typo="Typo.h5" Color="Color.Secondary">Internal Projects</MudText>
+        @if (CanCreate)
+        {
+            <MudButton Variant="Variant.Outlined" Size="Size.Small" StartIcon="@Icons.Material.Filled.Add" Color="Color.Secondary" OnClick="OpenCreateDialog">
+                Create Project
+            </MudButton>
+        }
+        <MudSpacer />
+    </ToolBarContent>
+    <HeaderContent>
+        <MudTh><MudTableSortLabel SortBy="new Func<Project, object>(x=>x.DisplayName)">Name</MudTableSortLabel></MudTh>
+        <MudTh><MudTableSortLabel SortBy="new Func<Project, object>(x=>x.Description)">Description</MudTableSortLabel></MudTh>
+        <MudTh><MudTableSortLabel InitialDirection="SortDirection.Descending" SortBy="new Func<Project, object>(x=>x.CreatedAt)">Date Created</MudTableSortLabel></MudTh>
+        <MudTh><MudTableSortLabel SortBy="new Func<Project, object>(x=>x.Status)">Status</MudTableSortLabel></MudTh>
+        <MudTh>Actions</MudTh>
+    </HeaderContent>
+    <RowTemplate>
+        <MudTd DataLabel="Name">@context.DisplayName</MudTd>
+        <MudTd DataLabel="Description">@context.Description</MudTd>
+        <MudTd DataLabel="Date Created">@context.CreatedAt.ToString("MMM dd, yyyy")</MudTd>
+
+        <MudTd DataLabel="Status">
+            <MudChip T="string" Size="Size.Small" Color="@GetStatusColor(context.Status)">@context.Status</MudChip>
+        </MudTd>
+        <MudTd>
+            <MudTooltip Text="Open Dashboard">
+                <MudIconButton Icon="@Icons.Material.Filled.ArrowForward" Color="Color.Secondary"
+                    Href="@($"/projects/{context.Id}")" />
+            </MudTooltip>
+        </MudTd>
+    </RowTemplate>
+</MudTable>
+
+<MudTable Items="@ArchivedProjects" Hover="true" Outlined="true" Elevation="0" Breakpoint="Breakpoint.Sm" Class="mt-8" SortLabel="Sort By">
+    <ToolBarContent>
+        <MudText Typo="Typo.h5" Color="Color.Default">Archived Projects</MudText>
+        <MudSpacer />
+    </ToolBarContent>
+    <HeaderContent>
+        <MudTh><MudTableSortLabel SortBy="new Func<Project, object>(x=>x.DisplayName)">Name</MudTableSortLabel></MudTh>
+        <MudTh><MudTableSortLabel SortBy="new Func<Project, object>(x=>x.IsInternal ? x.Description : x.Client?.BusinessName ?? string.Empty)">Client / Description</MudTableSortLabel></MudTh>
+        <MudTh><MudTableSortLabel InitialDirection="SortDirection.Descending" SortBy="new Func<Project, object>(x=>x.CreatedAt)">Date Created</MudTableSortLabel></MudTh>
+        <MudTh><MudTableSortLabel SortBy="new Func<Project, object>(x=>x.Status)">Status</MudTableSortLabel></MudTh>
+        <MudTh>Actions</MudTh>
+    </HeaderContent>
+    <RowTemplate>
+        <MudTd DataLabel="Name">@context.DisplayName</MudTd>
+        <MudTd DataLabel="Client">
+            @if (context.IsInternal)
+            {
+                @context.Description
+            }
+            else
+            {
+                @context.Client?.BusinessName
+            }
+        </MudTd>
+        <MudTd DataLabel="Date Created">@context.CreatedAt.ToString("MMM dd, yyyy")</MudTd>
+        <MudTd DataLabel="Status">
+            <MudChip T="string" Size="Size.Small" Color="@GetStatusColor(context.Status)">@context.Status</MudChip>
+        </MudTd>
+        <MudTd>
+            <MudTooltip Text="Open Dashboard">
+                <MudIconButton Icon="@Icons.Material.Filled.ArrowForward" Color="Color.Default"
+                    Href="@($"/projects/{context.Id}")" />
+            </MudTooltip>
+        </MudTd>
+    </RowTemplate>
+</MudTable>
+
+
+@inject NavigationManager Nav
+
+@code {
+    private List<Project> ExternalProjects = new();
+    private List<Project> InternalProjects = new();
+    private List<Project> ArchivedProjects = new();
+    private List<ProjectGroup> ProjectGroups = new(); // Added Project Groups list
+
+    private string globalSearchString = "";
+
+    private string _selectedFilter = "All";
+    private string SelectedFilter
+    {
+        get => _selectedFilter;
+        set
+        {
+            if (_selectedFilter != value)
+            {
+                _selectedFilter = value;
+                ApplyFilter();
+            }
+        }
+    }
+
+    // Permissions
+    private bool CanCreate = false;
+    private bool CanViewFinancials = false;
+
+    private List<ProjectStatusConfig> Statuses = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadPermissions();
+
+        // Load Status Config
+        var profile = Db.CompanyProfile.Get();
+        Statuses = profile.ProjectStatuses;
+
+        RefreshList();
+    }
+
+    private Color GetStatusColor(string statusName)
+    {
+        var match = Statuses.FirstOrDefault(s => s.Name.Equals(statusName, StringComparison.InvariantCultureIgnoreCase));
+        if (match != null && Enum.TryParse<Color>(match.Color, out var c))
+        {
+            return c;
+        }
+        return Color.Default;
+    }
+
+    private async Task LoadPermissions()
+    {
+        var emp = await UserService.GetEmployeeAsync();
+        if (emp != null)
+        {
+            CanCreate = emp.HasPermission(AppPermissions.Projects.Create);
+            CanViewFinancials = emp.HasPermission(AppPermissions.Projects.View);
+        }
+    }
+
+    private void RefreshList()
+    {
+        var all = Db.Projects.GetAll().OrderByDescending(p => p.LastEdited).ToList();
+
+        ExternalProjects = all.Where(p => !p.IsInternal && p.Status != ProjectStatus.Archived).ToList();
+        InternalProjects = all.Where(p => p.IsInternal && p.Status != ProjectStatus.Archived).ToList();
+        ArchivedProjects = all.Where(p => p.Status == ProjectStatus.Archived).ToList();
+
+        // Load Project Groups
+        ProjectGroups = Db.ProjectGroups.GetAll().OrderBy(g => g.Name).ToList();
+
+
+
+        ApplyFilter();
+    }
+
+    private void ApplyFilter()
+    {
+        var all = Db.Projects.GetAll().OrderByDescending(p => p.LastEdited).ToList();
+        var baseExternal = all.Where(p => !p.IsInternal && p.Status != ProjectStatus.Archived);
+
+        if (!string.IsNullOrEmpty(SelectedFilter) && SelectedFilter != "All")
+        {
+            ExternalProjects = baseExternal.Where(p => p.Status == SelectedFilter).ToList();
+        }
+        else
+        {
+            ExternalProjects = baseExternal.ToList();
+        }
+
+        // Note: Project Groups are not currently filtered by status as they don't have a status property
+    }
+
+    private class GlobalSearchResult
+    {
+        public string Type { get; set; } = string.Empty;
+        public string Name { get; set; } = string.Empty;
+        public string Description { get; set; } = string.Empty;
+        public DateTime CreatedAt { get; set; }
+        public DateTime LastEdited { get; set; }
+        public string Status { get; set; } = string.Empty;
+        public Color StatusColor { get; set; }
+        public Color TypeColor { get; set; }
+        public string Url { get; set; } = string.Empty;
+    }
+
+    private IEnumerable<GlobalSearchResult> GlobalSearchResults
+    {
+        get
+        {
+            if (string.IsNullOrWhiteSpace(globalSearchString))
+                return Array.Empty<GlobalSearchResult>();
+
+            var results = new List<GlobalSearchResult>();
+            string search = globalSearchString.Trim();
+
+            // Client Projects
+            var clientMatches = ExternalProjects.Where(p => MatchProject(p, search));
+            foreach (var p in clientMatches)
+            {
+                results.Add(new GlobalSearchResult
+                {
+                    Type = "Client Project",
+                    TypeColor = Color.Primary,
+                    Name = p.DisplayName ?? string.Empty,
+                    Description = p.Client?.BusinessName ?? string.Empty,
+                    CreatedAt = p.CreatedAt,
+                    LastEdited = p.LastEdited,
+                    Status = p.Status ?? string.Empty,
+                    StatusColor = GetStatusColor(p.Status ?? string.Empty),
+                    Url = $"/projects/{p.Id}"
+                });
+            }
+
+            // Project Groups
+            var groupMatches = ProjectGroups.Where(g => MatchGroup(g, search));
+            foreach (var g in groupMatches)
+            {
+                results.Add(new GlobalSearchResult
+                {
+                    Type = "Project Group",
+                    TypeColor = Color.Tertiary,
+                    Name = g.Name ?? string.Empty,
+                    Description = g.Client?.BusinessName ?? string.Empty,
+                    CreatedAt = g.CreatedAt,
+                    LastEdited = g.CreatedAt, // Groups don't have LastEdited yet
+                    Status = $"{g.ProjectIds.Count} projects",
+                    StatusColor = Color.Tertiary,
+                    Url = $"/project-groups/{g.Id}"
+                });
+            }
+
+            // Internal Projects
+            var internalMatches = InternalProjects.Where(p => MatchProject(p, search));
+            foreach (var p in internalMatches)
+            {
+                results.Add(new GlobalSearchResult
+                {
+                    Type = "Internal Project",
+                    TypeColor = Color.Secondary,
+                    Name = p.DisplayName ?? string.Empty,
+                    Description = p.Description ?? string.Empty,
+                    CreatedAt = p.CreatedAt,
+                    LastEdited = p.LastEdited,
+                    Status = p.Status ?? string.Empty,
+                    StatusColor = GetStatusColor(p.Status ?? string.Empty),
+                    Url = $"/projects/{p.Id}"
+                });
+            }
+
+            // Archived Projects
+            var archivedMatches = ArchivedProjects.Where(p => MatchProject(p, search));
+            foreach (var p in archivedMatches)
+            {
+                results.Add(new GlobalSearchResult
+                {
+                    Type = "Archived Project",
+                    TypeColor = Color.Default,
+                    Name = p.DisplayName ?? string.Empty,
+                    Description = p.IsInternal ? (p.Description ?? string.Empty) : (p.Client?.BusinessName ?? string.Empty),
+                    CreatedAt = p.CreatedAt,
+                    LastEdited = p.LastEdited,
+                    Status = p.Status ?? string.Empty,
+                    StatusColor = GetStatusColor(p.Status ?? string.Empty),
+                    Url = $"/projects/{p.Id}"
+                });
+            }
+
+            return results.OrderByDescending(x => x.LastEdited);
+        }
+    }
+
+    private bool MatchProject(Project element, string searchString)
+    {
+        if (element.DisplayName != null && element.DisplayName.Contains(searchString, StringComparison.OrdinalIgnoreCase))
+            return true;
+        if (element.ProjectNumber != null && element.ProjectNumber.Contains(searchString, StringComparison.OrdinalIgnoreCase))
+            return true;
+        if (element.Client?.BusinessName != null && element.Client.BusinessName.Contains(searchString, StringComparison.OrdinalIgnoreCase))
+            return true;
+        if (element.Status != null && element.Status.Contains(searchString, StringComparison.OrdinalIgnoreCase))
+            return true;
+        if (element.Description != null && element.Description.Contains(searchString, StringComparison.OrdinalIgnoreCase))
+            return true;
+        return false;
+    }
+
+    private bool MatchGroup(ProjectGroup element, string searchString)
+    {
+        if (element.Name != null && element.Name.Contains(searchString, StringComparison.OrdinalIgnoreCase))
+            return true;
+        if (element.Client?.BusinessName != null && element.Client.BusinessName.Contains(searchString, StringComparison.OrdinalIgnoreCase))
+            return true;
+        return false;
+    }
+
+    private string GetGroupName(string? groupId)
+    {
+        if (string.IsNullOrEmpty(groupId)) return "";
+        return ProjectGroups.FirstOrDefault(g => g.Id == groupId)?.Name ?? "Unknown Group";
+    }
+
+
+
+    private async Task OpenCreateDialog()
+    {
+        if (!CanCreate) return;
+        var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Large, FullWidth = true };
+
+        var dialog = await DialogService.ShowAsync<ProjectDialog>("New Project", options);
+        var result = await dialog.Result;
+
+        if (!result.Canceled)
+        {
+            var newProject = (Project)result.Data;
+            Db.Projects.Save(newProject);
+
+            // Auto-create chat channel removed as per requirements
+            // Db.ChatChannels.GetOrCreateProjectChannel(newProject.Id, newProject.Name);
+
+            Snackbar.Add("Project Created!", Severity.Success);
+            RefreshList();
+        }
+    }
+
+    private async Task CreateGroup()
+    {
+        var options = new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true };
+        var dialog = await DialogService.ShowAsync<ProjectGroupDialog>("Create Project Group", options);
+        var result = await dialog.Result;
+
+        if (!result.Canceled && result.Data is ProjectGroup newGroup)
+        {
+            Db.ProjectGroups.Save(newGroup);
+            Snackbar.Add("Project Group Created!", Severity.Success);
+            RefreshList();
+            Nav.NavigateTo($"/project-groups/{newGroup.Id}");
+        }
+    }
+}

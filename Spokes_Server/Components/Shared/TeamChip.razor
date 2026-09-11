@@ -1,0 +1,88 @@
+@using Spokes_Server.Core.Models.HR
+@using MudBlazor
+@inject Spokes_Server.Aggregate.Database Db
+
+@{
+    var team = Team ?? (!string.IsNullOrEmpty(TeamId) ? Db.Teams.GetById(TeamId) : null);
+    var displayName = team?.Name ?? TeamName ?? "Unknown";
+    var avatarFontSize = Size switch
+    {
+        Size.Small => "0.625rem",
+        Size.Medium => "0.75rem",
+        Size.Large => "1rem",
+        _ => "0.625rem"
+    };
+    var avatarSize = Size switch
+    {
+        Size.Large => Size.Medium,
+        _ => Size.Small
+    };
+}
+
+@if (OnClose.HasDelegate)
+{
+    <MudChip T="string"
+             Size="@Size"
+             Color="@Color"
+             Variant="@Variant"
+             OnClose="@HandleClose"
+             Disabled="@Disabled"
+             Class="@Class"
+             Style="@Style"
+             Value="@(team?.Id ?? TeamId ?? displayName)">
+        <AvatarContent>
+            <TeamAvatar Team="@team"
+                        TeamName="@TeamName"
+                        Size="@avatarSize"
+                        FontSize="@avatarFontSize"
+                        UseIcon="@UseIcon" />
+        </AvatarContent>
+        <ChildContent>
+            @displayName
+        </ChildContent>
+    </MudChip>
+}
+else
+{
+    <MudChip T="string"
+             Size="@Size"
+             Color="@Color"
+             Variant="@Variant"
+             Disabled="@Disabled"
+             Class="@Class"
+             Style="@Style"
+             Value="@(team?.Id ?? TeamId ?? displayName)">
+        <AvatarContent>
+            <TeamAvatar Team="@team"
+                        TeamName="@TeamName"
+                        Size="@avatarSize"
+                        FontSize="@avatarFontSize"
+                        UseIcon="@UseIcon" />
+        </AvatarContent>
+        <ChildContent>
+            @displayName
+        </ChildContent>
+    </MudChip>
+}
+
+@code {
+    [Parameter] public Team? Team { get; set; }
+    [Parameter] public string? TeamId { get; set; }
+    [Parameter] public string? TeamName { get; set; }
+    [Parameter] public Size Size { get; set; } = Size.Small;
+    [Parameter] public Color Color { get; set; } = Color.Default;
+    [Parameter] public Variant Variant { get; set; } = Variant.Filled;
+    [Parameter] public bool UseIcon { get; set; } = true;
+    [Parameter] public EventCallback OnClose { get; set; }
+    [Parameter] public bool Disabled { get; set; } = false;
+    [Parameter] public string Class { get; set; } = "";
+    [Parameter] public string Style { get; set; } = "";
+
+    private async Task HandleClose(MudChip<string> chip)
+    {
+        if (OnClose.HasDelegate)
+        {
+            await OnClose.InvokeAsync();
+        }
+    }
+}

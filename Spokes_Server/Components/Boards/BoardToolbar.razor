@@ -1,0 +1,77 @@
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Models.HR
+
+<MudPaper Elevation="0" Class="pa-2 px-4 d-flex align-center gap-2 border-b"
+    Style="background-color: var(--mud-palette-background);">
+
+    <!-- FILTER -->
+    <MudMenu AnchorOrigin="Origin.BottomLeft" TransformOrigin="Origin.TopLeft" LockScroll="true">
+        <ActivatorContent>
+            <MudButton Variant="@(View.Filters.Any() ? Variant.Text : Variant.Text)"
+                Color="@(View.Filters.Any() ? Color.Primary : Color.Default)"
+                StartIcon="@Icons.Material.Filled.FilterList" Size="Size.Small">
+                Filter @(View.Filters.Any() ? $"({View.Filters.Count})" : "")
+            </MudButton>
+        </ActivatorContent>
+        <ChildContent>
+            <BoardFilterMenu Board="Board" View="View" OnChange="OnFiltersChanged" />
+        </ChildContent>
+    </MudMenu>
+
+    <!-- SORT -->
+    <MudMenu AnchorOrigin="Origin.BottomLeft" TransformOrigin="Origin.TopLeft" LockScroll="true">
+        <ActivatorContent>
+            <MudButton Variant="Variant.Text" Color="@(View.SortOptions.Any() ? Color.Primary : Color.Default)"
+                StartIcon="@Icons.Material.Filled.Sort" Size="Size.Small">
+                Sort @(View.SortOptions.Any() ? $"({View.SortOptions.Count})" : "")
+            </MudButton>
+        </ActivatorContent>
+        <ChildContent>
+            <BoardSortMenu Board="Board" View="View" OnChange="OnSortChanged" />
+        </ChildContent>
+    </MudMenu>
+
+    <BoardViewPropertiesMenu Board="@Board" View="@View" OnChange="@OnChange" />
+
+    <MudSpacer />
+
+    <MudTextField @bind-Value="SearchText" Placeholder="Search" Variant="Variant.Outlined" Margin="Margin.Dense"
+        Dense="true" Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search" Immediate="true"
+        TextChanged="OnSearchChanged" Style="max-width: 200px;" Class="mr-2" />
+
+    <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Add"
+        DisableElevation="true" OnClick="OnNewCard">
+        New
+    </MudButton>
+
+</MudPaper>
+
+@code {
+    [Parameter] public Board Board { get; set; } = default!;
+    [Parameter] public BoardView View { get; set; } = default!;
+    [Parameter] public EventCallback OnNewCard { get; set; }
+    [Parameter] public EventCallback OnChange { get; set; }
+
+    [Inject] IDialogService DialogService { get; set; } = default!;
+    [Parameter] public string SearchText { get; set; } = "";
+    [Parameter] public EventCallback<string> SearchTextChanged { get; set; }
+
+    async Task OnFiltersChanged()
+    {
+        await OnChange.InvokeAsync();
+    }
+
+    async Task OnSortChanged()
+    {
+        await OnChange.InvokeAsync();
+    }
+
+    async Task OnSearchChanged(string text)
+    {
+        SearchText = text;
+        await SearchTextChanged.InvokeAsync(text);
+    }
+}

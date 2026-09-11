@@ -1,0 +1,1090 @@
+@page "/"
+@inject NavigationManager Nav
+@using Spokes_Server.Core.Data
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Services
+@using Spokes_Server.Components.Shared
+@using Spokes_Server.Core.Constants
+@using Spokes_Server.Core.Helpers
+@using MudBlazor
+@using System.Globalization
+@using Spokes_Server.Components.Dialogs
+@inject Database Db
+@inject UserService UserService
+@inject IDialogService DialogService
+@inject ISnackbar Snackbar
+
+<PageTitle>Home | Spokes</PageTitle>
+
+@if (IsFriendEdition)
+{
+    <Spokes_Server.Components.Pages.Chat.Chat />
+}
+else
+{
+    <MudContainer MaxWidth="MaxWidth.Large" Class="mt-4">
+        <div class="d-flex flex-column gap-4">
+            <!-- Welcome Section -->
+            <MudPaper Class="pa-6" Outlined="true" Elevation="0">
+                <MudText Typo="Typo.h4">Welcome back, @(_currentUser?.FirstName ?? "User")!</MudText>
+                <MudText Typo="Typo.subtitle1" Color="Color.Secondary">Here's what's happening this week.</MudText>
+            </MudPaper>
+
+            @if (_isLoading)
+            {
+                <div class="d-flex justify-center align-center py-16">
+                    <MudProgressCircular Color="Color.Primary" Indeterminate="true" Size="Size.Large" />
+                </div>
+            }
+            else
+            {
+                <MudGrid>
+                <!-- 1. This Week's Agenda -->
+                @if (HasPerm(AppPermissions.Calendar.View))
+
+                {
+                    <MudItem xs="12" md="6">
+                        <MudPaper Class="pa-4" Outlined="true" Elevation="0" Style="height: 100%">
+                            <div class="d-flex justify-space-between align-center mb-4">
+                                <MudText Typo="Typo.h6"><b>This Week's Agenda</b></MudText>
+                                <MudButton Variant="Variant.Text" Color="Color.Primary"
+                                    EndIcon="@Icons.Material.Filled.ArrowForward"
+                                    OnClick="@(() => Nav.NavigateTo("/planning/calendar"))">Calendar</MudButton>
+                            </div>
+
+                            @if (WeekEvents.Any())
+
+                            {
+                                <MudList T="string" Dense="true">
+                                    @foreach (var group in WeekEvents.GroupBy(e => e.Start.Date))
+                                    {
+                                        <MudListSubheader Class="pb-1 pt-2 px-4">
+                                            <MudText Typo="Typo.subtitle2" Color="Color.Primary">
+                                                <b>@(group.Key.Date == DateTime.Today ? "Today" : group.Key.Date == DateTime.Today.AddDays(1) ? "Tomorrow" : group.Key.ToString("dddd, MMM d"))</b>
+                                            </MudText>
+                                        </MudListSubheader>
+                                        
+                                        @foreach (var evt in group)
+                                        {
+                                            var cat = Categories.FirstOrDefault(c => string.Equals(c.Id, evt.Category, StringComparison.OrdinalIgnoreCase) || string.Equals(c.Name, evt.Category, StringComparison.OrdinalIgnoreCase));
+                                            Color catColor = Color.Info;
+                                            if (cat != null) Enum.TryParse(cat.Color, out catColor);
+
+                                            <MudListItem T="string" Icon="@Icons.Material.Filled.Event" IconColor="@catColor" OnClick="@(() => OpenEventDialog(evt))">
+                                                <div class="d-flex justify-space-between align-center" style="width: 100%">
+                                                    <div class="d-flex flex-column">
+                                                        <MudText Typo="Typo.subtitle2">@evt.Title</MudText>
+                                                        <MudText Typo="Typo.caption">
+                                                            @(evt.IsAllDay ? "All Day" : $"{evt.Start:HH:mm} - {evt.End:HH:mm}")
+                                                        </MudText>
+                                                    </div>
+                                                    @if (cat != null)
+                                                    {
+                                                        <MudChip T="string" Color="@catColor" Size="Size.Small" Variant="Variant.Outlined">@cat.Name</MudChip>
+                                                    }
+                                                </div>
+                                            </MudListItem>
+                                        }
+                                    }
+                                </MudList>
+                            }
+
+                            else
+
+                            {
+                                <MudText Typo="Typo.body2" Color="Color.Secondary">No events scheduled for this week.</MudText>
+                            }
+                        </MudPaper>
+                    </MudItem>
+                }
+
+                <!-- 2. Latest Chat Notifications -->
+                @if (HasPerm(AppPermissions.Chat.Use))
+
+                {
+                    <MudItem xs="12" md="6">
+                        <MudPaper Class="pa-4" Outlined="true" Elevation="0" Style="height: 100%">
+                            <div class="d-flex justify-space-between align-start mb-4">
+                                <MudText Typo="Typo.h6" Class="mt-2"><b>Notifications</b></MudText>
+                            </div>
+
+                            @if (UnreadMessages.Any())
+                            {
+                                <MudList T="string" Dense="true" Clickable="true">
+                                    @foreach (var msg in UnreadMessages)
+                                    {
+                                        bool isChat = msg.Type == "Chat";
+                                        string icon = isChat ? Icons.Material.Filled.Chat : Icons.Material.Filled.Email;
+                                        Color iconColor = isChat ? Color.Primary : Color.Secondary;
+                                        string url = isChat ? $"/chat/{msg.ChannelId}" : $"/email/{msg.FolderPath}/{msg.EmailId}";
+                                        
+                                        <MudListItem T="string" Icon="@icon" IconColor="@iconColor"
+                                            OnClick="@(() => Nav.NavigateTo(url))">
+                                            <div class="d-flex flex-column">
+                                                <MudText Typo="Typo.subtitle2"><b>@msg.SenderName</b> @(isChat ? "in " + msg.ChannelName : "")</MudText>
+                                                @if (!isChat)
+                                                {
+                                                    <MudText Typo="Typo.body2" Class="text-truncate" Style="max-width: 300px;"><b>@msg.ChannelName</b></MudText>
+                                                }
+                                                <MudText Typo="Typo.caption" Class="text-truncate" Style="max-width: 300px;">
+                                                    @msg.Content</MudText>
+                                            </div>
+                                        </MudListItem>
+                                    }
+                                </MudList>
+                            }
+
+                            else
+
+                            {
+                                <MudText Typo="Typo.body2" Color="Color.Secondary">You're all caught up!</MudText>
+                            }
+                        </MudPaper>
+                    </MudItem>
+                }
+
+                <!-- 3. Weekly Planned Work -->
+                @if (!IsFriendEdition && IsWeeklyPlanEnabled && HasPerm(AppPermissions.Timesheets.AccessTimesheet))
+
+                {
+                    <MudItem xs="12">
+                        <MudPaper Class="pa-4" Outlined="true" Elevation="0">
+                            <div class="d-flex justify-space-between align-center mb-4">
+                                <MudText Typo="Typo.h6"><b>My Week Plan</b></MudText>
+                                <MudButton Variant="Variant.Text" Color="Color.Primary"
+                                    EndIcon="@Icons.Material.Filled.ArrowForward"
+                                    OnClick="@(() => Nav.NavigateTo("/my-timesheet"))">Timesheet</MudButton>
+                            </div>
+
+                            @if (CurrentPlan != null && CurrentPlan.Entries.Any())
+
+                            {
+                                <MudGrid>
+                                    <MudItem xs="12" sm="3" Class="d-flex flex-column justify-center align-center">
+                                        <MudText Typo="Typo.h3" Color="Color.Primary">@CurrentPlan.TotalHours.ToString("F0")h
+                                        </MudText>
+                                        <MudText Typo="Typo.subtitle2">Planned This Week</MudText>
+                                    </MudItem>
+                                    <MudItem xs="12" sm="9">
+                                        <MudTable Items="@CurrentPlan.Entries" Dense="true" Hover="true" Elevation="0">
+                                            <HeaderContent>
+                                                <MudTh>Project</MudTh>
+                                                <MudTh>Planned Hours</MudTh>
+                                                <MudTh>Focus</MudTh>
+                                            </HeaderContent>
+                                            <RowTemplate>
+                                                <MudTd>@context.ProjectName</MudTd>
+                                                <MudTd>@context.Hours.ToString("F1")h</MudTd>
+                                                <MudTd>
+                                                    <MudText Typo="Typo.caption">@context.Note</MudText>
+                                                </MudTd>
+                                            </RowTemplate>
+                                        </MudTable>
+                                    </MudItem>
+                                </MudGrid>
+                            }
+
+                            else
+
+                            {
+                                <div class="d-flex flex-column align-center pa-4">
+                                    <MudText Typo="Typo.body1" Class="mb-2">No work planned for this week yet.</MudText>
+                                    <MudButton Variant="Variant.Outlined" Color="Color.Primary"
+                                        OnClick="@(() => Nav.NavigateTo("/my-timesheet"))">Create Plan</MudButton>
+                                </div>
+                            }
+                        </MudPaper>
+                    </MudItem>
+                }
+            </MudGrid>
+
+            <!-- Quick Actions based on Perms -->
+            @if (!IsFriendEdition)
+            {
+                <MudText Typo="Typo.h5" Class="mt-6"><b>Quick Actions</b></MudText>
+                <MudGrid>
+                    @if (HasPerm(AppPermissions.Projects.View))
+                    {
+                        <MudItem xs="6" sm="4" md="3">
+                            <MudCard Outlined="true" Elevation="0" Class="cursor-pointer hover-elevate" @onclick="@(() => Nav.NavigateTo("/projects"))">
+                                <MudCardContent Class="d-flex flex-column align-center py-6">
+                                    <MudIcon Icon="@Icons.Material.Filled.Work" Size="Size.Large" Color="Color.Primary"
+                                             Class="mb-2" />
+                                    <MudText>Projects</MudText>
+                                </MudCardContent>
+                            </MudCard>
+                        </MudItem>
+                    }
+
+                    @if (HasPerm(AppPermissions.Finance.AccessAccounting))
+                    {
+                        <MudItem xs="6" sm="4" md="3">
+                            <MudCard Outlined="true" Elevation="0" Class="cursor-pointer hover-elevate" @onclick="@(() => Nav.NavigateTo("/business-dashboard"))">
+                                <MudCardContent Class="d-flex flex-column align-center py-6">
+                                    <MudIcon Icon="@Icons.Material.Filled.Dashboard" Size="Size.Large" Color="Color.Secondary"
+                                             Class="mb-2" />
+                                    <MudText>Business Dashboard</MudText>
+                                </MudCardContent>
+                            </MudCard>
+                        </MudItem>
+                    }
+
+                    @if (HasPerm(AppPermissions.Purchases.ManagePOs))
+                    {
+                        <MudItem xs="6" sm="4" md="3">
+                            <MudCard Outlined="true" Elevation="0" Class="cursor-pointer hover-elevate"
+                                     @onclick="@(() => Nav.NavigateTo("/purchases/create-po"))">
+                                <MudCardContent Class="d-flex flex-column align-center py-6">
+                                    <MudIcon Icon="@Icons.Material.Filled.AddShoppingCart" Size="Size.Large" Color="Color.Success"
+                                             Class="mb-2" />
+                                    <MudText>New Purchase Order</MudText>
+                                </MudCardContent>
+                            </MudCard>
+                        </MudItem>
+                    }
+                </MudGrid>
+                          
+            }
+            }
+            
+
+        </div>
+    </MudContainer>
+}
+
+<style>
+    .hover-elevate {
+        transition: transform 0.2s, box-shadow 0.2s;
+    }
+
+    .hover-elevate:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+    }
+</style>
+
+@code {
+    private Employee? _currentUser;
+    private bool IsFriendEdition => Db.CompanyProfile.Get()?.Edition == "Family";
+    private bool IsWeeklyPlanEnabled => Db.CompanyProfile.Get()?.TimesheetConfig?.EnableWeeklyPlan ?? true;
+    private bool _isLoading = true;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    // Data Models
+
+
+
+
+
+
+
+    private List<CalendarEvent> WeekEvents = new();
+    private List<CalendarCategory> Categories = new();
+
+
+
+
+
+
+
+    private List<NotificationViewModel> UnreadMessages = new();
+
+
+
+
+
+
+
+    private WeeklyPlan? CurrentPlan;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    protected override async Task OnInitializedAsync()
+    {
+        _currentUser = await UserService.GetEmployeeAsync();
+        
+        if (!IsFriendEdition)
+        {
+            Categories = Db.CompanyProfile.Get().CalendarCategories;
+        }
+
+        if (_currentUser != null && !IsFriendEdition)
+        {
+            _ = LoadDashboardDataAsync();
+        }
+        else
+        {
+            _isLoading = false;
+        }
+    }
+
+    private async Task LoadDashboardDataAsync()
+    {
+        try
+        {
+            await Task.Run(() =>
+            {
+                LoadWeekAgenda();
+                LoadNotifications();
+                if (IsWeeklyPlanEnabled)
+                {
+                    LoadWeeklyPlan();
+                }
+            });
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[Home] Error loading dashboard: {ex.Message}");
+        }
+        finally
+        {
+            _isLoading = false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    private void LoadWeekAgenda()
+
+
+
+
+
+
+
+    {
+
+
+
+
+
+
+
+        if (_currentUser == null) return;
+
+
+
+
+
+
+
+        var today = DateTime.Today;
+
+
+
+
+
+
+
+        var daysUntilSunday = ((int)DayOfWeek.Sunday - (int)today.DayOfWeek + 7) % 7;
+        var endOfWeek = today.AddDays(daysUntilSunday + 1);
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+        // Fetch events where user is EmployeeId or (Participant logic if implemented)
+
+
+
+
+
+
+
+        // Ignoring complicated recurrence or attendees for MVP, assuming 'EmployeeId' owns the event
+
+
+
+
+
+
+
+        var allEvents = Db.CalendarEvents.GetAll();
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+        WeekEvents = allEvents
+
+
+
+
+
+
+
+        .Where(e => (e.IsCompanyWide || 
+                     e.EmployeeId == _currentUser.Id || 
+                     (e.Attendees != null && e.Attendees.Contains(_currentUser.Id)) || 
+                     (!string.IsNullOrEmpty(_currentUser.TeamId) && e.InvitedTeamIds != null && e.InvitedTeamIds.Contains(_currentUser.TeamId))) &&
+        e.Start < endOfWeek && e.End > today) // Overlaps this week
+
+
+
+
+
+
+
+        .OrderBy(e => e.Start)
+
+
+
+
+
+
+
+        .ToList();
+
+
+
+
+
+
+
+    }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    private void LoadNotifications()
+
+
+
+
+
+
+
+    {
+
+
+
+
+
+
+
+        if (_currentUser == null) return;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+        // Get unread messages logic
+
+
+
+
+
+
+
+        // 1. Get user channels
+
+
+
+
+
+
+
+        var channels = Db.ChatChannels.GetAll().Where(c => c.ParticipantIds.Contains(_currentUser.Id) || c.ChannelType ==
+
+
+
+        "General"); // Simplified
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+        foreach (var channel in channels)
+
+
+
+
+
+
+
+        {
+
+
+
+
+
+
+
+            var lastRead = Db.ChatReadStates.GetLastReadAt(_currentUser.Id, channel.Id);
+
+
+
+
+
+
+
+            var unreadMsgs = Db.ChatMessages.GetAll()
+
+
+
+
+
+
+
+            .Where(m => m.ChannelId == channel.Id && m.SentAt > lastRead && m.SenderId != _currentUser.Id)
+
+
+
+
+
+
+
+            .OrderByDescending(m => m.SentAt)
+
+
+
+
+
+
+
+            .Take(1) // Just take the latest per channel for summary
+
+
+
+
+
+
+
+            .ToList();
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+            foreach (var msg in unreadMsgs)
+
+
+
+
+
+
+
+            {
+
+
+
+
+
+
+
+                var sender = Db.Employees.GetById(msg.SenderId);
+
+
+
+
+
+
+
+                var channelName = ChatChannelFormatter.GetDisplayName(channel, _currentUser?.Id, id => Db.Employees.GetById(id));
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                UnreadMessages.Add(new NotificationViewModel
+
+
+
+
+
+
+
+                    {
+
+
+
+
+
+
+
+                        ChannelId = channel.Id,
+
+
+
+
+
+
+
+                        ChannelName = channelName,
+
+
+
+
+
+
+
+                        SenderName = sender?.FullName ?? "Unknown",
+
+
+
+
+
+
+
+                        Content = msg.Content,
+
+
+
+
+
+
+
+                        SentAt = msg.SentAt,
+                        Type = "Chat",
+                        EmailId = "",
+                        FolderPath = ""
+                    });
+            }
+        }
+
+        // 2. Fetch unread emails from INBOX
+        var topEmails = Db.EmailMessages.GetByFolderRecent(_currentUser.Id, "INBOX", 50)
+            .Where(e => !e.IsRead)
+            .Take(10)
+            .ToList();
+
+        foreach (var email in topEmails)
+        {
+            UnreadMessages.Add(new NotificationViewModel
+            {
+                ChannelId = "",
+                ChannelName = email.Subject,
+                SenderName = string.IsNullOrWhiteSpace(email.FromName) ? email.FromAddress : email.FromName,
+                Content = string.IsNullOrWhiteSpace(email.Snippet) ? "No snippet available" : email.Snippet,
+                SentAt = email.Date.DateTime,
+                Type = "Email",
+                EmailId = email.Id,
+                FolderPath = email.FolderPath
+            });
+        }
+
+        UnreadMessages = UnreadMessages.OrderByDescending(m => m.SentAt).Take(5).ToList();
+    }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    private void LoadWeeklyPlan()
+
+
+
+
+
+
+
+    {
+
+
+
+
+
+
+
+        if (_currentUser == null) return;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+        var week = ISOWeek.GetWeekOfYear(DateTime.Today);
+
+
+
+
+
+
+
+        var year = DateTime.Today.Year;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+        CurrentPlan = Db.WeeklyPlans.GetByEmployeeAndWeek(_currentUser.Id, year, week);
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+        // Enrich project names if missing (UI logic from MyWeekView)
+
+
+
+
+
+
+
+        if (CurrentPlan != null)
+
+
+
+
+
+
+
+        {
+
+
+
+
+
+
+
+            var allProjects = Db.Projects.GetAll(); // Cache potentially
+
+
+
+
+
+
+
+            foreach (var entry in CurrentPlan.Entries)
+
+
+
+
+
+
+
+            {
+
+
+
+
+
+
+
+                if (string.IsNullOrEmpty(entry.ProjectName))
+
+
+
+
+
+
+
+                {
+
+
+
+
+
+
+
+                    var p = allProjects.FirstOrDefault(x => x.Id == entry.ProjectId);
+
+
+
+
+
+
+
+                    if (p != null) entry.ProjectName = p.DisplayName;
+
+
+
+
+
+
+
+                }
+
+
+
+
+
+
+
+            }
+
+
+
+
+
+
+
+        }
+
+
+
+
+
+
+
+    }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    private bool HasPerm(string perm) => _currentUser?.HasPermission(perm) ?? false;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    public class NotificationViewModel
+
+
+
+
+
+
+
+    {
+
+
+
+
+
+
+
+        public string ChannelId { get; set; }
+
+
+
+
+
+
+
+        public string ChannelName { get; set; }
+
+
+
+
+
+
+
+        public string SenderName { get; set; }
+
+
+
+
+
+
+
+        public string Content { get; set; }
+
+
+
+
+
+
+
+        public DateTime SentAt { get; set; }
+        public string Type { get; set; } = "Chat";
+        public string EmailId { get; set; } = "";
+        public string FolderPath { get; set; } = "";
+    }
+
+    private async Task OpenEventDialog(CalendarEvent evt)
+    {
+        var parameters = new DialogParameters { ["Event"] = evt, ["IsNew"] = false };
+        var dialog = await DialogService.ShowAsync<CalendarEventDialog>("Event Details", parameters);
+        var result = await dialog.Result;
+
+        if (result != null && !result.Canceled)
+        {
+            var resultEvent = result.Data as CalendarEvent;
+
+            if (resultEvent == null) // Deleted
+            {
+                Db.CalendarEvents.Delete(evt.Id);
+                Snackbar.Add("Event deleted", Severity.Success);
+            }
+            else // Saved
+            {
+                Db.CalendarEvents.Save(resultEvent);
+                Snackbar.Add("Event saved", Severity.Success);
+            }
+            LoadWeekAgenda();
+            StateHasChanged();
+        }
+    }
+}
+

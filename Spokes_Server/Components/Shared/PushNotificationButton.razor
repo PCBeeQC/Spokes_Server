@@ -1,0 +1,185 @@
+@using Spokes_Server.Core.Data
+@using Microsoft.AspNetCore.Components.Authorization
+@using System.Security.Claims
+@inject IJSRuntime JS
+@inject ISnackbar Snackbar
+@inject Database Db
+@inject AuthenticationStateProvider AuthStateProvider
+
+<MudTooltip Text="@GetTooltipText()">
+    <MudIconButton Icon="@GetIcon()" Color="Color.Inherit" OnClick="HandleClick"
+        Disabled="@(!IsSupported || !IsConfigured || IsLoading)" />
+</MudTooltip>
+
+@code {
+    private bool IsSupported = false;
+    private string UnsupportedReason = "";
+    private bool IsConfigured = false;
+    private bool IsSubscribed = false;
+    private bool IsLoading = false;
+    private bool IsInitialized = false;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            await LoadStatus();
+            IsInitialized = true;
+            StateHasChanged();
+        }
+    }
+
+    private async Task LoadStatus()
+    {
+        try
+        {
+            // Check browser support
+            IsSupported = await JS.InvokeAsync<bool>("pushNotifications.isSupported");
+
+            if (!IsSupported)
+            {
+                UnsupportedReason = await JS.InvokeAsync<string>("pushNotifications.getSupportReason");
+            }
+
+            if (IsSupported)
+            {
+                // Check if VAPID is configured
+                var profile = Db.CompanyProfile.Get();
+                IsConfigured = !string.IsNullOrEmpty(profile?.VapidPublicKey);
+
+                if (IsConfigured)
+                {
+                    // Check existing subscription
+                    var existingSub = await JS.InvokeAsync<Dictionary<string, object>?>("pushNotifications.getExistingSubscription");
+                    IsSubscribed = existingSub != null && existingSub.ContainsKey("endpoint");
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error loading push status: {ex.Message}");
+            UnsupportedReason = ex.Message;
+        }
+    }
+
+    private string GetIcon()
+    {
+        if (!IsInitialized) return Icons.Material.Outlined.Notifications;
+        if (!IsSupported || !IsConfigured) return Icons.Material.Outlined.NotificationsOff;
+        if (IsSubscribed) return Icons.Material.Filled.NotificationsActive;
+        return Icons.Material.Outlined.Notifications;
+    }
+
+    private string GetTooltipText()
+    {
+        if (!IsSupported) return $"Push notifications not supported: {UnsupportedReason}";
+        if (!IsConfigured) return "Push notifications not configured";
+        if (IsSubscribed) return "Push notifications enabled";
+        return "Enable push notifications";
+    }
+
+    private async Task HandleClick()
+    {
+        if (IsSubscribed)
+        {
+            if (IsLoading) return;
+            IsLoading = true;
+            StateHasChanged();
+
+            try
+            {
+                var result = await JS.InvokeAsync<Dictionary<string, object>>("pushNotifications.unsubscribeAndNotifyServer");
+                var success = result?.GetValueOrDefault("success")?.ToString() == "True";
+
+                if (success)
+                {
+                    IsSubscribed = false;
+                    Snackbar.Add("Push notifications disabled.", Severity.Success);
+                }
+                else
+                {
+                    var error = result?.GetValueOrDefault("error")?.ToString() ?? "Unknown error";
+                    Snackbar.Add($"Failed to disable notifications: {error}", Severity.Error);
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error disabling notifications: {ex.Message}");
+                Snackbar.Add("Error disabling notifications.", Severity.Error);
+            }
+            finally
+            {
+                IsLoading = false;
+                StateHasChanged();
+            }
+            return;
+        }
+
+        if (IsLoading) return;
+        IsLoading = true;
+        StateHasChanged();
+
+        try
+        {
+            // 1. Request permission
+            var permResult = await JS.InvokeAsync<Dictionary<string, object>>("pushNotifications.requestPermission");
+            var permission = permResult?.GetValueOrDefault("permission")?.ToString() ?? "denied";
+
+            if (permission != "granted")
+            {
+                Snackbar.Add("Notification permission was denied. Enable notifications in browser settings.", Severity.Warning);
+                return;
+            }
+
+            // 2. Register service worker
+            var swResult = await JS.InvokeAsync<Dictionary<string, object>>("pushNotifications.registerServiceWorker");
+            var swSuccess = swResult?.GetValueOrDefault("success")?.ToString() == "True";
+
+            if (!swSuccess)
+            {
+                Snackbar.Add("Failed to register service worker.", Severity.Error);
+                return;
+            }
+
+            // 3. Get VAPID public key
+            var profile = Db.CompanyProfile.Get();
+            if (string.IsNullOrEmpty(profile?.VapidPublicKey))
+            {
+                Snackbar.Add("Push notifications not configured. Contact an administrator.", Severity.Error);
+                return;
+            }
+
+            // 4. Subscribe to push
+            var subscription = await JS.InvokeAsync<Dictionary<string, object>>("pushNotifications.subscribe",
+            profile.VapidPublicKey);
+
+            if (subscription == null || !subscription.ContainsKey("endpoint"))
+            {
+                Snackbar.Add("Failed to subscribe to push notifications.", Severity.Error);
+                return;
+            }
+
+            // 5. Send subscription to server
+            var result = await JS.InvokeAsync<bool>("pushNotifications.sendSubscriptionToServer", subscription);
+            if (result)
+            {
+                IsSubscribed = true;
+                Snackbar.Add("Push notifications enabled! You'll receive alerts for new messages.", Severity.Success);
+            }
+            else
+            {
+                Snackbar.Add("Failed to save subscription.", Severity.Error);
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error enabling notifications: {ex.Message}");
+            Snackbar.Add("Error enabling notifications.", Severity.Error);
+        }
+        finally
+        {
+            IsLoading = false;
+            StateHasChanged();
+        }
+    }
+}

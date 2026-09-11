@@ -1,0 +1,168 @@
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Models.HR
+@using MudBlazor
+
+<MudDialog>
+    <DialogContent>
+        <MudStack Spacing="3">
+            <MudTextField @bind-Value="_property.Name" Label="Property Name" Variant="Variant.Outlined"
+                AutoFocus="true" />
+
+            <MudSelect @bind-Value="_property.Type" Label="Type" Variant="Variant.Outlined" Disabled="@_isEditMode">
+                @foreach (var type in Enum.GetValues<BoardPropertyType>())
+                {
+                    <MudSelectItem Value="@type">@type</MudSelectItem>
+                }
+            </MudSelect>
+
+            @if (_property.Type == BoardPropertyType.Select || _property.Type == BoardPropertyType.MultiSelect)
+            {
+                <MudText Typo="Typo.subtitle2" Class="mt-2">Options</MudText>
+                <MudPaper Class="pa-2 bg-gray-50" Outlined="true" MaxHeight="200px" Style="overflow-y: auto;">
+                    <MudStack Spacing="1">
+                        @foreach (var opt in _property.Options)
+                        {
+                            <div class="d-flex align-center gap-2">
+                                <MudMenu AnchorOrigin="Origin.BottomLeft" TransformOrigin="Origin.TopLeft" Dense="true"
+                                    MaxHeight="200">
+                                    <ActivatorContent>
+                                        <MudIconButton Icon="@Icons.Material.Filled.Circle" Size="Size.Small"
+                                            Style="@($"color: {GetColor(opt.Color)}")" />
+                                    </ActivatorContent>
+                                    <ChildContent>
+                                        @foreach (var c in _colors)
+                                        {
+                                            <MudMenuItem OnClick="@(() => opt.Color = c)">
+                                                <div class="d-flex align-center gap-2">
+                                                    <MudIcon Icon="@Icons.Material.Filled.Circle" Size="Size.Small"
+                                                        Style="@($"color: {GetColor(c)}")" />
+                                                    <MudText Typo="Typo.body2">@c</MudText>
+                                                </div>
+                                            </MudMenuItem>
+                                        }
+                                    </ChildContent>
+                                </MudMenu>
+
+                                <MudText Class="flex-grow-1">@opt.Name</MudText>
+                                <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small"
+                                    OnClick="@(() => RemoveOption(opt))" />
+                            </div>
+                        }
+
+                        <div class="d-flex gap-2 mt-2 align-center">
+                            <MudMenu AnchorOrigin="Origin.BottomLeft" TransformOrigin="Origin.TopLeft" Dense="true"
+                                MaxHeight="200">
+                                <ActivatorContent>
+                                    <MudIconButton Icon="@Icons.Material.Filled.Circle" Size="Size.Small"
+                                        Style="@($"color: {GetColor(_newOptionColor)}")" />
+                                </ActivatorContent>
+                                <ChildContent>
+                                    @foreach (var c in _colors)
+                                    {
+                                        <MudMenuItem OnClick="@(() => _newOptionColor = c)">
+                                            <div class="d-flex align-center gap-2">
+                                                <MudIcon Icon="@Icons.Material.Filled.Circle" Size="Size.Small"
+                                                    Style="@($"color: {GetColor(c)}")" />
+                                                <MudText Typo="Typo.body2">@c</MudText>
+                                            </div>
+                                        </MudMenuItem>
+                                    }
+                                </ChildContent>
+                            </MudMenu>
+
+                            <MudTextField @bind-Value="_newOptionName" Placeholder="New Option" Variant="Variant.Outlined"
+                                Margin="Margin.Dense" />
+                            <MudIconButton Icon="@Icons.Material.Filled.Add" Color="Color.Primary" OnClick="AddOption"
+                                Disabled="@string.IsNullOrWhiteSpace(_newOptionName)" />
+                        </div>
+                    </MudStack>
+                </MudPaper>
+            }
+        </MudStack>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+        <MudButton Color="Color.Primary" OnClick="Submit" Disabled="@string.IsNullOrEmpty(_property.Name)">Save
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
+
+    [Parameter] public BoardProperty? Property { get; set; }
+
+    private BoardProperty _property = new();
+    private bool _isEditMode = false;
+    private string _newOptionName = "";
+
+    private string _newOptionColor = "gray";
+    private string[] _colors = new[] { "gray", "brown", "orange", "yellow", "green", "blue", "purple", "pink", "red" };
+
+    protected override void OnInitialized()
+    {
+        if (Property != null)
+        {
+            // Clone to avoid direct mutation before save
+            _property = new BoardProperty
+            {
+                Id = Property.Id,
+                Name = Property.Name,
+                Type = Property.Type,
+                Options = Property.Options.Select(o => new BoardPropertyOption { Id = o.Id, Name = o.Name, Color = o.Color }).ToList()
+            };
+            _isEditMode = true;
+        }
+    }
+
+    void AddOption()
+    {
+        if (!string.IsNullOrWhiteSpace(_newOptionName))
+        {
+            _property.Options.Add(new BoardPropertyOption
+            {
+                Name = _newOptionName,
+                Color = _newOptionColor
+            });
+            _newOptionName = "";
+            _newOptionColor = GetRandomColor(); // Reset to random? Or "gray"?
+        }
+    }
+
+    void RemoveOption(BoardPropertyOption opt)
+    {
+        _property.Options.Remove(opt);
+    }
+
+    void Submit()
+    {
+        MudDialog.Close(DialogResult.Ok(_property));
+    }
+
+    void Cancel() => MudDialog.Cancel();
+
+    string GetRandomColor()
+    {
+        return _colors[new Random().Next(_colors.Length)];
+    }
+
+    string GetColor(string colorName)
+    {
+        return colorName switch
+        {
+            "gray" => "var(--mud-palette-grey)",
+            "brown" => "#795548",
+            "orange" => "var(--mud-palette-warning)",
+            "yellow" => "#FBC02D",
+            "green" => "var(--mud-palette-success)",
+            "blue" => "var(--mud-palette-info)",
+            "purple" => "#9C27B0",
+            "pink" => "#E91E63",
+            "red" => "var(--mud-palette-error)",
+            _ => "var(--mud-palette-text-primary)"
+        };
+    }
+}

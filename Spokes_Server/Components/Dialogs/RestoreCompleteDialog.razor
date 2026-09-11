@@ -1,0 +1,17 @@
+@using MudBlazor
+<MudDialog>
+    <DialogContent>
+        <div class="d-flex flex-column align-center text-center px-4 py-6">
+            <MudIcon Icon="@Icons.Material.Filled.CheckCircle" Color="Color.Success" Style="font-size: 64px;" Class="mb-4" />
+            <MudText Typo="Typo.h5" GutterBottom="true">Restore Complete</MudText>
+            <MudText Typo="Typo.body1" Color="Color.Secondary">The system has been restored successfully.</MudText>
+        </div>
+    </DialogContent>
+    <DialogActions>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="Close" Class="mx-auto mt-2 mb-4">OK</MudButton>
+    </DialogActions>
+</MudDialog>
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
+    private void Close() => MudDialog.Close(DialogResult.Ok(true));
+}

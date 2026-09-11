@@ -1,0 +1,79 @@
+@inject Spokes_Server.Core.Services.Security.FileTokenService FileTokens
+
+<div class="attachment-video" style="position: relative; max-width: 100%; max-height: 500px; display: inline-block;">
+    @if (!_isPlaying)
+    {
+        <div style="position: relative; cursor: pointer; display: inline-block;" @onclick="PlayVideo">
+            @if (Attachment.HasServerThumbnail)
+            {
+                <img src="@GetThumbnailTokenUrl()" alt="@Attachment.FileName"
+                    style="max-width: 100%; max-height: 500px; width: auto; height: auto; border-radius: 8px; display: block; object-fit: contain;" />
+            }
+            else
+            {
+                <MudPaper Elevation="1" Class="d-flex align-center justify-center" Style="width: 300px; height: 200px; max-width: 100%; border-radius: 8px; background: var(--mud-palette-background-grey);">
+                    <MudIcon Icon="@Icons.Material.Filled.VideoFile" Size="Size.Large" Color="Color.Secondary" />
+                </MudPaper>
+            }
+            <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: rgba(0,0,0,0.5); border-radius: 50%; padding: 12px; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 12px rgba(0,0,0,0.3);">
+                <MudIcon Icon="@Icons.Material.Filled.PlayArrow" Size="Size.Large" Style="color: white;" />
+            </div>
+        </div>
+    }
+    else
+    {
+        <video playsinline webkit-playsinline controls autoplay poster="@(Attachment.HasServerThumbnail ? GetThumbnailTokenUrl() : "")"
+            onerror="console.error('[VideoPlayer] Playback Error on src: ' + this.src + ' | Code: ' + (this.error ? this.error.code : 'unknown') + ' | Message: ' + (this.error ? this.error.message : 'none'));" onstalled="console.warn('[VideoPlayer] Playback stalled on src: ' + this.src);"
+            style="max-width: 100%; max-height: 500px; width: auto; height: auto; border-radius: 8px; display: block; object-fit: contain;">
+            <source src="@GetVideoTokenUrl()" type="@GetVideoMimeType()">
+            Your browser does not support the video tag.
+        </video>
+    }
+</div>
+
+@code {
+    [Parameter, EditorRequired]
+    public ChatAttachment Attachment { get; set; } = default!;
+
+    [Parameter]
+    public string CurrentUserId { get; set; } = string.Empty;
+
+    [Parameter]
+    public string ChannelId { get; set; } = string.Empty;
+
+    [Parameter]
+    public string? ChannelKey { get; set; }
+
+    private bool _isPlaying = false;
+
+    private void PlayVideo()
+    {
+        _isPlaying = true;
+    }
+
+    private string GetVideoMimeType()
+    {
+        var ext = System.IO.Path.GetExtension(Attachment.FileName).ToLowerInvariant();
+        return ext switch
+        {
+            ".mp4" => "video/mp4",
+            ".webm" => "video/webm",
+            ".ogg" => "video/ogg",
+            ".mov" => "video/quicktime",
+            _ => "video/mp4"
+        };
+    }
+
+    private string GetVideoTokenUrl()
+    {
+        var token = FileTokens.GenerateAccessToken("chat", ChannelId, Attachment.FilePath, ChannelKey);
+        return Attachment.FilePath.Contains("?") ? $"{Attachment.FilePath}&t={token}" : $"{Attachment.FilePath}?t={token}";
+    }
+
+    private string GetThumbnailTokenUrl()
+    {
+        if (!Attachment.HasServerThumbnail || string.IsNullOrEmpty(Attachment.ThumbnailUrl)) return "";
+        var token = FileTokens.GenerateAccessToken("chat", ChannelId, Attachment.ThumbnailUrl, ChannelKey);
+        return Attachment.ThumbnailUrl.Contains("?") ? $"{Attachment.ThumbnailUrl}&t={token}" : $"{Attachment.ThumbnailUrl}?t={token}";
+    }
+}

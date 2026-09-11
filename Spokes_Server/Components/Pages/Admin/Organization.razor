@@ -1,0 +1,119 @@
+@page "/organization"
+@implements IDisposable
+@using Spokes_Server.Components.Pages.Admin.Features
+@attribute [Authorize]
+@inject AuthenticationStateProvider AuthStateProvider
+@inject NavigationManager Nav
+@using Microsoft.AspNetCore.Components.Authorization
+@using Spokes_Server.Core.Constants
+@using System.Security.Claims
+
+@inject UserService UserService
+@inject Spokes_Server.Core.Services.Core.AppLabelService AppLabels
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Data
+@inject Database Db
+
+<PageTitle>Directory</PageTitle>
+
+<MudContainer MaxWidth="MaxWidth.Large" Class="mt-4 pb-4">
+    <div class="d-flex justify-space-between align-start mb-4">
+        <div>
+            <MudText Typo="Typo.h5" GutterBottom="true">@AppLabels.Company Directory</MudText>
+            <MudText Typo="Typo.body1">View @AppLabels.Employees.ToLower() and @AppLabels.Teams.ToLower().</MudText>
+        </div>
+        @if (_hasAccess && Db.SystemConfigs.Get().ProviderType == IdpType.BuiltInCasdoor)
+        {
+            <MudButton Variant="Variant.Outlined" Color="Color.Primary" StartIcon="@Icons.Material.Filled.AdminPanelSettings" Href="@($"{Db.SystemConfigs.Get().ServerPublicUrl.TrimEnd('/')}/login/spokes-org")" Target="_blank">Open Casdoor</MudButton>
+        }
+    </div>
+
+    @* Desktop and Mobile Friendly Segmented Control *@
+    <MudToggleGroup T="int" Value="activeTabIndex" ValueChanged="UpdateActiveTab" Outline="true" Delimiters="true" Rounded="true" CheckMark="false" Class="mb-6 flex-wrap" Error="false">
+        <MudToggleItem Value="0" Text="@AppLabels.Employees" Icon="@Icons.Material.Filled.People" />
+        <MudToggleItem Value="1" Text="@AppLabels.Teams" Icon="@Icons.Material.Filled.Diversity3" />
+        @if (_hasAccess)
+        {
+             @if (!IsFriendEdition)
+             {
+                 <MudToggleItem Value="2" Text="Org Chart" Icon="@Icons.Material.Filled.AccountTree" />
+             }
+        }
+    </MudToggleGroup>
+
+    @* Content Area *@
+    @if (activeTabIndex == 0)
+    {
+        <EmployeesList />
+    }
+    else if (activeTabIndex == 1)
+    {
+        <TeamsList />
+    }
+    else if (activeTabIndex == 2 && _hasAccess && !IsFriendEdition)
+    {
+        <OrgTree />
+    }
+
+</MudContainer>
+
+
+@code {
+    [SupplyParameterFromQuery] public string? Tab { get; set; }
+    private bool IsFriendEdition => Db.CompanyProfile.Get()?.Edition == "Family";
+    private int activeTabIndex = 0;
+    private bool _hasAccess = false;
+
+    protected override void OnParametersSet()
+    {
+        if (!string.IsNullOrEmpty(Tab))
+        {
+            activeTabIndex = Tab.ToLower() switch
+            {
+                "employees" => 0,
+                "teams" => 1,
+                "chart" => 2,
+                _ => 0
+            };
+        }
+    }
+
+    private bool _isDisposed;
+
+    public void Dispose()
+    {
+        _isDisposed = true;
+    }
+
+    private void UpdateActiveTab(int index)
+    {
+        if (_isDisposed) return;
+
+        activeTabIndex = index;
+
+        if (!Nav.Uri.Contains("/organization", StringComparison.OrdinalIgnoreCase))
+            return;
+
+        var tabName = index switch
+        {
+            0 => "employees",
+            1 => "teams",
+            2 => "chart",
+            _ => "employees"
+        };
+        
+        try
+        {
+            Nav.NavigateTo(Nav.GetUriWithQueryParameter("tab", tabName), replace: true);
+        }
+        catch (Microsoft.AspNetCore.Components.NavigationException)
+        {
+        }
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        var emp = await UserService.GetEmployeeAsync();
+        _hasAccess = emp != null && (emp.IsAdmin || emp.HasPermission(AppPermissions.Admin.ManageUsers));
+    }
+}

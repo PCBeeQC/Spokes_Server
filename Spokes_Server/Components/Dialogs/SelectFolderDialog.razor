@@ -1,0 +1,133 @@
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Data
+@using MudBlazor
+@inject Database Db
+@inject UserService UserService
+
+<MudDialog>
+    <DialogContent>
+        @if (Folders == null)
+        {
+            <MudProgressCircular Indeterminate="true" Class="my-4 mx-auto" Style="display: block;" />
+        }
+        else if (!Folders.Any())
+        {
+            <MudText Color="Color.Secondary" Class="my-4 text-center">No other folders available.</MudText>
+        }
+        else
+        {
+            <MudTreeView T="EmailFolder" Items="TreeItems" SelectedValue="SelectedFolder"
+                SelectedValueChanged="OnFolderSelected" Hover="true" Width="100%" Class="custom-scrollbar"
+                Style="max-height: 400px; overflow-y: auto;">
+                <ItemTemplate Context="treeItem">
+                    <MudTreeViewItem @bind-Expanded="@treeItem.Expanded" Items="@treeItem.Children" Value="@treeItem.Value">
+                        <BodyContent>
+                            <div class="d-flex align-center gap-3 w-100 pa-1">
+                                <MudIcon Icon="@GetFolderIcon(treeItem.Value)"
+                                    Color="@(SelectedFolder?.Id == treeItem.Value.Id ? Color.Primary : Color.Default)"
+                                    Size="Size.Small" />
+                                <MudText Typo="Typo.body2"
+                                    Color="@(SelectedFolder?.Id == treeItem.Value.Id ? Color.Primary : Color.Default)">
+                                    @treeItem.Value.Name</MudText>
+                            </div>
+                        </BodyContent>
+                    </MudTreeViewItem>
+                </ItemTemplate>
+            </MudTreeView>
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Close">Close</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="Submit" Disabled="@(SelectedFolder == null)">
+            Move</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = null!;
+
+    [Parameter] public string CurrentFolderPath { get; set; } = "";
+
+    private List<EmailFolder>? Folders;
+    private EmailFolder? SelectedFolder;
+    private Employee? CurrentEmployee;
+
+    private List<TreeItemData<EmailFolder>> TreeItems = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        CurrentEmployee = await UserService.GetEmployeeAsync();
+        if (CurrentEmployee != null)
+        {
+            // Load folders, filtering out the current one and Drafts
+            var allFolders = Db.EmailFolders.GetByEmployee(CurrentEmployee.Id);
+            Folders = allFolders.Where(f => !f.IsDrafts && f.Path != CurrentFolderPath)
+            .OrderBy(f => f.Name)
+            .ToList();
+
+            TreeItems = BuildTree(Folders);
+        }
+    }
+
+    private List<TreeItemData<EmailFolder>> BuildTree(List<EmailFolder> folders)
+    {
+        var allPaths = new HashSet<string>(folders.Select(f => f.Path));
+        var roots = folders.Where(f =>
+        string.IsNullOrEmpty(f.ParentPath) || !allPaths.Contains(f.ParentPath)
+        ).OrderBy(f => f.Name).ToList();
+        return roots.Select(r => BuildNode(r, folders)).ToList();
+    }
+
+    private TreeItemData<EmailFolder> BuildNode(EmailFolder folder, List<EmailFolder> allFolders)
+    {
+        var children = allFolders.Where(f => f.ParentPath == folder.Path)
+        .OrderBy(f => f.Name).ToList();
+        return new EmailFolderTreeItem(folder)
+            {
+                Text = folder.Name,
+                Icon = GetFolderIcon(folder),
+                Expanded = true,
+                Children = children.Select(c => BuildNode(c, allFolders)).ToList()
+            };
+    }
+
+    public class EmailFolderTreeItem : TreeItemData<EmailFolder>
+    {
+        public EmailFolderTreeItem(EmailFolder folder) : base(folder) { }
+    }
+
+
+
+    private void OnFolderSelected(EmailFolder folder)
+    {
+        SelectedFolder = folder;
+    }
+
+    private void Close()
+    {
+        MudDialog.Cancel();
+    }
+
+    private void Submit()
+    {
+        if (SelectedFolder != null)
+        {
+            MudDialog.Close(DialogResult.Ok(SelectedFolder.Path));
+        }
+    }
+
+    private string GetFolderIcon(EmailFolder folder)
+    {
+        if (folder.IsInbox) return Icons.Material.Filled.Inbox;
+        if (folder.IsSent) return Icons.Material.Filled.Send;
+        if (folder.IsTrash) return Icons.Material.Filled.Delete;
+        if (folder.IsArchive) return Icons.Material.Filled.Inventory2;
+        if (folder.IsJunk) return Icons.Material.Filled.Report;
+        return Icons.Material.Filled.Folder;
+    }
+}
+

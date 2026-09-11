@@ -1,0 +1,29 @@
+.git/
+.vscode/
+.vs/
+.github/
+.desloppify/
+.agent/
+
+# Build results
+**/bin/
+**/obj/
+
+# Local configuration and secrets
+**/.env
+**/*.env
+**/appsettings.Development.json
+**/appsettings.Local.json
+**/*.user
+**/*.userprefs
+
+# Databases
+**/*.db
+**/*.sqlite
+**/*.db-shm
+**/*.db-wal
+**/*.mdf
+**/*.ldf
+
+# macOS
+**/.DS_Store

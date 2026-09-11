@@ -1,0 +1,32 @@
+@page "/banned"
+@layout Spokes_Server.Components.Layout.LoginLayout
+@using MudBlazor
+@using Spokes_Server.Core.Services.Core
+@inject NavigationManager Nav
+@inject UserService UserService
+
+<div class="d-flex flex-column align-center justify-center" style="height: 100vh; width: 100vw; background-color: var(--mud-palette-background);">
+    <MudIcon Icon="@Icons.Material.Filled.Block" Color="Color.Error" Style="font-size: 6rem;" Class="mb-4" />
+    <MudText Typo="Typo.h4" GutterBottom="true" Align="Align.Center">Account Banned</MudText>
+    <MudText Typo="Typo.body1" Align="Align.Center" Class="mb-6">
+        You have been banned from this server. Please contact a moderator if you believe this is an error.
+    </MudText>
+    
+    <form action="logout" method="post">
+        <MudButton ButtonType="ButtonType.Submit" Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Logout">
+            Sign Out
+        </MudButton>
+        <AntiforgeryToken />
+    </form>
+</div>
+
+@code {
+    protected override async Task OnInitializedAsync()
+    {
+        var currentUser = await UserService.GetEmployeeAsync();
+        if (currentUser == null || !currentUser.IsBanned)
+        {
+            Nav.NavigateTo("/", replace: true);
+        }
+    }
+}

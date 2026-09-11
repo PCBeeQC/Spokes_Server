@@ -1,0 +1,228 @@
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Data
+@using Spokes_Server.Core.Services
+@using MudBlazor
+@inject Database Db
+@inject ISnackbar Snackbar
+@inject IJSRuntime JS
+@inject IFileService FileService
+
+<MudDialog>
+    <DialogContent>
+        <MudForm>
+            <MudGrid>
+                <!-- Title -->
+                <MudItem xs="12">
+                    <MudTextField @bind-Value="Note.Title" Label="Title" Required="true" Variant="Variant.Outlined" />
+                </MudItem>
+
+                <!-- Category -->
+                <MudItem xs="8">
+                    @if (IsAddingCategory)
+                    {
+                        <div class="d-flex align-end gap-2">
+                             <MudTextField @bind-Value="NewCategoryName" Label="New Category Name" AutoFocus="true" />
+                             <MudIconButton Icon="@Icons.Material.Filled.Check" Color="Color.Success" OnClick="SaveNewCategory" />
+                             <MudIconButton Icon="@Icons.Material.Filled.Close" Color="Color.Error" OnClick="@(() => IsAddingCategory = false)" />
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="d-flex align-end gap-2">
+                            <div class="flex-grow-1">
+                                <MudSelect T="string" @bind-Value="Note.Category" Label="Category" AnchorOrigin="Origin.BottomCenter">
+                                    @foreach (var cat in ProjectCategories)
+                                    {
+                                        <MudSelectItem Value="@cat">@cat</MudSelectItem>
+                                    }
+                                </MudSelect>
+                            </div>
+                            
+                            <MudTooltip Text="Category Color">
+                                <MudColorPicker Value="@GetCategoryHex()" ValueChanged="SetCategoryHex" Label="" />
+                            </MudTooltip>
+
+                            <MudTooltip Text="Add New Category">
+                                <MudIconButton Icon="@Icons.Material.Filled.Add" Color="Color.Primary" OnClick="@(() => IsAddingCategory = true)" />
+                            </MudTooltip>
+                            
+                            @if (!string.IsNullOrEmpty(Note.Category) && !DefaultCategories.Contains(Note.Category))
+                            {
+                                <MudTooltip Text="Delete this Category">
+                                    <MudIconButton Icon="@Icons.Material.Filled.Delete" Color="Color.Error" OnClick="DeleteCategory" />
+                                </MudTooltip>
+                            }
+                        </div>
+                    }
+                </MudItem>
+                
+                <!-- Date -->
+                 <MudItem xs="4">
+                     <MudDatePicker @bind-Date="Date" Label="Date" />
+                 </MudItem>
+
+                <!-- Content -->
+                <MudItem xs="12">
+                   <Spokes_Server.Components.Shared.MarkdownEditor @bind-Value="Note.Content" />
+                </MudItem>
+
+                <!-- Attachments -->
+                <MudItem xs="12">
+                    <MudText Typo="Typo.subtitle2" Class="mb-2">Attachments</MudText>
+                    
+                    @if (Note.Attachments.Any())
+                    {
+                        <MudList T="string" Dense="true">
+                            @foreach (var att in Note.Attachments)
+                            {
+                                <MudListItem Icon="@Icons.Material.Filled.AttachFile">
+                                    <div class="d-flex justify-space-between align-center" style="width:100%">
+                                        <MudLink Href="@att.FilePath" Target="_blank">
+                                            @att.FileName
+                                        </MudLink>
+                                        <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small" Color="Color.Error" 
+                                            OnClick="@(() => RemoveAttachment(att))" />
+                                    </div>
+                                </MudListItem>
+                            }
+                        </MudList>
+                    }
+
+                    <ApiFileUpload Category="projectnotes" ContextId="@Project.Id" MaximumFileCount="5"
+                                   OnUploadCompleted="HandleNotesApiUploaded"
+                                   OnUploadError='(e) => Snackbar.Add($"Upload failed: {e}", Severity.Error)'>
+                        <CustomContent>
+                             <MudButton Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.CloudUpload">
+                                Attach Files
+                            </MudButton>
+                        </CustomContent>
+                    </ApiFileUpload>
+                </MudItem>
+
+            </MudGrid>
+        </MudForm>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Close">Close</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="Submit">Save Note</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
+    [Parameter] public ProjectNote Note { get; set; } = default!;
+    [Parameter] public Project Project { get; set; } = default!;
+
+    private DateTime? Date { get => Note.Date; set { if (value.HasValue) Note.Date = value.Value; } }
+    
+    // Category Logic
+    private List<string> ProjectCategories = new();
+    private List<string> DefaultCategories = new() { "General", "Meeting", "Event", "Maintenance", "Email" };
+    private bool IsAddingCategory = false;
+    private string NewCategoryName = "";
+
+    protected override void OnInitialized()
+    {
+        if (Project.NoteCategories == null || !Project.NoteCategories.Any())
+        {
+            Project.NoteCategories = DefaultCategories.ToList();
+        }
+        if (Project.NoteCategoryColors == null)
+        {
+            Project.NoteCategoryColors = new Dictionary<string, string>();
+        }
+        ProjectCategories = Project.NoteCategories.ToList();
+    }
+
+    private MudBlazor.Utilities.MudColor GetCategoryHex()
+    {
+        if (string.IsNullOrEmpty(Note.Category)) return new MudBlazor.Utilities.MudColor("#757575");
+        
+        if (Project.NoteCategoryColors.TryGetValue(Note.Category, out var hex))
+        {
+            return new MudBlazor.Utilities.MudColor(hex);
+        }
+        
+        // Return a default color based on hash if no color is set
+        var hash = Note.Category.GetHashCode();
+        var colors = new[] { "#594AE2", "#FF4081", "#2196F3", "#00C853", "#FFAB00", "#FF5252" };
+        return new MudBlazor.Utilities.MudColor(colors[Math.Abs(hash) % colors.Length]);
+    }
+
+    private void SetCategoryHex(MudBlazor.Utilities.MudColor color)
+    {
+        if (string.IsNullOrEmpty(Note.Category)) return;
+        Project.NoteCategoryColors[Note.Category] = color.Value;
+        // Project changes are saved in Submit or implicitly when adding category, 
+        // but let's save here too to ensure color persists immediately.
+        Db.Projects.Save(Project);
+    }
+
+    private void SaveNewCategory()
+    {
+        if (!string.IsNullOrWhiteSpace(NewCategoryName))
+        {
+            if (!Project.NoteCategories.Contains(NewCategoryName))
+            {
+                Project.NoteCategories.Add(NewCategoryName);
+                // We should save the project to persist the new category
+                Db.Projects.Save(Project);
+                
+                ProjectCategories = Project.NoteCategories.ToList();
+                Note.Category = NewCategoryName;
+                Snackbar.Add("Category Added", Severity.Success);
+            }
+        }
+        IsAddingCategory = false;
+        NewCategoryName = "";
+    }
+    
+    private void DeleteCategory()
+    {
+        var catToDelete = Note.Category;
+        if (!string.IsNullOrEmpty(catToDelete) && !DefaultCategories.Contains(catToDelete))
+        {
+            Project.NoteCategories.Remove(catToDelete);
+            Db.Projects.Save(Project);
+            ProjectCategories = Project.NoteCategories.ToList();
+            Note.Category = ProjectCategories.FirstOrDefault() ?? "General";
+            Snackbar.Add($"Category '{catToDelete}' deleted", Severity.Success);
+        }
+    }
+
+    private void HandleNotesApiUploaded(List<ApiFileUpload.UploadResult> results)
+    {
+        if (results == null || results.Count == 0) return;
+        
+        foreach (var result in results)
+        {
+            try
+            {
+                Note.Attachments.Add(new NoteAttachment
+                {
+                    FileName = result.FileName,
+                    FilePath = result.FilePath,
+                    ContentType = result.ContentType
+                });
+            }
+            catch (Exception ex)
+            {
+                Snackbar.Add($"Error processing {result.FileName}: {ex.Message}", Severity.Error);
+            }
+        }
+        StateHasChanged();
+    }
+
+    private void RemoveAttachment(NoteAttachment att)
+    {
+        Note.Attachments.Remove(att);
+    }
+
+    private void Close() => MudDialog.Cancel();
+    private void Submit() => MudDialog.Close(DialogResult.Ok(Note));
+}
+

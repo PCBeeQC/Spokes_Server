@@ -1,0 +1,36 @@
+@using MudBlazor
+
+<MudPaper Elevation="0" Outlined="true" Class="pa-4 d-flex flex-column gap-2" Style="min-width: 200px; height: 100%;">
+    <div class="d-flex justify-space-between align-start">
+        <MudText Typo="Typo.subtitle2" Color="Color.Secondary">@Title</MudText>
+        <MudIcon Icon="@Icon" Color="@IconColor" Size="Size.Medium" />
+    </div>
+
+    <div class="d-flex align-end gap-2 mt-2">
+        <MudText Typo="Typo.h4" Style="font-weight: 500;">@Value</MudText>
+        @if (!string.IsNullOrEmpty(Trend))
+        {
+            <MudText Typo="Typo.caption" Color="@TrendColor" Class="mb-1">
+                @TrendIcon @Trend
+            </MudText>
+        }
+    </div>
+
+    @if (!string.IsNullOrEmpty(Subtitle))
+    {
+        <MudText Typo="Typo.caption" Color="Color.Secondary">@Subtitle</MudText>
+    }
+</MudPaper>
+
+@code {
+    [Parameter] public required string Title { get; set; }
+    [Parameter] public required string Value { get; set; }
+    [Parameter] public string? Subtitle { get; set; }
+    [Parameter] public string Icon { get; set; } = Icons.Material.Filled.Analytics;
+    [Parameter] public Color IconColor { get; set; } = Color.Primary;
+
+    [Parameter] public string? Trend { get; set; } // e.g. "+15%"
+    [Parameter] public Color TrendColor { get; set; } = Color.Success;
+
+    private string TrendIcon => Trend?.StartsWith("+") == true ? "▲" : (Trend?.StartsWith("-") == true ? "▼" : "");
+}

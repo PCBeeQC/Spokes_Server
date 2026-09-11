@@ -1,0 +1,89 @@
+@page "/business/expenses"
+@implements IDisposable
+@using Spokes_Server.Core.Constants
+@using Spokes_Server.Components.Pages.BusinessExpenses.Tabs
+@attribute [Authorize(Policy = AppPermissions.Finance.AccessAccounting)]
+@* Ideally we check granular permissions, but for now we route here if they have access.
+The NavMenu prevents navigation, and we can add imperative check if needed.
+Actually, let's stick to the convention if strict perms are needed.
+Wait, the user said "Put it under Finance.AccessAccounting".
+So I should probably check that manually or rely on NavMenu + a check here. *@
+
+<PageTitle>Forward Planning</PageTitle>
+
+<MudContainer MaxWidth="MaxWidth.ExtraLarge" Class="mt-4">
+    <MudText Typo="Typo.h4" Class="mb-4">Forward Planning</MudText>
+    <MudTabs ActivePanelIndex="activeTabIndex" ActivePanelIndexChanged="UpdateActiveTab" Elevation="0" Border="true" Outlined="true" Rounded="true" ApplyEffectsToContainer="true" TabPanelsClass="pa-4">
+        <MudTabPanel Text="Salaries & Contributions" Icon="@Icons.Material.Filled.People">
+            <SalaryTab />
+        </MudTabPanel>
+
+        <MudTabPanel Text="Recurring Costs" Icon="@Icons.Material.Filled.Autorenew">
+            <RecurringCostsTab />
+        </MudTabPanel>
+
+        <MudTabPanel Text="One-Time Expenses" Icon="@Icons.Material.Filled.ReceiptLong">
+            <OneTimeExpensesTab />
+        </MudTabPanel>
+
+        <MudTabPanel Text="Cost Estimator" Icon="@Icons.Material.Filled.PieChart">
+            <CostEstimatorTab />
+        </MudTabPanel>
+    </MudTabs>
+</MudContainer>
+
+@code {
+    // We could add an OnInitialized check for permissions here to redirect if needed.
+    [Inject] NavigationManager Nav { get; set; }
+    [SupplyParameterFromQuery] public string? Tab { get; set; }
+    private int activeTabIndex = 0;
+
+    protected override void OnParametersSet()
+    {
+        if (!string.IsNullOrEmpty(Tab))
+        {
+            activeTabIndex = Tab.ToLower() switch
+            {
+                "salaries" => 0,
+                "recurring" => 1,
+                "one-time" => 2,
+                "estimator" => 3,
+                _ => 0
+            };
+        }
+    }
+
+    private bool _isDisposed;
+
+    public void Dispose()
+    {
+        _isDisposed = true;
+    }
+
+    private void UpdateActiveTab(int index)
+    {
+        if (_isDisposed) return;
+
+        activeTabIndex = index;
+
+        if (!Nav.Uri.Contains("/business/expenses", StringComparison.OrdinalIgnoreCase))
+            return;
+
+        var tabName = index switch
+        {
+            0 => "salaries",
+            1 => "recurring",
+            2 => "one-time",
+            3 => "estimator",
+            _ => "salaries"
+        };
+        
+        try
+        {
+            Nav.NavigateTo(Nav.GetUriWithQueryParameter("tab", tabName), replace: true);
+        }
+        catch (Microsoft.AspNetCore.Components.NavigationException)
+        {
+        }
+    }
+}

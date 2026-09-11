@@ -1,0 +1,1031 @@
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Data
+@using MudBlazor
+@inject Database Db
+@inject ISnackbar Snackbar
+
+<MudDialog>
+    <DialogContent>
+        <MudForm>
+            <MudGrid Class="mb-4">
+                <MudItem xs="3">
+                    <MudTextField @bind-Value="Invoice.InvoiceNumber" Label="Invoice #" Required="true" ReadOnly="true"
+                        Variant="Variant.Outlined" Margin="Margin.Dense" />
+                </MudItem>
+                <MudItem xs="3">
+                    <MudDatePicker @bind-Date="Date" Label="Issue Date" Variant="Variant.Outlined"
+                        Margin="Margin.Dense" />
+                </MudItem>
+                <MudItem xs="3">
+                    <MudDatePicker @bind-Date="DueDate" Label="Due Date" Variant="Variant.Outlined"
+                        Margin="Margin.Dense" />
+                </MudItem>
+                <MudItem xs="3">
+                    <MudSelect @bind-Value="Invoice.TemplateId" Label="Document Template" Variant="Variant.Outlined" Margin="Margin.Dense"
+                        HelperText="Leave empty to use default">
+                        <MudSelectItem Value="@((string?)null)">Default</MudSelectItem>
+                        @foreach (var t in Templates)
+                        {
+                            <MudSelectItem Value="@t.Id">@t.Name</MudSelectItem>
+                        }
+                    </MudSelect>
+                </MudItem>
+                <MudItem xs="12">
+                    <MudTextField @bind-Value="Invoice.Note" Label="Description / Memo" Variant="Variant.Outlined"
+                        Margin="Margin.Dense" Lines="1" />
+                </MudItem>
+            </MudGrid>
+
+            <MudTabs Elevation="2" Rounded="true" ApplyEffectsToContainer="true" TabPanelsClass="pa-4">
+
+                <!-- TIME / LABOR -->
+                <MudTabPanel Text="Time / Labor" Icon="@Icons.Material.Filled.AccessTime">
+                    @if (LaborGroups.Any())
+                    {
+                        <MudText Typo="Typo.subtitle2" Class="mb-2">Unbilled Project Time</MudText>
+                        <MudTable Items="@LaborGroups" Hover="true" Dense="true" Elevation="0" Outlined="true" Class="mb-4">
+                            <HeaderContent>
+                                <MudTh>Project</MudTh>
+                                <MudTh>Task</MudTh>
+                                <MudTh>Available</MudTh>
+                                <MudTh>Rate</MudTh>
+                                <MudTh>Bill Hours</MudTh>
+                                <MudTh>Amount</MudTh>
+                                <MudTh></MudTh>
+                            </HeaderContent>
+                            <RowTemplate>
+                                <MudTd><MudText Typo="Typo.caption">@context.ProjectName</MudText></MudTd>
+                                <MudTd>@context.TaskName : @context.SubTaskName</MudTd>
+                                <MudTd>@context.AvailableHours.ToString("N1")</MudTd>
+                                <MudTd>@context.Rate.ToString("C")</MudTd>
+                                <MudTd>
+                                    <MudNumericField @bind-Value="context.HoursToBill" Min="0" Max="@context.AvailableHours" Margin="Margin.Dense" Variant="Variant.Outlined" Step="0.5M" />
+                                </MudTd>
+                                <MudTd><b>@((context.HoursToBill * context.Rate).ToString("C"))</b></MudTd>
+                                <MudTd>
+                                    <MudIconButton Icon="@Icons.Material.Filled.Add" Color="Color.Primary" Size="Size.Small" OnClick="@(() => context.HoursToBill = context.AvailableHours)" Title="Add all available hours" />
+                                </MudTd>
+                            </RowTemplate>
+                        </MudTable>
+                    }
+
+                    <MudText Typo="Typo.subtitle2" Class="mb-2">Custom Labor Lines</MudText>
+                    <MudTable Items="@CustomLaborLines" Dense="true" Hover="true" Elevation="0" Outlined="true">
+                        <HeaderContent>
+                            <MudTh>Description</MudTh>
+                            <MudTh Style="width: 100px;">Hrs</MudTh>
+                            <MudTh Style="width: 100px;">Rate</MudTh>
+                            <MudTh Style="width: 130px;">Total</MudTh>
+                            <MudTh Style="width: 60px;"></MudTh>
+                        </HeaderContent>
+                        <RowTemplate>
+                            <MudTd>
+                                <MudTextField @bind-Value="context.Description" Margin="Margin.Dense" DisableUnderLine="true" Placeholder="Role/Task detail..." />
+                            </MudTd>
+                            <MudTd>
+                                <MudNumericField @bind-Value="context.Quantity" Margin="Margin.Dense" HideSpinButtons="true" DisableUnderLine="true" />
+                            </MudTd>
+                            <MudTd>
+                                <MudNumericField @bind-Value="context.UnitPrice" Format="N2" Margin="Margin.Dense" HideSpinButtons="true" DisableUnderLine="true" />
+                            </MudTd>
+                            <MudTd>@context.Total.ToString("C")</MudTd>
+                            <MudTd>
+                                <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small" Color="Color.Error" OnClick="@(() => CustomLaborLines.Remove(context))" />
+                            </MudTd>
+                        </RowTemplate>
+                        <FooterContent>
+                            <MudTd colspan="5">
+                                <MudButton StartIcon="@Icons.Material.Filled.Add" OnClick="@(() => CustomLaborLines.Add(new InvoiceLine { Type = "Labor", Description = "Custom Labor" }))" Size="Size.Small" Color="Color.Primary">Add Custom Labor</MudButton>
+                            </MudTd>
+                        </FooterContent>
+                    </MudTable>
+                </MudTabPanel>
+
+                <!-- EXPENSES / HARDWARE -->
+                <MudTabPanel Text="Expenses / Hardware" Icon="@Icons.Material.Filled.Devices">
+                    @if (UnbilledItems.Any())
+                    {
+                        <MudText Typo="Typo.subtitle2" Class="mb-2">Unbilled Project Expenses & POs</MudText>
+                        <MudTable Items="@UnbilledItems" MultiSelection="true" @bind-SelectedItems="SelectedItems" Dense="true" Hover="true" Elevation="0" Outlined="true" Class="mb-4">
+                            <HeaderContent>
+                                <MudTh>Project</MudTh>
+                                <MudTh>Date</MudTh>
+                                <MudTh>Description</MudTh>
+                                <MudTh>Cost</MudTh>
+                                <MudTh>Total (W/ Markup)</MudTh>
+                            </HeaderContent>
+                            <RowTemplate>
+                                <MudTd><MudText Typo="Typo.caption">@context.ProjectName</MudText></MudTd>
+                                <MudTd>@context.Date.ToShortDateString()</MudTd>
+                                <MudTd>@context.Description</MudTd>
+                                <MudTd>@context.Cost.ToString("C")</MudTd>
+                                <MudTd>@context.Total.ToString("C")</MudTd>
+                            </RowTemplate>
+                        </MudTable>
+                    }
+
+                    <MudText Typo="Typo.subtitle2" Class="mb-2">Custom Hardware & Items</MudText>
+                    <MudTable Items="@CustomMaterialLines" Dense="true" Hover="true" Elevation="0" Outlined="true">
+                        <HeaderContent>
+                            <MudTh>Description</MudTh>
+                            <MudTh Style="width: 150px;">Cost</MudTh>
+                            <MudTh Style="width: 120px;">Markup %</MudTh>
+                            <MudTh Style="width: 150px;">Price</MudTh>
+                            <MudTh Style="width: 100px;">Qty</MudTh>
+                            <MudTh Style="width: 150px;">Total</MudTh>
+                            <MudTh Style="width: 60px;"></MudTh>
+                        </HeaderContent>
+                        <RowTemplate>
+                            <MudTd>
+                                <MudTextField @bind-Value="context.Description" Margin="Margin.Dense" DisableUnderLine="true" Placeholder="Item Name" />
+                            </MudTd>
+                            <MudTd>
+                                <MudNumericField Value="@context.OriginalUnitCost" ValueChanged="@((decimal v) => UpdateMaterialCost(context, v))" Format="N2" Margin="Margin.Dense" HideSpinButtons="true" DisableUnderLine="true" />
+                            </MudTd>
+                            <MudTd>
+                                <MudNumericField Value="@(context.MarkupPercentage * 100)" ValueChanged="@((decimal v) => UpdateMaterialMarkup(context, v))" Format="N1" Margin="Margin.Dense" HideSpinButtons="true" DisableUnderLine="true" />
+                            </MudTd>
+                            <MudTd>
+                                <MudNumericField Value="@context.UnitPrice" ValueChanged="@((decimal v) => UpdateMaterialPrice(context, v))" Format="N2" Margin="Margin.Dense" HideSpinButtons="true" DisableUnderLine="true" />
+                            </MudTd>
+                            <MudTd>
+                                <MudNumericField @bind-Value="context.Quantity" Format="N0" Margin="Margin.Dense" HideSpinButtons="true" DisableUnderLine="true" />
+                            </MudTd>
+                            <MudTd>@context.Total.ToString("C")</MudTd>
+                            <MudTd>
+                                <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small" Color="Color.Error" OnClick="@(() => CustomMaterialLines.Remove(context))" />
+                            </MudTd>
+                        </RowTemplate>
+                        <FooterContent>
+                            <MudTd colspan="7">
+                                <MudButton StartIcon="@Icons.Material.Filled.Add" OnClick="@(() => CustomMaterialLines.Add(new InvoiceLine { Type = "Material", Quantity = 1, MarkupPercentage = 0.15m }))" Size="Size.Small" Color="Color.Primary">Add Custom Item</MudButton>
+                            </MudTd>
+                        </FooterContent>
+                    </MudTable>
+                </MudTabPanel>
+
+                <!-- QUOTES & MILESTONES -->
+                <MudTabPanel Text="Quotes & Milestones" Icon="@Icons.Material.Filled.AssignmentTurnedIn">
+                    @if (!AvailableTerms.Any() && !AcceptedQuotes.Any())
+                    {
+                        <MudAlert Severity="Severity.Info">No unbilled milestones or quote items available.</MudAlert>
+                    }
+                    else
+                    {
+                        @if (AvailableTerms.Any())
+                        {
+                            <MudText Typo="Typo.subtitle2" Class="mb-2 mt-2">Unbilled Milestones</MudText>
+                            <MudTable Items="@AvailableTerms" MultiSelection="true" @bind-SelectedItems="SelectedTerms" Hover="true" Dense="true" Elevation="0" Outlined="true" Class="mb-4">
+                                <HeaderContent>
+                                    <MudTh>Description</MudTh>
+                                    <MudTh>%</MudTh>
+                                    <MudTh>Quote Amount (Inc. Tax)</MudTh>
+                                    <MudTh>Pre-Tax (Invoice)</MudTh>
+                                </HeaderContent>
+                                <RowTemplate>
+                                    <MudTd>
+                                        <MudTextField @bind-Value="context.InvoiceDescription" Margin="Margin.Dense" DisableUnderLine="true" />
+                                    </MudTd>
+                                    <MudTd>@context.Term.Percentage%</MudTd>
+                                    <MudTd>@context.Term.Amount.ToString("C")</MudTd>
+                                    <MudTd><b>@context.PreTaxAmount.ToString("C")</b></MudTd>
+                                </RowTemplate>
+                            </MudTable>
+                        }
+
+                        @foreach (var quote in AcceptedQuotes)
+                        {
+                            if (quote.LaborItems.Any() || quote.ItemRows.Any())
+                            {
+                                <MudText Typo="Typo.subtitle1" Color="Color.Primary" Class="mt-4 mb-2"><b>Quote #@quote.QuoteNumber: @quote.Title</b></MudText>
+                            }
+
+                            if (quote.LaborItems.Any())
+                            {
+                                <MudText Typo="Typo.body2">Labor Items</MudText>
+                                <MudTable Items="@quote.LaborItems" MultiSelection="true" SelectedItems="@GetSelectedLaborForQuote(quote.Id)" SelectedItemsChanged="@((HashSet<QuoteLaborItem> items) => UpdateSelectedLabor(quote.Id, items))" Hover="true" Dense="true" Elevation="0" Outlined="true" Class="mb-2">
+                                    <HeaderContent>
+                                        <MudTh>Task</MudTh>
+                                        <MudTh>Hours</MudTh>
+                                        <MudTh>Rate</MudTh>
+                                        <MudTh>Total</MudTh>
+                                    </HeaderContent>
+                                    <RowTemplate>
+                                        <MudTd>@context.WorkTypeName</MudTd>
+                                        <MudTd>@context.Hours.ToString("N1")</MudTd>
+                                        <MudTd>@context.Rate.ToString("C")</MudTd>
+                                        <MudTd>@context.Total.ToString("C")</MudTd>
+                                    </RowTemplate>
+                                </MudTable>
+                            }
+
+                            if (quote.ItemRows.Any())
+                            {
+                                <MudText Typo="Typo.body2">Hardware / Items</MudText>
+                                <MudTable Items="@quote.ItemRows" MultiSelection="true" SelectedItems="@GetSelectedItemsForQuote(quote.Id)" SelectedItemsChanged="@((HashSet<QuoteItemRow> items) => UpdateSelectedItems(quote.Id, items))" Hover="true" Dense="true" Elevation="0" Outlined="true" Class="mb-2">
+                                    <HeaderContent>
+                                        <MudTh>Description</MudTh>
+                                        <MudTh>Qty</MudTh>
+                                        <MudTh>Price</MudTh>
+                                        <MudTh>Total</MudTh>
+                                    </HeaderContent>
+                                    <RowTemplate>
+                                        <MudTd>@context.Description</MudTd>
+                                        <MudTd>@context.Quantity.ToString("N0")</MudTd>
+                                        <MudTd>@context.UnitPrice.ToString("C")</MudTd>
+                                        <MudTd>@context.Total.ToString("C")</MudTd>
+                                    </RowTemplate>
+                                </MudTable>
+                            }
+                        }
+                    }
+                </MudTabPanel>
+
+                <!-- PRE-PAYMENT -->
+                <MudTabPanel Text="Pre-Payment" Icon="@Icons.Material.Filled.AccountBalanceWallet">
+                    <MudText Typo="Typo.body2" Class="mb-2">Sell blocks of hours or general credit.</MudText>
+                    <MudTable Items="@PrePayItems" Dense="true" Hover="true" Elevation="0" Outlined="true">
+                        <HeaderContent>
+                            <MudTh>Type</MudTh>
+                            <MudTh>Description</MudTh>
+                            <MudTh>Hours / Qty</MudTh>
+                            <MudTh>Rate</MudTh>
+                            <MudTh>Total</MudTh>
+                            <MudTh></MudTh>
+                        </HeaderContent>
+                        <RowTemplate>
+                            <MudTd>
+                                @if (context.IsTaskBased) { <MudChip T="string" Size="Size.Small" Color="Color.Info">Task Block</MudChip> }
+                                else { <MudChip T="string" Size="Size.Small" Color="Color.Default">Custom</MudChip> }
+                            </MudTd>
+                            <MudTd><MudTextField @bind-Value="context.Description" Margin="Margin.Dense" DisableUnderLine="true" /></MudTd>
+                            <MudTd>
+                                @if (context.IsTaskBased) { <MudNumericField @bind-Value="context.Hours" Min="0" Margin="Margin.Dense" HideSpinButtons="true" DisableUnderLine="true" /> }
+                                else { <MudText>-</MudText> }
+                            </MudTd>
+                            <MudTd>
+                                @if (context.IsTaskBased) { <MudText>@context.Rate.ToString("C")</MudText> }
+                                else { <MudText>-</MudText> }
+                            </MudTd>
+                            <MudTd>
+                                @if (context.IsTaskBased) { <b>@context.Total.ToString("C")</b> }
+                                else { <MudNumericField @bind-Value="context.ManualAmount" Format="N2" Margin="Margin.Dense" HideSpinButtons="true" DisableUnderLine="true" /> }
+                            </MudTd>
+                            <MudTd>
+                                <MudIconButton Icon="@Icons.Material.Filled.Delete" Color="Color.Error" Size="Size.Small" OnClick="@(() => PrePayItems.Remove(context))" />
+                            </MudTd>
+                        </RowTemplate>
+                        <FooterContent>
+                            <MudTd colspan="6">
+                                <div class="d-flex gap-2">
+                                    <MudButton StartIcon="@Icons.Material.Filled.Add" OnClick="@(() => PrePayItems.Add(new PrePayItemVM { Description = "Pre-payment", IsTaskBased = false }))" Size="Size.Small" Variant="Variant.Outlined">Add Custom Amount</MudButton>
+                                    <MudMenu Label="Add Task Block" Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.Add" Size="Size.Small">
+                                        @foreach (var t in WorkTypes.Values)
+                                        {
+                                            <MudMenuItem OnClick="@(() => AddTaskPrePay(t))">@t.Name</MudMenuItem>
+                                        }
+                                    </MudMenu>
+                                </div>
+                            </MudTd>
+                        </FooterContent>
+                    </MudTable>
+                </MudTabPanel>
+
+                <!-- GENERAL / OTHER -->
+                <MudTabPanel Text="General / Other" Icon="@Icons.Material.Filled.List">
+                    <MudTable Items="@GeneralLines" Dense="true" Hover="true" Elevation="0" Outlined="true">
+                        <HeaderContent>
+                            <MudTh>Description</MudTh>
+                            <MudTh Style="width: 100px;">Qty</MudTh>
+                            <MudTh Style="width: 140px;">Price</MudTh>
+                            <MudTh Style="width: 140px;">Total</MudTh>
+                            <MudTh Style="width: 60px;"></MudTh>
+                        </HeaderContent>
+                        <RowTemplate>
+                            <MudTd><MudTextField @bind-Value="context.Description" Margin="Margin.Dense" DisableUnderLine="true" /></MudTd>
+                            <MudTd><MudNumericField @bind-Value="context.Quantity" Margin="Margin.Dense" HideSpinButtons="true" DisableUnderLine="true" /></MudTd>
+                            <MudTd><MudNumericField @bind-Value="context.UnitPrice" Format="N2" Margin="Margin.Dense" HideSpinButtons="true" DisableUnderLine="true" /></MudTd>
+                            <MudTd><MudText>@context.Total.ToString("C")</MudText></MudTd>
+                            <MudTd><MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small" Color="Color.Error" OnClick="@(() => GeneralLines.Remove(context))" /></MudTd>
+                        </RowTemplate>
+                        <FooterContent>
+                            <MudTd colspan="5">
+                                <MudButton StartIcon="@Icons.Material.Filled.Add" OnClick="@(() => GeneralLines.Add(new InvoiceLine { Type = "General", Quantity = 1 }))" Size="Size.Small" Color="Color.Primary">Add Line</MudButton>
+                            </MudTd>
+                        </FooterContent>
+                    </MudTable>
+                </MudTabPanel>
+
+                <!-- CREDITS -->
+                <MudTabPanel Text="Credits" Icon="@Icons.Material.Filled.CreditCard">
+                    @if (!AvailableCredits.Any())
+                    {
+                        <MudAlert Severity="Severity.Info" Class="mb-4">No available credits or prepayments to apply.</MudAlert>
+                    }
+                    else
+                    {
+                        <MudText Typo="Typo.body2" Class="mb-2">Select existing prepayments to apply to this invoice.</MudText>
+                        <MudTable Items="@AvailableCredits" Dense="true" Hover="true" Elevation="0" Outlined="true">
+                            <HeaderContent>
+                                <MudTh>Source Invoice</MudTh>
+                                <MudTh>Description</MudTh>
+                                <MudTh>Original Amount</MudTh>
+                                <MudTh>Remaining Balance</MudTh>
+                                <MudTh Style="width: 150px;">Amount to Apply</MudTh>
+                            </HeaderContent>
+                            <RowTemplate>
+                                <MudTd>@context.InvoiceNumber</MudTd>
+                                <MudTd>@context.Description</MudTd>
+                                <MudTd>@context.OriginalAmount.ToString("C")</MudTd>
+                                <MudTd>@context.RemainingBalance.ToString("C")</MudTd>
+                                <MudTd>
+                                    <MudNumericField @bind-Value="context.AmountToApply" Min="0" Max="@context.RemainingBalance" Format="N2" Margin="Margin.Dense" HideSpinButtons="true" DisableUnderLine="true" />
+                                </MudTd>
+                            </RowTemplate>
+                        </MudTable>
+                    }
+                </MudTabPanel>
+
+            </MudTabs>
+
+            <!-- PAYMENTS SUMMARY (Below Tabs) -->
+            @if (Invoice.Payments.Any() || Invoice.DatePaid.HasValue)
+            {
+                <MudPaper Class="mt-4 pa-3" Elevation="0" Outlined="true">
+                    <div class="d-flex align-center justify-space-between">
+                        <MudText Typo="Typo.subtitle2">Payments Recorded (@Invoice.AmountPaid.ToString("C2"))</MudText>
+                    </div>
+                    @if (Invoice.Payments.Any())
+                    {
+                        <MudTable Items="@Invoice.Payments" Dense="true" Elevation="0" Outlined="true" Class="mt-2">
+                            <HeaderContent>
+                                <MudTh>Date</MudTh>
+                                <MudTh>Amount</MudTh>
+                                <MudTh>Method</MudTh>
+                                <MudTh>Reference</MudTh>
+                                <MudTh></MudTh>
+                            </HeaderContent>
+                            <RowTemplate Context="payment">
+                                <MudTd>@payment.Date.ToShortDateString()</MudTd>
+                                <MudTd>@payment.Amount.ToString("C2")</MudTd>
+                                <MudTd>@payment.Method</MudTd>
+                                <MudTd>@payment.Reference</MudTd>
+                                <MudTd>
+                                    <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small" Color="Color.Error" OnClick="@(() => Invoice.Payments.Remove(payment))" />
+                                </MudTd>
+                            </RowTemplate>
+                        </MudTable>
+                    }
+                    else if (Invoice.DatePaid.HasValue)
+                    {
+                        <MudText Typo="Typo.body2" Class="mt-2 text-muted">Legacy payment recorded on @Invoice.DatePaid.Value.ToShortDateString().</MudText>
+                    }
+                </MudPaper>
+            }
+
+            <MudPaper Class="mt-4 pa-3 d-flex flex-column align-end gap-1" Elevation="0" Outlined="true" Style="background-color: var(--mud-palette-background-grey);">
+                <div class="d-flex gap-4">
+                    <MudText>Labor/Time: <b>@CalculatedLaborTotal.ToString("C")</b></MudText>
+                    <MudText>Expenses: <b>@CalculatedExpenseTotal.ToString("C")</b></MudText>
+                    <MudText>Milestones/Quotes: <b>@CalculatedQuotesTotal.ToString("C")</b></MudText>
+                    <MudText>Pre-Pay/Other: <b>@CalculatedOtherTotal.ToString("C")</b></MudText>
+                </div>
+                <div class="d-flex gap-4" style="min-width: 250px; justify-content: space-between;">
+                    <MudText>Subtotal:</MudText>
+                    <MudText><b>@CalculatedSubTotal.ToString("C")</b></MudText>
+                </div>
+                @if (CreditToApply > 0)
+                {
+                    <div class="d-flex gap-4" style="min-width: 250px; justify-content: space-between;">
+                        <MudText Color="Color.Success">Credit Applied:</MudText>
+                        <MudText Color="Color.Success"><b>-@CreditToApply.ToString("C")</b></MudText>
+                    </div>
+                }
+                <div class="d-flex gap-4" style="min-width: 250px; justify-content: space-between;">
+                    <MudText>Tax Rate:</MudText>
+                    <div style="width: 100px;">
+                        <MudNumericField Value="@(Invoice.TaxRate * 100)" ValueChanged="@((decimal v) => Invoice.TaxRate = v / 100)" Format="N3" Margin="Margin.Dense" HideSpinButtons="true" Adornment="Adornment.End" AdornmentIcon="@Icons.Material.Filled.Percent" />
+                    </div>
+                </div>
+                <div class="d-flex gap-4" style="min-width: 250px; justify-content: space-between;">
+                    <MudText>Tax Amount:</MudText>
+                    <MudText><b>@((TaxableAmount * Invoice.TaxRate).ToString("C"))</b></MudText>
+                </div>
+                <div class="d-flex gap-4 mt-2" style="min-width: 250px; justify-content: space-between;">
+                    <MudText Typo="Typo.h6" Color="Color.Primary"><b>Total Due:</b></MudText>
+                    <MudText Typo="Typo.h6" Color="Color.Primary"><b>@FinalTotal.ToString("C")</b></MudText>
+                </div>
+            </MudPaper>
+        </MudForm>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Close">Close</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="Submit">Save Invoice</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
+    [Parameter] public Invoice Invoice { get; set; } = default!;
+
+    // Wrappers
+    private DateTime? Date { get => Invoice.Date; set { if (value.HasValue) Invoice.Date = value.Value; } }
+    private DateTime? DueDate { get => Invoice.DueDate; set { if (value.HasValue) Invoice.DueDate = value.Value; } }
+
+    private List<DocumentTemplate> Templates = new();
+    private Dictionary<string, WorkType> WorkTypes = new();
+    private List<Project> Projects = new();
+    private Project? PrimaryProject;
+    
+    // Custom Lines
+    private List<InvoiceLine> CustomLaborLines = new();
+    private List<InvoiceLine> CustomMaterialLines = new();
+    private List<InvoiceLine> GeneralLines = new();
+    private List<PrePayItemVM> PrePayItems = new();
+
+    // Unbilled Labor
+    private List<LaborGroupViewModel> LaborGroups = new();
+    // Unbilled Expenses
+    private List<ExpenseRow> UnbilledItems = new();
+    private HashSet<ExpenseRow> SelectedItems = new();
+    
+    // Milestones & Quotes
+    private List<Quote> AcceptedQuotes = new();
+    private List<MilestoneVM> AvailableTerms = new();
+    private HashSet<MilestoneVM> SelectedTerms = new();
+    private Dictionary<string, HashSet<QuoteLaborItem>> _laborSelections = new();
+    private Dictionary<string, HashSet<QuoteItemRow>> _itemSelections = new();
+
+    private List<AvailableCreditVM> AvailableCredits = new();
+    private decimal DefaultMarkupRate = 0.15m;
+
+    // --- Calculations ---
+    private decimal CalculatedLaborTotal => LaborGroups.Sum(x => x.HoursToBill * x.Rate) + CustomLaborLines.Sum(x => x.Total) + _laborSelections.Values.SelectMany(x => x).Sum(x => x.Total);
+    private decimal CalculatedExpenseTotal => SelectedItems.Sum(x => x.Total) + CustomMaterialLines.Sum(x => x.Total) + _itemSelections.Values.SelectMany(x => x).Sum(x => x.Total);
+    private decimal CalculatedQuotesTotal => SelectedTerms.Sum(x => x.PreTaxAmount) + _laborSelections.Values.SelectMany(x => x).Sum(x => x.Total) + _itemSelections.Values.SelectMany(x => x).Sum(x => x.Total); // Wait, quote total should not double count. I should remove quotes labor and items from CalculatedLaborTotal and CalculatedExpenseTotal!
+    private decimal CalculatedOtherTotal => PrePayItems.Sum(x => x.Total) + GeneralLines.Sum(x => x.Total);
+    
+    private decimal CalculatedSubTotal => CalculatedLaborTotal + CalculatedExpenseTotal + SelectedTerms.Sum(x => x.PreTaxAmount) + CalculatedOtherTotal;
+    private decimal CreditToApply => AvailableCredits.Sum(c => c.AmountToApply);
+    private decimal TaxableAmount => Math.Max(0, CalculatedSubTotal - CreditToApply);
+    private decimal FinalTotal => TaxableAmount * (1 + Invoice.TaxRate);
+
+    protected override void OnInitialized()
+    {
+        Templates = Db.DocumentTemplates.GetAll();
+        WorkTypes = Db.WorkTypes.GetAll().ToDictionary(w => w.Id, w => w);
+
+        bool isGroup = !string.IsNullOrEmpty(Invoice.ProjectGroupId);
+        if (isGroup)
+        {
+            var group = Db.ProjectGroups.GetById(Invoice.ProjectGroupId!);
+            if (group != null)
+                Projects = group.ProjectIds.Select(id => Db.Projects.GetById(id)!).Where(p => p != null).ToList();
+        }
+        else
+        {
+            PrimaryProject = Db.Projects.GetById(Invoice.ProjectId);
+            if (PrimaryProject != null) Projects.Add(PrimaryProject);
+        }
+
+        PrimaryProject ??= Projects.FirstOrDefault();
+
+        LoadAvailableCredits();
+        LoadExistingInvoiceLines();
+        LoadUnbilledData();
+        LoadMilestonesAndQuotes();
+    }
+
+    private void LoadAvailableCredits()
+    {
+        AvailableCredits.Clear();
+
+        var groupInvoices = !string.IsNullOrEmpty(Invoice.ProjectGroupId) ? Db.Invoices.GetByProjectGroup(Invoice.ProjectGroupId) : new List<Invoice>();
+        var allInvoices = new List<Invoice>();
+        foreach (var project in Projects)
+        {
+            allInvoices.AddRange(Db.Invoices.GetByProject(project.Id));
+        }
+        allInvoices.AddRange(groupInvoices);
+        allInvoices = allInvoices.DistinctBy(i => i.Id).ToList();
+
+        // Find all paid prepayments
+        var paidPrepayments = allInvoices
+            .Where(i => i.Status == "Paid")
+            .SelectMany(i => i.Lines.Where(l => l.IsPrepayment).Select(l => new { Invoice = i, Line = l }))
+            .ToList();
+
+        // Find all used credits
+        var usedCredits = allInvoices
+            .Where(i => i.Status != "Void")
+            .SelectMany(i => i.Lines.Where(l => l.IsCreditUsed))
+            .ToList();
+
+        // Find unlinked credits (migration logic)
+        decimal unlinkedCreditUsed = usedCredits
+            .Where(l => string.IsNullOrEmpty(l.SourceId))
+            .Sum(l => Math.Abs(l.Total));
+
+        // Deduct linked credits and then unlinked credits from oldest to newest
+        var sortedPrepayments = paidPrepayments.OrderBy(p => p.Invoice.Date).ToList();
+
+        foreach (var prepay in sortedPrepayments)
+        {
+            decimal original = prepay.Line.Total;
+            
+            // Subtract linked used credits
+            decimal linkedUsed = usedCredits
+                .Where(l => l.SourceId == prepay.Line.Id)
+                .Sum(l => Math.Abs(l.Total));
+                
+            decimal remaining = original - linkedUsed;
+
+            // Subtract unlinked used credits
+            if (unlinkedCreditUsed > 0 && remaining > 0)
+            {
+                decimal amountToDeduct = Math.Min(remaining, unlinkedCreditUsed);
+                remaining -= amountToDeduct;
+                unlinkedCreditUsed -= amountToDeduct;
+            }
+
+            // Also check if THIS current invoice already applied some of this specific credit
+            decimal currentlyApplied = Invoice.Lines
+                .Where(l => l.IsCreditUsed && l.SourceId == prepay.Line.Id)
+                .Sum(l => Math.Abs(l.Total));
+
+            // When editing, add back what this invoice currently applied to the remaining balance
+            remaining += currentlyApplied;
+
+            // Also support unlinked applied on this current invoice as a fallback?
+            // Actually, if it's the current invoice and unlinked, it will be wiped upon save anyway since we rebuild from AvailableCredits.
+
+            if (remaining > 0 || currentlyApplied > 0)
+            {
+                AvailableCredits.Add(new AvailableCreditVM
+                {
+                    PrepaymentLineId = prepay.Line.Id,
+                    InvoiceNumber = prepay.Invoice.InvoiceNumber,
+                    Description = prepay.Line.Description,
+                    OriginalAmount = original,
+                    RemainingBalance = remaining,
+                    AmountToApply = currentlyApplied
+                });
+            }
+        }
+    }
+
+    private void LoadExistingInvoiceLines()
+    {
+        foreach (var line in Invoice.Lines)
+        {
+            if (line.IsPrepayment)
+            {
+                PrePayItems.Add(new PrePayItemVM
+                {
+                    Description = line.Description,
+                    IsTaskBased = !string.IsNullOrEmpty(line.WorkTypeId),
+                    WorkTypeId = line.WorkTypeId ?? "",
+                    Hours = line.Quantity,
+                    Rate = line.UnitPrice,
+                    ManualAmount = line.UnitPrice * line.Quantity
+                });
+            }
+            else if (line.IsCreditUsed)
+            {
+               // We recalculate this dynamically from AvailableCredits, skip loading it as a line item
+            }
+            else if (line.Type == "General" && string.IsNullOrEmpty(line.SourceId))
+            {
+                GeneralLines.Add(line);
+            }
+            else if (line.Type == "Labor" && string.IsNullOrEmpty(line.SourceId))
+            {
+                CustomLaborLines.Add(line);
+            }
+            else if (line.Type == "Material" && string.IsNullOrEmpty(line.SourceId))
+            {
+                CustomMaterialLines.Add(line);
+            }
+            // If it HAS a SourceId, it will be handled when Loading Unbilled Data by pre-selecting it.
+        }
+    }
+
+    private void LoadUnbilledData()
+    {
+        var projectIds = Projects.Select(p => p.Id).ToHashSet();
+
+        // Get all billed IDs across all invoices, EXCEPT the current one we are editing
+        var billedTimeIds = new HashSet<string>();
+        var billedPoIds = new HashSet<string>();
+        var billedExpenseIds = new HashSet<string>();
+
+        // Pre-select items that are billed on THIS invoice
+        var currentInvoiceTimeIds = Invoice.BilledTimeEntryIds.ToHashSet();
+        var currentInvoicePoIds = Invoice.BilledPoItemIds.ToHashSet();
+        var currentInvoiceExpenseIds = Invoice.BilledExpenseItemIds.ToHashSet();
+
+        foreach (var projectId in projectIds)
+        {
+            var projectInvoices = Db.Invoices.GetByProject(projectId).Where(i => i.Id != Invoice.Id);
+            billedTimeIds.UnionWith(projectInvoices.SelectMany(i => i.BilledTimeEntryIds));
+            billedPoIds.UnionWith(projectInvoices.SelectMany(i => i.BilledPoItemIds));
+            billedExpenseIds.UnionWith(projectInvoices.SelectMany(i => i.BilledExpenseItemIds));
+        }
+
+        if (!string.IsNullOrEmpty(Invoice.ProjectGroupId))
+        {
+            var groupInvoices = Db.Invoices.GetByProjectGroup(Invoice.ProjectGroupId).Where(i => i.Id != Invoice.Id);
+            billedTimeIds.UnionWith(groupInvoices.SelectMany(i => i.BilledTimeEntryIds));
+            billedPoIds.UnionWith(groupInvoices.SelectMany(i => i.BilledPoItemIds));
+            billedExpenseIds.UnionWith(groupInvoices.SelectMany(i => i.BilledExpenseItemIds));
+        }
+
+        // Labor
+        var allSheets = Db.Timesheets.GetAll();
+        var rawGroups = new Dictionary<string, LaborGroupViewModel>();
+
+        foreach (var sheet in allSheets)
+        {
+            // Include candidates that are unbilled globally OR billed on this current invoice
+            var candidates = sheet.Entries.Where(e => projectIds.Contains(e.ProjectId) && 
+                (!billedTimeIds.Contains(e.Id) || currentInvoiceTimeIds.Contains(e.Id)));
+            
+            foreach (var entry in candidates)
+            {
+                var project = Db.Projects.GetById(entry.ProjectId);
+                if (project == null) continue;
+
+                var key = $"{entry.ProjectId}|{entry.WorkTypeId}|{entry.SubTaskId}";
+
+                if (!rawGroups.ContainsKey(key))
+                {
+                    var task = WorkTypes.ContainsKey(entry.WorkTypeId) ? WorkTypes[entry.WorkTypeId] : new WorkType { Name = "Unknown" };
+                    var subTaskName = task.SubTasks.FirstOrDefault(s => s.Id == entry.SubTaskId)?.Name ?? "General";
+                    var card = project.RateCardId != null ? Db.RateCards.GetById(project.RateCardId) : null;
+                    var rate = project.GetEffectiveRate(entry.WorkTypeId, task.DefaultRate, card);
+
+                    rawGroups[key] = new LaborGroupViewModel
+                    {
+                        ProjectId = entry.ProjectId,
+                        ProjectName = project.DisplayName,
+                        WorkTypeId = entry.WorkTypeId,
+                        SubTaskId = entry.SubTaskId,
+                        TaskName = task.Name,
+                        SubTaskName = subTaskName,
+                        Rate = rate,
+                        AvailableHours = 0,
+                        HoursToBill = 0
+                    };
+                }
+                rawGroups[key].AvailableHours += entry.Hours;
+                if (currentInvoiceTimeIds.Contains(entry.Id))
+                {
+                    rawGroups[key].HoursToBill += entry.Hours;
+                }
+                rawGroups[key].Entries.Add(new EntryRef { Entry = entry, ParentSheet = sheet });
+            }
+        }
+        foreach (var g in rawGroups.Values)
+        {
+            g.Entries = g.Entries.OrderBy(x => x.Entry.Date).ToList();
+            LaborGroups.Add(g);
+        }
+
+        // Expenses
+        var allPos = Db.Purchases.GetAll();
+        foreach (var po in allPos)
+        {
+            var myItems = po.Items.Where(i => projectIds.Contains(i.ProjectId) && 
+                (!billedPoIds.Contains(i.Id) || currentInvoicePoIds.Contains(i.Id)));
+                
+            foreach (var item in myItems)
+            {
+                var project = Db.Projects.GetById(item.ProjectId);
+                var card = project?.RateCardId != null ? Db.RateCards.GetById(project.RateCardId) : null;
+                var markupMult = 1 + (card?.MarkupRate ?? DefaultMarkupRate);
+
+                var row = new ExpenseRow
+                {
+                    Id = item.Id,
+                    ProjectId = item.ProjectId,
+                    ProjectName = project?.DisplayName ?? "Unknown",
+                    Date = po.Date,
+                    Description = item.Description,
+                    Cost = item.Total,
+                    Total = item.Total * markupMult,
+                    Quantity = item.Quantity,
+                    UnitCost = item.UnitPrice,
+                    Source = "PO"
+                };
+                UnbilledItems.Add(row);
+                if (currentInvoicePoIds.Contains(item.Id)) SelectedItems.Add(row);
+            }
+        }
+
+        var allReports = Db.ExpenseReports.GetAll();
+        foreach (var report in allReports.Where(r => r.DateSubmitted.HasValue))
+        {
+            var myItems = report.Items.Where(i => projectIds.Contains(i.ProjectId) && 
+                (!billedExpenseIds.Contains(i.Id) || currentInvoiceExpenseIds.Contains(i.Id)));
+                
+            foreach (var item in myItems)
+            {
+                var project = Db.Projects.GetById(item.ProjectId);
+                var card = project?.RateCardId != null ? Db.RateCards.GetById(project.RateCardId) : null;
+                var markupMult = 1 + (card?.MarkupRate ?? DefaultMarkupRate);
+
+                var row = new ExpenseRow
+                {
+                    Id = item.Id,
+                    ProjectId = item.ProjectId,
+                    ProjectName = project?.DisplayName ?? "Unknown",
+                    Date = item.Date,
+                    Description = $"{report.EmployeeName}: {item.Description}",
+                    Cost = item.Total,
+                    Total = item.Total * markupMult,
+                    Quantity = item.IsKilometrage ? item.Kilometers : 1m,
+                    UnitCost = item.IsKilometrage ? item.KilometrageRate : item.Total,
+                    Source = "ExpenseReport"
+                };
+                UnbilledItems.Add(row);
+                if (currentInvoiceExpenseIds.Contains(item.Id)) SelectedItems.Add(row);
+            }
+        }
+    }
+
+    private void LoadMilestonesAndQuotes()
+    {
+        var projectIds = Projects.Select(p => p.Id).ToHashSet();
+
+        foreach (var projectId in projectIds)
+        {
+            var quotes = Db.Quotes.GetByProject(projectId).Where(q => q.Status == "Accepted").ToList();
+            AcceptedQuotes.AddRange(quotes);
+
+            foreach (var quote in quotes)
+            {
+                // Milestones
+                foreach (var term in quote.PaymentTerms)
+                {
+                    if (!term.IsInvoiced || term.InvoiceId == Invoice.Id)
+                    {
+                        var existingLine = Invoice.Lines.FirstOrDefault(l => l.SourceType == "Milestone" && l.SourceId == term.Id);
+                        var vm = new MilestoneVM 
+                        {
+                            Term = term,
+                            Quote = quote,
+                            InvoiceDescription = existingLine?.Description ?? $"{term.Description} ({term.Percentage}% - {quote.QuoteNumber})"
+                        };
+                        AvailableTerms.Add(vm);
+                        if (term.InvoiceId == Invoice.Id) SelectedTerms.Add(vm);
+                    }
+                }
+
+                // Setup selections for labor/items based on Invoice.Lines
+                _laborSelections[quote.Id] = new HashSet<QuoteLaborItem>();
+                _itemSelections[quote.Id] = new HashSet<QuoteItemRow>();
+
+                var quoteLaborLineIds = Invoice.Lines.Where(l => l.SourceType == "QuoteLabor").Select(l => l.SourceId).ToHashSet();
+                var quoteItemLineIds = Invoice.Lines.Where(l => l.SourceType == "QuoteItem").Select(l => l.SourceId).ToHashSet();
+
+                foreach (var l in quote.LaborItems)
+                {
+                    if (quoteLaborLineIds.Contains(l.Id)) _laborSelections[quote.Id].Add(l);
+                }
+
+                foreach (var i in quote.ItemRows)
+                {
+                    if (quoteItemLineIds.Contains(i.Id)) _itemSelections[quote.Id].Add(i);
+                }
+            }
+        }
+    }
+
+    private HashSet<QuoteLaborItem> GetSelectedLaborForQuote(string quoteId) => _laborSelections.TryGetValue(quoteId, out var set) ? set : new HashSet<QuoteLaborItem>();
+    private void UpdateSelectedLabor(string quoteId, HashSet<QuoteLaborItem> newSelection) => _laborSelections[quoteId] = newSelection;
+    private HashSet<QuoteItemRow> GetSelectedItemsForQuote(string quoteId) => _itemSelections.TryGetValue(quoteId, out var set) ? set : new HashSet<QuoteItemRow>();
+    private void UpdateSelectedItems(string quoteId, HashSet<QuoteItemRow> newSelection) => _itemSelections[quoteId] = newSelection;
+
+    private void UpdateMaterialCost(InvoiceLine line, decimal cost)
+    {
+        line.OriginalUnitCost = cost;
+        line.UnitPrice = cost * (1 + line.MarkupPercentage);
+    }
+    private void UpdateMaterialMarkup(InvoiceLine line, decimal markupPercent)
+    {
+        line.MarkupPercentage = markupPercent / 100m;
+        line.UnitPrice = line.OriginalUnitCost * (1 + line.MarkupPercentage);
+    }
+    private void UpdateMaterialPrice(InvoiceLine line, decimal price)
+    {
+        line.UnitPrice = price;
+        if (line.OriginalUnitCost != 0) line.MarkupPercentage = (line.UnitPrice / line.OriginalUnitCost) - 1;
+    }
+
+    private void AddTaskPrePay(WorkType t)
+    {
+        var rate = PrimaryProject?.GetEffectiveRate(t.Id, t.DefaultRate, null) ?? t.DefaultRate;
+        PrePayItems.Add(new PrePayItemVM { Description = $"Block of Hours: {t.Name}", IsTaskBased = true, WorkTypeId = t.Id, Rate = rate, Hours = 0 });
+    }
+
+    private void Close() => MudDialog.Cancel();
+
+    private void Submit()
+    {
+        // Clear all Billed ID lists for this invoice so we can rebuild them
+        Invoice.BilledTimeEntryIds.Clear();
+        Invoice.BilledPoItemIds.Clear();
+        Invoice.BilledExpenseItemIds.Clear();
+        Invoice.Lines.Clear();
+
+        var template = (!string.IsNullOrEmpty(Invoice.TemplateId)) ? Db.DocumentTemplates.GetById(Invoice.TemplateId) : Db.DocumentTemplates.GetDefault();
+        if (template == null) template = Db.DocumentTemplates.GetDefault();
+
+        // 1. Labor Groups (Unbilled)
+        foreach (var group in LaborGroups.Where(g => g.HoursToBill > 0))
+        {
+            decimal remainingToBill = group.HoursToBill;
+            string taskLabel = (group.SubTaskName == "General" || string.IsNullOrEmpty(group.SubTaskName)) ? group.TaskName : $"{group.TaskName}: {group.SubTaskName}";
+            string lineDescription = $"{group.ProjectName} - {taskLabel} {template?.Label_ItemLaborTag ?? "(Labor)"}";
+
+            Invoice.Lines.Add(new InvoiceLine { Description = lineDescription, WorkTypeId = group.WorkTypeId, SubTaskId = group.SubTaskId, Quantity = group.HoursToBill, UnitPrice = group.Rate, Type = "Labor", SourceType = "Time" });
+
+            foreach (var refObj in group.Entries)
+            {
+                if (remainingToBill <= 0) break;
+                var entry = refObj.Entry;
+                var sheet = refObj.ParentSheet;
+
+                if (entry.Hours <= remainingToBill)
+                {
+                    Invoice.BilledTimeEntryIds.Add(entry.Id);
+                    remainingToBill -= entry.Hours;
+                }
+                else
+                {
+                    var billedEntry = new TimeEntry { ProjectId = entry.ProjectId, WorkTypeId = entry.WorkTypeId, SubTaskId = entry.SubTaskId, Date = entry.Date, Description = entry.Description + " (Billed)", Hours = remainingToBill, Id = Guid.NewGuid().ToString() };
+                    entry.Hours -= remainingToBill;
+                    sheet.Entries.Add(billedEntry);
+                    Invoice.BilledTimeEntryIds.Add(billedEntry.Id);
+                    Db.Timesheets.Save(sheet);
+                    remainingToBill = 0;
+                }
+            }
+        }
+
+        // 2. Expenses (Unbilled)
+        foreach (var item in SelectedItems)
+        {
+            var project = Db.Projects.GetById(item.ProjectId);
+            var card = project?.RateCardId != null ? Db.RateCards.GetById(project.RateCardId) : null;
+            var markupRate = card?.MarkupRate ?? DefaultMarkupRate;
+
+            Invoice.Lines.Add(new InvoiceLine { Description = $"{item.ProjectName} - {item.Description}", Quantity = item.Quantity, UnitPrice = item.UnitCost * (1 + markupRate), OriginalUnitCost = item.UnitCost, MarkupPercentage = markupRate, Type = "Material", SourceId = item.Id, SourceType = item.Source });
+
+            if (item.Source == "PO") Invoice.BilledPoItemIds.Add(item.Id);
+            else Invoice.BilledExpenseItemIds.Add(item.Id);
+        }
+
+        // 3. Milestones
+        foreach (var quote in AcceptedQuotes)
+        {
+            foreach (var term in quote.PaymentTerms)
+            {
+                var vm = AvailableTerms.FirstOrDefault(v => v.Term.Id == term.Id);
+                
+                if (vm != null && SelectedTerms.Contains(vm))
+                {
+                    term.InvoiceId = Invoice.Id;
+                    // Milestone amounts are extracted to their Pre-Tax (Net) value so the Invoice tax accurately brings it back to Gross.
+                    Invoice.Lines.Add(new InvoiceLine { Description = vm.InvoiceDescription, Quantity = 1, UnitPrice = vm.PreTaxAmount, Type = "General", SourceId = term.Id, SourceType = "Milestone" });
+                }
+                else if (term.InvoiceId == Invoice.Id)
+                {
+                    // Deselected!
+                    term.InvoiceId = "";
+                }
+            }
+            Db.Quotes.Save(quote);
+        }
+
+        // 4. Quote Labor & Items
+        foreach (var l in _laborSelections.Values.SelectMany(x => x))
+        {
+            Invoice.Lines.Add(new InvoiceLine { Type = "Labor", Description = string.IsNullOrEmpty(l.SubTaskName) ? l.WorkTypeName : $"{l.WorkTypeName}: {l.SubTaskName}", WorkTypeId = l.WorkTypeId, SubTaskId = l.SubTaskId, Quantity = l.Hours, UnitPrice = l.Rate, SourceId = l.Id, SourceType = "QuoteLabor" });
+        }
+        foreach (var i in _itemSelections.Values.SelectMany(x => x))
+        {
+            Invoice.Lines.Add(new InvoiceLine { Type = "Material", Description = i.Description, Quantity = i.Quantity, UnitPrice = i.UnitPrice, OriginalUnitCost = i.UnitCost, MarkupPercentage = i.MarkupPercentage / 100m, SourceId = i.Id, SourceType = "QuoteItem" });
+        }
+
+        // 5. Pre-Pays
+        foreach (var pp in PrePayItems)
+        {
+            Invoice.Lines.Add(new InvoiceLine { Description = pp.Description + (pp.IsTaskBased ? $" ({pp.Hours}h)" : ""), WorkTypeId = pp.IsTaskBased ? pp.WorkTypeId : null, Quantity = pp.IsTaskBased ? pp.Hours : 1, UnitPrice = pp.IsTaskBased ? pp.Rate : pp.Total, IsPrepayment = true, Type = "General" });
+        }
+
+        // 6. Custom Lines
+        Invoice.Lines.AddRange(CustomLaborLines);
+        Invoice.Lines.AddRange(CustomMaterialLines);
+        Invoice.Lines.AddRange(GeneralLines);
+
+        // Apply Specific Credits
+        foreach (var credit in AvailableCredits.Where(c => c.AmountToApply > 0))
+        {
+            Invoice.Lines.Add(new InvoiceLine 
+            { 
+                Description = $"Credit Applied from {credit.InvoiceNumber}: {credit.Description}", 
+                Quantity = 1, 
+                UnitPrice = -credit.AmountToApply, 
+                IsCreditUsed = true, 
+                Type = "General",
+                SourceId = credit.PrepaymentLineId,
+                SourceType = "Prepayment" 
+            });
+        }
+
+        if (Invoice.BalanceDue <= 0 && Invoice.GrandTotal > 0 && Invoice.Status != "Paid")
+        {
+            Invoice.Status = "Paid";
+            Invoice.DatePaid = Invoice.DatePaid ?? DateTime.Today;
+        }
+        else if (Invoice.Status == "Paid" && Invoice.BalanceDue > 0)
+        {
+            Invoice.Status = "Sent";
+            if (!Invoice.Payments.Any()) Invoice.DatePaid = null;
+        }
+
+        Db.Invoices.Save(Invoice);
+        MudDialog.Close(DialogResult.Ok(true));
+    }
+
+    class AvailableCreditVM
+    {
+        public string PrepaymentLineId { get; set; } = "";
+        public string InvoiceNumber { get; set; } = "";
+        public string Description { get; set; } = "";
+        public decimal OriginalAmount { get; set; }
+        public decimal RemainingBalance { get; set; }
+        public decimal AmountToApply { get; set; }
+    }
+
+    class PrePayItemVM
+    {
+        public bool IsTaskBased { get; set; }
+        public string Description { get; set; } = "";
+        public string WorkTypeId { get; set; } = "";
+        public decimal Hours { get; set; }
+        public decimal Rate { get; set; }
+        public decimal ManualAmount { get; set; }
+        public decimal Total => IsTaskBased ? (Hours * Rate) : ManualAmount;
+    }
+
+    class LaborGroupViewModel
+    {
+        public string ProjectId { get; set; } = "";
+        public string ProjectName { get; set; } = "";
+        public string WorkTypeId { get; set; } = "";
+        public string SubTaskId { get; set; } = "";
+        public string TaskName { get; set; } = "";
+        public string SubTaskName { get; set; } = "";
+        public decimal Rate { get; set; }
+        public decimal AvailableHours { get; set; }
+        public decimal HoursToBill { get; set; }
+        public List<EntryRef> Entries { get; set; } = new();
+    }
+
+    class EntryRef { public TimeEntry Entry = default!; public Timesheet ParentSheet = default!; }
+
+    class ExpenseRow
+    {
+        public string Id = "";
+        public string ProjectId = "";
+        public string ProjectName = "";
+        public DateTime Date;
+        public string Description = "";
+        public decimal Cost;
+        public decimal Total;
+        public decimal Quantity = 1m;
+        public decimal UnitCost;
+        public string Source = "";
+
+        public override bool Equals(object? obj) => obj is ExpenseRow other && Id == other.Id;
+        public override int GetHashCode() => Id.GetHashCode();
+    }
+
+    class MilestoneVM
+    {
+        public PaymentTerm Term { get; set; } = default!;
+        public Quote Quote { get; set; } = default!;
+        public string InvoiceDescription { get; set; } = string.Empty;
+
+        public decimal PreTaxAmount => Quote.ShowTax ? Term.Amount / (1 + Quote.TaxRate) : Term.Amount;
+
+        public override bool Equals(object? obj) => obj is MilestoneVM other && Term.Id == other.Term.Id;
+        public override int GetHashCode() => Term.Id.GetHashCode();
+    }
+}

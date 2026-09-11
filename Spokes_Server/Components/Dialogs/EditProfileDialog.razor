@@ -1,0 +1,329 @@
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Data
+@using MudBlazor
+@inject Database Db
+@inject ISnackbar Snackbar
+@inject EncryptionService EncryptionService
+@inject Spokes_Server.Core.Services.Core.AppLabelService AppLabels
+@inject IDialogService DialogService
+@inject IConfiguration Config
+
+<MudDialog>
+    <DialogContent>
+        @if (Employee.IsSuspended)
+        {
+            <MudAlert Severity="Severity.Error" Class="ma-4">Your account is suspended. You cannot edit your profile.</MudAlert>
+        }
+        else
+        {
+        <MudGrid>
+            <!-- Preview -->
+            <MudItem xs="12" Class="d-flex justify-center my-4">
+                @if (!string.IsNullOrEmpty(_avatarBase64))
+                {
+                        <MudAvatar Style="height:100px; width:100px;">
+                            <MudImage Src="@_avatarBase64" ObjectFit="ObjectFit.Cover" />
+                        </MudAvatar>
+                }
+                else
+                {
+                        <MudAvatar
+                            Style="@($"height:100px; width:100px; background-color: {(_profileColor ?? Colors.DeepPurple.Default)}; color: {Colors.Shades.White}; font-size: 2rem;")">
+                        @Employee.FirstName.FirstOrDefault()@Employee.LastName.FirstOrDefault()
+                        </MudAvatar>
+                }
+            </MudItem>
+
+            <!-- Upload -->
+            <MudItem xs="12" Class="d-flex justify-center align-center gap-2">
+                <ApiFileUpload Category="avatars" ContextId="@Employee.Id" MaximumFileCount="1"
+                               Accept="image/*"
+                               OnUploadCompleted="HandleAvatarApiUploaded"
+                               OnUploadError='(e) => Snackbar.Add($"Error: {e}", Severity.Error)'>
+                    <CustomContent>
+                        <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.CloudUpload" Disabled="@(Config.GetValue<bool>("Spokes_DemoMode"))">
+                            Upload Avatar
+                        </MudButton>
+                    </CustomContent>
+                </ApiFileUpload>
+                @if (!string.IsNullOrEmpty(_avatarBase64))
+                {
+                        <MudButton Variant="Variant.Outlined" Color="Color.Error" OnClick="RemoveAvatar" Disabled="@(Config.GetValue<bool>("Spokes_DemoMode"))">Remove</MudButton>
+                }
+            </MudItem>
+
+            @if (!IsFriendEdition)
+            {
+                <!-- Signature Upload -->
+                <MudItem xs="12" Class="d-flex flex-column align-center my-4">
+                    <MudText Typo="Typo.subtitle1" Class="mb-2">Document Signature</MudText>
+                    @if (!string.IsNullOrEmpty(_signatureBase64))
+                    {
+                            <MudPaper Elevation="0" Outlined="true" Class="pa-2 mb-2 d-flex justify-center" Style="background-color: #fafafa; width: 100%; max-width: 300px;">
+                                <MudImage Src="@_signatureBase64" Style="max-height: 80px; object-fit: contain;" />
+                            </MudPaper>
+                    }
+                    else
+                    {
+                            <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-2">No signature uploaded. This is used for document blocks.</MudText>
+                    }
+                    <div class="d-flex gap-2 mt-2">
+                        <ApiFileUpload Category="signatures" ContextId="@Employee.Id" MaximumFileCount="1"
+                                       Accept="image/*"
+                                       OnUploadCompleted="HandleSignatureApiUploaded"
+                                       OnUploadError='(e) => Snackbar.Add($"Error: {e}", Severity.Error)'>
+                            <CustomContent>
+                                <MudButton Variant="Variant.Filled" Color="Color.Secondary" Size="Size.Small" StartIcon="@Icons.Material.Filled.Draw">
+                                    Upload Signature
+                                </MudButton>
+                            </CustomContent>
+                        </ApiFileUpload>
+                        @if (!string.IsNullOrEmpty(_signatureBase64))
+                        {
+                                <MudButton Variant="Variant.Outlined" Color="Color.Error" Size="Size.Small" OnClick="RemoveSignature">Remove</MudButton>
+                        }
+                    </div>
+                </MudItem>
+            }
+
+            @if (string.IsNullOrEmpty(_avatarBase64))
+            {
+                <!-- Color Picker -->
+                <MudItem xs="12">
+                    <MudText Typo="Typo.subtitle2" Class="mb-2">Profile Color (used if no avatar)</MudText>
+                    <MudColorPicker Variant="Variant.Outlined" @bind-Text="_profileColor" Style="@($"color: {_profileColor};")"
+                                    Placeholder="Select Color" ColorPickerMode="ColorPickerMode.HEX" />
+                </MudItem>
+            }
+            
+
+            
+
+            <MudItem xs="12">
+                <MudDivider Class="mb-2" />
+                <MudText Typo="Typo.h6">@(IsFriendEdition ? "Personal Information" : "Professional Information")</MudText>
+            </MudItem>
+
+            <MudItem xs="6" Class="mt-n5">
+                <MudTextField ShrinkLabel @bind-Value="Employee.FirstName" Label="First Name" ReadOnly="@(!IsFriendEdition)" Variant="Variant.Outlined"
+                    Margin="Margin.Dense" />
+            </MudItem>
+            <MudItem xs="6" Class="mt-n5">
+                <MudTextField ShrinkLabel @bind-Value="Employee.LastName" Label="Last Name" ReadOnly="@(!IsFriendEdition)" Variant="Variant.Outlined"
+                    Margin="Margin.Dense" />
+            </MudItem>
+            
+            <MudItem xs="@(IsFriendEdition ? 12 : 6)" Class="mt-n4">
+                <MudTextField ShrinkLabel @bind-Value="Employee.Email" Label="@AppLabels.Email" ReadOnly="@(!IsFriendEdition)" Variant="Variant.Outlined"
+                    Margin="Margin.Dense" />
+            </MudItem>
+
+            <MudItem xs="12" Class="mt-n2 mb-2">
+                <MudCheckBox @bind-Value="Employee.IsEmailPublic" Label="Make my email visible to other users" Color="Color.Primary" Dense="true" />
+                <MudText Typo="Typo.caption" Color="Color.Secondary" Class="ml-8 d-block mt-n2">If unchecked, your email will be hidden on your public profile card.</MudText>
+            </MudItem>
+
+            @if (!IsFriendEdition)
+            {
+                <MudItem xs="6" Class="mt-n4">
+                    <MudTextField ShrinkLabel Value="@Employee.Position" Label="Position Title" ReadOnly="true"
+                        Variant="Variant.Outlined" Margin="Margin.Dense" />
+                </MudItem>
+
+                <MudItem Class="mt-n4" xs="4">
+                    <MudTextField ShrinkLabel Value="@TeamName" Label="@($"Primary {AppLabels.Team}")" ReadOnly="true" Variant="Variant.Outlined"
+                                  Margin="Margin.Dense" />
+                </MudItem>
+            
+                <MudItem Class="mt-n4" xs="4">
+                    <MudTextField ShrinkLabel Value="@Employee.WeeklyHours.ToString("0.##")" Label="Weekly Capacity (Hours)"
+                        ReadOnly="true" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                </MudItem>
+                <MudItem Class="mt-n4" xs="4">
+                    <MudTextField ShrinkLabel Value="@Employee.DateOfJoining.ToString("d")" Label="Start Date" ReadOnly="true"
+                        Variant="Variant.Outlined" Margin="Margin.Dense" />
+                </MudItem>
+
+                <MudItem Class="mt-n4" xs="12">
+                    <MudDivider Class="my-4" />
+                    <MudText Typo="Typo.h6">Personal Information</MudText>
+                </MudItem>
+            }
+
+            @if (!IsFriendEdition)
+            {
+                <MudItem Class="mt-n4" xs="6">
+                    <MudTextField ShrinkLabel @bind-Value="Employee.PersonalEmail" Label="Personal Email" Variant="Variant.Outlined"
+                        Margin="Margin.Dense" />
+                </MudItem>
+            }
+            <MudItem Class="mt-n4" xs="@(IsFriendEdition ? 12 : 6)">
+                <MudTextField ShrinkLabel @bind-Value="Employee.PhoneNumber" Label="Personal Phone" Variant="Variant.Outlined"
+                    Margin="Margin.Dense" />
+            </MudItem>
+            <MudItem Class="mt-n4" xs="12">
+                <MudTextField ShrinkLabel @bind-Value="Employee.Address" Label="Address" Lines="2" Variant="Variant.Outlined"
+                    Margin="Margin.Dense" />
+            </MudItem>
+
+            @if (!IsFriendEdition)
+            {
+                <MudItem Class="mt-n4" xs="6">
+                    <MudTextField ShrinkLabel @bind-Value="Employee.EmergencyContact" Label="Emergency Contact Name"
+                                  Variant="Variant.Outlined" Margin="Margin.Dense" />
+                </MudItem>
+                <MudItem Class="mt-n4" xs="6">
+                    <MudTextField ShrinkLabel @bind-Value="Employee.EmergencyContactPhone" Label="Emergency Contact Phone"
+                                  Variant="Variant.Outlined" Margin="Margin.Dense" />
+                </MudItem>
+            }
+            
+        </MudGrid>
+        }
+
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Close">Close</MudButton>
+        @if (!Employee.IsSuspended)
+        {
+            <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="Submit">Save</MudButton>
+        }
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
+    [Parameter] public Employee Employee { get; set; } = default!;
+
+    private string? _avatarBase64;
+    private string? _signatureBase64;
+    private string? _profileColor;
+    private bool IsFriendEdition => Db.CompanyProfile.Get()?.Edition == "Family";
+    private string TeamName = "None";
+
+    protected override void OnInitialized()
+    {
+        if (!string.IsNullOrEmpty(Employee.AvatarFile))
+        {
+            _avatarBase64 = $"/spokesapi/Media/Avatar/{Employee.Id}?v={Employee.AvatarVersion}";
+        }
+        else
+        {
+            _avatarBase64 = Employee.AvatarBase64;
+        }
+
+        _signatureBase64 = Employee.SignatureImageBase64;
+        _profileColor = Employee.ProfileColor;
+
+        if (!string.IsNullOrEmpty(Employee.TeamId))
+        {
+            var team = Db.Teams.GetById(Employee.TeamId);
+            if (team != null)
+            {
+                TeamName = team.Name;
+            }
+        }
+    }
+
+    private async Task HandleAvatarApiUploaded(List<ApiFileUpload.UploadResult> results)
+    {
+        var result = results.FirstOrDefault();
+        if (result == null) return;
+
+        try
+        {
+            var parameters = new DialogParameters<ImageCropDialog>
+            {
+                { x => x.ImageBase64, result.FilePath },
+                { x => x.TargetWidth, 400 }
+            };
+
+            var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Medium, FullWidth = true };
+            var dialog = await DialogService.ShowAsync<ImageCropDialog>("Crop Avatar", parameters, options);
+            var dialogResult = await dialog.Result;
+
+            if (!dialogResult.Canceled && dialogResult.Data is string croppedBase64)
+            {
+                _avatarBase64 = croppedBase64;
+            }
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Error processing image: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private void RemoveAvatar()
+    {
+        _avatarBase64 = null;
+    }
+
+    private void HandleSignatureApiUploaded(List<ApiFileUpload.UploadResult> results)
+    {
+        var result = results.FirstOrDefault();
+        if (result == null) return;
+        _signatureBase64 = result.FilePath;
+        StateHasChanged();
+    }
+
+    private void RemoveSignature()
+    {
+        _signatureBase64 = null;
+    }
+
+    private void Submit()
+    {
+        if (!string.IsNullOrEmpty(_avatarBase64) && _avatarBase64.StartsWith("data:image"))
+        {
+            try
+            {
+                var base64Data = _avatarBase64.Substring(_avatarBase64.IndexOf(",") + 1);
+                var bytes = Convert.FromBase64String(base64Data);
+                var empPath = Path.Combine(Config["DataPath"] ?? "Data", "Employees", Employee.Id);
+                if (!Directory.Exists(empPath)) Directory.CreateDirectory(empPath);
+                var filePath = Path.Combine(empPath, "avatar.png");
+                System.IO.File.WriteAllBytes(filePath, bytes);
+                
+                Employee.AvatarFile = "avatar.png";
+                Employee.AvatarBase64 = null;
+                Employee.AvatarVersion++;
+            }
+            catch (Exception ex)
+            {
+                Snackbar.Add($"Error saving avatar: {ex.Message}", Severity.Error);
+            }
+        }
+        else if (string.IsNullOrEmpty(_avatarBase64))
+        {
+            Employee.AvatarFile = null;
+            Employee.AvatarBase64 = null;
+            Employee.AvatarVersion++;
+            
+            var filePath = Path.Combine(Config["DataPath"] ?? "Data", "Employees", Employee.Id, "avatar.png");
+            if (System.IO.File.Exists(filePath)) System.IO.File.Delete(filePath);
+        }
+
+        Employee.SignatureImageBase64 = _signatureBase64;
+        Employee.ProfileColor = _profileColor;
+
+        Db.Employees.Save(Employee);
+        MudDialog.Close(DialogResult.Ok(Employee));
+    }
+
+    private void Close() => MudDialog.Cancel();
+
+    private async Task OpenSecureChatSettings()
+    {
+        var parameters = new DialogParameters<SecureChatSettingsDialog> { { x => x.Employee, Employee } };
+        var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Small, FullWidth = true };
+        var dialog = await DialogService.ShowAsync<SecureChatSettingsDialog>("Secure Chat Settings", parameters);
+        await dialog.Result;
+        StateHasChanged(); // Refresh UI in case they enabled it
+    }
+}
+
+

@@ -1,0 +1,71 @@
+@using MudBlazor
+@inject IJSRuntime JS
+
+<MudDialog>
+    <DialogContent>
+        <div style="max-height: 400px; display: flex; justify-content: center; overflow: hidden; background: #000;">
+            <img id="@_imgId" src="@ImageBase64" style="max-width: 100%; display: block;" />
+        </div>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Close">Close</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="CropAndSave">Apply Crop</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
+    
+    [Parameter]
+    public string ImageBase64 { get; set; } = string.Empty;
+
+    [Parameter]
+    public int TargetWidth { get; set; } = 400; // Output image size
+
+    private string _imgId = $"cropper-{Guid.NewGuid()}";
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender && !string.IsNullOrEmpty(ImageBase64))
+        {
+            // Give the DOM a tiny bit of time to render the image
+            await Task.Delay(50);
+            await JS.InvokeVoidAsync("window.initCropper", _imgId);
+        }
+    }
+
+    private async Task CropAndSave()
+    {
+        try
+        {
+            var croppedBase64 = await JS.InvokeAsync<string>("window.getCroppedImage", _imgId, TargetWidth);
+            if (!string.IsNullOrEmpty(croppedBase64))
+            {
+                MudDialog.Close(DialogResult.Ok(croppedBase64));
+            }
+            else
+            {
+                MudDialog.Cancel();
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error cropping image: {ex.Message}");
+            MudDialog.Cancel();
+        }
+    }
+
+    private void Close()
+    {
+        MudDialog.Cancel();
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        try
+        {
+            await JS.InvokeVoidAsync("window.destroyCropper", _imgId);
+        }
+        catch (Exception) { /* Ignored */ }
+    }
+}

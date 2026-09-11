@@ -1,0 +1,195 @@
+@using Spokes_Server.Core.Data
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Models.HR
+@using MudBlazor
+@using Microsoft.AspNetCore.Components.Authorization
+@using System.Security.Claims
+@inject Database Db
+@inject AuthenticationStateProvider AuthStateProvider
+
+<div class="@($"d-flex align-center w-100 {Class}")">
+    <div class="d-flex flex-wrap align-center gap-1 flex-grow-1 pa-1 mud-input-outlined-border" 
+         style="min-height: 40px; border-radius: var(--mud-default-borderradius); border-color: var(--mud-palette-lines-default); border-width: 1px; border-style: solid; background-color: var(--mud-palette-surface);">
+        
+        @if (!string.IsNullOrEmpty(Label))
+        {
+            <MudText Typo="Typo.body2" Class="ml-2 mr-1" Style="min-width: 30px;">@Label</MudText>
+        }
+
+        @foreach (var email in SelectedEmails)
+        {
+            <MudChip T="string" OnClose="@(() => RemoveEmail(email))" Size="Size.Small" Color="Color.Primary" Class="ma-0">
+                @email
+            </MudChip>
+        }
+
+        <div style="flex-grow: 1; min-width: 150px; margin-top: -6px; margin-bottom: -6px;">
+            <MudAutocomplete T="string" @ref="_autocomplete" Value="@_currentInput" FullWidth="true" ValueChanged="OnValueChanged"
+                             SearchFunc="@Search" AdornmentIcon="@Icons.Material.Filled.Search"
+                             CoerceText="false" CoerceValue="false" Variant="Variant.Text" Margin="Margin.Dense" ResetValueOnEmptyText="true"
+                             Placeholder="Search..." Class="ma-0" UserAttributes="@_inputAttributes"
+                             Adornment="Adornment.End" />
+        </div>
+    </div>
+
+    <MudIconButton Icon="@Icons.Material.Filled.Contacts" OnClick="OpenAddressBook"
+                   Color="Color.Primary" Size="Size.Medium" Class="ml-1" Title="Open Address Book" />
+</div>
+
+@code {
+    [Parameter] public string Class { get; set; } = "";
+    [Parameter] public string Label { get; set; } = "To";
+    [Parameter] public List<string> SelectedEmails { get; set; } = new();
+    [Parameter] public EventCallback<List<string>> SelectedEmailsChanged { get; set; }
+    [Parameter] public EventCallback OnAddressBookClick { get; set; }
+
+    private string _currentInput;
+    private MudAutocomplete<string> _autocomplete;
+
+    // Attributes to deter password managers from hijacking the field
+    private Dictionary<string, object> _inputAttributes = new()
+    {
+        { "autocomplete", "new-password" },
+        { "data-lpignore", "true" },
+        { "data-1p-ignore", "true" },
+        { "data-bwignore", "true" },
+        { "data-form-type", "other" }
+    };
+
+    private async Task<IEnumerable<string>> Search(string value, CancellationToken token)
+    {
+        var suggestions = new HashSet<string>();
+        
+        // Always allow what the user typed if it looks somewhat like an email
+        if (!string.IsNullOrWhiteSpace(value) && value.Contains("@"))
+        {
+             suggestions.Add(value);
+        }
+
+        if (string.IsNullOrEmpty(value))
+        {
+            return suggestions;
+        }
+
+        var search = value.Trim();
+
+        // 1. Search in Tier 1: Suppliers / Companies
+        var suppliers = Db.Suppliers.GetAll();
+
+        foreach (var supplier in suppliers)
+        {
+            // Main Contact
+            if (!string.IsNullOrEmpty(supplier.Info.ContactPersonEmail))
+            {
+                if (supplier.Info.ContactPersonEmail.Contains(search, StringComparison.OrdinalIgnoreCase) ||
+                    supplier.Info.ContactPersonName.Contains(search, StringComparison.OrdinalIgnoreCase) ||
+                    supplier.Info.BusinessName.Contains(search, StringComparison.OrdinalIgnoreCase))
+                {
+                    suggestions.Add(supplier.Info.ContactPersonEmail);
+                }
+            }
+
+            // Other Contacts
+            foreach (var contact in supplier.Contacts)
+            {
+                if (!string.IsNullOrEmpty(contact.Email))
+                {
+                   if (contact.Email.Contains(search, StringComparison.OrdinalIgnoreCase) ||
+                       contact.Name.Contains(search, StringComparison.OrdinalIgnoreCase))
+                   {
+                        suggestions.Add(contact.Email);
+                   }
+                }
+            }
+        }
+
+        // 2. Search in Tier 2: Public Contacts
+        var publicContacts = Db.PublicContacts.GetAll();
+        foreach (var contact in publicContacts)
+        {
+            if (!string.IsNullOrEmpty(contact.Email) && 
+                (contact.Email.Contains(search, StringComparison.OrdinalIgnoreCase) || 
+                 contact.Name.Contains(search, StringComparison.OrdinalIgnoreCase)))
+            {
+                suggestions.Add(contact.Email);
+            }
+        }
+
+        // 3. Search in Tier 3: Private Contacts
+        // We need the current employee ID for this.
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        var user = authState.User;
+        if (user.Identity?.IsAuthenticated == true)
+        {
+            var subId = user.Claims.FirstOrDefault(c => c.Type == ClaimTypes.NameIdentifier)?.Value;
+            if (!string.IsNullOrEmpty(subId))
+            {
+                var openId = Db.OpenIdAccounts.GetBySub(subId);
+                var employee = (openId != null && !string.IsNullOrEmpty(openId.LinkedEmployeeId))
+                    ? Db.Employees.GetById(openId.LinkedEmployeeId)
+                    : null;
+                if (employee != null)
+                {
+                    var privateContacts = Db.PrivateContacts.GetAllForEmployee(employee.Id);
+                    foreach (var contact in privateContacts)
+                    {
+                        if (!string.IsNullOrEmpty(contact.Email) && 
+                            (contact.Email.Contains(search, StringComparison.OrdinalIgnoreCase) || 
+                             contact.Name.Contains(search, StringComparison.OrdinalIgnoreCase)))
+                        {
+                            suggestions.Add(contact.Email);
+                        }
+                    }
+                }
+            }
+        }
+
+        return suggestions;
+    }
+
+    private async Task OnValueChanged(string value)
+    {
+        if (!string.IsNullOrWhiteSpace(value))
+        {
+             if(!SelectedEmails.Contains(value))
+             {
+                 SelectedEmails.Add(value);
+                 await SelectedEmailsChanged.InvokeAsync(SelectedEmails);
+             }
+             
+             // Step 1: Blank out the binding immediately
+             _currentInput = null;
+
+             // Step 2: Yield thread to let Blazor register that _currentInput has nulled
+             await Task.Delay(10);
+
+             if (_autocomplete != null)
+             {
+                 // Step 3: Use MudBlazor's inner cleanup commands
+                 await _autocomplete.ClearAsync();
+                 await _autocomplete.ResetAsync();
+
+                 // Step 4: The magic bullet. You noticed the text "remains until focus is lost".
+                 // So we instantly simulate a blur event to trigger its visual wipe,
+                 // and then jump focus back in exactly zero seconds so your cursor doesn't blink!
+                 await _autocomplete.BlurAsync();
+                 await _autocomplete.FocusAsync();
+             }
+        }
+    }
+
+    private async Task RemoveEmail(string email)
+    {
+        SelectedEmails.Remove(email);
+        await SelectedEmailsChanged.InvokeAsync(SelectedEmails);
+    }
+    
+    private async Task OpenAddressBook()
+    {
+        await OnAddressBookClick.InvokeAsync();
+    }
+}
+

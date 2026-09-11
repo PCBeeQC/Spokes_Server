@@ -1,0 +1,84 @@
+@using MudBlazor
+@using Spokes_Server.Core.Models.Accounting
+
+<MudDialog>
+    <DialogContent>
+        <MudText Typo="Typo.body1" Class="mb-4">@Message</MudText>
+
+        @if (ExistingPayments != null && ExistingPayments.Any())
+        {
+            <MudPaper Class="mb-4 pa-3" Elevation="0" Outlined="true" Style="background-color: var(--mud-palette-background-grey);">
+                <MudText Typo="Typo.subtitle2" Class="mb-2">Previous Payments</MudText>
+                <MudTable Items="@ExistingPayments" Dense="true" Elevation="0" Outlined="true">
+                    <HeaderContent>
+                        <MudTh>Date</MudTh>
+                        <MudTh>Amount</MudTh>
+                        <MudTh>Method</MudTh>
+                    </HeaderContent>
+                    <RowTemplate Context="payment">
+                        <MudTd>@payment.Date.ToShortDateString()</MudTd>
+                        <MudTd>@payment.Amount.ToString("C2")</MudTd>
+                        <MudTd>@payment.Method</MudTd>
+                    </RowTemplate>
+                </MudTable>
+            </MudPaper>
+        }
+        
+        <MudNumericField @bind-Value="Payment.Amount" Label="Payment Amount" Format="N2" Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.AttachMoney" Required="true" />
+        
+        @if (Payment.Amount > MaxAmount)
+        {
+            <MudText Color="Color.Warning" Typo="Typo.caption">Warning: Amount exceeds the remaining balance (@MaxAmount.ToString("C2")).</MudText>
+        }
+
+        <MudDatePicker @bind-Date="Date" Label="Payment Date" DisableToolbar="true" Class="mt-3" />
+        
+        <MudTextField @bind-Value="Payment.Reference" Label="Reference (Check #, Wire ID)" Class="mt-3" />
+        
+        <MudSelect @bind-Value="Payment.Method" Label="Payment Method" Class="mt-3">
+            <MudSelectItem Value="@("Check")">Check</MudSelectItem>
+            <MudSelectItem Value="@("Credit Card")">Credit Card</MudSelectItem>
+            <MudSelectItem Value="@("Wire Transfer")">Wire Transfer</MudSelectItem>
+            <MudSelectItem Value="@("ACH")">ACH</MudSelectItem>
+            <MudSelectItem Value="@("Cash")">Cash</MudSelectItem>
+            <MudSelectItem Value="@("Other")">Other</MudSelectItem>
+        </MudSelect>
+        
+        <MudTextField @bind-Value="Payment.Notes" Label="Internal Notes (Optional)" Lines="2" Class="mt-3" />
+        
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Close">Cancel</MudButton>
+        <MudButton Color="Color.Success" Variant="Variant.Filled" OnClick="Submit" Disabled="@(Payment.Amount <= 0)">Record Payment</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
+
+    [Parameter] public string Message { get; set; } = "Record a new payment.";
+    [Parameter] public decimal MaxAmount { get; set; } = 0;
+    [Parameter] public List<PaymentRecord>? ExistingPayments { get; set; }
+    
+    private PaymentRecord Payment = new();
+    
+    private DateTime? Date
+    {
+        get => Payment.Date;
+        set { if (value.HasValue) Payment.Date = value.Value; }
+    }
+
+    protected override void OnInitialized()
+    {
+        Payment.Amount = MaxAmount > 0 ? MaxAmount : 0;
+        Payment.Date = DateTime.Today;
+    }
+
+    private void Close() => MudDialog.Cancel();
+
+    private void Submit()
+    {
+        if (Payment.Amount <= 0) return;
+        MudDialog.Close(DialogResult.Ok(Payment));
+    }
+}

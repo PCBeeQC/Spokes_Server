@@ -1,0 +1,35 @@
+@page "/access-denied"
+@layout Spokes_Server.Components.Layout.LoginLayout
+@using Microsoft.AspNetCore.Authorization
+@attribute [AllowAnonymous]
+
+<MudContainer MaxWidth="MaxWidth.False" Class="d-flex align-center justify-center mud-width-full"
+    Style="height: 100vh; background-color: #f4f6f8;">
+
+    <MudPaper Elevation="3" Class="pa-8 d-flex flex-column align-center" Width="100%" MaxWidth="500px">
+        
+        <MudIcon Icon="@Icons.Material.Filled.GppBad" Color="Color.Error" Style="font-size: 5rem;" Class="mb-4" />
+        
+        <MudText Typo="Typo.h4" Align="Align.Center" GutterBottom="true">Access Denied</MudText>
+        
+        <MudText Typo="Typo.body1" Align="Align.Center" Color="Color.Secondary" Class="mb-8">
+            You are signed in, but you do not have the required permissions to access this page. 
+            If you believe this is an error, please contact your administrator.
+        </MudText>
+
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Large" FullWidth="true"
+            StartIcon="@Icons.Material.Filled.Home" OnClick="GoHome" Class="py-3">
+            Back to Dashboard
+        </MudButton>
+
+    </MudPaper>
+</MudContainer>
+
+@code {
+    [Inject] private NavigationManager Nav { get; set; } = default!;
+
+    private void GoHome()
+    {
+        Nav.NavigateTo("/", forceLoad: true);
+    }
+}

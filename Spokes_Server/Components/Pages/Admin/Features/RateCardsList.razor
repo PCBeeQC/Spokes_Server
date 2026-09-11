@@ -1,0 +1,71 @@
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Data
+@using Spokes_Server.Components.Pages.Admin
+@inject Database Db
+@inject IDialogService DialogService
+@inject ISnackbar Snackbar
+
+<MudText Typo="Typo.body1" Class="mb-4">Define price groups (e.g. Standard, Discounted) to apply to projects.</MudText>
+
+<MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="OpenCreateDialog">Create Rate Card</MudButton>
+
+<MudTable Items="@List" Dense="true" Striped="true" Outlined="true" Elevation="0" Hover="true" Class="mt-4">
+    <HeaderContent>
+        <MudTh>Name</MudTh>
+        <MudTh>Overrides defined</MudTh>
+        <MudTh>Expense Markup</MudTh>
+        <MudTh>Status</MudTh>
+        <MudTh>Actions</MudTh>
+    </HeaderContent>
+    <RowTemplate>
+        <MudTd>@context.Name</MudTd>
+        <MudTd>@context.Rates.Count</MudTd>
+        <MudTd>@context.MarkupRate.ToString("P0")</MudTd>
+        <MudTd>
+            @if (context.IsActive)
+            {
+                <MudChip T="string" Color="Color.Success" Size="Size.Small">Active</MudChip>
+            }
+            else
+            {
+
+                <MudChip T="string" Color="Color.Default" Size="Size.Small">Inactive</MudChip>
+            }
+        </MudTd>
+        <MudTd>
+            <MudIconButton Icon="@Icons.Material.Filled.Edit" Size="Size.Small"
+                OnClick="@(() => OpenEditDialog(context))" />
+        </MudTd>
+    </RowTemplate>
+</MudTable>
+
+@code {
+    private List<RateCard> List = new();
+    protected override void OnInitialized() => Refresh();
+    private void Refresh() => List = Db.RateCards.GetAll().OrderBy(x => x.Name).ToList();
+
+    private async Task OpenCreateDialog() => await OpenDialog(new RateCard(), "New Rate Card");
+    private async Task OpenEditDialog(RateCard item) => await OpenDialog(item, "Edit Rate Card");
+
+    private async Task OpenDialog(RateCard item, string title)
+    {
+        // Clone to avoid live editing
+        var clone = System.Text.Json.JsonSerializer.Deserialize<RateCard>(System.Text.Json.JsonSerializer.Serialize(item));
+
+        var parameters = new DialogParameters { ["RateCard"] = clone };
+        var dialog = await DialogService.ShowAsync<RateCardDialog>(title, parameters);
+        var result = await dialog.Result;
+
+        if (!result.Canceled)
+        {
+            Db.RateCards.Save((RateCard)result.Data);
+            Refresh();
+            Snackbar.Add("Saved", Severity.Success);
+        }
+    }
+}
+

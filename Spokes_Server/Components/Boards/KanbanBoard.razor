@@ -1,0 +1,246 @@
+@using Spokes_Server.Core.Data
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Services
+@inject Database Db
+@inject BoardService BoardService
+@inject IDialogService DialogService
+
+<MudStack Class="h-100 w-100" Spacing="0">
+    <!-- TOOLBAR -->
+    <MudPaper Elevation="0" Class="pa-2 d-flex align-center justify-space-between border-b mb-2">
+        <MudStack Row="true" AlignItems="AlignItems.Center">
+            <MudIcon Icon="@Icons.Material.Filled.ViewColumn" Size="Size.Small" Color="Color.Default" />
+            <MudText Typo="Typo.subtitle2">Group By:</MudText>
+            <MudSelect T="string" Value="@View.GroupByPropertyId" ValueChanged="OnGroupByChanged"
+                Variant="Variant.Outlined" Margin="Margin.Dense" Dense="true" Style="min-width: 150px;">
+                @foreach (var prop in Board.Properties.Where(p => p.Type == BoardPropertyType.Select || p.Type ==
+                                BoardPropertyType.Person))
+                {
+                    <MudSelectItem Value="@prop.Id">@prop.Name</MudSelectItem>
+                }
+            </MudSelect>
+        </MudStack>
+    </MudPaper>
+
+    <!-- CONTENT -->
+    @if (_groupByProp == null)
+    {
+        <MudAlert Severity="Severity.Info" Class="ma-4">Please select a property to group by (e.g. Status, Assignee).
+        </MudAlert>
+    }
+    else
+    {
+        <MudDropContainer T="BoardCard" Items="Cards"
+            ItemsSelector="@((item, column) => GetCardGroupValue(item) == column)" ItemDropped="ItemUpdated"
+            Class="d-flex flex-row gap-4 h-100 px-4 pb-4" Style="overflow-x: auto; overflow-y: hidden;">
+            <ChildContent>
+                <!-- UNGROUPED COLUMN -->
+                <MudPaper Width="300px" MinWidth="300px" Class="pa-2 d-flex flex-column gap-2 rounded-lg" Elevation="0"
+                    Style="background-color: var(--mud-palette-background-grey); height: 100%;">
+                    <MudStack Row="true" AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween" Class="px-2 pt-2">
+                        <div class="d-flex align-center gap-2">
+                            <MudChip T="string" Size="Size.Small" Variant="Variant.Text" Color="Color.Default">No @_groupByProp.Name
+                            </MudChip>
+                            <MudChip T="string" Size="Size.Small" Variant="Variant.Filled" Color="Color.Default">@Cards.Count(c =>
+                                                            string.IsNullOrEmpty(GetCardGroupValue(c)))</MudChip>
+                    </div>
+                </MudStack>
+                <MudDropZone T="BoardCard" Identifier="@string.Empty"
+                    Class="d-flex flex-column gap-2 flex-grow-1 overflow-y-auto px-1 py-2" />
+                <MudButton Variant="Variant.Text" StartIcon="@Icons.Material.Filled.Add" FullWidth="true"
+                    OnClick="@(() => CreateCard(string.Empty))">New</MudButton>
+            </MudPaper>
+
+                <!-- DYNAMIC COLUMNS -->
+            @foreach (var col in _kanbanColumns)
+                {
+                    <MudPaper Width="300px" MinWidth="300px" Class="pa-2 d-flex flex-column gap-2 rounded-lg" Elevation="0"
+                        Style="background-color: var(--mud-palette-background-grey); height: 100%;">
+                        <MudStack Row="true" AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween" Class="px-2 pt-2">
+                            <div class="d-flex align-center gap-2">
+                                <MudChip T="string" Size="Size.Small" Style="@($"background-color: {GetColor(col.Color)}; color: white;")">
+                                    @col.Name</MudChip>
+                                <MudChip T="string" Size="Size.Small" Variant="Variant.Filled" Color="Color.Default">@Cards.Count(c =>
+                                                                GetCardGroupValue(c) == col.Id)</MudChip>
+                    </div>
+                </MudStack>
+
+                        <MudDropZone T="BoardCard" Identifier="@col.Id"
+                            Class="d-flex flex-column gap-2 flex-grow-1 overflow-y-auto px-1 py-2" />
+
+                        <MudButton Variant="Variant.Text" StartIcon="@Icons.Material.Filled.Add" FullWidth="true"
+                            OnClick="@(() => CreateCard(col.Id))">New</MudButton>
+                    </MudPaper>
+                        }
+            </ChildContent>
+            <ItemRenderer>
+                <MudPaper Elevation="2" Class="pa-3 rounded cursor-pointer hover-elevate"
+                    @onclick="@(() => OpenCard(context))">
+                    <MudText Typo="Typo.body1" Style="font-weight: 500;">@context.Title</MudText>
+
+                    <!-- PROPERTIES PREVIEW (Small subset) -->
+                    <MudStack Spacing="1" Class="mt-2">
+                        @foreach (var prop in Board.Properties.Where(p => View.VisiblePropertyIds.Contains(p.Id)).Take(3))
+                        {
+                            <MudText Typo="Typo.caption" Color="Color.Secondary"
+                                Style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                                @GetPropertyValue(context, prop)
+                            </MudText>
+                        }
+                    </MudStack>
+                </MudPaper>
+            </ItemRenderer>
+        </MudDropContainer>
+    }
+
+</MudStack>
+
+@code {
+    [Parameter] public Board Board { get; set; } = default!;
+    [Parameter] public BoardView View { get; set; } = default!;
+    [Parameter] public List<BoardCard> Cards { get; set; } = new();
+
+    private BoardProperty? _groupByProp;
+
+    // Unified abstraction for columns (Option or Person)
+    private class KanbanColumn
+    {
+        public string Id { get; set; } = string.Empty;
+        public string Name { get; set; } = string.Empty;
+        public string Color { get; set; } = "gray";
+    }
+
+    private List<KanbanColumn> _kanbanColumns = new();
+
+    protected override void OnParametersSet()
+    {
+        RefreshConfig();
+    }
+
+    void RefreshConfig()
+    {
+        _groupByProp = null;
+        _kanbanColumns.Clear();
+
+        if (!string.IsNullOrEmpty(View.GroupByPropertyId))
+        {
+            _groupByProp = Board.Properties.FirstOrDefault(p => p.Id == View.GroupByPropertyId);
+            if (_groupByProp != null)
+            {
+                if (_groupByProp.Type == BoardPropertyType.Select)
+                {
+                    _kanbanColumns = _groupByProp.Options.Select(o => new KanbanColumn
+                    {
+                        Id = o.Id,
+                        Name = o.Name,
+                        Color = o.Color
+                    }).ToList();
+                }
+                else if (_groupByProp.Type == BoardPropertyType.Person)
+                {
+                    var emps = Db.Employees.GetAll().Where(e => e.IsActive).ToList();
+                    _kanbanColumns = emps.Select(e => new KanbanColumn
+                    {
+                        Id = e.Id,
+                        Name = $"{e.FirstName} {e.LastName}",
+                        Color = "blue" // Default color for people
+                    }).ToList();
+                }
+            }
+        }
+        else
+        {
+            // Auto-select first Select property if none active (better UX)
+            var firstSelect = Board.Properties.FirstOrDefault(p => p.Type == BoardPropertyType.Select);
+            if (firstSelect != null)
+            {
+                View.GroupByPropertyId = firstSelect.Id;
+                RefreshConfig(); // Recursive call safe? standard
+            }
+        }
+    }
+
+    void OnGroupByChanged(string propId)
+    {
+        View.GroupByPropertyId = propId;
+        // Ideally should save view here
+        BoardService.UpdateBoard(Board);
+        RefreshConfig();
+    }
+
+    string GetCardGroupValue(BoardCard card)
+    {
+        if (_groupByProp == null) return "";
+        if (card.PropertyValues.TryGetValue(_groupByProp.Id, out var val))
+        {
+            return val;
+        }
+        return "";
+    }
+
+    void ItemUpdated(MudItemDropInfo<BoardCard> dropItem)
+    {
+        if (_groupByProp == null) return;
+
+        if (dropItem.Item == null) return;
+        dropItem.Item.PropertyValues[_groupByProp.Id] = dropItem.DropzoneIdentifier;
+        BoardService.UpdateCard(dropItem.Item);
+    }
+
+    void CreateCard(string columnId)
+    {
+        var newCard = BoardService.CreateCard(Board.Id, "New Card");
+        if (_groupByProp != null && !string.IsNullOrEmpty(columnId))
+        {
+            newCard.PropertyValues[_groupByProp.Id] = columnId;
+            BoardService.UpdateCard(newCard);
+        }
+        Cards.Add(newCard);
+    }
+
+    async Task OpenCard(BoardCard card)
+    {
+        var parameters = new DialogParameters<CardDetailDialog> { { x => x.Card, card }, { x => x.Board, Board } };
+        var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Medium, FullWidth = true };
+        await DialogService.ShowAsync<CardDetailDialog>("Card Details", parameters, options);
+    }
+
+    string GetPropertyValue(BoardCard card, BoardProperty prop)
+    {
+        if (card.PropertyValues.TryGetValue(prop.Id, out var val))
+        {
+            if (prop.Type == BoardPropertyType.Select)
+            {
+                return prop.Options.FirstOrDefault(o => o.Id == val)?.Name ?? val;
+            }
+            if (prop.Type == BoardPropertyType.Person)
+            {
+                var emp = Db.Employees.GetById(val);
+                return emp != null ? $"{emp.FirstName} {emp.LastName}" : val;
+            }
+            return val;
+        }
+        return "";
+    }
+
+    string GetColor(string colorName)
+    {
+        return colorName switch
+        {
+            "gray" => "var(--mud-palette-grey)",
+            "brown" => "#795548",
+            "orange" => "var(--mud-palette-warning)",
+            "yellow" => "#FBC02D",
+            "green" => "var(--mud-palette-success)",
+            "blue" => "var(--mud-palette-info)",
+            "purple" => "#9C27B0",
+            "pink" => "#E91E63",
+            "red" => "var(--mud-palette-error)",
+            _ => "var(--mud-palette-text-primary)"
+        };
+    }
+}

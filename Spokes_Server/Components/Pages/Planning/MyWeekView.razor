@@ -1,0 +1,245 @@
+@using Spokes_Server.Core.Data
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Constants
+@using MudBlazor
+@using System.Globalization
+@inject Database Db
+@inject ISnackbar Snackbar
+@inject UserService UserService
+@inject AuthenticationStateProvider AuthStateProvider
+@using Spokes_Server.Core.Services
+
+<div class="my-week-view">
+    <div class="d-flex justify-space-between align-center mb-4">
+        <MudText Typo="Typo.h5"><b>My Weekly Plan</b></MudText>
+        <div class="d-flex align-center gap-2">
+            <MudIconButton Icon="@Icons.Material.Filled.ChevronLeft" OnClick="PrevWeek" />
+            <MudText><b>W@(CurrentWeek) - @CurrentYear</b></MudText>
+            <MudIconButton Icon="@Icons.Material.Filled.ChevronRight" OnClick="NextWeek" />
+            @if (IsSaving)
+            {
+                <MudText Typo="Typo.caption" Color="Color.Warning" Class="ml-2">Saving...</MudText>
+            }
+            else
+            {
+                <MudText Typo="Typo.caption" Color="Color.Success" Class="ml-2">Saved</MudText>
+            }
+        </div>
+    </div>
+
+    <!-- Capacity Summary -->
+    <MudPaper Class="pa-4 mb-4" Elevation="0" Outlined="true">
+        <MudGrid>
+            <MudItem xs="12" sm="3">
+                <MudText Typo="Typo.subtitle2" Color="Color.Secondary">Total Planned</MudText>
+                <MudText Typo="Typo.h4">@CurrentPlan.TotalHours.ToString("F1") <span
+                        style="font-size: 0.5em; color: gray;">/ 40h</span></MudText>
+            </MudItem>
+            <MudItem xs="12" sm="9" Class="d-flex align-center">
+                @{
+                    var percent = (CurrentPlan.TotalHours / 40.0m) * 100;
+                    var color = percent > 100 ? Color.Error : (percent > 90 ? Color.Warning : Color.Success);
+                }
+                <MudProgressLinear Value="@((double)percent)" Color="@color" Size="Size.Large" Rounded="true"
+                    Class="my-3">
+                    <MudText Typo="Typo.subtitle2" Color="Color.Dark"><b>@CurrentPlan.TotalHours.ToString("F1")h</b>
+                    </MudText>
+                </MudProgressLinear>
+            </MudItem>
+        </MudGrid>
+    </MudPaper>
+
+    <!-- Plan Editor -->
+    <MudPaper Class="pa-4" Elevation="0" Outlined="true">
+        <MudText Typo="Typo.h6" Class="mb-4">Planned Activities</MudText>
+
+        @if (CurrentPlan.Entries.Any())
+        {
+            <MudTable Items="@CurrentPlan.Entries" Dense="true" Hover="true" Elevation="0">
+                <HeaderContent>
+                    <MudTh>Project</MudTh>
+                    <MudTh>Hours</MudTh>
+                    <MudTh>Notes</MudTh>
+                    <MudTh Style="width: 50px;"></MudTh>
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd>
+                        <MudAutocomplete T="string" Label="Project" Value="@context.ProjectName"
+                            ValueChanged="@((name) => UpdateProjectByName(context, name))" SearchFunc="@SearchProjects"
+                            Variant="Variant.Text" Margin="Margin.Dense" ResetValueOnEmptyText="true" CoerceText="true" 
+                            Disabled="@(!CanEdit)" />
+                    </MudTd>
+                    <MudTd>
+                        <MudNumericField Value="@context.Hours" ValueChanged="@((decimal v) => UpdateHours(context, v))"
+                            Min="0" Max="100" Step="0.5M" Margin="Margin.Dense" HideSpinButtons="true" 
+                            Disabled="@(!CanEdit)" />
+                    </MudTd>
+                    <MudTd>
+                        <MudTextField Value="@context.Note" ValueChanged="@((string v) => UpdateNote(context, v))"
+                            Placeholder="Specific focus..." Margin="Margin.Dense" DisableUnderLine="true"
+                            DebounceInterval="500" Disabled="@(!CanEdit)" />
+                    </MudTd>
+                    <MudTd>
+                        @if (CanEdit)
+                        {
+                            <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small" Color="Color.Error"
+                                OnClick="@(() => RemoveEntry(context))" />
+                        }
+                    </MudTd>
+                </RowTemplate>
+            </MudTable>
+        }
+        else
+        {
+            <MudAlert Severity="Severity.Info" Class="mb-4">No activities planned for this week. @(CanEdit ? "Click 'Add Activity' to start." : "")</MudAlert>
+        }
+
+        @if (CanEdit)
+        {
+            <div class="d-flex mt-4 gap-2">
+                <MudButton StartIcon="@Icons.Material.Filled.Add" OnClick="AddEntry" Variant="Variant.Outlined"
+                    Color="Color.Primary">Add Activity</MudButton>
+            </div>
+        }
+    </MudPaper>
+
+</div>
+
+@code {
+    private int CurrentYear = DateTime.Today.Year;
+    private int CurrentWeek;
+    private WeeklyPlan CurrentPlan = new();
+
+    private List<Project> ActiveProjects = new();
+    private List<WorkType> WorkTypes = new();
+
+    private Employee CurrentEmployee = default!;
+    private bool CanEdit = false;
+
+    protected override async Task OnInitializedAsync()
+    {
+        CurrentWeek = ISOWeek.GetWeekOfYear(DateTime.Today);
+
+        // Get Current User
+        CurrentEmployee = await UserService.GetEmployeeAsync();
+
+        if (CurrentEmployee != null)
+        {
+            CanEdit = CurrentEmployee.HasPermission(AppPermissions.MyWeek.Edit);
+        }
+
+        // Fix Filter: Ensure we get active projects (Status string comparison)
+        // Also load WorkTypes for "SubTask"
+        ActiveProjects = Db.Projects.GetAll()
+        .Where(p => (p.Status != ProjectStatus.Archived && p.Status != ProjectStatus.Draft) || p.IsInternal)
+        .OrderBy(p => p.DisplayName)
+        .ToList();
+
+        WorkTypes = Db.WorkTypes.GetAll().OrderBy(w => w.Name).ToList();
+
+        LoadPlan();
+    }
+
+    private void LoadPlan()
+    {
+        if (CurrentEmployee == null) return;
+
+        CurrentPlan = Db.WeeklyPlans.GetByEmployeeAndWeek(CurrentEmployee.Id, CurrentYear, CurrentWeek);
+
+        // Ensure name is up to date
+        CurrentPlan.EmployeeName = $"{CurrentEmployee.FirstName} {CurrentEmployee.LastName}";
+
+        // Refresh Project Names in case they changed or are missing
+        foreach (var entry in CurrentPlan.Entries)
+        {
+            if (string.IsNullOrEmpty(entry.ProjectName))
+            {
+                var p = ActiveProjects.FirstOrDefault(x => x.Id == entry.ProjectId);
+                if (p != null) entry.ProjectName = p.DisplayName;
+            }
+        }
+    }
+
+    private async Task<IEnumerable<string>> SearchProjects(string value, CancellationToken token)
+    {
+        if (string.IsNullOrEmpty(value))
+            return ActiveProjects.Select(x => x.DisplayName);
+
+        return ActiveProjects.Where(x => x.DisplayName.Contains(value, StringComparison.InvariantCultureIgnoreCase))
+        .Select(x => x.DisplayName);
+    }
+
+    private bool IsSaving = false;
+
+    // ... LoadPlan ...
+
+    private void UpdateProjectByName(PlanEntry entry, string projectName)
+    {
+        entry.ProjectName = projectName;
+        var proj = ActiveProjects.FirstOrDefault(p => p.DisplayName == projectName);
+        if (proj != null)
+        {
+            entry.ProjectId = proj.Id;
+        }
+        _ = AutoSave();
+    }
+    
+    private void UpdateHours(PlanEntry entry, decimal hours)
+    {
+        entry.Hours = hours;
+        _ = AutoSave();
+    }
+
+    private void UpdateNote(PlanEntry entry, string note)
+    {
+        entry.Note = note;
+        _ = AutoSave();
+    }
+
+    private void AddEntry()
+    {
+        if (!CanEdit) return;
+        CurrentPlan.Entries.Add(new PlanEntry { Hours = 4 }); // Default 4h block
+        _ = AutoSave();
+    }
+
+    private void RemoveEntry(PlanEntry entry)
+    {
+        if (!CanEdit) return;
+        CurrentPlan.Entries.Remove(entry);
+        _ = AutoSave();
+    }
+
+    private async Task AutoSave()
+    {
+        IsSaving = true;
+        StateHasChanged();
+        
+        // Simulate async delay if backend is fast, to show the UI state
+        // await Task.Delay(300);
+
+        Db.WeeklyPlans.Save(CurrentPlan);
+        
+        IsSaving = false;
+        StateHasChanged();
+    }
+
+    private void PrevWeek()
+    {
+        CurrentWeek--;
+        if (CurrentWeek < 1) { CurrentYear--; CurrentWeek = 52; }
+        LoadPlan();
+    }
+
+    private void NextWeek()
+    {
+        CurrentWeek++;
+        if (CurrentWeek > 52) { CurrentYear++; CurrentWeek = 1; }
+        LoadPlan();
+    }
+}
+

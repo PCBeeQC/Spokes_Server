@@ -1,0 +1,152 @@
+@page "/admin/standard-documents"
+@using MudBlazor
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Data
+@using Spokes_Server.Core.Constants
+@using Microsoft.AspNetCore.Components.Authorization
+@attribute [Authorize]
+@inject Database Db
+@inject UserService UserService
+@inject IDialogService DialogService
+@inject ISnackbar Snackbar
+@inject NavigationManager Nav
+
+<PageTitle>Standard Documents</PageTitle>
+
+<MudContainer MaxWidth="MaxWidth.Large" Class="mt-4">
+    <div class="d-flex justify-space-between align-center mb-4">
+        <div>
+            <MudText Typo="Typo.h4">Standard Documents</MudText>
+            <MudText Typo="Typo.body1" Color="Color.Secondary">Manage reusable document templates with context tags.
+            </MudText>
+        </div>
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Add"
+            OnClick="OnCreate">
+            New Template
+        </MudButton>
+    </div>
+
+    <MudTable Items="_documents"  Breakpoint="Breakpoint.Sm" Dense="true" Striped="true" Outlined="true" Elevation="0" Hover="true" Loading="_loading"
+        CustomHeader="true">
+        <HeaderContent>
+            <MudTHeadRow>
+                <MudTh>Name</MudTh>
+                <MudTh>Description</MudTh>
+                <MudTh>Last Updated</MudTh>
+                <MudTh Style="width: 100px;">Actions</MudTh>
+            </MudTHeadRow>
+        </HeaderContent>
+        <RowTemplate Context="doc">
+            <MudTd DataLabel="Name">@doc.Name</MudTd>
+            <MudTd DataLabel="Description">@doc.Description</MudTd>
+            <MudTd DataLabel="Last Updated">@doc.UpdatedAt.ToLocalTime().ToString("g")</MudTd>
+            <MudTd>
+                <div class="d-flex">
+                    <MudTooltip Text="Edit">
+                        <MudIconButton Icon="@Icons.Material.Filled.Edit" Color="Color.Primary" Size="Size.Small"
+                            OnClick="@(() => OnEdit(doc))" />
+                    </MudTooltip>
+                    <MudTooltip Text="Delete">
+                        <MudIconButton Icon="@Icons.Material.Filled.Delete" Color="Color.Error" Size="Size.Small"
+                            OnClick="@(() => OnDelete(doc))" />
+                    </MudTooltip>
+                </div>
+            </MudTd>
+        </RowTemplate>
+        <NoRecordsContent>
+            <MudText Align="Align.Center" Class="pa-4">No standard documents found. Click 'New Template' to create one.
+            </MudText>
+        </NoRecordsContent>
+    </MudTable>
+</MudContainer>
+
+@code {
+    private List<StandardDocument> _documents = new();
+    private bool _loading = true;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var emp = await UserService.GetEmployeeAsync();
+        var hasAccess = emp != null && (emp.IsAdmin || emp.HasPermission(AppPermissions.Admin.ManageSettings));
+
+        if (!hasAccess)
+        {
+            Nav.NavigateTo("/", true);
+            return;
+        }
+
+        Reload();
+    }
+
+    private void Reload()
+    {
+        _loading = true;
+        _documents = Db.StandardDocuments.GetAll().OrderBy(d => d.Name).ToList();
+        _loading = false;
+    }
+
+    private async Task OnCreate()
+    {
+        var parameters = new DialogParameters { ["IsNew"] = true, ["Document"] = new StandardDocument() };
+        var options = new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true, CloseButton = true };
+        var dialog = await DialogService.ShowAsync<StandardDocumentDialog>("Create Document", parameters, options);
+        var result = await dialog.Result;
+
+        if (!result.Canceled)
+        {
+            Reload();
+        }
+    }
+
+    private async Task OnEdit(StandardDocument doc)
+    {
+        // Clone for editing
+        var cloned = new StandardDocument
+            {
+                Id = doc.Id,
+                Name = doc.Name,
+                Description = doc.Description,
+                Body = doc.Body,
+                IsConfidential = doc.IsConfidential,
+                Blocks = doc.Blocks.Select(b => new DocumentBlockInstance
+                {
+                    Type = b.Type,
+                    Name = b.Name,
+                    Properties = new Dictionary<string, string>(b.Properties)
+                }).ToList(),
+                CreatedAt = doc.CreatedAt,
+                UpdatedAt = doc.UpdatedAt
+            };
+
+        var parameters = new DialogParameters { ["IsNew"] = false, ["Document"] = cloned };
+        var options = new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true, CloseButton = true };
+        var dialog = await DialogService.ShowAsync<StandardDocumentDialog>("Edit Document", parameters, options);
+        var result = await dialog.Result;
+
+        if (!result.Canceled)
+        {
+            Reload();
+        }
+    }
+
+    private async Task OnDelete(StandardDocument doc)
+    {
+        var confirm = await DialogService.ShowMessageBoxAsync("Delete Template",
+        $"Are you sure you want to delete '{doc.Name}'? This document template will no longer be available for new projects.",
+        "Delete", cancelText: "Cancel");
+
+        if (confirm == true)
+        {
+            try
+            {
+                Db.StandardDocuments.Delete(doc.Id);
+                Snackbar.Add("Standard document deleted", Severity.Info);
+                Reload();
+            }
+            catch (Exception ex)
+            {
+                Snackbar.Add($"Error deleting document: {ex.Message}", Severity.Error);
+            }
+        }
+    }
+}

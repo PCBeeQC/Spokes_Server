@@ -1,0 +1,64 @@
+@if (Count > 0)
+{
+    <span class="@CssClass" style="@Style">
+        @DisplayText
+    </span>
+}
+
+<style>
+    .notification-badge {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 9999px; /* Ensures a perfect pill/circle shape */
+        color: white;
+        font-weight: 700;
+        flex-shrink: 0;
+        box-sizing: border-box;
+        line-height: normal; /* Better vertical centering than fixed line-height: 1 */
+    }
+
+    .notification-badge-medium {
+        min-width: 21px;
+        height: 21px;
+        padding: 0 7px;
+        font-size: 11px;
+    }
+
+    .notification-badge-small {
+        min-width: 18px;
+        height: 18px;
+        padding: 0 6px;
+        font-size: 9px;
+    }
+</style>
+
+@code {
+    [Parameter] public int Count { get; set; } = 0;
+    
+    /// <summary>
+    /// Max number to show before displaying the plus sign.
+    /// E.g. MaxCount=9 => 10 is shown as "9+".
+    /// </summary>
+    [Parameter] public int MaxCount { get; set; } = 9;
+    
+    /// <summary>
+    /// Whether to render the smaller variant of the badge.
+    /// </summary>
+    [Parameter] public bool Small { get; set; } = false;
+    
+    /// <summary>
+    /// Color of the badge background. Defaults to error red.
+    /// </summary>
+    [Parameter] public string Color { get; set; } = "var(--mud-palette-error)";
+    
+    [Parameter] public string Class { get; set; } = "";
+    
+    [Parameter] public string StyleOverride { get; set; } = "";
+
+    private string DisplayText => Count > MaxCount ? $"{MaxCount}+" : Count.ToString();
+
+    private string CssClass => $"notification-badge {(Small ? "notification-badge-small" : "notification-badge-medium")} {Class}".Trim();
+
+    private string Style => $"background: {Color}; {StyleOverride}".Trim();
+}

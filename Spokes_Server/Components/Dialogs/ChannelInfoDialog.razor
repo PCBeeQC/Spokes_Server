@@ -1,0 +1,68 @@
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Components.Pages.Chat
+
+<MudDialog ContentClass="pa-0">
+    <DialogContent>
+        <div style="height: var(--viewport-height, 100dvh); width: 100%; display: flex; flex-direction: column; padding-top: var(--safe-area-top); padding-bottom: var(--safe-area-bottom);">
+            <ChannelInfoPanel Channel="Channel" DisplayName="@DisplayName" Employees="Employees"
+                CurrentUserId="@CurrentUserId" OnClose="Close" OnPinnedMessageClicked="OnPinnedMessageClicked"
+                OnChannelUpdated="OnChannelUpdatedCb" OnLeaveGroup="OnLeaveGroupCb"
+                OnArchiveChannel="OnArchiveChannelCb" OnDeleteChannel="OnDeleteChannelCb" OnRemoveMember="OnRemoveMemberCb" />
+        </div>
+    </DialogContent>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
+
+    [Parameter] public ChatChannel? Channel { get; set; }
+    [Parameter] public string DisplayName { get; set; } = "";
+    [Parameter] public List<Employee> Employees { get; set; } = new();
+    [Parameter] public string? CurrentUserId { get; set; }
+    [Parameter] public EventCallback<string> OnPinnedMessageClickedCb { get; set; }
+    [Parameter] public EventCallback OnChannelUpdatedCallback { get; set; }
+    [Parameter] public EventCallback OnLeaveGroupCallback { get; set; }
+    [Parameter] public EventCallback OnArchiveChannelCallback { get; set; }
+    [Parameter] public EventCallback OnDeleteChannelCallback { get; set; }
+    [Parameter] public EventCallback<string> OnRemoveMemberCallback { get; set; }
+
+    private void Close() => MudDialog.Close(DialogResult.Ok(true));
+
+    private async Task OnPinnedMessageClicked(string messageId)
+    {
+        await OnPinnedMessageClickedCb.InvokeAsync(messageId);
+        MudDialog.Close(DialogResult.Ok(true));
+    }
+
+    private async Task OnChannelUpdatedCb()
+    {
+        await OnChannelUpdatedCallback.InvokeAsync();
+    }
+
+    private async Task OnLeaveGroupCb()
+    {
+        await OnLeaveGroupCallback.InvokeAsync();
+        MudDialog.Close(DialogResult.Ok(true));
+    }
+
+    private async Task OnArchiveChannelCb()
+    {
+        await OnArchiveChannelCallback.InvokeAsync();
+        MudDialog.Close(DialogResult.Ok(true));
+    }
+
+    private async Task OnDeleteChannelCb()
+    {
+        await OnDeleteChannelCallback.InvokeAsync();
+        MudDialog.Close(DialogResult.Ok(true));
+    }
+
+    private async Task OnRemoveMemberCb(string memberId)
+    {
+        await OnRemoveMemberCallback.InvokeAsync(memberId);
+    }
+}

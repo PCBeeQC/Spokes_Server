@@ -1,0 +1,17 @@
+@* Custom snackbar content for chat notifications *@
+<div class="d-flex align-center gap-3" style="cursor: pointer;">
+    <MudAvatar Size="Size.Medium" Color="Color.Primary">@Initials</MudAvatar>
+    <div>
+        <MudText Typo="Typo.caption" Style="opacity: 0.7;">@ChannelName</MudText>
+        <MudText Typo="Typo.subtitle2" Style="font-weight: 600;">@SenderName</MudText>
+        <MudText Typo="Typo.body2" Style="opacity: 0.9;">@Content</MudText>
+    </div>
+</div>
+
+@code {
+    [Parameter] public string SenderName { get; set; } = "";
+    [Parameter] public string Content { get; set; } = "";
+    [Parameter] public string Initials { get; set; } = "";
+    [Parameter] public string ChannelId { get; set; } = "";
+    [Parameter] public string ChannelName { get; set; } = "";
+}

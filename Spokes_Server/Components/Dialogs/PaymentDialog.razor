@@ -1,0 +1,41 @@
+@using MudBlazor
+
+<MudDialog>
+    <DialogContent>
+        <MudText Class="mb-4">Enter the amount received from the client.</MudText>
+        <MudGrid>
+            <MudItem xs="12" sm="6">
+                <MudNumericField @bind-Value="Amount" Label="Payment Amount" Format="N2" Max="@MaxAmount"
+                    Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.AttachMoney" AutoFocus="true" />
+            </MudItem>
+            <MudItem xs="12" sm="6">
+                <MudDatePicker @bind-Date="DatePaid" Label="Payment Date" DisableToolbar="true" />
+            </MudItem>
+        </MudGrid>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Close">Close</MudButton>
+        <MudButton Color="Color.Success" Variant="Variant.Filled" OnClick="Submit">Save Payment</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
+    [Parameter] public decimal MaxAmount { get; set; }
+
+    private decimal Amount;
+    private DateTime? DatePaid = DateTime.Today;
+
+    protected override void OnInitialized()
+    {
+        Amount = MaxAmount;
+    }
+
+    private void Close() => MudDialog.Cancel();
+
+    private void Submit()
+    {
+        if (Amount <= 0) return;
+        MudDialog.Close(DialogResult.Ok((Amount, DatePaid ?? DateTime.Today)));
+    }
+}

@@ -1,0 +1,4 @@
+/* Target the ID directly to ensure specificity */
+#chat-drop-zone {
+    position: relative;
+}

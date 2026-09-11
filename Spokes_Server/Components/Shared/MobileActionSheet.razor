@@ -1,0 +1,143 @@
+@if (IsOpen)
+{
+    <div class="action-sheet-backdrop" @onclick="OnClose"></div>
+    <div id="@_sheetId" class="action-sheet">
+        <div class="action-sheet-handle"></div>
+        <div class="action-sheet-content">
+            @ChildContent
+        </div>
+    </div>
+}
+
+<style>
+    .action-sheet-backdrop {
+        position: absolute;
+        inset: 0;
+        background: rgba(0,0,0,0.4);
+        z-index: 9998;
+        animation: fadeIn 0.2s ease;
+    }
+
+    .action-sheet {
+        position: absolute;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        background: var(--mud-palette-background);
+        border-radius: 24px 24px 0 0;
+        z-index: 9999;
+        padding: 8px 0 env(safe-area-inset-bottom, 16px) 0;
+        animation: slideUp 0.25s ease;
+        box-shadow: 0 -4px 24px rgba(0,0,0,0.2);
+        max-height: 85vh;
+        display: flex;
+        flex-direction: column;
+    }
+
+    .action-sheet-content {
+        flex: 1;
+        overflow-y: auto;
+        overscroll-behavior: contain;
+        padding: 0 16px 16px 16px;
+    }
+
+    .action-sheet-handle {
+        width: 36px;
+        height: 4px;
+        border-radius: 2px;
+        background: var(--mud-palette-text-disabled);
+        margin: 4px auto 8px;
+    }
+
+
+
+    @@keyframes slideUp {
+        from { transform: translateY(100%); }
+        to { transform: translateY(0); }
+    }
+
+    @@keyframes fadeIn {
+        from { opacity: 0; }
+        to { opacity: 1; }
+    }
+</style>
+
+@implements IAsyncDisposable
+@inject IJSRuntime JS
+
+@code {
+    [Parameter] public bool IsOpen { get; set; }
+    [Parameter] public EventCallback OnClose { get; set; }
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+
+    private IJSObjectReference? _module;
+    private DotNetObjectReference<MobileActionSheet>? _objRef;
+    private bool _wasOpen;
+    private string _sheetId = "action-sheet-" + Guid.NewGuid().ToString("N");
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            try
+            {
+                _module = await JS.InvokeAsync<IJSObjectReference>("import", $"./{Assets.Bypassed("Components/Shared/MobileActionSheet.razor.js")}");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[MobileActionSheet] Error loading JS: {ex.Message}");
+            }
+        }
+
+        if (IsOpen && !_wasOpen)
+        {
+            _wasOpen = true;
+            _objRef ??= DotNetObjectReference.Create(this);
+            if (_module != null)
+            {
+                // Slight delay to allow DOM to render the element before querying it
+                await Task.Delay(50);
+                await _module.InvokeVoidAsync("initSwipeToDismiss", _sheetId, _objRef);
+                await _module.InvokeVoidAsync("initHistoryState", _objRef);
+            }
+        }
+        else if (!IsOpen && _wasOpen)
+        {
+            _wasOpen = false;
+        }
+    }
+
+    [JSInvokable]
+    public async Task CloseSheet()
+    {
+        if (_module != null)
+        {
+            try { await _module.InvokeVoidAsync("cleanupHistoryState", true); } catch { }
+        }
+        await OnClose.InvokeAsync();
+    }
+
+    [JSInvokable]
+    public async Task HandleBack()
+    {
+        if (_module != null)
+        {
+            try { await _module.InvokeVoidAsync("cleanupHistoryState", false); } catch { }
+        }
+        await OnClose.InvokeAsync();
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        _objRef?.Dispose();
+        if (_module != null)
+        {
+            try 
+            { 
+                await _module.InvokeVoidAsync("cleanupHistoryState", false);
+                await _module.DisposeAsync(); 
+            }
+            catch (Microsoft.JSInterop.JSDisconnectedException) { /* Circuit already gone */ }
+        }
+    }
+}

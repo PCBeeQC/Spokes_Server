@@ -1,0 +1,621 @@
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Data
+@using MudBlazor
+@using Spokes_Server.Components.Dialogs
+@inject Database Db
+@inject IDialogService DialogService
+@inject Spokes_Server.Core.Services.Core.AppLabelService AppLabels
+
+<MudDialog>
+    <DialogContent>
+        <div class="d-flex flex-column gap-4 pb-2" style="max-height: 70vh; overflow-y: auto;">
+            @* --- General Info Card --- *@
+            <MudPaper Elevation="0" Outlined="true" Class="rounded-lg overflow-hidden flex-shrink-0">
+                <div class="d-flex align-center my-1 ml-4">
+                    <MudIcon Icon="@Icons.Material.Filled.Info" Size="Size.Small" Class="mr-2" />
+                    <MudText Typo="Typo.h6">General Info</MudText>
+                </div>
+                <MudDivider />
+                <div class="px-4 py-4 d-flex flex-column gap-3">
+                    <div class="d-flex gap-3 align-center">
+                        <MudTooltip Text="Select Icon">
+                            <MudAvatar Style="height: 56px; width: 56px; cursor: pointer; flex-shrink: 0;" Color="Color.Primary" @onclick="PickIcon">
+                                @if (!string.IsNullOrEmpty(Icon))
+                                {
+                                    <MudIcon Icon="@Icon" Size="Size.Large" />
+                                }
+                                else
+                                {
+                                    <MudIcon Icon="@Icons.Material.Filled.InsertEmoticon" Size="Size.Medium" />
+                                }
+                            </MudAvatar>
+                        </MudTooltip>
+                        <MudTextField T="string" Margin="Margin.Dense" Label="Channel Name" @bind-Value="ChannelName" Required="true" Variant="Variant.Outlined" Class="flex-grow-1 ma-0" />
+                    </div>
+                    
+                    <MudTextField T="string" Margin="Margin.Dense" Label="Description" @bind-Value="Description" Lines="2" Variant="Variant.Outlined" Class="ma-0" />
+                    
+                    @if (SelectedAccessType == "Public")
+                    {
+                        <div class="d-flex align-end gap-2 mt-1">
+                            <MudSelect Margin="Margin.Dense" T="string" Label="Category (Optional)" @bind-Value="CategoryId"
+                                AnchorOrigin="Origin.BottomLeft" Variant="Variant.Outlined" Class="flex-grow-1 ma-0" Clearable="true"
+                                ToStringFunc="@(id => string.IsNullOrEmpty(id) ? "None (Public)" : AllCategories.FirstOrDefault(c => c.Id == id)?.Name ?? "Unknown")">
+                                <MudSelectItem T="string" Value="@(null)">None (Public)</MudSelectItem>
+                                @foreach (var cat in AllCategories)
+                                {
+                                    <MudSelectItem T="string" Value="@cat.Id">@cat.Name</MudSelectItem>
+                                }
+                            </MudSelect>
+                            @if (CanManageCategories)
+                            {
+                                <MudTooltip Text="Manage Categories">
+                                    <MudIconButton Icon="@Icons.Material.Filled.Settings" OnClick="OpenManageCategories" Class="mb-n1" />
+                                </MudTooltip>
+                            }
+                        </div>
+                    }
+                </div>
+            </MudPaper>
+
+            @* --- Access Control Card --- *@
+            <MudPaper Elevation="0" Outlined="true" Class="rounded-lg overflow-hidden flex-shrink-0">
+                <div class="d-flex align-center my-1 ml-4">
+                    <MudIcon Icon="@Icons.Material.Filled.Security" Size="Size.Small" Class="mr-2" />
+                    <MudText Typo="Typo.h6">Access Control</MudText>
+                </div>
+                <MudDivider />
+                <div class="px-4 py-4 d-flex flex-column gap-3">
+                    <MudSelect Margin="Margin.Dense" T="string" Label="Access Type" @bind-Value="SelectedAccessType"
+                        AnchorOrigin="Origin.BottomLeft" Variant="Variant.Outlined" Class="ma-0">
+                        <MudSelectItem Value="@("Public")">Public (Everyone)</MudSelectItem>
+                        <MudSelectItem Value="@("Restricted")">Restricted (Specific @(AppLabels.Teams)/People)</MudSelectItem>
+                        @if (!IsFriendEdition)
+                        {
+                            <MudSelectItem Value="@("Project")">Linked to Project</MudSelectItem>                        
+                        }
+                    </MudSelect>
+
+                    @if (SelectedAccessType == "Restricted")
+                    {
+                        <div class="mt-2">
+                            <MudText Typo="Typo.subtitle2" Class="mb-1">Allowed @(AppLabels.Teams)</MudText>
+                            <TeamAutocomplete Label="@($"Add {AppLabels.Team}")" Margin="Margin.Dense" Teams="@AllTeams" ExcludedIds="@SelectedTeamIds" ValueChanged="AddTeamAsync" ResetOnSelect="true" Class="ma-0" />
+
+                            <div class="d-flex flex-wrap gap-1 mt-2">
+                                @foreach(var teamId in SelectedTeamIds)
+                                {
+                                    var team = AllTeams.FirstOrDefault(t => t.Id == teamId);
+                                    if (team != null)
+                                    {
+                                        <TeamChip Team="@team" OnClose="@(() => RemoveTeam(teamId))" Size="Size.Small" />
+                                    }
+                                }
+                            </div>
+                        </div>
+
+                        <div class="mt-2">
+                            <MudText Typo="Typo.subtitle2" Class="mb-1">Allowed Users</MudText>
+                            <EmployeeAutocomplete Label="Add User" Margin="Margin.Dense" Employees="@AllEmployees" ExcludedIds="@SelectedUserIds" ValueChanged="AddUserAsync" ResetOnSelect="true" Class="ma-0" />
+
+                            <div class="d-flex flex-wrap gap-1 mt-2">
+                                @foreach(var userId in SelectedUserIds)
+                                {
+                                    var user = AllEmployees.FirstOrDefault(u => u.Id == userId);
+                                    if (user != null)
+                                    {
+                                        <EmployeeChip Employee="@user" OnClose="@(() => RemoveUser(userId))" Size="Size.Small" />
+                                    }
+                                }
+                            </div>
+                        </div>
+                    }
+                    else if (SelectedAccessType == "Project")
+                    {
+                        <div class="mt-2">
+                            <MudAutocomplete Margin="Margin.Dense" T="Project" Label="Select Project" Value="@_selectedProject" ValueChanged="OnProjectSelected"
+                                             SearchFunc="SearchProjects" ToStringFunc="@(p => p?.DisplayName ?? "")" 
+                                             Clearable="true" Variant="Variant.Outlined" Class="ma-0">
+                                <ItemTemplate Context="proj">
+                                    <MudText Typo="Typo.body2">@proj.DisplayName</MudText>
+                                </ItemTemplate>
+                            </MudAutocomplete>
+                            <MudText Typo="Typo.caption" Class="ml-1 mt-1 d-block">Access will be determined by the Project's settings.</MudText>
+                        </div>
+                    }
+                </div>
+            </MudPaper>
+
+            @* --- Announcement Channel Card --- *@
+            @if (ExistingChannel == null || ExistingChannel.SupportsAnnouncements)
+            {
+                <MudPaper Elevation="0" Outlined="true" Class="rounded-lg overflow-hidden flex-shrink-0">
+                    <div class="d-flex align-center justify-space-between my-1 ml-4 mr-2">
+                        <div class="d-flex align-center">
+                            <MudIcon Icon="@Icons.Material.Filled.Campaign" Size="Size.Small" Class="mr-2" />
+                            <MudText Typo="Typo.h6">Announcement Channel</MudText>
+                        </div>
+                        <MudSwitch @bind-Value="IsAnnouncementOnly" Color="Color.Primary" Class="ma-0" />
+                    </div>
+                    <MudDivider />
+                    @if (IsAnnouncementOnly)
+                    {
+                        <div class="px-4 py-4 d-flex flex-column gap-3">
+                            <MudText Color="Color.Info" Typo="Typo.caption" Class="mb-1">Only specific users or @(AppLabels.Teams.ToLower()) will be allowed to post messages in this channel.</MudText>
+                            
+                            <div>
+                                <MudText Typo="Typo.subtitle2" Class="mb-1">Allowed @(AppLabels.Teams)</MudText>
+                                <TeamAutocomplete Label="@($"Add {AppLabels.Team} to Post")" Margin="Margin.Dense" Teams="@AllTeams" ExcludedIds="@AllowedPostTeamIds" ValueChanged="AddPostTeamAsync" ResetOnSelect="true" Class="ma-0" />
+                                <div class="d-flex flex-wrap gap-1 mt-2">
+                                    @foreach(var teamId in AllowedPostTeamIds)
+                                    {
+                                        var team = AllTeams.FirstOrDefault(t => t.Id == teamId);
+                                        if (team != null)
+                                        {
+                                            <TeamChip Team="@team" OnClose="@(() => RemovePostTeam(teamId))" Color="Color.Secondary" Size="Size.Small" />
+                                        }
+                                    }
+                                </div>
+                            </div>
+
+                            <div class="mt-2">
+                                <MudText Typo="Typo.subtitle2" Class="mb-1">Allowed Users</MudText>
+                                <EmployeeAutocomplete Label="Add User to Post" Margin="Margin.Dense" Employees="@AllEmployees" ExcludedIds="@AllowedPostUserIds" ValueChanged="AddPostUserAsync" ResetOnSelect="true" Class="ma-0" />
+                                <div class="d-flex flex-wrap gap-1 mt-2">
+                                    @foreach(var userId in AllowedPostUserIds)
+                                    {
+                                        var user = AllEmployees.FirstOrDefault(u => u.Id == userId);
+                                        if (user != null)
+                                        {
+                                            <EmployeeChip Employee="@user" OnClose="@(() => RemovePostUser(userId))" Size="Size.Small" />
+                                        }
+                                    }
+                                </div>
+                            </div>
+                        </div>
+                    }
+                </MudPaper>
+            }
+
+            @* --- Voice & Video Card --- *@
+            <MudPaper Elevation="0" Outlined="true" Class="rounded-lg overflow-hidden flex-shrink-0">
+                <div class="d-flex align-center justify-space-between my-1 ml-4 mr-2">
+                    <div class="d-flex align-center">
+                        <MudIcon Icon="@Icons.Material.Filled.VolumeUp" Size="Size.Small" Class="mr-2" />
+                        <MudText Typo="Typo.h6">Voice Channel</MudText>
+                    </div>
+                    <MudSwitch @bind-Value="IsVoiceChannel" Color="Color.Primary" Class="ma-0" Disabled="IsAnnouncementOnly" />
+                </div>
+                <MudDivider />
+                @if (IsVoiceChannel && !IsAnnouncementOnly)
+                {
+                    <div class="px-4 py-4 d-flex flex-column gap-3">
+                        <MudText Color="Color.Info" Typo="Typo.caption" Class="mb-1">Makes this an auto-joining Voice and Video channel. Text chat acts as secondary.</MudText>
+                        <MudSelect Margin="Margin.Dense" T="int" Label="Audio Bitrate (Voice Call Quality)" @bind-Value="AudioBitrateKbps" Variant="Variant.Outlined" AnchorOrigin="Origin.BottomLeft" Class="ma-0">
+                            <MudSelectItem Value="64">64 kbps (Low)</MudSelectItem>
+                            <MudSelectItem Value="96">96 kbps (Standard)</MudSelectItem>
+                            <MudSelectItem Value="128">128 kbps (High)</MudSelectItem>
+                            <MudSelectItem Value="256">256 kbps (Very High)</MudSelectItem>
+                            <MudSelectItem Value="384">384 kbps (Extreme)</MudSelectItem>
+                        </MudSelect>
+                    </div>
+                }
+            </MudPaper>
+
+            @* --- Encryption Card --- *@
+            <MudPaper Elevation="0" Outlined="true" Class="rounded-lg overflow-hidden flex-shrink-0">
+                <div class="d-flex align-center justify-space-between my-1 ml-4 mr-2">
+                    <div class="d-flex align-center">
+                        <MudIcon Icon="@Icons.Material.Filled.Lock" Size="Size.Small" Class="mr-2" />
+                        <MudText Typo="Typo.h6">Channel Encryption</MudText>
+                    </div>
+                    <MudSwitch @bind-Value="IsEncrypted" Color="Color.Primary" Class="ma-0" />
+                </div>
+                <MudDivider />
+                @if (IsEncrypted)
+                {
+                    <div class="px-4 py-4 d-flex flex-column gap-3">
+                        <MudText Color="Color.Error" Typo="Typo.caption">This is not End-To-End encryption. When enabled, messages are encrypted before being saved to disk. However, a motivated malicious server owner could intercept data in the server's RAM. This encryption will protect chat data in case of database leak.</MudText>
+                    </div>
+                }
+            </MudPaper>
+        </div>
+    </DialogContent>
+    <DialogActions>
+        @if (ExistingChannel != null)
+        {
+            @if (ExistingChannel.IsArchived)
+            {
+                <MudButton Color="Color.Warning" OnClick="UnarchiveChannel" StartIcon="@Icons.Material.Filled.Unarchive">
+                    Unarchive
+                </MudButton>
+            }
+            else
+            {
+                <MudButton Color="Color.Warning" OnClick="ArchiveChannel" StartIcon="@Icons.Material.Filled.Archive">
+                    Archive
+                </MudButton>
+            }
+        }
+        <MudSpacer />
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+        <MudButton Color="Color.Primary" OnClick="Submit" Variant="Variant.Filled">@(ExistingChannel != null ? "Save Changes" : "Create Channel")</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    private Project? _selectedProject;
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
+
+    [Parameter] public List<Team> AllTeams { get; set; } = new();
+    [Parameter] public List<Employee> AllEmployees { get; set; } = new();
+    [Parameter] public List<Project> AllProjects { get; set; } = new();
+    [Parameter] public bool CanManageCategories { get; set; } = false;
+
+    [Parameter] public ChatChannel? ExistingChannel { get; set; }
+    [Parameter] public string? InitialAccessType { get; set; }
+    [Parameter] public string? InitialCategoryId { get; set; }
+
+    private List<ChatCategory> AllCategories { get; set; } = new();
+
+    private string ChannelName { get; set; } = string.Empty;
+    private string Description { get; set; } = string.Empty;
+    private string Icon { get; set; } = "";
+    private string? CategoryId { get; set; }
+
+    private bool EncryptionInfo;
+    private bool _isVoiceChannel;
+    private bool IsVoiceChannel
+    {
+        get => _isVoiceChannel;
+        set
+        {
+            _isVoiceChannel = value;
+            if (value && string.IsNullOrEmpty(Icon))
+            {
+                Icon = Icons.Material.Filled.VolumeUp;
+            }
+            else if (!value && Icon == Icons.Material.Filled.VolumeUp)
+            {
+                Icon = "";
+            }
+        }
+    }
+    
+    private bool IsEncrypted { get; set; }
+    private int AudioBitrateKbps { get; set; } = 96;
+
+    private string SelectedAccessType { get; set; } = "Public";
+
+    private IEnumerable<string> SelectedTeamIds { get; set; } = new HashSet<string>();
+    private IEnumerable<string> SelectedUserIds { get; set; } = new HashSet<string>();
+
+    private bool _isAnnouncementOnly;
+    private bool IsAnnouncementOnly 
+    { 
+        get => _isAnnouncementOnly; 
+        set
+        {
+            _isAnnouncementOnly = value;
+            if (value)
+            {
+                IsVoiceChannel = false;
+            }
+        }
+    }
+    private IEnumerable<string> AllowedPostTeamIds { get; set; } = new HashSet<string>();
+    private IEnumerable<string> AllowedPostUserIds { get; set; } = new HashSet<string>();
+
+    private string SelectedProjectId { get; set; } = string.Empty;
+    private bool IsFriendEdition => Db.CompanyProfile.Get()?.Edition == "Family";
+
+    protected override void OnInitialized()
+    {
+        LoadCategories();
+        if (ExistingChannel != null)
+        {
+            ChannelName = ExistingChannel.Name;
+            Description = ExistingChannel.Description;
+            Icon = ExistingChannel.Icon;
+            CategoryId = ExistingChannel.CategoryId;
+            _isVoiceChannel = ExistingChannel.IsVoiceChannel;
+            IsEncrypted = ExistingChannel.IsEncrypted;
+            AudioBitrateKbps = ExistingChannel.AudioBitrateKbps;
+            IsAnnouncementOnly = ExistingChannel.IsAnnouncementOnly;
+            AllowedPostTeamIds = new HashSet<string>(ExistingChannel.AllowedPostTeamIds ?? new List<string>());
+            AllowedPostUserIds = new HashSet<string>(ExistingChannel.AllowedPostUserIds ?? new List<string>());
+            
+            // Determine Access Type
+            if (ExistingChannel.ChannelType == ChatChannelType.Project)
+            {
+                SelectedAccessType = "Project";
+                SelectedProjectId = ExistingChannel.LinkedEntityId ?? string.Empty;
+                if (!string.IsNullOrEmpty(SelectedProjectId))
+                {
+                    _selectedProject = AllProjects.FirstOrDefault(p => p.Id == SelectedProjectId);
+                }
+            }
+            else
+            {
+                if (ExistingChannel.AllowedTeamIds.Any() || ExistingChannel.ParticipantIds.Any())
+                {
+                    SelectedAccessType = "Restricted";
+                    SelectedTeamIds = new HashSet<string>(ExistingChannel.AllowedTeamIds);
+                    SelectedUserIds = new HashSet<string>(ExistingChannel.ParticipantIds);
+                }
+                else
+                {
+                    SelectedAccessType = "Public";
+                }
+            }
+        }
+        else 
+        {
+            if (!string.IsNullOrEmpty(InitialAccessType))
+            {
+                SelectedAccessType = InitialAccessType;
+            }
+            if (!string.IsNullOrEmpty(InitialCategoryId))
+            {
+                CategoryId = InitialCategoryId;
+            }
+        }
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+
+    private void LoadCategories()
+    {
+        AllCategories = Db.ChatCategories.GetAll().Where(c => !c.IsSystem).OrderBy(c => c.DisplayOrder).ToList();
+    }
+
+    private async Task OpenManageCategories()
+    {
+        var dialog = await DialogService.ShowAsync<ManageCategoriesDialog>("Manage Categories");
+        await dialog.Result;
+        LoadCategories();
+    }
+
+    private async Task PickIcon()
+    {
+        var dialog = await DialogService.ShowAsync<IconPicker>("Select Icon");
+        var result = await dialog.Result;
+        if (!result.Canceled && result.Data is string icon)
+        {
+            Icon = icon;
+        }
+    }
+
+    private void AddTeamAsync(Team? team)
+    {
+        if (team != null)
+        {
+            var list = SelectedTeamIds.ToList();
+            if (!list.Contains(team.Id))
+            {
+                list.Add(team.Id);
+                SelectedTeamIds = list;
+            }
+        }
+        StateHasChanged();
+    }
+
+    private void AddUserAsync(Employee? user)
+    {
+        if (user != null)
+        {
+            var list = SelectedUserIds.ToList();
+            if (!list.Contains(user.Id))
+            {
+                 list.Add(user.Id);
+                 SelectedUserIds = list;
+            }
+        }
+        StateHasChanged();
+    }
+
+    private async Task OnProjectSelected(Project? project)
+    {
+        _selectedProject = project;
+        SelectedProjectId = project?.Id ?? string.Empty;
+    }
+
+    private Task<IEnumerable<Project>> SearchProjects(string value, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return Task.FromResult(AllProjects.AsEnumerable());
+
+        var results = AllProjects
+            .Where(p => (p.DisplayName != null && p.DisplayName.Contains(value, StringComparison.OrdinalIgnoreCase)) ||
+                        (p.Id != null && p.Id.Contains(value, StringComparison.OrdinalIgnoreCase)))
+            .Take(10);
+
+        return Task.FromResult(results);
+    }
+
+    private void RemoveTeam(string teamId)
+    {
+        var list = SelectedTeamIds.ToList();
+        list.Remove(teamId);
+        SelectedTeamIds = list;
+    }
+
+    private void RemoveUser(string userId)
+    {
+        var list = SelectedUserIds.ToList();
+        list.Remove(userId);
+        SelectedUserIds = list;
+    }
+
+    private void AddPostTeamAsync(Team? team)
+    {
+        if (team != null)
+        {
+            var list = AllowedPostTeamIds.ToList();
+            if (!list.Contains(team.Id))
+            {
+                list.Add(team.Id);
+                AllowedPostTeamIds = list;
+            }
+        }
+        StateHasChanged();
+    }
+
+    private void AddPostUserAsync(Employee? user)
+    {
+        if (user != null)
+        {
+            var list = AllowedPostUserIds.ToList();
+            if (!list.Contains(user.Id))
+            {
+                 list.Add(user.Id);
+                 AllowedPostUserIds = list;
+            }
+        }
+        StateHasChanged();
+    }
+
+    private void RemovePostTeam(string teamId)
+    {
+        var list = AllowedPostTeamIds.ToList();
+        list.Remove(teamId);
+        AllowedPostTeamIds = list;
+    }
+
+    private void RemovePostUser(string userId)
+    {
+        var list = AllowedPostUserIds.ToList();
+        list.Remove(userId);
+        AllowedPostUserIds = list;
+    }
+
+    private void Submit()
+    {
+        if (string.IsNullOrWhiteSpace(ChannelName)) return;
+
+        string finalType = ChatChannelType.General;
+        string? finalLinkedId = null;
+
+        if (ExistingChannel?.ChannelType == ChatChannelType.Direct)
+        {
+            // Direct messages type is immutable and cannot be an announcement channel.
+            finalType = ChatChannelType.Direct;
+            finalLinkedId = ExistingChannel.LinkedEntityId;
+            IsAnnouncementOnly = false;
+            AllowedPostUserIds = Enumerable.Empty<string>();
+            AllowedPostTeamIds = Enumerable.Empty<string>();
+        }
+        else if (SelectedAccessType == "Project")
+        {
+            finalType = ChatChannelType.Project;
+            finalLinkedId = SelectedProjectId;
+        }
+        else if (SelectedAccessType == "Restricted")
+        {
+            if (SelectedUserIds.Any() || !SelectedTeamIds.Any())
+            {
+                finalType = ChatChannelType.Group;
+            }
+            else
+            {
+                finalType = ChatChannelType.Team;
+            }
+        }
+        else // Public
+        {
+            finalType = ChatChannelType.General;
+            SelectedTeamIds = new List<string>();
+            SelectedUserIds = new List<string>();
+        }
+
+        var result = new ChannelCreationResult
+        {
+            Name = ChannelName,
+            Description = Description,
+            Icon = Icon,
+            CategoryId = CategoryId,
+            Type = finalType,
+            AllowedTeamIds = SelectedTeamIds.ToList(),
+            ParticipantIds = SelectedUserIds.ToList(),
+            LinkedEntityId = finalLinkedId,
+            IsArchived = ExistingChannel?.IsArchived ?? false,
+            IsVoiceChannel = IsVoiceChannel,
+            IsEncrypted = IsEncrypted,
+            AudioBitrateKbps = AudioBitrateKbps,
+            IsAnnouncementOnly = IsAnnouncementOnly,
+            AllowedPostUserIds = AllowedPostUserIds.ToList(),
+            AllowedPostTeamIds = AllowedPostTeamIds.ToList()
+        };
+
+        MudDialog.Close(DialogResult.Ok(result));
+    }
+
+    private void ArchiveChannel()
+    {
+        var result = new ChannelCreationResult
+        {
+            Name = ChannelName,
+            Description = Description,
+            Icon = Icon,
+            CategoryId = CategoryId,
+            Type = ExistingChannel?.ChannelType ?? ChatChannelType.General,
+            AllowedTeamIds = SelectedTeamIds.ToList(),
+            ParticipantIds = SelectedUserIds.ToList(),
+            LinkedEntityId = ExistingChannel?.LinkedEntityId,
+            IsArchived = true,
+            IsVoiceChannel = ExistingChannel?.IsVoiceChannel ?? false,
+            IsEncrypted = ExistingChannel?.IsEncrypted ?? false,
+            AudioBitrateKbps = ExistingChannel?.AudioBitrateKbps ?? 64,
+            IsAnnouncementOnly = IsAnnouncementOnly,
+            AllowedPostUserIds = AllowedPostUserIds.ToList(),
+            AllowedPostTeamIds = AllowedPostTeamIds.ToList()
+        };
+        MudDialog.Close(DialogResult.Ok(result));
+    }
+
+    private void UnarchiveChannel()
+    {
+        var result = new ChannelCreationResult
+        {
+            Name = ChannelName,
+            Description = Description,
+            Icon = Icon,
+            CategoryId = CategoryId,
+            Type = ExistingChannel?.ChannelType ?? ChatChannelType.General,
+            AllowedTeamIds = SelectedTeamIds.ToList(),
+            ParticipantIds = SelectedUserIds.ToList(),
+            LinkedEntityId = ExistingChannel?.LinkedEntityId,
+            IsArchived = false,
+            IsVoiceChannel = ExistingChannel?.IsVoiceChannel ?? false,
+            IsEncrypted = ExistingChannel?.IsEncrypted ?? false,
+            AudioBitrateKbps = ExistingChannel?.AudioBitrateKbps ?? 64,
+            IsAnnouncementOnly = IsAnnouncementOnly,
+            AllowedPostUserIds = AllowedPostUserIds.ToList(),
+            AllowedPostTeamIds = AllowedPostTeamIds.ToList()
+        };
+        MudDialog.Close(DialogResult.Ok(result));
+    }
+
+    public class ChannelCreationResult
+    {
+        public string Name { get; set; } = string.Empty;
+        public string Description { get; set; } = string.Empty;
+        public string Icon { get; set; } = string.Empty;
+        public string? CategoryId { get; set; }
+        public string Type { get; set; } = string.Empty;
+        public string? LinkedEntityId { get; set; }
+        public List<string> AllowedTeamIds { get; set; } = new();
+        public List<string> ParticipantIds { get; set; } = new();
+        public bool IsArchived { get; set; }
+        public bool IsVoiceChannel { get; set; }
+        public bool IsEncrypted { get; set; }
+        public int AudioBitrateKbps { get; set; }
+        public bool IsAnnouncementOnly { get; set; }
+        public List<string> AllowedPostUserIds { get; set; } = new();
+        public List<string> AllowedPostTeamIds { get; set; } = new();
+    }
+}

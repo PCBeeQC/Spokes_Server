@@ -1,0 +1,137 @@
+@using Spokes_Server.Core.Data
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Models.HR
+@using MudBlazor
+@inject Database Db
+@inject UserService UserService
+
+<MudDialog>
+    <DialogContent>
+        <MudTable Items="@_contacts" MultiSelection="true" @bind-SelectedItems="_selectedContacts" Hover="true"
+            Striped="true" Filter="new Func<ContactFlatModel,bool>(FilterFunc)">
+            <ToolBarContent>
+                <MudText Typo="Typo.h6">Select Contacts</MudText>
+                <MudSpacer />
+                <MudTextField @bind-Value="_searchString" Placeholder="Search..." Adornment="Adornment.Start"
+                    AdornmentIcon="@Icons.Material.Filled.Search" IconSize="Size.Medium" Class="mt-0"></MudTextField>
+            </ToolBarContent>
+            <HeaderContent>
+                <MudTh>Name</MudTh>
+                <MudTh>Email</MudTh>
+                <MudTh>Type</MudTh>
+            </HeaderContent>
+            <RowTemplate>
+                <MudTd DataLabel="Name">@context.Name</MudTd>
+                <MudTd DataLabel="Email">@context.Email</MudTd>
+                <MudTd DataLabel="Type">
+                    <MudChip T="string" Size="Size.Small"
+                        Color="@(context.Type == "Company Primary" ? Color.Primary : context.Type == "Company" ? Color.Default : context.Type == "Public" ? Color.Info : Color.Secondary)">
+                        @context.Type
+                    </MudChip>
+                </MudTd>
+            </RowTemplate>
+            <PagerContent>
+                <MudTablePager />
+            </PagerContent>
+        </MudTable>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Close">Close</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="Submit">Add Selected
+            (@_selectedContacts.Count)</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; }
+
+    private string _searchString = "";
+    private HashSet<ContactFlatModel> _selectedContacts = new();
+    private List<ContactFlatModel> _contacts = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        var suppliers = Db.Suppliers.GetAll();
+        foreach (var s in suppliers)
+        {
+            // Add Primary Contact
+            if (!string.IsNullOrEmpty(s.Info.ContactPersonEmail))
+            {
+                _contacts.Add(new ContactFlatModel
+                    {
+                        Name = !string.IsNullOrEmpty(s.Info.ContactPersonName) ? s.Info.ContactPersonName : s.Info.BusinessName,
+                        Email = s.Info.ContactPersonEmail,
+                        Type = "Company Primary"
+                    });
+            }
+
+            // Add Secondary Contacts
+            foreach (var c in s.Contacts)
+            {
+                if (!string.IsNullOrEmpty(c.Email))
+                {
+                    _contacts.Add(new ContactFlatModel
+                        {
+                            Name = c.Name,
+                            Email = c.Email,
+                            Type = "Company"
+                        });
+                }
+            }
+        }
+
+        var publicContacts = Db.PublicContacts.GetAll();
+        foreach (var c in publicContacts)
+        {
+            if (!string.IsNullOrEmpty(c.Email))
+            {
+                _contacts.Add(new ContactFlatModel
+                    {
+                        Name = c.Name,
+                        Email = c.Email,
+                        Type = "Public"
+                    });
+            }
+        }
+
+        var employee = await UserService.GetEmployeeAsync();
+        if (employee != null)
+        {
+            var privateContacts = Db.PrivateContacts.GetAllForEmployee(employee.Id);
+            foreach (var c in privateContacts)
+            {
+                if (!string.IsNullOrEmpty(c.Email))
+                {
+                    _contacts.Add(new ContactFlatModel
+                        {
+                            Name = c.Name,
+                            Email = c.Email,
+                            Type = "Private"
+                        });
+                }
+            }
+        }
+    }
+
+    private bool FilterFunc(ContactFlatModel element)
+    {
+        if (string.IsNullOrWhiteSpace(_searchString)) return true;
+        if (element.Name.Contains(_searchString, StringComparison.OrdinalIgnoreCase)) return true;
+        if (element.Email.Contains(_searchString, StringComparison.OrdinalIgnoreCase)) return true;
+        return false;
+    }
+
+    private void Submit() => MudDialog.Close(DialogResult.Ok(_selectedContacts.Select(c => c.Email).ToList()));
+    private void Close() => MudDialog.Cancel();
+
+    private class ContactFlatModel
+    {
+        public string Name { get; set; } = "";
+        public string Email { get; set; } = "";
+        public string Type { get; set; } = "";
+    }
+}
+

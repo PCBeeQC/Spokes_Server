@@ -1,0 +1,85 @@
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Data
+@using Spokes_Server.Components.Pages.Admin
+@inject Database Db
+@inject IDialogService DialogService
+@inject ISnackbar Snackbar
+
+<MudText Typo="Typo.body1" Class="mb-4">Define standard billing rates for different types of work.</MudText>
+
+<MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="OpenCreateDialog">Create New Task</MudButton>
+
+<MudTable Items="@List" Dense="true" Striped="true" Outlined="true" Elevation="0" Hover="true" Class="mt-4">
+    <HeaderContent>
+        <MudTh>Task Name</MudTh>
+        <MudTh>Default Billing Rate</MudTh>
+        <MudTh>Status</MudTh>
+        <MudTh>Actions</MudTh>
+    </HeaderContent>
+    <RowTemplate>
+        <MudTd>@context.Name</MudTd>
+        <MudTd>@context.DefaultRate.ToString("C")</MudTd>
+        <MudTd>
+            @if (context.IsActive)
+            {
+                <MudChip T="string" Color="Color.Success" Size="Size.Small">Active</MudChip>
+            }
+            else
+            {
+
+                <MudChip T="string" Color="Color.Default" Size="Size.Small">Inactive</MudChip>
+            }
+        </MudTd>
+        <MudTd>
+            <MudIconButton Icon="@Icons.Material.Filled.Edit" Size="Size.Small"
+                OnClick="@(() => OpenEditDialog(context))" />
+            <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small" Color="Color.Error"
+                OnClick="@(() => DeleteTask(context))" />
+        </MudTd>
+    </RowTemplate>
+</MudTable>
+
+@code {
+    private List<WorkType> List = new();
+
+    protected override void OnInitialized() => Refresh();
+
+    private void Refresh() => List = Db.WorkTypes.GetAll().OrderBy(x => x.Name).ToList();
+
+    private async Task OpenCreateDialog() => await OpenDialog(new WorkType(), "New Task");
+    private async Task OpenEditDialog(WorkType item) => await OpenDialog(item, "Edit Task");
+
+    private async Task DeleteTask(WorkType item)
+    {
+        bool? result = await DialogService.ShowMessageBoxAsync(
+        "Delete Task",
+        $"Are you sure you want to delete task '{item.Name}'? This cannot be undone.",
+        yesText: "Delete", cancelText: "Cancel");
+
+        if (result == true)
+        {
+            Db.WorkTypes.Delete(item.Id);
+            Refresh();
+            Snackbar.Add("Task Deleted", Severity.Warning);
+        }
+    }
+
+    private async Task OpenDialog(WorkType item, string title)
+    {
+        var parameters = new DialogParameters { ["WorkType"] = item };
+        var dialog = await DialogService.ShowAsync<WorkTypeDialog>(title, parameters);
+        var result = await dialog.Result;
+
+        if (!result.Canceled)
+        {
+            Db.WorkTypes.Save((WorkType)result.Data);
+            Refresh();
+            Snackbar.Add("Saved", Severity.Success);
+        }
+    }
+}
+

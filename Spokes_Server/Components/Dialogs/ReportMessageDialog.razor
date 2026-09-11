@@ -1,0 +1,49 @@
+@using MudBlazor
+@using Spokes_Server.Core.Models.Communication
+
+<MudDialog>
+    <DialogContent>
+        <MudText Typo="Typo.body2" Class="mb-4">Please select a reason for reporting this message.</MudText>
+        <MudSelect T="string" @bind-Value="_reason" Label="Reason" AnchorOrigin="Origin.BottomCenter" Variant="Variant.Outlined">
+            <MudSelectItem Value="@("Harassment or Bullying")">Harassment or Bullying</MudSelectItem>
+            <MudSelectItem Value="@("Hate Speech")">Hate Speech</MudSelectItem>
+            <MudSelectItem Value="@("Spam or Scams")">Spam or Scams</MudSelectItem>
+            <MudSelectItem Value="@("Inappropriate Content")">Inappropriate Content</MudSelectItem>
+            <MudSelectItem Value="@("Other")">Other</MudSelectItem>
+        </MudSelect>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Close">Close</MudButton>
+        <MudButton Color="Color.Error" Variant="Variant.Filled" OnClick="Submit" Disabled="@(string.IsNullOrEmpty(_reason))">Report</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = null!;
+    
+    [Parameter]
+    public ChatMessage Message { get; set; } = null!;
+    
+    [Parameter]
+    public string SnapshotContent { get; set; } = string.Empty;
+
+    private string _reason = string.Empty;
+
+    private void Close()
+    {
+        MudDialog.Cancel();
+    }
+
+    private void Submit()
+    {
+        var result = new ReportedMessage
+        {
+            MessageId = Message.Id,
+            ReportedUserId = Message.SenderId,
+            Reason = _reason,
+            SnapshotContent = SnapshotContent,
+            Attachments = Message.Attachments.ToList()
+        };
+        MudDialog.Close(DialogResult.Ok(result));
+    }
+}

@@ -1,0 +1,177 @@
+@using Spokes_Server.Core.Data
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Models.HR
+@inject Database Db
+@inject ISnackbar Snackbar
+@inject IDialogService DialogService
+
+<MudPaper Class="pa-4 mb-4" Elevation="0" Outlined="true">
+    <MudText Typo="Typo.h6" Class="mb-3">Recurring Cost Estimates</MudText>
+    <MudGrid>
+        <MudItem xs="12" sm="6" md="3">
+            <MudPaper Class="pa-3" Elevation="0" Style="background: var(--mud-palette-background-grey);">
+                <MudText Typo="Typo.caption" Class="mud-text-secondary">Monthly Total</MudText>
+                <MudText Typo="Typo.h5" Color="Color.Primary">@GetMonthlyTotal().ToString("C2")</MudText>
+            </MudPaper>
+        </MudItem>
+        <MudItem xs="12" sm="6" md="3">
+            <MudPaper Class="pa-3" Elevation="0" Style="background: var(--mud-palette-background-grey);">
+                <MudText Typo="Typo.caption" Class="mud-text-secondary">Yearly Total</MudText>
+                <MudText Typo="Typo.h5" Color="Color.Secondary">@GetYearlyTotal().ToString("C2")</MudText>
+            </MudPaper>
+        </MudItem>
+        <MudItem xs="12" sm="6" md="3">
+            <MudPaper Class="pa-3" Elevation="0" Style="background: var(--mud-palette-background-grey);">
+                <MudText Typo="Typo.caption" Class="mud-text-secondary">Active Expenses</MudText>
+                <MudText Typo="Typo.h5">@Expenses.Count(e => e.Frequency != RecurringExpenseFrequency.OneTime)</MudText>
+            </MudPaper>
+        </MudItem>
+    </MudGrid>
+</MudPaper>
+
+<MudTable Items="@Expenses" Elevation="0" Outlined="true" Dense="true" Hover="true" Striped="true">
+    <ToolBarContent>
+        <MudText Typo="Typo.h6">Recurring Fixed Costs</MudText>
+        <MudSpacer />
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Add"
+            OnClick="AddExpense">Add Recurring Bill</MudButton>
+    </ToolBarContent>
+    <HeaderContent>
+        <MudTh>Name</MudTh>
+        <MudTh>Supplier</MudTh>
+        <MudTh>Amount</MudTh>
+        <MudTh>Frequency</MudTh>
+        <MudTh>Actions</MudTh>
+    </HeaderContent>
+    <RowTemplate>
+        <MudTd DataLabel="Name">@context.Name</MudTd>
+        <MudTd DataLabel="Supplier">
+            @if (!string.IsNullOrEmpty(context.Supplier))
+            {
+                @context.Supplier
+            }
+            else
+            {
+                <MudText Typo="Typo.caption" Class="mud-text-secondary">-</MudText>
+            }
+        </MudTd>
+        <MudTd DataLabel="Amount">@context.Amount.ToString("C2")</MudTd>
+        <MudTd DataLabel="Frequency">@context.Frequency</MudTd>
+        <MudTd DataLabel="Actions">
+            <MudIconButton Icon="@Icons.Material.Filled.Edit" Color="Color.Primary" Size="Size.Small"
+                OnClick="@(() => EditExpense(context))" />
+            <MudIconButton Icon="@Icons.Material.Filled.Delete" Color="Color.Error" Size="Size.Small"
+                OnClick="@(() => DeleteExpense(context))" />
+        </MudTd>
+    </RowTemplate>
+</MudTable>
+
+@code {
+    private List<RecurringExpense> Expenses = new();
+
+    protected override void OnInitialized()
+    {
+        Expenses = Db.RecurringExpenses.GetAll().Where(e => e.IsEstimate).ToList();
+    }
+
+    private async Task AddExpense()
+    {
+        var parameters = new DialogParameters<RecurringExpenseDialog>
+{
+{ x => x.Expense, new RecurringExpense() },
+{ x => x.IsNew, true },
+{ x => x.ShowBillHistory, false }
+};
+
+        var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Medium, FullWidth = true };
+        var dialog = await DialogService.ShowAsync<RecurringExpenseDialog>("Add Recurring Expense", parameters, options);
+        var result = await dialog.Result;
+
+        if (!result.Canceled && result.Data is RecurringExpense expense)
+        {
+            Db.RecurringExpenses.Save(expense);
+            Expenses.Add(expense);
+            Snackbar.Add("Recurring expense added", Severity.Success);
+            StateHasChanged();
+        }
+    }
+
+    private async Task EditExpense(RecurringExpense expense)
+    {
+        // Pass the actual expense so history edits are reflected
+        var parameters = new DialogParameters<RecurringExpenseDialog>
+{
+{ x => x.Expense, expense },
+{ x => x.IsNew, false },
+{ x => x.ShowBillHistory, false }
+};
+
+        var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Medium, FullWidth = true };
+        var dialog = await DialogService.ShowAsync<RecurringExpenseDialog>("Edit Recurring Expense", parameters, options);
+        var result = await dialog.Result;
+
+        if (!result.Canceled && result.Data is RecurringExpense updated)
+        {
+            Db.RecurringExpenses.Save(updated);
+
+            // Refresh the list in case the reference changed
+            var idx = Expenses.FindIndex(e => e.Id == updated.Id);
+            if (idx >= 0) Expenses[idx] = updated;
+
+            Snackbar.Add("Recurring expense updated", Severity.Success);
+            StateHasChanged();
+        }
+    }
+
+    private async Task DeleteExpense(RecurringExpense expense)
+    {
+        var confirm = await DialogService.ShowMessageBoxAsync("Delete", "Are you sure?", yesText: "Delete", cancelText: "Cancel");
+        if (confirm == true)
+        {
+            Db.RecurringExpenses.Delete(expense.Id);
+            Expenses.Remove(expense);
+            StateHasChanged();
+        }
+    }
+
+    // --- Cost Calculations ---
+    private decimal GetMonthlyTotal()
+    {
+        decimal total = 0;
+        foreach (var e in Expenses)
+        {
+            total += e.Frequency switch
+            {
+                RecurringExpenseFrequency.Weekly => e.Amount * 4.33m, // avg weeks per month
+                RecurringExpenseFrequency.BiWeekly => e.Amount * 2.17m,
+                RecurringExpenseFrequency.Monthly => e.Amount,
+                RecurringExpenseFrequency.Yearly => e.Amount / 12m,
+                RecurringExpenseFrequency.OneTime => 0, // One-time not included in recurring
+                _ => e.Amount
+            };
+        }
+        return total;
+    }
+
+    private decimal GetYearlyTotal()
+    {
+        decimal total = 0;
+        foreach (var e in Expenses)
+        {
+            total += e.Frequency switch
+            {
+                RecurringExpenseFrequency.Weekly => e.Amount * 52m,
+                RecurringExpenseFrequency.BiWeekly => e.Amount * 26m,
+                RecurringExpenseFrequency.Monthly => e.Amount * 12m,
+                RecurringExpenseFrequency.Yearly => e.Amount,
+                RecurringExpenseFrequency.OneTime => 0, // One-time not included in recurring
+                _ => e.Amount * 12m
+            };
+        }
+        return total;
+    }
+}
+

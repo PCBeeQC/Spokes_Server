@@ -1,0 +1,367 @@
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Data
+@using Spokes_Server.Components.Dialogs
+@using MudBlazor
+@inject Database Db
+@inject AuthenticationStateProvider AuthStateProvider
+@inject IDialogService DialogService
+@inject ISnackbar Snackbar
+@inject UserService UserService
+@inject Spokes_Server.Core.Services.Accounting.FinancialCalculationEngine CalcEngine
+
+<MudDialog>
+    <DialogContent>
+        <MudForm>
+            <MudPaper Class="pa-4 mb-4" Elevation="0" Outlined="true"
+                Style="background: var(--mud-palette-background-grey);">
+                <MudGrid>
+                    <MudItem xs="4">
+                        <MudTextField Value="@PO.PoNumber" Label="PO Number" ReadOnly="true" Placeholder="(Auto)"
+                            Variant="Variant.Text" />
+                    </MudItem>
+                    <MudItem xs="4">
+                        <MudDatePicker @bind-Date="date" Label="Date Emitted" />
+                    </MudItem>
+                    <MudItem xs="4">
+                        <MudTextField @bind-Value="PO.IssuedBy" Label="Issued By" HelperText="Person emitting the PO" />
+                    </MudItem>
+                    <MudItem xs="12" sm="6">
+                         <MudSelect @bind-Value="PO.TemplateId" Label="Document Template" Variant="Variant.Outlined" Margin="Margin.Dense"
+                             HelperText="Leave empty to use Global default">
+                             <MudSelectItem Value="@((string?)null)">Default</MudSelectItem>
+                            @foreach (var t in Templates)
+                            {
+                                     <MudSelectItem Value="@t.Id">@t.Name</MudSelectItem>
+                            }
+                         </MudSelect>
+                    </MudItem>
+                    <MudItem xs="12" sm="6">
+                         <MudSelect @bind-Value="PO.Currency" Label="Currency" Variant="Variant.Outlined" Margin="Margin.Dense" HelperText="Select currency">
+                             <MudSelectItem Value="@(string.Empty)">Default</MudSelectItem>
+                             @if (mainProfile != null)
+                             {
+                                 @foreach (var curr in mainProfile.SupportedCurrencies)
+                                 {
+                                     <MudSelectItem Value="@curr">@curr</MudSelectItem>
+                                 }
+                             }
+                         </MudSelect>
+                    </MudItem>
+                    <MudItem xs="12">
+                        <MudTextField @bind-Value="PO.Note" Label="Notes" Variant="Variant.Outlined" Margin="Margin.Dense" Lines="3" />
+                    </MudItem>
+                </MudGrid>
+            </MudPaper>
+
+            <MudGrid Class="mb-4 align-center">
+                <MudItem xs="12">
+                    <Spokes_Server.Components.Shared.CompanyContactSelector 
+                        Label="Select Supplier"
+                        ContactLabel="Select Supplier Contact"
+                        Icon="@Icons.Material.Filled.Search"
+                        InitialCompanyName="@PO.Supplier?.BusinessName"
+                        InitialContactName="@PO.SupplierRepName"
+                        SelectedCompanyChanged="OnSupplierSelected"
+                        SelectedContactChanged="OnSupplierContactSelected"
+                        Required="true" />
+                </MudItem>
+
+                <MudItem xs="6">
+                    <MudTextField @bind-Value="PO.SupplierRepName" Label="Supplier Rep Name"
+                        HelperText="Specific contact for this order" />
+                </MudItem>
+                <MudItem xs="6">
+                    <MudTextField @bind-Value="PO.SupplierQuoteRef" Label="Supplier Quote Ref #" />
+                </MudItem>
+
+                <MudItem xs="12">
+                     <Spokes_Server.Components.Shared.CompanyContactSelector 
+                         Label="Select Recipient (Ship To)"
+                         ContactLabel="Select Recipient Contact"
+                         Icon="@Icons.Material.Filled.LocalShipping"
+                         InitialCompanyName="@PO.Recipient?.BusinessName"
+                         SelectedCompanyChanged="OnRecipientSelected"
+                         SelectedContactChanged="OnRecipientContactSelected"
+                         Clearable="true"
+                         ShowEditButtons="false"
+                         HelperText="@GetRecipientAddressHelper()"
+                         Placeholder="Leave empty to use main company" />
+                </MudItem>
+            </MudGrid>
+
+            <MudDivider Class="my-4" />
+
+            <div class="d-flex justify-space-between align-end mb-2">
+                <MudText Typo="Typo.h6">Items</MudText>
+
+                <div class="d-flex align-center gap-2">
+                    <MudText Typo="Typo.caption">Custom Columns:</MudText>
+                    <MudChipSet T="string" OnClose="RemoveColumn" AllClosable="true">
+                        @foreach (var head in PO.CustomHeaders)
+                        {
+                                <MudChip T="string" Text="@head" Size="Size.Small" Variant="Variant.Outlined"
+                                    Color="Color.Primary" />
+                        }
+                    </MudChipSet>
+                    <MudIconButton Icon="@Icons.Material.Filled.AddCircleOutline" Color="Color.Primary"
+                        OnClick="@(() => _columnPopoverOpen = !_columnPopoverOpen)" />
+                    <MudPopover Open="@_columnPopoverOpen" AnchorOrigin="Origin.BottomRight"
+                        TransformOrigin="Origin.TopRight" Class="pa-4">
+                        <div class="d-flex gap-2">
+                            <MudTextField @bind-Value="newColName" Placeholder="Column Name" Margin="Margin.Dense"
+                                AutoFocus="true" />
+                            <MudButton OnClick="AddColumn" Variant="Variant.Filled" Color="Color.Primary"
+                                Size="Size.Small">Add</MudButton>
+                        </div>
+                    </MudPopover>
+                </div>
+            </div>
+
+            <MudTable Items="@PO.Items" Dense="true" Hover="true" Elevation="2">
+                <HeaderContent>
+                    <MudTh>Project</MudTh>
+                    <MudTh Style="width: 80px;">Qty</MudTh>
+                    <MudTh>Part #</MudTh>
+                    <MudTh>Description</MudTh>
+                    @foreach (var head in PO.CustomHeaders)
+                    {
+                            <MudTh>@head</MudTh>
+                    }
+                    <MudTh>Price</MudTh>
+                    <MudTh>Total</MudTh>
+                    <MudTh></MudTh>
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd>
+                        <MudAutocomplete T="string" Value="context.ProjectId" ValueChanged="@(v => context.ProjectId = v)"
+                            Dense="true" Margin="Margin.Dense" Placeholder="Select Project" Underline="false"
+                            SearchFunc="SearchProjects" ToStringFunc="GetProjectDisplayName"
+                            ResetValueOnEmptyText="true" CoerceText="false" MaxItems="null"
+                            AnchorOrigin="Origin.BottomCenter" />
+                    </MudTd>
+                    <MudTd>
+                        <MudNumericField @bind-Value="context.Quantity" HideSpinButtons="true" Margin="Margin.Dense"
+                            Variant="Variant.Outlined" />
+                    </MudTd>
+                    <MudTd>
+                        <MudTextField @bind-Value="context.PartNumber" Margin="Margin.Dense" />
+                    </MudTd>
+                    <MudTd>
+                        <MudTextField @bind-Value="context.Description" Margin="Margin.Dense" />
+                    </MudTd>
+                    @foreach (var head in PO.CustomHeaders)
+                    {
+                            <MudTd>
+                                <MudTextField Value="@GetCustomVal(context, head)"
+                                    ValueChanged="@((string s) => SetCustomVal(context, head, s))" Margin="Margin.Dense" />
+                            </MudTd>
+                    }
+                    <MudTd>
+                        <MudNumericField @bind-Value="context.UnitPrice" Format="N2" HideSpinButtons="true"
+                            Margin="Margin.Dense" />
+                    </MudTd>
+                    <MudTd>@context.Total.ToString("C")</MudTd>
+                    <MudTd>
+                        <MudIconButton Icon="@Icons.Material.Filled.Delete" Color="Color.Error" Size="Size.Small"
+                            OnClick="@(() => PO.Items.Remove(context))" />
+                    </MudTd>
+                </RowTemplate>
+                <FooterContent>
+                    <MudTd colspan="@(7 + PO.CustomHeaders.Count)">
+                        <MudButton StartIcon="@Icons.Material.Filled.Add" OnClick="AddItem" Variant="Variant.Text">Add
+                            Line Item</MudButton>
+                    </MudTd>
+                </FooterContent>
+            </MudTable>
+
+            <MudGrid Class="mt-4 justify-end">
+                <MudItem xs="12" sm="5" Class="d-flex flex-column align-end">
+                    <MudSwitch @bind-Value="PO.ApplyTax" Color="Color.Primary" Label="Apply Taxes" />
+                    <MudDivider Class="my-2" Width="100%" />
+                    <div class="d-flex justify-space-between" style="width: 200px;">
+                        <MudText>Subtotal:</MudText>
+                        <MudText>@PO.SubTotal.ToString("C")</MudText>
+                    </div>
+                    @if (PO.ApplyTax)
+                    {
+                            <div class="d-flex justify-space-between" style="width: 200px;">
+                                <MudText>Taxes (@(PO.TaxRate * 100)%):</MudText>
+                                <MudText>@PO.TaxAmount.ToString("C")</MudText>
+                            </div>
+                    }
+                    <div class="d-flex justify-space-between mt-2" style="width: 200px;">
+                        <MudText Typo="Typo.h6"><b>Total:</b></MudText>
+                        <MudText Typo="Typo.h6" Color="Color.Primary"><b>@PO.GrandTotal.ToString("C")</b></MudText>
+                    </div>
+                </MudItem>
+            </MudGrid>
+        </MudForm>
+    </DialogContent>
+    <DialogActions>
+        @if (!string.IsNullOrEmpty(PO.PoNumber) && PO.Status == "Draft")
+        {
+            <MudButton Color="Color.Error" Variant="Variant.Outlined" OnClick="DeleteAsync">Delete</MudButton>
+            <MudSpacer />
+        }
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="Submit">Save PO</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
+    [Parameter] public PurchaseOrder PO { get; set; } = default!;
+
+    private List<Project> Projects = new();
+    private List<Supplier> AllSuppliers = new();
+    private List<DocumentTemplate> Templates = new();
+
+    // Track the selected object for the Autocomplete
+    private Supplier? selectedSupplier;
+    private Supplier? selectedRecipient;
+    private CompanyProfile? mainProfile;
+
+    private string newColName = "";
+    private bool _columnPopoverOpen;
+    private DateTime? date { get => PO.Date; set => PO.Date = value ?? DateTime.Today; }
+
+    protected override async Task OnInitializedAsync()
+    {
+        Projects = Db.Projects.GetAll().Where(p => p.IsActive).OrderBy(p => p.Name).ToList();
+        AllSuppliers = Db.Suppliers.GetAll();
+        Templates = Db.DocumentTemplates.GetAll();
+
+        // UI Initialization for Supplier/Recipient is handled by InitialCompanyName property on the component
+
+        mainProfile = Db.CompanyProfile.Get();
+
+        // 2. Auto-fill Issued By
+        if (string.IsNullOrEmpty(PO.IssuedBy))
+        {
+            var emp = await UserService.GetEmployeeAsync();
+            var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+            PO.IssuedBy = emp != null ? emp.FullName : (authState.User.Identity?.Name ?? "");
+        }
+    }
+
+
+
+    private void OnSupplierSelected(Supplier? s)
+    {
+        selectedSupplier = s;
+        if (s != null)
+        {
+            // Snapshot the data into the PO
+            // We use JSON serialization for a deep copy so changing the supplier later doesn't rewrite history
+            var json = System.Text.Json.JsonSerializer.Serialize(s.Info);
+            var snapshot = System.Text.Json.JsonSerializer.Deserialize<ClientInfo>(json);
+            if (snapshot != null)
+            {
+                PO.Supplier = snapshot;
+            }
+        }
+    }
+
+    private void OnSupplierContactSelected(ContactPerson? c)
+    {
+        if (c != null)
+        {
+            PO.SupplierRepName = $"{c.Prefix} {c.Name}".Trim();
+            // Automatically try to match quote ref / email if they are standard fields, 
+            // but for now we just satisfy the requested mapping.
+        }
+        else
+        {
+            PO.SupplierRepName = "";
+        }
+    }
+
+    private void OnRecipientSelected(Supplier? s)
+    {
+        selectedRecipient = s;
+        if (s != null)
+        {
+            var json = System.Text.Json.JsonSerializer.Serialize(s.Info);
+            var snapshot = System.Text.Json.JsonSerializer.Deserialize<ClientInfo>(json);
+            PO.Recipient = snapshot;
+        }
+        else
+        {
+            PO.Recipient = null;
+        }
+    }
+
+    private void OnRecipientContactSelected(ContactPerson? c)
+    {
+        // Could store Recipient contact explicitly if the model supported it,
+        // for now just tracking the component event.
+    }
+
+    private string GetRecipientAddressHelper()
+    {
+        if (selectedRecipient != null)
+            return $"{selectedRecipient.Info.BusinessAdressStreet}, {selectedRecipient.Info.BusinessAdressCity}";
+
+        if (PO.Recipient != null)
+            return $"{PO.Recipient.BusinessAdressStreet}, {PO.Recipient.BusinessAdressCity}";
+
+        if (mainProfile != null)
+            return $"Defaulting to: {mainProfile.CompanyName} ({mainProfile.AddressStreet}, {mainProfile.AddressCity})";
+
+        return "Defaulting to main company address.";
+    }
+
+    // --- Items & Columns Logic ---
+    private void AddColumn()
+    {
+        if (!string.IsNullOrWhiteSpace(newColName) && !PO.CustomHeaders.Contains(newColName))
+        {
+            PO.CustomHeaders.Add(newColName); newColName = ""; _columnPopoverOpen = false;
+        }
+    }
+    private void RemoveColumn(MudChip<string> chip)
+    {
+        var head = chip.Text; PO.CustomHeaders.Remove(head); foreach (var item in PO.Items) item.CustomData.Remove(head);
+    }
+    private void AddItem() => PO.Items.Add(new PoItem());
+    private string GetCustomVal(PoItem item, string key) => item.CustomData.ContainsKey(key) ? item.CustomData[key] : "";
+    private void SetCustomVal(PoItem item, string key, string val) => item.CustomData[key] = val;
+
+    private Task<IEnumerable<string>> SearchProjects(string value, CancellationToken token)
+    {
+        var matching = string.IsNullOrEmpty(value)
+            ? Projects
+            : Projects.Where(p =>
+                p.DisplayName.Contains(value, StringComparison.InvariantCultureIgnoreCase) ||
+                (!string.IsNullOrEmpty(p.Client?.BusinessName) &&
+                 p.Client.BusinessName.Contains(value, StringComparison.InvariantCultureIgnoreCase)));
+
+        return Task.FromResult(matching.Select(p => p.Id));
+    }
+
+    private string GetProjectDisplayName(string id)
+    {
+        var p = Projects.FirstOrDefault(x => x.Id == id);
+        return p?.DisplayName ?? "";
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+    private void Submit() => MudDialog.Close(DialogResult.Ok(PO));
+
+    private async Task DeleteAsync()
+    {
+        bool? result = await DialogService.ShowMessageBoxAsync(
+            "Delete Purchase Order",
+            $"Are you sure you want to delete PO #{PO.PoNumber}? This action cannot be undone.",
+            yesText: "Delete", cancelText: "Cancel");
+
+        if (result == true)
+        {
+            MudDialog.Close(DialogResult.Ok("Deleted"));
+        }
+    }
+}

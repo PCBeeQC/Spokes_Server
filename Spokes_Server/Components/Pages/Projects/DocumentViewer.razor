@@ -1,0 +1,510 @@
+@page "/projects/{ProjectId}/documents/{DocumentId}"
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Data
+@using Spokes_Server.Core.Services.Core
+@using Spokes_Server.Components.Shared
+@using MudBlazor
+@using Markdig
+@inject Database Db
+@inject ISnackbar Snackbar
+@inject IDialogService DialogService
+@inject NavigationManager Nav
+@inject IJSRuntime JS
+@inject ILogger<DocumentViewer> Logger
+@inject UserService UserService
+@implements IAsyncDisposable
+@using Spokes_Server.Core.Services.Documents
+@inject DocumentPdfService PdfService
+@inject MarkdownSanitizerService MarkdownSanitizer
+
+<style>
+    .markdown-content h1,
+    .markdown-content h2,
+    .markdown-content h3 {
+        color: @_profile.PrimaryColor !important;
+        margin-top: 1rem;
+        margin-bottom: 0.75rem;
+    }
+
+    .markdown-content h4,
+    .markdown-content h5,
+    .markdown-content h6 {
+        color: black !important;
+        margin-top: 1rem;
+        margin-bottom: 0.75rem;
+    }
+
+    .markdown-content p {
+        margin-bottom: 1rem;
+        line-height: 1.6;
+    }
+
+    .markdown-content ul,
+    .markdown-content ol {
+        padding-left: 2rem;
+        margin-bottom: 1rem;
+    }
+
+    .markdown-content li {
+        margin-bottom: 0.5rem;
+    }
+
+    .markdown-content strong {
+        font-weight: bold;
+    }
+</style>
+
+@if (_document == null || _project == null || _profile == null)
+{
+    <MudContainer MaxWidth="MaxWidth.Small" Class="mt-10">
+        <MudAlert Severity="Severity.Info">Loading document...</MudAlert>
+    </MudContainer>
+}
+else
+{
+    <PageTitle>@_document.Name - @_project.DisplayName</PageTitle>
+
+    <MudGrid Spacing="0" Class="py-2 px-4 d-print-none align-center" Style="position: sticky; top: 0; z-index: 99; background-color: var(--mud-palette-background);">
+        <MudItem xs="3">
+            <MudButton StartIcon="@Icons.Material.Filled.ArrowBack" OnClick="GoBack">Back to Project</MudButton>
+        </MudItem>
+        <MudItem xs="9" Class="d-flex justify-end align-center gap-2">
+            @if (_isEditing)
+            {
+                <MudButton Variant="Variant.Outlined" OnClick="CancelEditing">Cancel</MudButton>
+                <MudButton Variant="Variant.Outlined" Color="Color.Primary" OnClick="SaveEdits">Save Changes</MudButton>
+            }
+            else
+            {
+                <MudSelect T="string" Value="@_document.Status" ValueChanged="UpdateStatus" Dense="true" Margin="Margin.Dense"
+                    Variant="Variant.Outlined" Style="width: 150px;">
+                    <MudSelectItem Value="@("Draft")">Draft</MudSelectItem>
+                    <MudSelectItem Value="@("Final")">Final</MudSelectItem>
+                </MudSelect>
+
+
+                <MudButton Variant="Variant.Outlined" Color="Color.Secondary" StartIcon="@Icons.Material.Filled.Print"
+                    OnClick="Print">Print / PDF</MudButton>
+
+                @if (_document.Status == "Final" && !string.IsNullOrEmpty(_document.PdfPath))
+                {
+                    <MudButton Variant="Variant.Outlined" Color="Color.Secondary" StartIcon="@Icons.Material.Filled.OpenInNew" OnClick="OpenPdf">Open PDF</MudButton>
+                    <MudButton Variant="Variant.Outlined" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Email"
+                        OnClick="SendByEmail" Class="ml-2">Send by Email</MudButton>
+                }
+
+                @if (_document.Status != "Final")
+                {
+                    <MudButton Variant="Variant.Outlined" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Edit"
+                        OnClick="StartEditing" Class="mr-2">Edit Content</MudButton>
+
+                    @if (_document.IsManualEdit && !string.IsNullOrEmpty(_document.StandardDocumentId))
+                    {
+                        <MudButton Variant="Variant.Outlined" Color="Color.Warning" StartIcon="@Icons.Material.Filled.History"
+                            OnClick="ResetToTemplate">Reset to Template</MudButton>
+                    }
+                }
+            }
+        </MudItem>
+    </MudGrid>
+
+    <MudPaper Class="mx-auto overflow-hidden mb-10" Style="max-width: 8.5in; width: 100%; min-height: 11in;" Elevation="3"
+        id="printable-area">
+
+        @if (!_isEditing)
+        {
+            <div class="print-footer-custom">
+
+                @if (_document.IsLongFooter)
+                {
+                    <span>@((_profile?.CompanyName) + " - " + _profile?.AddressStreet + ", " + _profile?.AddressCity + " - " + _profile?.PhoneNumber) </span>
+                }
+                else
+                {
+                    <span>@_profile?.CompanyName</span>
+                }
+
+
+                <span>
+                    @* Ref: @_document.Name *@
+                    @if (_document.IsConfidential)
+                    {
+                        <span style="color: #d32f2f; font-weight: bold; text-transform: uppercase;">@(_template?.Label_Confidential ?? "CONFIDENTIAL")</span>
+                    }
+                </span>
+
+                <span data-page-number style="display:none">{page} / {pages}</span>
+            </div>
+        }
+
+        <div class="@(_isEditing ? "pa-10" : "print-body")">
+            @if (_isEditing)
+            {
+                <MudText Typo="Typo.h6" Class="mb-4">Editing Resolved Content</MudText>
+                <MudAlert Severity="Severity.Warning" Class="mb-4">
+                    You are editing the resolved text. Changes here will be permanent and tags will no longer auto-resolve if
+                    you
+                    save.
+                </MudAlert>
+
+                <MudSwitch @bind-Value="_document.IsConfidential" Label="Confidential Footer" Color="Color.Error"
+                    Class="mb-4" />
+
+                <MudSwitch @bind-Value="_document.IsLongFooter" Label="Footer with address and phone number" Color="Color.Error"
+                           Class="mb-4" />
+
+                @if (DocumentBlockLibrary.GetAll().Any())
+                {
+                    <DocumentBlocksEditor Blocks="_document.Blocks" BlocksChanged="@(b => { _document.Blocks = b; SaveBlocks(); })"
+                        OnBlockAdded="OnBlockAdded" OnBlockRenamed="OnBlockRenamed" />
+                }
+
+                <MarkdownEditor @bind-Value="_editingBody" AvailableTags="GetAvailableTags()" />
+            }
+            else
+            {
+                @* Content Section Only *@
+                <div class="markdown-content allow-break">
+                    @RenderMarkdown(GetResolvedBody())
+                </div>
+            }
+        </div>
+    </MudPaper>
+}
+
+@code {
+    [Parameter] public string ProjectId { get; set; } = string.Empty;
+    [Parameter] public string DocumentId { get; set; } = string.Empty;
+
+    private ProjectDocument? _document;
+    private Project? _project;
+    private CompanyProfile? _profile;
+    private Employee? _pm;
+    private DocumentTemplate? _template;
+
+    private bool _isAdmin = false;
+
+    private bool _isEditing = false;
+    private string _editingBody = string.Empty;
+    private bool _needsPagination = false;
+
+    private const int PageHeight = 940;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if ((firstRender || _needsPagination) && _document != null && _profile != null && !_isEditing)
+        {
+            _needsPagination = false;
+            // Small delay to let Blazor finish rendering the non-editing content
+            await Task.Delay(50);
+            try { await JS.InvokeVoidAsync("paginateSections", "printable-area", PageHeight); }
+            catch { /* pagination failed, single-page fallback */ }
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        try { await JS.InvokeVoidAsync("cleanupPagination", "printable-area"); }
+        catch { /* component already disposed or JS unavailable */ }
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        _document = Db.ProjectDocuments.GetById(DocumentId);
+        _project = Db.Projects.GetById(ProjectId);
+        _profile = Db.CompanyProfile.Get();
+
+        if (_project != null && !string.IsNullOrEmpty(_project.ProjectManagerId))
+        {
+            _pm = Db.Employees.GetById(_project.ProjectManagerId);
+        }
+
+        if (_project != null && !string.IsNullOrEmpty(_project.DefaultTemplateId))
+        {
+            _template = Db.DocumentTemplates.GetById(_project.DefaultTemplateId);
+        }
+        if (_template == null)
+        {
+            _template = Db.DocumentTemplates.GetDefault();
+        }
+
+        _isAdmin = await UserService.IsAdminAsync();
+
+        if (_document == null || _project == null)
+        {
+            Snackbar.Add("Document not found", Severity.Error);
+            Nav.NavigateTo($"/projects/{ProjectId}");
+            return;
+        }
+
+        if (!await UserService.CanViewProjectAsync(_project))
+        {
+            Nav.NavigateTo("/projects");
+            return;
+        }
+    }
+
+    private string GetResolvedBody()
+    {
+        if (_document == null || _project == null || _profile == null) return string.Empty;
+
+        // If Sent, show the frozen body exactly as is
+        if (_document.Status == "Final")
+        {
+            return _document.ResolvedBody;
+        }
+
+        string body = _document.ResolvedBody;
+
+        // If Draft and NOT manually edited, use the StandardDocument template
+        if (!_document.IsManualEdit)
+        {
+            var template = Db.StandardDocuments.GetById(_document.StandardDocumentId);
+            if (template != null)
+            {
+                body = template.Body;
+
+                // Always pull the template's blocks and confidentiality if not manually overridden
+                if (template.Blocks != null)
+                {
+                    _document.Blocks = template.Blocks.Select(b => new DocumentBlockInstance
+                        {
+                            Id = Guid.NewGuid().ToString(),
+                            Type = b.Type,
+                            Name = b.Name,
+                            Properties = new Dictionary<string, string>(b.Properties)
+                        }).ToList();
+                }
+                _document.IsConfidential = template.IsConfidential;
+            }
+        }
+
+        // 1. Resolve standard generic tags
+        string resolvedBody = ContextTagRegistry.Resolve(body, _project, _profile, _pm);
+
+        // 2. Inject Document Blocks
+        foreach (var block in _document.Blocks)
+        {
+            var libraryDef = DocumentBlockLibrary.GetByType(block.Type);
+            if (libraryDef != null)
+            {
+                string blockHtml = libraryDef.RenderHtml(block, _project, _profile, _pm);
+                resolvedBody = resolvedBody.Replace($"@Block.{block.Name}", blockHtml);
+            }
+        }
+
+        return resolvedBody;
+    }
+
+    private List<ContextTagDefinition> GetAvailableTags()
+    {
+        var baseTags = ContextTagRegistry.GetAvailableTags();
+        if (_document == null) return baseTags;
+
+        var blockTags = _document.Blocks
+        .Where(b => !string.IsNullOrWhiteSpace(b.Name))
+        .Select(b => new ContextTagDefinition
+            {
+                Tag = $"@Block.{b.Name}",
+                Description = $"Renders the {b.Type} block",
+                Category = "Document Blocks"
+            })
+        .ToList();
+
+        return blockTags.Concat(baseTags).ToList();
+    }
+
+    private MarkupString RenderMarkdown(string text)
+    {
+        if (string.IsNullOrEmpty(text)) return new MarkupString("");
+        
+        // Preserve multiple blank lines
+        text = text.Replace("\r\n", "\n").Replace("\r", "\n");
+        text = System.Text.RegularExpressions.Regex.Replace(text, @"\n{3,}", match => 
+            "\n\n" + string.Join("", System.Linq.Enumerable.Repeat("<div style=\"height: 1rem;\"></div>\n\n", match.Length - 2)));
+
+        // Convert page break markers to force-break divs for pagination
+        text = text.Replace("<!-- pagebreak -->", "\n\n<div class=\"force-break\"></div>\n\n");
+        return new MarkupString(MarkdownSanitizer.RenderSanitizedHtml(text));
+    }
+
+    private void UpdateStatus(string newStatus)
+    {
+        _ = UpdateStatusAsync(newStatus);
+    }
+
+    private async Task UpdateStatusAsync(string newStatus)
+    {
+        if (_document == null) return;
+
+        // Admin-only revert from Final to Draft
+        if (_document.Status == "Final" && newStatus == "Draft" && !_isAdmin)
+        {
+            Snackbar.Add("Only administrators can revert a finalized document to draft.", Severity.Warning);
+            return;
+        }
+
+        var oldStatus = _document.Status;
+
+        // When switching to Final, we freeze the current resolution
+        if (oldStatus == "Final" && newStatus == "Draft")
+        {
+            if (!string.IsNullOrEmpty(_document.PdfPath) && System.IO.File.Exists(_document.PdfPath))
+            {
+                try { System.IO.File.Delete(_document.PdfPath); } catch { }
+            }
+            _document.PdfPath = string.Empty;
+        }
+        else if (newStatus == "Final" && oldStatus == "Draft")
+        {
+            // Calculate resolved body while status is still Draft
+            _document.ResolvedBody = GetResolvedBody();
+            _document.Status = newStatus; // apply status before PDF generation so headless browser renders the frozen body
+            Db.ProjectDocuments.Save(_document); // save to cache so puppeteer sees it
+
+            Snackbar.Add("Generating PDF document...", Severity.Info);
+            _document.PdfPath = await PdfService.GenerateProjectDocumentPdfAsync(_document, ProjectId, Nav.BaseUri);
+        }
+
+        _document.Status = newStatus;
+        _document.UpdatedAt = DateTime.UtcNow;
+        Db.ProjectDocuments.Save(_document);
+        Spokes_Server.Core.Services.Projects.TimelineEventHelper.ProcessDocumentStatusChange(Db, _document, oldStatus, newStatus, null);
+        Snackbar.Add($"Status updated to {newStatus}", Severity.Success);
+        
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private void SaveEdits()
+    {
+        if (_document == null) return;
+
+        _document.ResolvedBody = _editingBody;
+        _document.IsManualEdit = true;
+        _document.UpdatedAt = DateTime.UtcNow;
+
+        Db.ProjectDocuments.Save(_document);
+        _isEditing = false;
+        _needsPagination = true;
+        Snackbar.Add("Changes saved (Document is now delinked from template)", Severity.Info);
+    }
+
+    private void CancelEditing()
+    {
+        _isEditing = false;
+        _needsPagination = true;
+    }
+
+    private void SaveBlocks()
+    {
+        if (_document == null) return;
+        _document.IsManualEdit = true;
+        _document.UpdatedAt = DateTime.UtcNow;
+        Db.ProjectDocuments.Save(_document);
+    }
+
+    private void OnBlockAdded(string blockName)
+    {
+        var tag = $"@Block.{blockName}";
+        if (!_editingBody.Contains(tag))
+        {
+            _editingBody = string.IsNullOrWhiteSpace(_editingBody)
+            ? tag
+            : _editingBody + "\n\n" + tag;
+        }
+    }
+
+    private void OnBlockRenamed((string OldName, string NewName) rename)
+    {
+        var oldTag = $"@Block.{rename.OldName}";
+        var newTag = $"@Block.{rename.NewName}";
+        if (_editingBody.Contains(oldTag))
+        {
+            _editingBody = _editingBody.Replace(oldTag, newTag);
+        }
+    }
+
+    private void ResetToTemplate()
+    {
+        if (_document == null) return;
+        _document.IsManualEdit = false;
+        _document.UpdatedAt = DateTime.UtcNow;
+        Db.ProjectDocuments.Save(_document);
+        Snackbar.Add("Document re-linked to template (manual edits discarded)", Severity.Warning);
+    }
+
+    private async Task StartEditing()
+    {
+        if (_document == null) return;
+
+        // Cleanup pagination first so Blazor can manage the edit UI DOM
+        try { await JS.InvokeVoidAsync("cleanupPagination", "printable-area"); }
+        catch { }
+
+        if (_document.IsManualEdit || _document.Status == "Final")
+        {
+            _editingBody = _document.ResolvedBody;
+        }
+        else
+        {
+            var template = Db.StandardDocuments.GetById(_document.StandardDocumentId);
+            _editingBody = template?.Body ?? _document.ResolvedBody;
+        }
+
+        _isEditing = true;
+    }
+
+    private async Task Print()
+    {
+        await JS.InvokeVoidAsync("window.print");
+    }
+
+    private void GoBack() => Nav.NavigateTo($"/projects/{ProjectId}?tab=documents");
+
+    private async Task SendByEmail()
+    {
+        if (string.IsNullOrEmpty(_document?.PdfPath) || !System.IO.File.Exists(_document.PdfPath))
+        {
+            Snackbar.Add("PDF file not found. Please try generating it again by setting status to Draft then Final.", Severity.Warning);
+            return;
+        }
+
+        var parameters = new DialogParameters
+        {
+            ["To"] = _project?.Client?.ContactPersonEmail ?? "",
+            ["Subject"] = $"{_document.Name} from {_profile?.CompanyName}",
+            ["Body"] = $"<p>Dear {_project?.Client?.ContactPersonName ?? "Client"},</p><p>Please find attached document: {_document.Name}.</p>",
+            ["IsTemplate"] = true,
+            ["PreloadedFiles"] = new List<(string Path, string FileName)> 
+            { 
+                (_document.PdfPath, $"{_document.Name}.pdf") 
+            }
+        };
+
+        var options = new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true };
+        await DialogService.ShowAsync<Spokes_Server.Components.Pages.Email.EmailComposer>("Send Email", parameters, options);
+    }
+
+    private async Task OpenPdf()
+    {
+        if (string.IsNullOrEmpty(_document?.PdfPath) || !System.IO.File.Exists(_document.PdfPath))
+        {
+            Snackbar.Add("PDF file not found.", Severity.Warning);
+            return;
+        }
+
+        try
+        {
+            var bytes = await System.IO.File.ReadAllBytesAsync(_document.PdfPath);
+            var base64 = Convert.ToBase64String(bytes);
+            var dataUrl = $"data:application/pdf;base64,{base64}";
+            await JS.InvokeVoidAsync("window.openBase64InNewTab", dataUrl, $"{_document.Name}.pdf");
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to open PDF");
+            Snackbar.Add("Failed to open PDF view", Severity.Error);
+        }
+    }
+}

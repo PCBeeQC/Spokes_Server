@@ -1,0 +1,144 @@
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Aggregate
+@using Spokes_Server.Core.Services.Communication.Chat
+@inject Database Db
+@inject ChatService ChatService
+@inject ChatStateService ChatState
+@inject ISnackbar Snackbar
+@implements IDisposable
+
+@if (_event == null)
+{
+    <MudCard Class="pa-3" Style="width: 100%; max-width: 350px; border-radius: 8px; border: 1px dashed var(--mud-palette-divider); box-shadow: none; background: transparent;">
+        <div class="d-flex align-center gap-3">
+            <MudIcon Icon="@Icons.Material.Filled.EventBusy" Color="Color.Secondary" />
+            <MudText Typo="Typo.body2" Color="Color.Secondary" Style="font-style: italic;">This event is no longer available.</MudText>
+        </div>
+    </MudCard>
+}
+else
+{
+    <MudCard Class="pa-3" Style="width: 100%; max-width: 350px; border-radius: 8px; border: 1px solid var(--mud-palette-divider); box-shadow: none;">
+        <div class="d-flex align-center gap-3 mb-2">
+            <MudAvatar Size="Size.Medium" Style="background: color-mix(in srgb, var(--mud-palette-info) 15%, transparent); color: var(--mud-palette-info);">
+                <MudIcon Icon="@Icons.Material.Filled.Event" Size="Size.Small" />
+            </MudAvatar>
+            <div style="overflow: hidden;">
+                <MudText Typo="Typo.subtitle2" Style="font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">@_event.Title</MudText>
+                <MudText Typo="Typo.caption" Color="Color.Secondary">
+                    @(_event.IsAllDay ? _event.Start.ToString("MMMM d, yyyy") : $"{_event.Start.ToString("MMM d, h:mm tt")} - {_event.End.ToString("h:mm tt")}")
+                </MudText>
+            </div>
+        </div>
+        @if (!string.IsNullOrWhiteSpace(_event.Location))
+        {
+            <MudText Typo="Typo.body2" Class="mb-3 d-flex align-center gap-1">
+                <MudIcon Icon="@Icons.Material.Filled.LocationOn" Size="Size.Small" Color="Color.Secondary"/> @_event.Location
+            </MudText>
+        }
+        @if (!string.IsNullOrWhiteSpace(_event.Description))
+        {
+            <MudText Typo="Typo.body2" Class="mb-3" Style="color: var(--mud-palette-text-secondary); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;">
+                @_event.Description
+            </MudText>
+        }
+        <div class="d-flex justify-space-between align-center gap-2 w-100 mb-n1" style="min-height: 36px;">
+            <div class="d-flex flex-wrap align-center gap-1">
+                @if (_event.Attendees != null)
+                {
+                    foreach (var attendeeId in _event.Attendees)
+                    {
+                        var emp = Employees.FirstOrDefault(e => e.Id == attendeeId);
+                        if (emp != null)
+                        {
+                            <MudTooltip Text="@emp.FullName" Placement="Placement.Top" RootStyle="display: inline-flex; align-items: center;">
+                                <EmployeeAvatar Employee="emp" Size="Size.Small" ShowPresence="false" Style="width: 14px; height: 14px; min-width: 14px; min-height: 14px; font-size: 0.5rem;" />
+                            </MudTooltip>
+                        }
+                    }
+                }
+            </div>
+            <div class="d-flex justify-end flex-shrink-0 gap-2">
+                @if (_event.Attendees != null && _event.Attendees.Contains(CurrentUserId))
+                {
+                    <MudButton Variant="Variant.Outlined" Color="Color.Error" Size="Size.Small" StartIcon="@Icons.Material.Filled.Close"
+                        OnClick="CancelRsvpAsync" Disabled="@IsCurrentUserSuspended">Cancel</MudButton>
+                }
+                else
+                {
+                    <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small" StartIcon="@Icons.Material.Filled.Add"
+                        OnClick="RsvpAsync" Disabled="@IsCurrentUserSuspended">I'm in!</MudButton>
+                }
+            </div>
+        </div>
+    </MudCard>
+}
+
+@code {
+    [Parameter, EditorRequired]
+    public string EventId { get; set; } = string.Empty;
+
+    [Parameter]
+    public string? CurrentUserId { get; set; }
+
+    [Parameter, EditorRequired]
+    public List<Employee> Employees { get; set; } = new();
+
+    private CalendarEvent? _event;
+
+    private bool IsCurrentUserSuspended =>
+        Employees.FirstOrDefault(e => e.Id == CurrentUserId)?.IsSuspended == true;
+
+    protected override void OnInitialized()
+    {
+        _event = Db.CalendarEvents.GetById(EventId);
+        ChatState.CalendarEventUpdated += HandleCalendarEventUpdated;
+    }
+
+    protected override void OnParametersSet()
+    {
+        if (_event == null || _event.Id != EventId)
+        {
+            _event = Db.CalendarEvents.GetById(EventId);
+        }
+    }
+
+    private void HandleCalendarEventUpdated(CalendarEvent updatedEvent)
+    {
+        if (updatedEvent.Id == EventId)
+        {
+            _event = updatedEvent;
+            InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private async Task RsvpAsync()
+    {
+        if (string.IsNullOrEmpty(CurrentUserId)) return;
+        var success = await ChatService.RsvpToEventAsync(EventId, CurrentUserId);
+        if (success)
+        {
+            _event = Db.CalendarEvents.GetById(EventId);
+            Snackbar.Add("You're in! Event added to your calendar.", Severity.Success);
+            StateHasChanged();
+        }
+    }
+
+    private async Task CancelRsvpAsync()
+    {
+        if (string.IsNullOrEmpty(CurrentUserId)) return;
+        var success = await ChatService.CancelRsvpEventAsync(EventId, CurrentUserId);
+        if (success)
+        {
+            _event = Db.CalendarEvents.GetById(EventId);
+            Snackbar.Add("Attendance cancelled.", Severity.Info);
+            StateHasChanged();
+        }
+    }
+
+    public void Dispose()
+    {
+        ChatState.CalendarEventUpdated -= HandleCalendarEventUpdated;
+    }
+}

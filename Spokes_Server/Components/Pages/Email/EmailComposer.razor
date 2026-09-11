@@ -1,0 +1,568 @@
+@using Spokes_Server.Core.Services
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Models.HR
+@using System.IO
+@using System.Linq
+@using Spokes_Server.Components.Shared
+@using Spokes_Server.Components.Dialogs
+@using Microsoft.AspNetCore.Components.Authorization
+@using Spokes_Server.Core.Constants
+@inject AuthenticationStateProvider AuthStateProvider
+@inject EmailService EmailService
+@inject UserService UserService
+@inject ISnackbar Snackbar
+@inject IDialogService DialogService
+@inject IJSRuntime JS
+@implements IDisposable
+
+<MudDialog>
+    <DialogContent>
+        @if (_isLoading)
+        {
+            <div class="d-flex justify-center align-center" style="height: 400px;">
+                <MudProgressCircular Indeterminate="true" Color="Color.Primary" />
+            </div>
+        }
+        else
+        {
+            <MudForm @ref="_form" @bind-IsValid="@_success">
+                <MudTextField Value="@_from" Label="From" ReadOnly="true" Margin="Margin.Dense" Variant="Variant.Outlined"
+                    Class="mb-2" />
+
+                <div class="d-flex align-center gap-2 mb-1 w-100">
+                    <EmailRecipientInput Label="To" SelectedEmails="@_toList"
+                        SelectedEmailsChanged="@((List<string> val) => { _toList = val; OnFieldChanged(); })"
+                        OnAddressBookClick="@(() => OpenAddressBook("To"))" Class="flex-grow-1" />
+                    <MudButton Variant="Variant.Text" Color="Color.Primary" OnClick="@(() => _showCcBcc = !_showCcBcc)"
+                        Size="Size.Small" Style="white-space:nowrap;" Class="mt-2">
+                        @(_showCcBcc ? "Hide Cc/Bcc" : "Cc/Bcc")
+                    </MudButton>
+                </div>
+
+                <MudCollapse Expanded="_showCcBcc">
+                    <div class="d-flex flex-column gap-2 mb-1">
+                        <EmailRecipientInput Label="Cc" SelectedEmails="@_ccList"
+                            SelectedEmailsChanged="@((List<string> val) => { _ccList = val; OnFieldChanged(); })"
+                            OnAddressBookClick="@(() => OpenAddressBook("Cc"))" Class="w-100" />
+                        <EmailRecipientInput Label="Bcc" SelectedEmails="@_bccList"
+                            SelectedEmailsChanged="@((List<string> val) => { _bccList = val; OnFieldChanged(); })"
+                            OnAddressBookClick="@(() => OpenAddressBook("Bcc"))" Class="w-100" />
+                    </div>
+                </MudCollapse>
+
+                <MudTextField Value="@_subject" ValueChanged="@((string v) => { _subject = v; OnFieldChanged(); })"
+                    Label="Subject" Margin="Margin.Dense" Required="true" RequiredError="Subject is required" Class="mb-3"
+                    Variant="Variant.Outlined" Immediate="true" />
+
+                <!-- Rich Text Editor -->
+                <style>
+                    .spokes-rich-text-editor .ql-overlay {
+                        z-index: 1000 !important;
+                    }
+
+                    .spokes-rich-text-editor {
+                        overflow: visible !important;
+                    }
+
+                    .ql-container {
+                        height: 100% !important;
+                        overflow-y: auto !important;
+                    }
+
+                    .ql-editor {
+                        min-height: 400px;
+                    }
+                </style>
+                <SpokesRichTextEditor @ref="_editor" Value="@_body" ValueChanged="OnBodyChanged" Class="mb-3"
+                    Immediate="true" />
+
+
+                <div class="d-flex align-center gap-2 mb-2">
+                    <MudFileUpload T="IReadOnlyList<IBrowserFile>" FilesChanged="UploadFiles" Accept="*"
+                        id="email-composer-upload">
+                        <CustomContent>
+                            <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="@context.OpenFilePickerAsync"
+                                StartIcon="@Icons.Material.Filled.AttachFile">
+                                Attach Files
+                            </MudButton>
+                        </CustomContent>
+                        <SelectedTemplate></SelectedTemplate>
+                    </MudFileUpload>
+
+                    @if (_canAttachDocuments)
+                    {
+                        <MudButton Variant="Variant.Outlined" Color="Color.Secondary" OnClick="OpenDocumentPicker"
+                            StartIcon="@Icons.Material.Filled.FindInPage">
+                            Attach Internal Document
+                        </MudButton>
+                    }
+
+                    <MudText Typo="Typo.caption">@(_attachments.Count + _existingAttachments.Count + _preloadedAttachments.Count) file(s) attached</MudText>
+                </div>
+
+                @if (_attachments.Any() || _existingAttachments.Any() || _preloadedAttachments.Any())
+                {
+                    <div class="d-flex flex-wrap gap-2">
+                        @foreach (var file in _attachments)
+                        {
+                            <MudChip T="string" Size="Size.Small" OnClose="@(() => { _attachments.Remove(file); OnFieldChanged(); })">
+                                @file.Name (@(file.Size / 1024) KB)
+                            </MudChip>
+                        }
+                        @foreach (var existing in _existingAttachments)
+                        {
+                            <MudChip T="string" Size="Size.Small" OnClose="@(() => RemoveExistingAttachment(existing))">
+                                @existing.FileName (@(existing.Size / 1024) KB)
+                            </MudChip>
+                        }
+                        @foreach (var preloaded in _preloadedAttachments)
+                        {
+                            <MudChip T="string" Size="Size.Small" OnClose="@(() => { _preloadedAttachments.Remove(preloaded); OnFieldChanged(); })">
+                                @preloaded.FileName (Server File)
+                            </MudChip>
+                        }
+                    </div>
+                }
+
+                @if (!string.IsNullOrEmpty(Body))
+                {
+                    <MudDivider Class="mt-2"></MudDivider>
+                    <MudText Typo="Typo.subtitle2" Class="mt-1 mb-1">Original Message (will be attached below your reply) :</MudText>
+                    <div class="border rounded pa-4 mud-theme-surface" style="max-height: 400px; overflow-y: auto;">
+                        <EmailContentRenderer HtmlContent="@Body" />
+                    </div>
+                }
+
+                
+            </MudForm>
+        }
+    </DialogContent>
+    <DialogActions>
+        <div class="d-flex align-center flex-grow-1 ml-4">
+            @if (_autoSaveState == AutoSaveStatus.Saving)
+            {
+                <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" Color="Color.Warning"
+                    Style="width:16px;height:16px;" />
+                <MudText Typo="Typo.caption" Color="Color.Warning">Saving draft…</MudText>
+            }
+            else if (_autoSaveState == AutoSaveStatus.Typing)
+            {
+                <MudIcon Icon="@Icons.Material.Filled.Edit" Size="Size.Small" Color="Color.Warning" Class="mr-1" />
+                <MudText Typo="Typo.caption" Color="Color.Warning">Typing…</MudText>
+            }
+            else if (_autoSaveState == AutoSaveStatus.Saved)
+            {
+                <MudIcon Icon="@Icons.Material.Filled.CloudDone" Size="Size.Small" Color="Color.Success" Class="mr-1" />
+                <MudText Typo="Typo.caption" Color="Color.Success">Draft saved@(_lastSavedTime.HasValue ? $" at {_lastSavedTime.Value:h:mm tt}" : "")</MudText>
+            }
+            else if (_autoSaveState == AutoSaveStatus.Error)
+            {
+                <MudIcon Icon="@Icons.Material.Filled.ErrorOutline" Size="Size.Small" Color="Color.Error" Class="mr-1" />
+                <MudText Typo="Typo.caption" Color="Color.Error">Save failed</MudText>
+            }
+        </div>
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="SendAsync"
+            Disabled="@(string.IsNullOrWhiteSpace(_subject) || !_toList.Any() || _isSending)">
+            @if (_isSending)
+            {
+                <MudProgressCircular Class="ms-n1" Size="Size.Small" Indeterminate="true" />
+                <MudText Class="ms-2">Sending…</MudText>
+            }
+            else
+            {
+                <MudText>Send</MudText>
+            }
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    // ──────────────────── Parameters ────────────────────
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
+    [Parameter] public string? To { get; set; }
+    [Parameter] public string? Subject { get; set; }
+    [Parameter] public string? Body { get; set; }
+    [Parameter] public string? DraftId { get; set; }
+    [Parameter] public List<(string Path, string FileName)>? PreloadedFiles { get; set; }
+    [Parameter] public bool IsTemplate { get; set; }
+
+    private bool _isLoading = true;
+    private bool _canAttachDocuments = false;
+
+    // ──────────────────── Form state ────────────────────
+    private MudForm _form = default!;
+    private SpokesRichTextEditor _editor = default!;
+    private bool _success;
+    private bool _isSending;
+    private bool _editorReady = false;
+
+    private string _from = "";
+    private List<string> _toList = new();
+    private List<string> _ccList = new();
+    private List<string> _bccList = new();
+    private bool _showCcBcc = false;
+    private string _subject = "";
+    private string _body = "";
+
+    private List<IBrowserFile> _attachments = new();
+    private List<EmailAttachmentMeta> _existingAttachments = new();
+    private List<(string Path, string FileName)> _preloadedAttachments = new();
+
+
+
+    // ──────────────────── Auto-save state ────────────────────
+    private enum AutoSaveStatus { Idle, Typing, Saving, Saved, Error }
+    private AutoSaveStatus _autoSaveState = AutoSaveStatus.Idle;
+    private string? _currentDraftId;
+    private CancellationTokenSource? _debounceCts;
+    private bool _dirty; // true when user changed something since last save
+    private bool _savingInProgress; // guard against concurrent saves
+    private DateTime? _lastSavedTime; // #31 — timestamp for auto-save display
+
+    // ──────────────────── Lifecycle ────────────────────
+    protected override async Task OnInitializedAsync()
+    {
+
+        var employee = await UserService.GetEmployeeAsync();
+        _canAttachDocuments = employee != null && (employee.IsAdmin || 
+                              employee.HasPermission(AppPermissions.Projects.View) || 
+                              employee.HasPermission(AppPermissions.Purchases.ManagePOs) || 
+                              employee.HasPermission(AppPermissions.BusinessDocuments.View));
+        _from = employee?.Email ?? "";
+
+        if (!string.IsNullOrEmpty(DraftId))
+        {
+            _currentDraftId = DraftId;
+            var draft = await EmailService.GetMessageAsync(DraftId);
+            if (draft != null)
+            {
+                _toList = draft.ToAddresses.ToList();
+                _ccList = draft.CcAddresses.ToList();
+                _bccList = draft.BccAddresses.ToList();
+                _subject = draft.Subject;
+                _existingAttachments = draft.Attachments;
+
+                var fullBody = await EmailService.GetEmailBodyAsync(draft.Id, employee.Id);
+                var separator = "<!-- spokes-reply-separator -->";
+                var idx = fullBody.IndexOf(separator, StringComparison.Ordinal);
+                if (idx >= 0)
+                {
+                    _body = fullBody.Substring(0, idx);
+                    Body = fullBody.Substring(idx + separator.Length);
+                }
+                else
+                {
+                    _body = fullBody;
+                }
+            }
+        }
+        else
+        {
+            if (!string.IsNullOrEmpty(To))
+            {
+                _toList = To.Split(new[] { ',', ';' }, StringSplitOptions.RemoveEmptyEntries)
+                .Select(e => e.Trim())
+                .ToList();
+            }
+            if (!string.IsNullOrEmpty(Subject)) _subject = Subject;
+
+            var signature = await EmailService.GetSignatureAsync(employee.Id);
+
+            if (IsTemplate && !string.IsNullOrEmpty(Body))
+            {
+                _body = Body;
+                if (!string.IsNullOrEmpty(signature))
+                {
+                    _body += $"<br/>{signature}";
+                }
+                Body = null; // Clear so it doesn't show in the original message section
+            }
+            else
+            {
+                _body = $"<p><br></p>";
+
+                if (!string.IsNullOrEmpty(signature))
+                {
+                    _body += $"{signature}";
+                }
+            }
+
+            // Body parameter is intentionally NOT appended to _body here anymore (unless IsTemplate).
+            // It will be displayed below the editor and appended on send for non-template cases.
+        }
+
+        if (PreloadedFiles != null)
+        {
+            _preloadedAttachments.AddRange(PreloadedFiles);
+        }
+
+        _isLoading = false;
+    }
+
+    protected override void OnAfterRender(bool firstRender)
+    {
+        if (firstRender)
+        {
+            _editorReady = true;
+        }
+    }
+
+
+    // ──────────────────── Change detection ────────────────────
+
+    /// <summary>Called by Subject (TextChanged), recipient lists, and file uploads.</summary>
+    private void OnFieldChanged()
+    {
+        ScheduleAutoSave();
+    }
+
+    /// <summary>Called by MudExRichTextEdit ValueChanged.</summary>
+    private void OnBodyChanged(string newValue)
+    {
+        if (_isLoading || !_editorReady) return;
+
+        // Safety check: The editor might emit an empty string during initialization or re-binding.
+        // If we have content in _body but receive empty, ignore it to prevent data loss.
+        if (!string.IsNullOrEmpty(_body) && string.IsNullOrEmpty(newValue))
+        {
+            return;
+        }
+
+        _body = newValue;
+        ScheduleAutoSave();
+    }
+
+    /// <summary>Central debounce: resets the 1.5s timer on every change.</summary>
+    private void ScheduleAutoSave()
+    {
+        if (_isSending) return;
+
+        _dirty = true;
+
+        // Show "Typing…" immediately
+        if (_autoSaveState != AutoSaveStatus.Typing)
+        {
+            _autoSaveState = AutoSaveStatus.Typing;
+            StateHasChanged();
+        }
+
+        // Cancel any pending debounce and start fresh
+        _debounceCts?.Cancel();
+        _debounceCts?.Dispose();
+        _debounceCts = new CancellationTokenSource();
+        var token = _debounceCts.Token;
+
+        _ = RunDebouncedSaveAsync(token);
+    }
+
+    private async Task RunDebouncedSaveAsync(CancellationToken token)
+    {
+        try
+        {
+            await Task.Delay(1500, token); // wait 1.5 s of inactivity
+        }
+        catch (TaskCanceledException)
+        {
+            return; // user typed again — a newer debounce is running
+        }
+
+        // Execute the save on the Blazor synchronization context
+        await InvokeAsync(ExecuteSaveAsync);
+    }
+
+    private async Task ExecuteSaveAsync()
+    {
+        if (_isSending || _savingInProgress || !_dirty) return;
+
+        _savingInProgress = true;
+        _dirty = false;
+        _autoSaveState = AutoSaveStatus.Saving;
+        StateHasChanged();
+
+        try
+        {
+            var employee = await UserService.GetEmployeeAsync();
+            if (employee == null) { _autoSaveState = AutoSaveStatus.Error; return; }
+
+            string toStr = string.Join(", ", _toList);
+            string ccStr = string.Join(", ", _ccList);
+            string bccStr = string.Join(", ", _bccList);
+
+            string finalBody = string.IsNullOrEmpty(Body) ? _body : $"{_body}\n<!-- spokes-reply-separator -->\n{Body}";
+
+            var id = await EmailService.SaveDraftAsync(
+            employee.Id, toStr, _subject, finalBody,
+            _attachments, ccStr, bccStr, _currentDraftId);
+
+            if (!string.IsNullOrEmpty(id))
+            {
+                _currentDraftId = id;
+                _autoSaveState = AutoSaveStatus.Saved;
+                _lastSavedTime = DateTime.Now;
+
+                // Move newly-uploaded files into "already saved" state
+                if (_attachments.Any())
+                {
+                    _attachments.Clear();
+                    var updatedDraft = await EmailService.GetMessageAsync(id);
+                    if (updatedDraft != null)
+                        _existingAttachments = updatedDraft.Attachments;
+                }
+            }
+            else
+            {
+                _autoSaveState = AutoSaveStatus.Error;
+            }
+        }
+        catch (Exception ex)
+        {
+            _autoSaveState = AutoSaveStatus.Error;
+            Console.WriteLine($"[AutoSave] Error: {ex.Message}");
+        }
+        finally
+        {
+            _savingInProgress = false;
+            StateHasChanged();
+
+            // If the user typed while we were saving, start a new debounce cycle
+            if (_dirty)
+            {
+                ScheduleAutoSave();
+            }
+        }
+    }
+
+    private void UploadFiles(IReadOnlyList<IBrowserFile>? files)
+    {
+        if (files == null || !files.Any()) return;
+
+        foreach (var file in files)
+        {
+            if (file.Size > 10 * 1024 * 1024)
+            {
+                Snackbar.Add($"File {file.Name} is too large (Max 10MB)", Severity.Warning);
+                continue;
+            }
+            _attachments.Add(file);
+        }
+        OnFieldChanged();
+    }
+
+    private async Task RemoveExistingAttachment(EmailAttachmentMeta attachment)
+    {
+        _existingAttachments.Remove(attachment);
+        
+        var emp = await UserService.GetEmployeeAsync();
+        if (emp != null && !string.IsNullOrEmpty(_currentDraftId))
+        {
+            await EmailService.RemoveDraftAttachmentAsync(emp.Id, _currentDraftId, attachment.Id);
+        }
+        
+        OnFieldChanged();
+    }
+
+    // ──────────────────── Send ────────────────────
+    private void Cancel() => MudDialog.Cancel();
+
+    private async Task SendAsync()
+    {
+        if (!_toList.Any())
+        {
+            Snackbar.Add("Recipient (To) is required", Severity.Error);
+            return;
+        }
+
+        _isSending = true;
+        _debounceCts?.Cancel();
+
+        try
+        {
+            var employee = await UserService.GetEmployeeAsync();
+            if (employee == null)
+            {
+                Snackbar.Add("User not found", Severity.Error);
+                return;
+            }
+
+            string toStr = string.Join(", ", _toList);
+            string ccStr = string.Join(", ", _ccList);
+            string bccStr = string.Join(", ", _bccList);
+
+            string finalBody = string.IsNullOrEmpty(Body) ? _body : $"{_body}\n<br/><br/>\n<!-- spokes-reply-separator -->\n{Body}";
+
+            await EmailService.SendEmailAsync(employee.Id, toStr, _subject, finalBody, _attachments, ccStr, bccStr, _existingAttachments, _currentDraftId, _preloadedAttachments.Any() ? _preloadedAttachments : null);
+
+            // Clean up saved draft
+            if (_currentDraftId != null)
+            {
+                await EmailService.DeleteMessageAsync(_currentDraftId, employee.Id);
+            }
+
+            Snackbar.Add("Email sent successfully", Severity.Success);
+            MudDialog.Close(DialogResult.Ok(true));
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to send: {ex.Message}", Severity.Error);
+            _isSending = false;
+        }
+    }
+
+    // ──────────────────── Address Book ────────────────────
+    private async Task OpenAddressBook(string target)
+    {
+        var options = new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true };
+        var dialog = await DialogService.ShowAsync<AddressBookPickerDialog>("Select Contacts", options);
+        var result = await dialog.Result;
+
+        if (!result.Canceled && result.Data is List<string> selectedEmails)
+        {
+            var targetList = target switch
+            {
+                "Cc" => _ccList,
+                "Bcc" => _bccList,
+                _ => _toList
+            };
+
+            foreach (var email in selectedEmails)
+            {
+                if (!targetList.Contains(email))
+                    targetList.Add(email);
+            }
+
+            OnFieldChanged();
+        }
+    }
+
+    private async Task OpenDocumentPicker()
+    {
+        var options = new DialogOptions { MaxWidth = MaxWidth.Large, FullWidth = true };
+        var dialog = await DialogService.ShowAsync<DocumentPickerDialog>("Attach Documents", options);
+        var result = await dialog.Result;
+
+        if (result != null && !result.Canceled && result.Data is List<(string PdfPath, string DisplayName)> selectedDocs)
+        {
+            foreach (var doc in selectedDocs)
+            {
+                if (!_preloadedAttachments.Any(p => p.Path == doc.PdfPath))
+                {
+                    _preloadedAttachments.Add((doc.PdfPath, doc.DisplayName));
+                }
+            }
+            OnFieldChanged();
+        }
+    }
+
+    // ──────────────────── Cleanup ────────────────────
+    public void Dispose()
+    {
+        _debounceCts?.Cancel();
+        _debounceCts?.Dispose();
+    }
+}
+
+

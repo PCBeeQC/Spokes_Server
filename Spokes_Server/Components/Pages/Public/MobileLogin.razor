@@ -1,0 +1,139 @@
+@page "/mobile-login"
+@layout Spokes_Server.Components.Layout.LoginLayout
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Components.Authorization
+@attribute [AllowAnonymous]
+@inject Spokes_Server.Aggregate.Database Db
+@inject NavigationManager Nav
+@inject IJSRuntime JSRuntime
+@inject AuthenticationStateProvider AuthStateProvider
+
+<MudContainer MaxWidth="MaxWidth.False" Class="d-flex align-center justify-center mud-width-full" Style="height: 100vh; background-color: var(--mud-palette-background-grey);">
+    <MudPaper Elevation="3" Class="pa-8 d-flex flex-column align-center" Width="100%" MaxWidth="500px">
+        @if (!string.IsNullOrEmpty(Profile?.LogoBase64))
+        {
+            <MudImage Src="@Profile.LogoBase64" Height="100" Class="mb-4" ObjectFit="ObjectFit.Contain" />
+        }
+        else
+        {
+            <MudIcon Icon="@Icons.Material.Filled.CloudSync" Color="Color.Primary" Style="font-size: 5rem;" Class="mb-4" />
+        }
+        
+        <MudText Typo="Typo.h4" Align="Align.Center" GutterBottom="true">
+            @(string.IsNullOrEmpty(Profile?.CompanyName) ? "Spokes" : Profile.CompanyName)
+        </MudText>
+        
+        @if (sso_error == "1")
+        {
+            <MudAlert Severity="Severity.Error" Class="mb-4">
+                Authentication failed. Please check your system configuration.
+            </MudAlert>
+        }
+        
+        <MudText Typo="Typo.body1" Align="Align.Center" Color="Color.Secondary" Class="mb-8">
+            Welcome back. Please log in to continue.
+        </MudText>
+        <MudButton id="mobile-login-btn" Variant="Variant.Filled" Color="Color.Primary" Size="Size.Large" FullWidth="true" Class="py-3">
+            <MudIcon Icon="@Icons.Material.Filled.Login" Class="mr-2" />
+            Log In
+        </MudButton>
+    </MudPaper>
+</MudContainer>
+
+<script>
+    window.OpenNativeLoginJS = async function(returnUrl) {
+        var deviceId = '';
+        try {
+            if (window.pushNotifications && window.pushNotifications.getDeviceId) {
+                deviceId = await window.pushNotifications.getDeviceId();
+            }
+        } catch(e) {}
+        
+        var url = '/sso/login/auto?native_browser=1&deviceId=' + encodeURIComponent(deviceId) + '&returnUrl=' + encodeURIComponent(returnUrl || '/');
+        
+        if (window.openSsoAuth) {
+            window.openSsoAuth(url);
+        } else if (window.openCapacitorBrowser) {
+            window.openCapacitorBrowser(url);
+        } else {
+            window.location.href = url;
+        }
+    }
+
+    document.addEventListener('DOMContentLoaded', async () => {
+        const returnUrl = "@System.Web.HttpUtility.JavaScriptStringEncode(SafeReturnUrl)";
+        
+        const btn = document.getElementById('mobile-login-btn');
+        if (btn) {
+            btn.addEventListener('click', () => {
+                sessionStorage.removeItem('mobile_auto_login_attempts');
+                window.OpenNativeLoginJS(returnUrl);
+            });
+        }
+        
+        const urlParams = new URLSearchParams(window.location.search);
+        const noAuto = urlParams.get('no_auto') === '1';
+        const isSsoError = urlParams.get('sso_error') === '1';
+        
+        if (noAuto || isSsoError) {
+            console.log('[MobileLogin] Loop guard or error detected. Halting auto-login loop.');
+            sessionStorage.removeItem('mobile_auto_login_attempts');
+            return;
+        }
+
+        const isNative = navigator.userAgent.includes("Capacitor") || 
+            !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
+
+        if (isNative) {
+            console.log('[MobileLogin] Native client detected on login page. Attempting silent session refresh...');
+            try {
+                let attempts = 0;
+                while (!window.spokesAuth?.refreshSessionAsync && attempts < 10) {
+                    await new Promise(r => setTimeout(r, 50));
+                    attempts++;
+                }
+
+                if (window.spokesAuth?.refreshSessionAsync) {
+                    const refreshed = await window.spokesAuth.refreshSessionAsync();
+                    if (refreshed) {
+                        console.log('[MobileLogin] Silent session refresh succeeded! Redirecting to:', returnUrl);
+                        window.location.replace(returnUrl || '/');
+                        return;
+                    }
+                }
+            } catch (e) {
+                console.warn('[MobileLogin] Silent session refresh error:', e);
+            }
+            console.log('[MobileLogin] Silent refresh did not recover session. Presenting manual login.');
+        }
+    });
+</script>
+
+@code {
+    [SupplyParameterFromQuery]
+    public string? sso_error { get; set; }
+
+    [SupplyParameterFromQuery]
+    public string? ReturnUrl { get; set; }
+    private string SafeReturnUrl
+    {
+        get
+        {
+            var currentHost = Uri.TryCreate(Nav.BaseUri, UriKind.Absolute, out var baseUri) ? baseUri.Host : "localhost";
+            return Spokes_Server.Core.Security.RedirectHelper.GetSafeRedirectUrl(ReturnUrl, currentHost, "/");
+        }
+    }
+
+    private Spokes_Server.Core.Models.Core.CompanyProfile? Profile;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Profile = Db.CompanyProfile.Get();
+        
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        if (authState.User.Identity?.IsAuthenticated == true)
+        {
+            Nav.NavigateTo(SafeReturnUrl, forceLoad: true);
+        }
+    }
+}

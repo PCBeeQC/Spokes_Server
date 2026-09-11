@@ -1,0 +1,2624 @@
+@page "/chat"
+@page "/chat/{ChannelId}"
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.AspNetCore.Http
+@using Spokes_Server.Core.Data
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Services
+@using Spokes_Server.Core.Helpers
+@using Spokes_Server.Components.Dialogs
+@inject Database Db
+@inject ChatService ChatService
+@inject NavigationManager Nav
+@inject AuthenticationStateProvider AuthStateProvider
+@inject IJSRuntime JS
+@inject IDialogService DialogService
+@inject IConfiguration Configuration
+@inject ChatNotificationService ChatNotifications
+@inject UserService UserService
+@inject VoiceChannelService VoiceChannelService
+@inject GlobalVoiceService VoiceService
+@inject ICryptoService Crypto
+@inject ScopedKeystoreService ScopedKeystore
+@inject NotificationRoutingService NotificationRoutingService
+@inject Spokes_Server.Core.Services.Communication.ShortcutIconService ShortcutIconService
+@implements IAsyncDisposable
+
+<PageTitle>Chat</PageTitle>
+
+<MudContainer MaxWidth="MaxWidth.False" Class="pa-0 flex-grow-1 d-flex flex-column chat-page-container">
+<style>
+    .chat-page-container {
+        height: 100%;
+        overflow: hidden;
+        position: relative;
+    }
+
+    @@media (max-width: 959.98px) {
+        .voice-chat-open .voice-video-area {
+            display: none !important;
+        }
+        .voice-chat-open .voice-chat-area {
+            width: 100% !important;
+            flex-grow: 1 !important;
+            border-left: none !important;
+        }
+    }
+
+    /* Reverse scroll implementation using scaleY(-1) for cross-browser consistency */
+    #chat-messages-container {
+        transform: scaleY(-1) translateZ(0);
+    }
+    #chat-messages-container > * {
+        transform: scaleY(-1);
+    }
+
+    /* Desktop overrides for native smooth mouse wheel scrolling */
+    @@media (hover: hover) and (pointer: fine) {
+        #chat-messages-container {
+            transform: none !important;
+            display: flex !important;
+            flex-direction: column-reverse !important;
+        }
+        #chat-messages-container > * {
+            transform: none !important;
+        }
+    }
+
+    .voice-chat-area {
+        width: 100%;
+        flex-grow: 1;
+        border-left: none;
+    }
+
+    @@media (min-width: 960px) {
+        .voice-chat-open .voice-chat-area {
+            width: 400px;
+            flex-grow: 0;
+            border-left: 1px solid var(--mud-palette-divider);
+        }
+    }
+
+
+</style>
+    <MudGrid Style="height: 100%;" Spacing="0">
+        <!-- Channel Sidebar -->
+        <MudItem xs="12" md="3" Class="@(ChannelId != null ? "d-none d-md-block" : "")" Style="height: 100%; border-right: 1px solid var(--mud-palette-divider);">
+            <ChatSidebar Channels="_channels" 
+                         SelectedChannelId="@ChannelId" 
+                         OnChannelSelected="SelectChannel"
+                         CurrentUserId="@_currentUser?.Id"
+                         Employees="_employees"
+                         CanViewArchive="@CanViewArchivedChannels()"
+                         OnArchiveChannel="ArchiveChannel"
+                         OnUnarchiveChannel="UnarchiveChannel"
+                         OnChannelOrdersChanged="@(async (updates) => await ChatService.UpdateChannelOrdersAsync(updates))" />
+        </MudItem>
+        
+        <!-- Chat Area -->
+        <MudItem xs="12" md="9" Class="@(ChannelId == null ? "d-none d-md-block" : "")" Style="height: 100%;">
+            @if (!_isFirstRenderComplete)
+            {
+                <div style="height: 100%; display: flex; flex-direction: column;">
+                    <!-- Header Skeleton -->
+                    <div class="d-flex align-center pa-4" style="border-bottom: 1px solid var(--mud-palette-divider);">
+                        <MudSkeleton SkeletonType="SkeletonType.Text" Width="200px" Height="32px" />
+                        <MudSpacer />
+                        <MudSkeleton SkeletonType="SkeletonType.Circle" Width="32px" Height="32px" Class="mr-2" />
+                        <MudSkeleton SkeletonType="SkeletonType.Circle" Width="32px" Height="32px" />
+                    </div>
+                    
+                    <!-- Messages Skeleton -->
+                    <div class="flex-grow-1 pa-4 d-flex flex-column justify-end">
+                        <div class="d-flex flex-column align-start mb-6">
+                            <MudSkeleton SkeletonType="SkeletonType.Rectangle" Width="250px" Height="60px" Style="border-radius: 16px;" Animation="Animation.Wave" />
+                        </div>
+                        <div class="d-flex flex-column align-end mb-6">
+                            <MudSkeleton SkeletonType="SkeletonType.Rectangle" Width="300px" Height="80px" Style="border-radius: 16px;" Animation="Animation.Wave" />
+                        </div>
+                        <div class="d-flex flex-column align-start mb-6">
+                            <MudSkeleton SkeletonType="SkeletonType.Rectangle" Width="200px" Height="60px" Style="border-radius: 16px;" Animation="Animation.Wave" />
+                        </div>
+                    </div>
+                    
+                    <!-- Input Skeleton -->
+                    <div class="pa-4">
+                        <MudSkeleton SkeletonType="SkeletonType.Rectangle" Height="56px" Style="border-radius: 28px;" Animation="Animation.Wave" />
+                    </div>
+                </div>
+            }
+            else
+            {
+                <div style="height: 100%; display: flex; flex-direction: row;">
+                    @* Main chat area *@
+                    <div id="chat-drop-zone" style="flex: 1; min-width: 0; display: flex; flex-direction: column; position: relative;">
+                
+                        <MudOverlay Visible="_isDraggingFiles" DarkBackground="true" Absolute="true" ZIndex="1000">
+                            <div class="d-flex flex-column align-center pa-6" style="border: 3px dashed rgba(255,255,255,0.5); border-radius: 16px; background: rgba(255,255,255,0.1);">
+                                <MudIcon Icon="@Icons.Material.Filled.CloudUpload" Size="Size.Large" Style="font-size: 4rem; color: white;" />
+                                <MudText Typo="Typo.h5" Style="color: white; margin-top: 0.5rem;">Drop files to upload</MudText>
+                            </div>
+                        </MudOverlay>
+
+                    @if (_selectedChannel != null)
+                {
+                    <!-- Channel Header -->
+                    <ChatHeader Channel="_selectedChannel"
+                                DisplayName="@GetChannelDisplayName(_selectedChannel)"
+                                CurrentUserId="@_currentUser?.Id"
+                                OnGoBack="GoBack"
+                                NotificationLevel="@_notificationLevel"
+                                OnNotificationLevelChanged="HandleNotificationLevelChanged"
+                                Employees="_employees"
+                                OnSearchResultSelected="ScrollToMessage"
+                                OnToggleInfo="ToggleInfoPanel"
+                                ShowInfoPanel="_showInfoPanel"
+                                OnJoinVoice="JoinVoiceChannel" />
+                    
+                    <!-- Global Voice Bar is now rendered in MainLayout -->
+
+                    <div class="d-flex flex-grow-1 @(((_selectedChannel.IsVoiceChannel || (VoiceService.IsInVoiceCall && VoiceService.CurrentChannelId == _selectedChannel.Id)) && _showSecondaryChat) ? "voice-chat-open" : "")" style="min-height: 0; position: relative;">
+                        @{
+                            bool showVideoGrid = _selectedChannel.IsVoiceChannel || (VoiceService.IsInVoiceCall && VoiceService.CurrentChannelId == _selectedChannel.Id);
+                        }
+                        <!-- VOICE VIDEO GRID -->
+                        @if (showVideoGrid)
+                        {
+                            <style>
+                                /* Avatar/Video toggling */
+                                .participant-rect:has(video.has-stream) .participant-large-avatar {
+                                    display: none !important;
+                                }
+                                .participant-rect:has(video.has-stream) .participant-small-overlay {
+                                    display: flex !important;
+                                }
+
+
+                                /* Detach videos from flex to allow PiP overlays */
+                                .participant-rect video.livekit-camera,
+                                .participant-rect video.livekit-screenshare {
+                                    position: absolute !important;
+                                    top: 0 !important;
+                                    left: 0 !important;
+                                    width: 100% !important;
+                                    height: 100% !important;
+                                    object-fit: contain !important;
+                                }
+
+                                .participant-rect video.livekit-screenshare {
+                                    z-index: 2 !important;
+                                }
+
+                                /* Screen share PiP logic */
+                                .participant-rect:has(video.livekit-screenshare) video.livekit-camera {
+                                    width: 25% !important;
+                                    height: 25% !important;
+                                    top: auto !important;
+                                    left: auto !important;
+                                    bottom: 8px !important;
+                                    right: 8px !important;
+                                    z-index: 5 !important;
+                                    border: 2px solid rgba(255,255,255,0.7) !important;
+                                    border-radius: 8px !important;
+                                    box-shadow: 0 4px 12px rgba(0,0,0,0.5) !important;
+                                }
+
+                                /* Active Speaker Border */
+                                .participant-rect.is-speaking {
+                                    border-color: #4caf50 !important;
+                                }
+                            </style>
+                            <div class="flex-grow-1 d-flex flex-column voice-video-area" style="background: #1e1e1e; position: relative;">
+                                @{ bool isFaceTimeLayoutGlobal = showVideoGrid && VoiceService.CallParticipants.Count == 2 && _focusedParticipantId != null; }
+                                <div id="voice-video-container" class="d-flex flex-wrap flex-grow-1 @(isFaceTimeLayoutGlobal ? "" : "pa-4 gap-4") align-content-start overflow-auto" style="justify-content: center; background: #1e1e1e; position: relative; height: 100%;">
+                                    @if (_selectedChannel.IsVoiceChannel && VoiceService.IsConnecting)
+                                    {
+                                        <div class="d-flex flex-column align-center justify-center w-100 h-100" style="min-height: 300px;">
+                                            <MudProgressCircular Color="Color.Primary" Indeterminate="true" Size="Size.Large" Class="mb-4" />
+                                            <MudText Typo="Typo.h6" Style="color: white;">Connecting to voice...</MudText>
+                                        </div>
+                                    }
+                                    else if (_selectedChannel.IsVoiceChannel && (!VoiceService.IsInVoiceCall || VoiceService.CurrentChannelId != _selectedChannel.Id))
+                                    {
+                                        <div class="d-flex flex-column align-center justify-center w-100 h-100" style="min-height: 300px;">
+                                            <MudButton Variant="Variant.Filled" Color="Color.Success" Size="Size.Large" OnClick="JoinVoiceChannel" StartIcon="@Icons.Material.Filled.Call">
+                                                Connect to Voice
+                                            </MudButton>
+                                        </div>
+                                    }
+                                    else
+                                    {
+                                        foreach (var pId in VoiceService.CallParticipants)
+                                        {
+                                            var emp = GetEmployee(pId);
+                                            if (emp == null) continue;
+                                            bool isSpeaking = VoiceService.ActiveSpeakers.Contains(pId);
+                                            bool isFocused = _focusedParticipantId == pId;
+                                            
+                                            bool isFaceTimeLayout = VoiceService.CallParticipants.Count == 2 && _focusedParticipantId != null;
+                                            
+                                            string style;
+                                            if (_focusedParticipantId == null)
+                                            {
+                                                style = $"cursor: pointer; position: relative; width: 300px; height: 225px; flex-shrink: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; background: #000; overflow: hidden; border-radius: 8px; border: 3px solid transparent;";
+                                            }
+                                            else if (isFaceTimeLayout)
+                                            {
+                                                if (isFocused)
+                                                {
+                                                    style = $"cursor: pointer; position: absolute; inset: 0; width: 100%; height: 100%; z-index: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; background: #000; overflow: hidden; border-radius: 0; border: 3px solid transparent;";
+                                                }
+                                                else
+                                                {
+                                                    style = $"cursor: pointer; position: absolute; top: 16px; left: 16px; width: 120px; height: 160px; z-index: 10; display: flex; flex-direction: column; align-items: center; justify-content: center; background: #000; overflow: hidden; border-radius: 8px; border: 3px solid #808080; box-shadow: 0 4px 12px rgba(0,0,0,0.5);";
+                                                }
+                                            }
+                                            else
+                                            {
+                                                if (isFocused)
+                                                {
+                                                    style = $"cursor: pointer; position: relative; width: 100%; order: -1; height: calc(100vh - 400px); min-height: 400px; flex-shrink: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; background: #000; overflow: hidden; border-radius: 8px; border: 3px solid transparent;";
+                                                }
+                                                else
+                                                {
+                                                    style = $"cursor: pointer; position: relative; width: 220px; height: 165px; flex-shrink: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; background: #000; overflow: hidden; border-radius: 8px; border: 3px solid transparent;";
+                                                }
+                                            }
+
+                                            <MudPaper Elevation="4" @key="pId"
+                                                      id="@($"participant-rect-{pId}")"
+                                                      @onclick="@(() => ToggleFocusParticipant(pId))"
+                                                      Style="@style"
+                                                      Class="participant-rect">
+                                                
+                                                <div class="participant-large-avatar" style="z-index: 0; display: flex; flex-direction: column; align-items: center; gap: 8px;">
+                                                     <EmployeeAvatar Employee="@emp" Style="@($"height: {(isFocused ? "96px" : "64px")}; width: {(isFocused ? "96px" : "64px")}; font-size: {(isFocused ? "2.5rem" : "1.5rem")};")" />
+                                                     <MudText Typo="@(isFocused ? Typo.h6 : Typo.subtitle2)" Style="color: white;">@emp.FullName</MudText>
+                                                </div>
+
+                                                <ParticipantVideoSlot ParticipantId="@pId" />
+                                                
+                                                <div class="participant-small-overlay" style="position: absolute; top: 8px; right: 8px; z-index: 10; display: none; align-items: center; gap: 8px; background: rgba(0,0,0,0.6); padding: 4px 8px; border-radius: 16px;">
+                                                    <EmployeeAvatar Employee="@emp" Style="height: 24px; width: 24px; font-size: 0.8rem;" />
+                                                    <MudText Typo="Typo.caption" Style="color: white; font-weight: bold;">@emp.FullName</MudText>
+                                                </div>
+
+
+                                            </MudPaper>
+                                        }
+                                    }
+                                
+                                @if (!_showSecondaryChat)
+                                {
+                                    <MudFab Color="Color.Primary" StartIcon="@Icons.Material.Filled.Chat" 
+                                            Style="position: absolute; bottom: 16px; right: 16px; z-index: 10;" 
+                                            OnClick="@(() => _showSecondaryChat = true)" />
+                                }
+                            </div>
+                        </div>
+                        }
+                    
+                        <div class="flex-column voice-chat-area @((showVideoGrid && !_showSecondaryChat) ? "d-none" : "d-flex")">
+                            
+                            @if (showVideoGrid && _showSecondaryChat)
+                            {
+                                <div class="pa-2 d-flex d-md-none justify-space-between align-center border-b" style="background: var(--mud-palette-surface);">
+                                    <MudIconButton Icon="@Icons.Material.Filled.ArrowBack" Size="Size.Small" OnClick="@(() => _showSecondaryChat = false)" />
+                                    <MudText Typo="Typo.subtitle2">Text Chat</MudText>
+                                    <div style="width: 36px;"></div> <!-- Spacer -->
+                                </div>
+                                <div class="pa-2 d-none d-md-flex justify-space-between align-center border-b" style="background: var(--mud-palette-surface);">
+                                    <MudText Typo="Typo.subtitle2">Text Chat</MudText>
+                                    <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small" OnClick="@(() => _showSecondaryChat = false)" />
+                                </div>
+                            }
+
+                            <!-- Messages Area -->
+                        @if (_selectedChannel.IsEncrypted && _currentUser != null && !_selectedChannel.EncryptedChannelKeys.ContainsKey(_currentUser.Id))
+                        {
+                            <div class="d-flex flex-column align-center justify-center h-100 flex-grow-1" style="background: var(--mud-palette-background-grey);">
+                                <MudIcon Icon="@Icons.Material.Filled.Lock" Size="Size.Large" Style="font-size: 4rem; color: var(--mud-palette-primary);" Class="mb-4" />
+                                <MudText Typo="Typo.h5" Class="mb-2">Secure Channel</MudText>
+                                <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-4 text-center px-4" Style="max-width: 400px;">
+                                    This channel is encrypted and you are not on the access list to view its contents. 
+                                </MudText>
+                            </div>
+                        }
+                        else if (_selectedChannel.IsEncrypted && !ScopedKeystore.IsUnlocked)
+                        {
+                            if (_isCheckingKeystoreCookie)
+                            {
+                                <div class="d-flex flex-column align-center justify-center h-100 flex-grow-1" style="background: var(--mud-palette-background-grey);">
+                                    <MudProgressCircular Indeterminate="true" Color="Color.Primary" Size="Size.Large" Class="mb-4" />
+                                    <MudText Typo="Typo.h6" Color="Color.Surface">Unlocking Secure Channel...</MudText>
+                                    <MudText Typo="Typo.body2" Color="Color.Surface" Class="mt-2 text-center px-4" Style="opacity: 0.7; max-width: 400px;">
+                                        Checking for locally stored credentials
+                                    </MudText>
+                                </div>
+                            }
+                            else
+                            {
+                                <div class="d-flex flex-column align-center justify-center h-100 flex-grow-1" style="background: var(--mud-palette-background-grey);">
+                                    <MudIcon Icon="@Icons.Material.Filled.Lock" Size="Size.Large" Style="font-size: 4rem; color: var(--mud-palette-primary);" Class="mb-4" />
+                                    <MudText Typo="Typo.h5" Class="mb-2">Secure Channel</MudText>
+                                    
+                                    @if (_currentUser?.HasChatPassword == true)
+                                    {
+                                        <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-4 text-center px-4" Style="max-width: 400px;">
+                                            This channel uses channel Encryption. Enter your chat password to unlock your vault and read messages.
+                                        </MudText>
+                                        
+                                        <div style="width: 100%; max-width: 300px;">
+                                            @{
+                                                string vaultUsername = !string.IsNullOrWhiteSpace(_currentUser?.FullName) ? _currentUser.FullName : _currentUser?.Id ?? "";
+                                            }
+                                            <input type="text" autocomplete="username" value="@($"{vaultUsername} (Chat Vault)")" style="position: absolute; left: -9999px;" tabindex="-1" aria-hidden="true" />
+                                            <MudTextField @bind-Value="_vaultPassword" Label="Chat Password" InputType="InputType.Password" Variant="Variant.Outlined" Margin="Margin.Dense" Class="mb-2" Immediate="true" OnKeyDown="@(async (e) => { if (e.Key == "Enter" || e.Key == "NumpadEnter") await UnlockVault(); })" UserAttributes="@(new Dictionary<string,object>{{ "autocomplete", "current-password" }})" />
+                                            <MudButton Variant="Variant.Filled" Color="Color.Primary" FullWidth="true" OnClick="UnlockVault">Unlock Channel</MudButton>
+                                            @if (_hasVaultError)
+                                            {
+                                                <MudText Typo="Typo.caption" Color="Color.Error" Class="mt-2 text-center d-block">Incorrect chat password.</MudText>
+                                            }
+                                        </div>
+                                    }
+                                    else
+                                    {
+                                        <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-4 text-center px-4" Style="max-width: 400px;">
+                                            This channel is encrypted. You must set up your secure Chat Vault password before you can view these messages.
+                                        </MudText>
+                                        
+                                        <div style="width: 100%; max-width: 300px;">
+                                            <MudButton Variant="Variant.Filled" Color="Color.Primary" FullWidth="true" OnClick="OpenSecureChatSettings">Set Up Chat Password</MudButton>
+                                        </div>
+                                    }
+                                </div>
+                            }
+                        }
+                        else
+                        {
+                            <div id="chat-messages-container" @key="@("chat-messages-" + _selectedChannel.Id)" @ref="_messagesContainer" class="flex-grow-1 overflow-auto pa-4 d-flex flex-column" style="background: var(--mud-palette-background-grey); will-change: transform; min-height: 0; -webkit-overflow-scrolling: touch;">
+                        
+                        @if (_typingUsers.Any())
+                        {
+                            <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-2">
+                                <em>@GetTypingText()</em>
+                            </MudText>
+                        }
+
+                        @if (_isLoadingMessages)
+                        {
+                            <div class="d-flex justify-center pa-4">
+                                <MudProgressCircular Indeterminate="true" />
+                            </div>
+                        }
+                        else if (_messages.Count == 0)
+                        {
+                            <div class="d-flex flex-column align-center justify-center pa-4" style="height: 100%;">
+                                <MudIcon Icon="@Icons.Material.Filled.ChatBubbleOutline" Size="Size.Large" Color="Color.Surface" Style="font-size: 64px; opacity: 0.5;" />
+                                <MudText Typo="Typo.h6" Color="Color.Surface" Class="mt-2" Style="opacity: 0.7;">No messages yet</MudText>
+                                <MudText Typo="Typo.body2" Color="Color.Surface" Style="opacity: 0.7;">Be the first to say hello!</MudText>
+                            </div>
+                        }
+                        else
+                        {
+                                var sorted = _sortedMessages;
+                                for (int i = 0; i < sorted.Count; i++)
+                                {
+                                    var message = sorted[i];
+                                    var nextOlderMessage = (i + 1 < sorted.Count) ? sorted[i + 1] : null;
+
+                                    // Grouping: same sender within 5 minutes
+                                    // Reset grouping if this message is a reply (show full header for replies)
+                                    var isGrouped = nextOlderMessage != null
+                                        && nextOlderMessage.SenderId == message.SenderId
+                                        && (message.SentAt - nextOlderMessage.SentAt).TotalMinutes <= 5
+                                        && message.SentAt.ToLocalTime().Date == nextOlderMessage.SentAt.ToLocalTime().Date
+                                        && string.IsNullOrEmpty(message.ReplyToId);
+
+                                    var replyToMsg = !string.IsNullOrEmpty(message.ReplyToId) 
+                                        ? _messages.FirstOrDefault(m => m.Id == message.ReplyToId) : null;
+
+                                     var decContent = _decryptedContents.GetValueOrDefault(message.Id);
+                                     var decReplyContent = replyToMsg != null ? _decryptedContents.GetValueOrDefault(replyToMsg.Id) : null;
+
+                                     <MessageBubble @key="@message.Id"
+                                                   Message="@message" 
+                                                   DataFingerprint="@(message.Content + string.Join(",", message.Reactions) + message.EditedAt?.Ticks + message.CallStatus)"
+                                                   DecryptedContent="@decContent"
+                                                   DecryptedReplyContent="@decReplyContent"
+                                                   Sender="@GetEmployee(message.SenderId)"
+                                                   IsOwnMessage="@(message.SenderId == (_currentUser?.Id))"
+                                                   IsGrouped="@isGrouped"
+                                                   CurrentUserId="@_currentUser?.Id"
+                                                   SessionId="@_sessionId"
+                                                   Employees="_employees"
+                                                   Teams="_channelTeams"
+                                                   ReplyToMessage="replyToMsg"
+                                                   ReplyToSender="@(replyToMsg != null ? GetEmployee(replyToMsg.SenderId) : null)"
+                                                   IsEditing="@(_editingMessageId == message.Id)"
+                                                   OnEdit="EditMessage"
+                                                   OnSaveEdit="SaveEditMessage"
+                                                   OnCancelEdit="CancelEditMessage"
+                                                   OnDelete="DeleteMessage"
+                                                   OnReply="StartReply"
+                                                   OnViewReactions="OpenReactionsDialog"
+                                                   OnViewReadReceipts="OpenReadReceiptsDialog"
+                                                   OnScrollToMessage="ScrollToMessage"
+                                                   OnReact="AddReaction"
+                                                   OnOpenLightbox="@(OpenLightbox)"
+                                                   OnJoinCall="JoinCallFromInvite"
+                                                   OnDeclineCall="DeclineCallInvite"
+                                                   OnAvatarClicked="OpenMemberProfile"
+                                                   OnBlockUser="ActionSheetBlockUserParam"
+                                                   OnReportMessage="ActionSheetReportMessageParam"
+                                                   OnDownloadMedia="DownloadMedia"
+                                                   OnShareMedia="ShareAttachment"
+                                                   ReadReceiptUserIds="@(_latestReadReceipts.TryGetValue(message.Id, out var readers) ? readers : _emptyReaders)"
+                                                   CumulativeReadReceiptUserIds="@(_cumulativeReadReceipts.TryGetValue(message.Id, out var cumulativeReaders) ? cumulativeReaders : _emptyReaders)"
+                                                   ChannelKey="@_decryptedChannelKey" />
+
+                                    // Date separator: insert when the date changes
+                                    // Rendered AFTER the message in DOM, meaning it sits visually ABOVE the message
+                                    if (nextOlderMessage == null || message.SentAt.ToLocalTime().Date != nextOlderMessage.SentAt.ToLocalTime().Date)
+                                    {
+                                        <DateSeparator @key="@($"date-{message.SentAt.ToLocalTime().Date.Ticks}")" Date="message.SentAt" />
+                                    }
+                                 }
+                                 
+                            @* Load older messages sentinel (now at the bottom of DOM = visual top) *@
+                            @if (_hasMoreMessages)
+                            {
+                                <div id="chat-top-sentinel" @ref="_topSentinel" style="height: 1px; width: 100%;"></div>
+                                
+                                @if (_isLoadingOlder)
+                                {
+                                    <div class="d-flex justify-center my-2">
+                                        <MudProgressCircular Size="Size.Small" Indeterminate="true" />
+                                    </div>
+                                }
+                            }
+                        }
+                            </div>
+                        }
+
+                            <!-- Floating Button Container -->
+                            <div style="position: relative; width: 100%; height: 0; z-index: 50;">
+                                <div class="scroll-to-bottom-wrapper @(_isScrolledUp ? "visible" : "")" style="position: absolute; bottom: 16px; left: 50%; pointer-events: none;">
+                                    <MudFab Color="Color.Primary" StartIcon="@Icons.Material.Filled.ArrowDownward" Size="Size.Small" OnClick="ScrollToBottom" Style="pointer-events: auto;" />
+                                </div>
+                            </div>
+                    
+                            <!-- Message Composer -->
+                            <ChatComposer @ref="_composer"
+                                          ChannelId="@ChannelId"
+                                          CurrentUserId="@_currentUser?.Id"
+                                          IsArchived="@(_selectedChannel?.IsArchived == true)"
+                                          IsAnnouncementOnly="@(_selectedChannel?.IsAnnouncementOnly == true)"
+                                          CanPost="@CanCurrentUserPostToChannel()"
+                                          Employees="_channelEmployees"
+                                          Teams="_channelTeams"
+                                          ReplyingTo="_replyingTo"
+                                          DecryptedReplyContent="@(_replyingTo != null ? _decryptedContents.GetValueOrDefault(_replyingTo.Id) : null)"
+                                          ReplyToSenderName="@(_replyingTo != null ? GetEmployee(_replyingTo.SenderId)?.FullName : null)"
+                                          OnSendMessage="HandleSendMessage"
+                                          OnCancelReply="CancelReply"
+                                          Disabled="@((_selectedChannel?.IsEncrypted == true && !ScopedKeystore.IsUnlocked) || _currentUser?.IsSuspended == true)"
+                                          OnEditLastMessage="HandleEditLastMessage"
+                                          UploadUrl="@GetUploadUrl()" />
+                        </div> @* Close flex-column wrapping text chat *@
+                    </div> @* Close d-flex flex-grow-1 row container *@
+                }
+                else
+                {
+                    <div class="d-flex flex-column align-center justify-center flex-grow-1" style="height: 100%; background: var(--mud-palette-background-grey);">
+                        <MudIcon Icon="@Icons.Material.Filled.Forum" Size="Size.Large" Color="Color.Surface" Style="font-size: 80px; opacity: 0.3;" />
+                        <MudText Typo="Typo.h5" Color="Color.Surface" Class="mt-4" Style="opacity: 0.5;">Select a Channel</MudText>
+                        <MudText Typo="Typo.body1" Color="Color.Surface" Class="mt-1" Style="opacity: 0.5;">Choose a channel from the sidebar to start chatting.</MudText>
+                    </div>
+                }
+                </div> @* Close chat-drop-zone div *@
+
+                @* Channel Info Panel *@
+                @if (_showInfoPanel && _selectedChannel != null)
+                {
+                    <div style="width: 300px; flex-shrink: 0; height: 100%; overflow-y: auto;">
+                        <ChannelInfoPanel Channel="_selectedChannel"
+                                         DisplayName="@GetChannelDisplayName(_selectedChannel)"
+                                         Employees="_employees"
+                                         CurrentUserId="@_currentUser?.Id"
+                                         OnClose="ToggleInfoPanel"
+                                         OnPinnedMessageClicked="ScrollToMessage"
+                                         OnChannelUpdated="HandleChannelUpdated"
+                                         OnLeaveGroup="HandleLeaveGroup"
+                                         OnArchiveChannel="HandleArchiveChannel"
+                                         OnDeleteChannel="HandleDeleteChannel"
+                                         OnRemoveMember="HandleRemoveMember"
+                                         DecryptedContents="_decryptedContents" />
+                    </div>
+                }
+            </div> @* Close flex row *@
+            }
+        </MudItem>
+    </MudGrid>
+
+@* ═══════════════════════════════════════════════════════════════
+   MOBILE ACTION SHEET — shown on long-press of a message
+   ═══════════════════════════════════════════════════════════════ *@
+<MobileActionSheet IsOpen="@(_actionSheetMessage != null)" OnClose="CloseActionSheet">
+    @* Quick-react emoji row *@
+    <div class="action-sheet-emoji-row">
+        @{
+            var recentReacts = (_currentUser?.RecentEmojis?.Any() == true) 
+                ? _currentUser.RecentEmojis.Take(6).ToList() 
+                : _quickReactEmojis.ToList();
+        }
+        @foreach (var emoji in recentReacts)
+        {
+            <button class="action-sheet-emoji" @onclick="@(() => ActionSheetReact(emoji))">@emoji</button>
+        }
+        <div style="position: relative;">
+            <button class="action-sheet-emoji" @onclick="@(() => _showMobileEmojiPicker = !_showMobileEmojiPicker)">
+                <MudIcon Icon="@Icons.Material.Filled.AddReaction" Size="Size.Medium" />
+            </button>
+        </div>
+    </div>
+
+    @if (_actionSheetMessage != null)
+    {
+        @* Group 1: Interactions *@
+        <MudPaper Elevation="0" Class="mb-4 overflow-hidden" Style="border-radius: 16px;">
+            <MudList T="string" Dense="false" DisablePadding="true" Clickable="true">
+                <MudListItem OnClick="ActionSheetReply" Icon="@Icons.Material.Filled.Reply">
+                    <MudText Typo="Typo.body1" >Reply</MudText>
+                </MudListItem>
+                @if (_actionSheetMessage.Reactions.Any())
+                {
+                    <MudListItem OnClick="ActionSheetViewReactions" Icon="@Icons.Material.Filled.People">
+                        <MudText Typo="Typo.body1" >View Reactions</MudText>
+                    </MudListItem>
+                }
+                @if (_cumulativeReadReceipts.TryGetValue(_actionSheetMessage.Id, out var readers) && readers.Any(id => id != _actionSheetMessage.SenderId && id != _currentUser?.Id))
+                {
+                    <MudListItem OnClick="ActionSheetViewReadReceipts" Icon="@Icons.Material.Filled.DoneAll">
+                        <MudText Typo="Typo.body1" >View Read Receipts</MudText>
+                    </MudListItem>
+                }
+            </MudList>
+        </MudPaper>
+
+        @* Group 2: Content *@
+        <MudPaper Elevation="0" Class="mb-4 overflow-hidden" Style="border-radius: 16px;">
+            <MudList T="string" Dense="false" DisablePadding="true" Clickable="true">
+                <MudListItem OnClick="ActionSheetCopy" Icon="@Icons.Material.Filled.ContentCopy">
+                    <MudText Typo="Typo.body1" >Copy Text</MudText>
+                </MudListItem>
+                @if (_actionSheetMessage.Attachments.Any())
+                {
+                    <MudListItem OnClick="ActionSheetShareAttachment" Icon="@Icons.Material.Filled.Share">
+                        <MudText Typo="Typo.body1" >Share</MudText>
+                    </MudListItem>
+                }
+                @if (_actionSheetMessage.Attachments.Any(a =>
+                {
+                    var ext = System.IO.Path.GetExtension(a.FileName).ToLowerInvariant();
+                    return ext is ".jpg" or ".jpeg" or ".png" or ".gif" or ".webp" or ".bmp" or ".mp4" or ".webm" or ".ogg" or ".mov";
+                }))
+                {
+                    <MudListItem OnClick="ActionSheetDownloadMedia" Icon="@Icons.Material.Filled.Download">
+                        <MudText Typo="Typo.body1" >Download</MudText>
+                    </MudListItem>
+                }
+                @if (_actionSheetMessage.SenderId == _currentUser?.Id)
+                {
+                    <MudListItem OnClick="ActionSheetEdit" Icon="@Icons.Material.Filled.Edit">
+                        <MudText Typo="Typo.body1" >Edit</MudText>
+                    </MudListItem>
+                }
+            </MudList>
+        </MudPaper>
+
+        @* Group 3: Moderation/Danger *@
+        <MudPaper Elevation="0" Class="mb-4 overflow-hidden" Style="border-radius: 16px;">
+                <MudList T="string" Dense="false" DisablePadding="true" Clickable="true">
+                    @if (_actionSheetMessage.SenderId == _currentUser?.Id || _currentUser?.HasPermission(Spokes_Server.Core.Constants.AppPermissions.Chat.Moderator) == true)
+                    {
+                        <MudListItem OnClick="ActionSheetDelete" Icon="@Icons.Material.Filled.Delete" IconColor="Color.Error">
+                            <MudText Typo="Typo.body1" Color="Color.Error" >Delete</MudText>
+                        </MudListItem>
+                    }
+                    @if (_actionSheetMessage.SenderId != _currentUser?.Id)
+                    {
+                        <MudListItem OnClick="ActionSheetBlockUser" Icon="@Icons.Material.Filled.Block" IconColor="Color.Error">
+                            <MudText Typo="Typo.body1" Color="Color.Error" >Block User</MudText>
+                        </MudListItem>
+                        @if (_selectedChannel?.ChannelType != ChatChannelType.Direct)
+                        {
+                            <MudListItem OnClick="ActionSheetReportMessage" Icon="@Icons.Material.Filled.Flag" IconColor="Color.Warning">
+                                <MudText Typo="Typo.body1" Color="Color.Warning" >Report Message</MudText>
+                            </MudListItem>
+                        }
+                    }
+                </MudList>
+        </MudPaper>
+    }
+</MobileActionSheet>
+
+@if (_showMobileEmojiPicker)
+{
+    <div style="position: fixed; top: 0; left: 0; right: 0; height: var(--viewport-height, 100dvh); padding-top: var(--safe-area-top); padding-bottom: var(--safe-area-bottom); box-sizing: border-box; z-index: 10004; display: flex; align-items: center; justify-content: center;" @onclick="@(() => _showMobileEmojiPicker = false)" @onclick:stopPropagation="true">
+        <div @onclick:stopPropagation="true" style="max-height: 100%; display: flex; flex-direction: column; min-height: 0;">
+            <EmojiPicker IsOpen="true" 
+                         OnEmojiSelected="ActionSheetReact" 
+                         OnClose="@(() => _showMobileEmojiPicker = false)" 
+                         DisableGifs="true"
+                         ContainerStyle="position: relative; z-index: 10005 !important; max-height: 100% !important;" />
+        </div>
+    </div>
+}
+</MudContainer>
+
+<style>
+    .action-sheet-emoji-row {
+        display: flex;
+        justify-content: center;
+        gap: 12px;
+        padding: 8px 16px 16px 16px;
+    }
+
+    .action-sheet-emoji {
+        font-size: 1.8rem;
+        background: var(--mud-palette-background-grey);
+        border: none;
+        border-radius: 50%;
+        width: 50px;
+        height: 50px;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transition: transform 0.15s, background 0.15s;
+    }
+
+    .action-sheet-emoji:active {
+        transform: scale(1.2);
+        background: var(--mud-palette-primary-lighten);
+    }
+
+    .scroll-to-bottom-wrapper {
+        opacity: 0;
+        transform: translateX(-50%) translateY(20px) scale(0.9) !important;
+        transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+    .scroll-to-bottom-wrapper.visible {
+        opacity: 1;
+        transform: translateX(-50%) translateY(0) scale(1) !important;
+    }
+</style>
+
+@code {
+    private bool _isFirstRenderComplete = false;
+
+    [Parameter]
+    public string? ChannelId { get; set; }
+
+    private Employee? _currentUser;
+    private List<ChatChannel> _channels = new();
+    private List<Employee> _employees = new();
+    private List<Team> _teams = new();
+    private static readonly List<string> _emptyReaders = new();
+    private ChatChannel? _selectedChannel;
+    private List<ChatMessage> _messages = new();
+    private bool _isLoadingMessages = false;
+    private Dictionary<string, (string UserName, DateTime LastPing)> _typingUsers = new();
+
+    private string GetTypingText()
+    {
+        var count = _typingUsers.Count;
+        if (count == 0) return string.Empty;
+        
+        var users = _typingUsers.Values.Select(v => v.UserName).ToList();
+        
+        if (count == 1) return $"{users[0]} is typing...";
+        if (count == 2) return $"{users[0]} and {users[1]} are typing...";
+        if (count == 3) return $"{users[0]}, {users[1]}, and {users[2]} are typing...";
+        
+        return "Several people are typing...";
+    }
+    
+    private ChatComposer? _composer;
+    private ElementReference _messagesContainer;
+    private ElementReference _topSentinel;
+    [Inject] private ChatStateService ChatState { get; set; } = default!;
+    [Inject] private GlobalKeystoreService GlobalKeystore { get; set; } = default!;
+    [Inject] private IHttpContextAccessor HttpContextAccessor { get; set; } = default!;
+    
+    private string _vaultPassword = "";
+    private Dictionary<string, string> _decryptedContents = new();
+    private string? _decryptedChannelKey;
+    private bool _isCheckingKeystoreCookie = true;
+
+    private bool _hasMoreMessages = false;
+    private Dictionary<string, List<string>> _latestReadReceipts = new();
+    private Dictionary<string, List<string>> _cumulativeReadReceipts = new();
+    private List<Team> _channelTeams = new();
+    private bool _isLoadingOlder = false;
+    private bool _isScrolledUp = false;
+    private System.Timers.Timer? _typingCleanupTimer;
+
+    // --- Render batch optimization fields ---
+    private List<ChatMessage> _sortedMessages = new();
+    private List<Employee> _channelEmployees = new();
+    private Dictionary<string, Employee> _employeeLookup = new();
+    private CancellationTokenSource? _channelCts;
+    private string? _sessionId;
+
+    [JSInvokable]
+    public void OnScrollPositionChanged(bool isScrolledUp)
+    {
+        if (_isScrolledUp != isScrolledUp)
+        {
+            _isScrolledUp = isScrolledUp;
+            InvokeAsync(StateHasChanged);
+        }
+    }
+    private bool _isDraggingFiles = false;
+    private ChatMessage? _replyingTo;
+    private string? _editingMessageId;
+    
+    private string _notificationLevel = "All";
+    private bool _showInfoPanel = false;
+    private bool _showSecondaryChat = false;
+    
+    // Voice Call state
+    private string? _focusedParticipantId = null;
+
+
+    // Mobile action sheet state
+    private ChatMessage? _actionSheetMessage;
+    private static readonly string[] _quickReactEmojis = { "👍", "❤️", "😂", "😮", "😢", "🔥" };
+    private bool _showMobileEmojiPicker = false;
+    
+    // JS Interop reference
+    private IJSObjectReference? _module;
+    private DotNetObjectReference<Chat>? _objRef;
+    
+    // Composer reference
+    [Inject] private ISnackbar Snackbar { get; set; } = default!;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            _currentUser = await UserService.GetEmployeeAsync();
+            _sessionId = await UserService.GetSessionIdAsync();
+            _employees = Db.Employees.GetAll();
+            _employeeLookup = _employees.ToDictionary(e => e.Id, e => e);
+            _teams = Db.Teams.GetAll();
+            LoadChannels();
+            SubscribeToLocalEvents();
+
+            // Server-side vault unlock: read the HttpOnly cookie directly from HttpContext
+            // before the circuit switches to WebSocket (after which HttpContext becomes null).
+            // This is more reliable than a JS fetch round-trip and avoids timing issues.
+            if (_currentUser != null && !string.IsNullOrEmpty(_currentUser.EncryptedPrivateKey) && !ScopedKeystore.IsUnlocked)
+            {
+                Console.WriteLine($"[VAULT-DIAGNOSTIC] [Chat.razor] HttpContextAccessor.HttpContext == null ? {HttpContextAccessor.HttpContext == null}");
+                if (HttpContextAccessor.HttpContext != null)
+                {
+                    Console.WriteLine($"[VAULT-DIAGNOSTIC] [Chat.razor] Request Path: {HttpContextAccessor.HttpContext.Request.Path}");
+                    Console.WriteLine($"[VAULT-DIAGNOSTIC] [Chat.razor] Cookie count: {HttpContextAccessor.HttpContext.Request.Cookies.Count}");
+                }
+                
+                var success = ScopedKeystore.TryInitializeFromVaultCookie(
+                    HttpContextAccessor.HttpContext, _currentUser.Id, _currentUser.EncryptedPrivateKey, Crypto, GlobalKeystore);
+                
+                Console.WriteLine($"[VAULT-DIAGNOSTIC] [Chat.razor] TryInitializeFromVaultCookie returned {success}");
+            }
+            
+            VoiceService.OnChange += HandleVoiceStateChanged;
+
+            if (!string.IsNullOrEmpty(ChannelId))
+            {
+                await SelectChannelInternal(ChannelId, updateUrl: false);
+            }
+
+            _typingCleanupTimer = new System.Timers.Timer(2000);
+            _typingCleanupTimer.Elapsed += (s, ev) =>
+            {
+                var now = DateTime.UtcNow;
+                var staleUsers = _typingUsers.Where(kvp => (now - kvp.Value.LastPing).TotalSeconds > 5).Select(kvp => kvp.Key).ToList();
+                if (staleUsers.Any())
+                {
+                    InvokeAsync(() =>
+                    {
+                        foreach (var userId in staleUsers)
+                        {
+                            _typingUsers.Remove(userId);
+                        }
+                        StateHasChanged();
+                    });
+                }
+            };
+            _typingCleanupTimer.Start();
+
+            if (ChannelId != null)
+            {
+                await ChatNotifications.MarkChannelAsReadAsync(ChannelId);
+            }
+        }
+        catch (Exception ex) when (ex is not NavigationException)
+        {
+            Console.WriteLine($"[Error] Chat.razor OnInitializedAsync failed: {ex}");
+        }
+    }
+
+    private void TryDecryptMessages()
+    {
+        if (_currentUser == null || _selectedChannel == null || !_selectedChannel.IsEncrypted) return;
+        
+        if (ScopedKeystore.IsUnlocked)
+        {
+            var privateKey = ScopedKeystore.GetPrivateKey();
+            if (privateKey != null && _selectedChannel.EncryptedChannelKeys.TryGetValue(_currentUser.Id, out var cipherKey))
+            {
+                try
+                {
+                    var channelKey = Crypto.DecryptRsa(cipherKey, privateKey);
+                    _decryptedChannelKey = channelKey;
+                    
+                    // Share the key with any newly setup/authorized users seamlessly in the background!
+                    _ = ChatService.ShareKeyOpportunisticallyAsync(_selectedChannel.Id, channelKey);
+                    
+                    foreach (var msg in _messages.Where(m => m.IsEncrypted))
+                    {
+                        if (!_decryptedContents.ContainsKey(msg.Id))
+                        {
+                            try
+                            {
+                                _decryptedContents[msg.Id] = Crypto.DecryptAes(msg.Content, channelKey);
+                            }
+                            catch (Exception ex)
+                            {
+                                Console.WriteLine($"[Error] Failed to decrypt message {msg.Id}: {ex.Message}");
+                            }
+                        }
+                    }
+                }
+                catch (Exception ex)
+                { 
+                    Console.WriteLine($"[Error] Decrypting messages: {ex.Message}");
+                }
+            }
+        }
+    }
+
+    private bool _hasVaultError = false;
+
+    private async Task UnlockVault()
+    {
+        if (_currentUser == null || string.IsNullOrWhiteSpace(_vaultPassword) || string.IsNullOrEmpty(_currentUser.EncryptedPrivateKey)) return;
+        
+        try
+        {
+             var kek = Crypto.DeriveKeyFromPassword(_vaultPassword, _currentUser.Id);
+             var plainKey = Crypto.DecryptAes(_currentUser.EncryptedPrivateKey, kek);
+             
+             ScopedKeystore.Unlock(plainKey);
+             GlobalKeystore.UnlockVault(_currentUser.Id, _currentUser.EncryptedPrivateKey, _vaultPassword, Crypto);
+             _hasVaultError = false;
+
+             var vaultResponse = await JS.InvokeAsync<System.Text.Json.JsonElement>("eval", new object[] {
+                 "(async function() { " +
+                 "  var hdrs = await window.spokesAuth.getHeaders({ 'Content-Type': 'application/json' }); " +
+                 "  var r = await fetch('/spokesapi/vault/login', { " +
+                 "    method: 'POST', " +
+                 "    headers: hdrs, " +
+                 "    body: JSON.stringify({ Password: " + System.Text.Json.JsonSerializer.Serialize(_vaultPassword) + " }) " +
+                 "  }); " +
+                 "  return await r.json(); " +
+                 "})()"
+             });
+
+             if (vaultResponse.TryGetProperty("vaultKey", out var vkElement))
+             {
+                 var vaultKeyStr = vkElement.GetString();
+                 await JS.InvokeVoidAsync("spokesVault.storeVaultKey", vaultKeyStr);
+             }
+             
+             _vaultPassword = "";
+             TryDecryptMessages();
+             _shouldScrollToBottomAndInitObserver = true;
+             StateHasChanged();
+        }
+        catch
+        {
+             _hasVaultError = true;
+        }
+    }
+
+    private async Task OpenSecureChatSettings()
+    {
+        var parameters = new DialogParameters { ["Employee"] = _currentUser };
+        var options = new DialogOptions { CloseButton = true, MaxWidth = MaxWidth.Small, FullWidth = true };
+        var dialog = await DialogService.ShowAsync<Spokes_Server.Components.Dialogs.SecureChatSettingsDialog>("Secure Chat Settings", parameters, options);
+        var result = await dialog.Result;
+
+        if (result != null && !result.Canceled && _currentUser != null)
+        {
+            // Refresh currentUser to update HasChatPassword
+            _currentUser = Db.Employees.GetById(_currentUser.Id);
+            
+            // Decrypt since vault should now be unlocked
+            TryDecryptMessages();
+            _shouldScrollToBottomAndInitObserver = true;
+            StateHasChanged();
+        }
+    }
+
+    private async Task OpenMemberProfile(Employee? employee)
+    {
+        if (employee == null) return;
+        var parameters = new DialogParameters { ["Employee"] = employee };
+        var options = new DialogOptions { CloseButton = true, MaxWidth = MaxWidth.Small, FullWidth = true, CloseOnEscapeKey = true };
+        await DialogService.ShowAsync<MemberProfileDialog>(null, parameters, options);
+    }
+
+    private bool _shouldScrollToBottomAndInitObserver = false;
+
+    // ...
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            _isFirstRenderComplete = true;
+            try
+            {
+                _objRef = DotNetObjectReference.Create(this);
+                _module = await JS.InvokeAsync<IJSObjectReference>("import", $"./{Assets.Bypassed("Components/Pages/Chat/Chat.razor.js")}");
+
+                if (_currentUser != null && !string.IsNullOrEmpty(_currentUser.EncryptedPrivateKey))
+                {
+                    await ScopedKeystore.InitializeFromDeviceCookieAsync(JS, _currentUser.Id, _currentUser.EncryptedPrivateKey, Crypto, GlobalKeystore);
+                    if (ScopedKeystore.IsUnlocked)
+                    {
+                        // GlobalKeystore is unlocked inside InitializeFromDeviceCookieAsync
+                        // when the device-stored password is successfully decrypted.
+                        TryDecryptMessages();
+                        StateHasChanged(); // Force re-render so components (like ChatComposer) get the populated UploadUrl!
+
+                        // Sync mobile session HasVaultCookie flag
+                        try
+                        {
+                            var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+                            var sessionId = authState.User.FindFirst("SessionId")?.Value;
+                            if (!string.IsNullOrEmpty(sessionId))
+                            {
+                                var session = Db.DeviceSessions.GetById(sessionId);
+                                if (session != null && !session.HasVaultCookie)
+                                {
+                                    // The server explicitly logged this device out of the vault, 
+                                    // but the local JS preference persisted.
+                                    // We must clear the local key instead of reviving the session!
+                                    await ScopedKeystore.ClearDeviceCookieAsync(JS, _currentUser.Id);
+                                    GlobalKeystore.LockVault(_currentUser.Id);
+                                    ScopedKeystore.Lock();
+                                    StateHasChanged();
+                                }
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine($"[Error] Syncing HasVaultCookie failed: {ex}");
+                        }
+                    }
+                }
+
+                // If the user is in an active voice call and navigated back to this channel,
+                // re-attach all LiveKit tracks to the freshly created DOM containers.
+                if (VoiceService.IsInVoiceCall)
+                {
+                    await VoiceService.ReattachTracksAsync();
+                }
+
+                // Note: We do NOT init scroll observer here yet. We let the block below handle it.
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[Error] Chat.razor OnAfterRenderAsync failed: {ex}");
+            }
+            finally
+            {
+                _isCheckingKeystoreCookie = false;
+                _shouldScrollToBottomAndInitObserver = true;
+                // Since this might have unlocked the keystore in the background on mobile,
+                // we must re-render so that child components (like ChatSidebar) update their
+                // UI (e.g. replacing 'Locked message' with decrypted previews).
+                StateHasChanged();
+            }
+        }
+
+
+
+        // Check if we need to scroll and/or init observer.
+        // This runs on first render (if flag set by OnInitialized) AND on subsequent updates (when switching channels or loading).
+        if (_shouldScrollToBottomAndInitObserver || (firstRender && _selectedChannel != null))
+        {
+            _shouldScrollToBottomAndInitObserver = false;
+            
+            // 1. Scroll to bottom first so we aren't at the top (which would trigger lazy load)
+            await ScrollToBottom();
+            
+            if (_module != null && _objRef != null)
+            {
+                // Init handlers
+                try { await _module.InvokeVoidAsync("initFileHandlers", "chat-messages-container", _objRef); } catch { }
+                try { await _module.InvokeVoidAsync("initLongPress", _messagesContainer, _objRef); } catch { }
+                try { await _module.InvokeVoidAsync("initScrollListener", _messagesContainer, _objRef); } catch { }
+                
+                // 2. Only attach observer if we actually have more messages AND messages are rendered (sentinel exists)
+                if (_hasMoreMessages && _messages.Count > 0)
+                {
+                    try 
+                    {
+                        await _module.InvokeVoidAsync("initScrollObserver", _messagesContainer, _topSentinel, _objRef);
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"[Warning] Failed to init observer: {ex.Message}");
+                    }
+                }
+                
+                try 
+                {
+                    await _module.InvokeVoidAsync("initReadReceiptObserver", _messagesContainer, _objRef);
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[Warning] Failed to init read receipt observer: {ex.Message}");
+                }
+            }
+        }
+    }
+
+    // --- Event Subscriptions ---
+
+    private void SubscribeToLocalEvents()
+    {
+        ChatState.MessageReceived += OnMessageReceived;
+        ChatState.UserTyping += OnUserTyping;
+        ChatState.UserStoppedTyping += OnUserStoppedTyping;
+        ChatState.MessageEdited += OnMessageEdited;
+        ChatState.MessageDeleted += OnMessageDeleted;
+        ChatState.ReactionAdded += OnReactionAdded;
+        ChatState.ReactionRemoved += OnReactionRemoved;
+        ChatState.ChannelCreated += OnChannelCreated;
+        ChatState.MessageRead += OnMessageRead;
+        ChatState.EmployeeProfileUpdated += OnEmployeeProfileUpdated;
+    }
+
+    private void UnsubscribeFromLocalEvents()
+    {
+        ChatState.MessageReceived -= OnMessageReceived;
+        ChatState.UserTyping -= OnUserTyping;
+        ChatState.UserStoppedTyping -= OnUserStoppedTyping;
+        ChatState.MessageEdited -= OnMessageEdited;
+        ChatState.MessageDeleted -= OnMessageDeleted;
+        ChatState.ReactionAdded -= OnReactionAdded;
+        ChatState.ReactionRemoved -= OnReactionRemoved;
+        ChatState.ChannelCreated -= OnChannelCreated;
+        ChatState.MessageRead -= OnMessageRead;
+        ChatState.EmployeeProfileUpdated -= OnEmployeeProfileUpdated;
+    }
+
+    // --- Local Event Handlers ---
+
+    private void OnEmployeeProfileUpdated(Employee updatedEmployee)
+    {
+        InvokeAsync(() =>
+        {
+            var existingIndex = _employees.FindIndex(e => e.Id == updatedEmployee.Id);
+            if (existingIndex >= 0)
+            {
+                // Create a new list reference so Blazor's parameter tracking sees the change
+                var newEmployees = new List<Employee>(_employees);
+                newEmployees[existingIndex] = updatedEmployee;
+                _employees = newEmployees;
+                
+                _employeeLookup[updatedEmployee.Id] = updatedEmployee;
+                
+                if (_currentUser?.Id == updatedEmployee.Id)
+                {
+                    _currentUser = updatedEmployee;
+                }
+                
+                // Recompute channel employees to ensure correct rendering if the updated employee is in the current channel
+                if (_channelEmployees.Any(e => e.Id == updatedEmployee.Id))
+                {
+                    _channelEmployees = GetChannelEmployees();
+                }
+
+                StateHasChanged();
+            }
+        });
+    }
+
+    private void OnMessageReceived(ChatMessage msg)
+    {
+        InvokeAsync(async () =>
+        {
+            var channelToUpdate = _channels.FirstOrDefault(c => c.Id == msg.ChannelId);
+            if (channelToUpdate != null)
+            {
+                channelToUpdate.LastActivityAt = msg.SentAt;
+                _channels = _channels.OrderByDescending(c => c.LastActivityAt).ToList();
+            }
+            else 
+            {
+                LoadChannels();
+            }
+
+            if (msg.ChannelId == ChannelId)
+            {
+                // Clear typing indicator immediately — the sender has sent their message
+                _typingUsers.Remove(msg.SenderId);
+
+                if (!_messages.Any(m => m.Id == msg.Id))
+                {
+                    _messages.Add(msg);
+                    
+                    if (msg.IsEncrypted) TryDecryptMessages();
+                    
+                    // Mark as read so the database knows we've seen this real-time message
+                    await ChatNotifications.MarkChannelAsReadAsync(ChannelId);
+                    
+                    RecomputeSortedMessages();
+                    RecomputeLatestReadReceipts();
+                    
+                    bool isOwnMessage = msg.SenderId == (_currentUser?.Id);
+                    StateHasChanged();
+                    
+                    if (isOwnMessage)
+                    {
+                        await Task.Delay(50);
+                        await ScrollToBottom();
+                    }
+                }
+            }
+            else
+            {
+                // Message is for another channel — re-sort sidebar only.
+                // Don't call StateHasChanged() here to avoid a full re-render of the
+                // message list just to update sidebar order. The next user interaction
+                // (e.g., clicking a channel) will pick up the new order.
+            }
+        });
+    }
+
+    private void OnUserTyping(string channelId, string userId, string userName)
+    {
+        InvokeAsync(() =>
+        {
+            if (channelId == ChannelId && userId != _currentUser?.Id)
+            {
+                _typingUsers[userId] = (userName, DateTime.UtcNow);
+                StateHasChanged();
+            }
+        });
+    }
+
+    private void OnUserStoppedTyping(string channelId, string userId)
+    {
+        InvokeAsync(() =>
+        {
+            if (channelId == ChannelId)
+            {
+                _typingUsers.Remove(userId);
+                StateHasChanged();
+            }
+        });
+    }
+
+    private void OnMessageEdited(ChatMessage edited)
+    {
+        InvokeAsync(() =>
+        {
+            if (edited.ChannelId == ChannelId)
+            {
+                var msg = _messages.FirstOrDefault(m => m.Id == edited.Id);
+                if (msg != null)
+                {
+                    msg.Content = edited.Content;
+                    msg.EditedAt = edited.EditedAt;
+                    msg.CallStatus = edited.CallStatus;
+                    msg.MentionedAlbumIds = edited.MentionedAlbumIds?.ToList() ?? new List<string>();
+                    msg.MentionedUserIds = edited.MentionedUserIds?.ToList() ?? new List<string>();
+                    msg.MentionedEventIds = edited.MentionedEventIds?.ToList() ?? new List<string>();
+                    msg.MentionsTeam = edited.MentionsTeam;
+                    msg.MentionsEveryone = edited.MentionsEveryone;
+
+
+                    if (msg.IsEncrypted && !string.IsNullOrEmpty(_decryptedChannelKey))
+                    {
+                        try
+                        {
+                            _decryptedContents[msg.Id] = Crypto.DecryptAes(msg.Content, _decryptedChannelKey);
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine($"[Error] Decrypting edited message {msg.Id}: {ex.Message}");
+                        }
+                    }
+
+                    StateHasChanged();
+                }
+            }
+        });
+    }
+
+    private void OnMessageDeleted(string channelId, string messageId)
+    {
+        InvokeAsync(() =>
+        {
+            if (channelId == ChannelId)
+            {
+                _messages.RemoveAll(m => m.Id == messageId);
+                RecomputeSortedMessages();
+                RecomputeLatestReadReceipts();
+                StateHasChanged();
+            }
+        });
+    }
+
+    private void OnReactionAdded(string channelId, string messageId, string emoji, string userId, string userName)
+    {
+        InvokeAsync(() =>
+        {
+            if (channelId == ChannelId)
+            {
+                var msg = _messages.FirstOrDefault(m => m.Id == messageId);
+                if (msg != null)
+                {
+                    var reactionKey = $"{emoji}:{userId}";
+                    if (!msg.Reactions.Contains(reactionKey))
+                    {
+                        msg.Reactions.Add(reactionKey);
+                    }
+                    StateHasChanged();
+                }
+            }
+        });
+    }
+
+    private void OnReactionRemoved(string channelId, string messageId, string emoji, string userId)
+    {
+        InvokeAsync(() =>
+        {
+            if (channelId == ChannelId)
+            {
+                var msg = _messages.FirstOrDefault(m => m.Id == messageId);
+                if (msg != null)
+                {
+                    var reactionKey = $"{emoji}:{userId}";
+                    msg.Reactions.Remove(reactionKey);
+                    StateHasChanged();
+                }
+            }
+        });
+    }
+
+    private void OnChannelCreated(ChatChannel channel)
+    {
+        InvokeAsync(() =>
+        {
+            LoadChannels();
+            // Only re-render if this new channel is visible to the current user
+            if (_channels.Any(c => c.Id == channel.Id))
+            {
+                StateHasChanged();
+            }
+        });
+    }
+
+    private void OnMessageRead(string channelId, string messageId, List<string> readBy)
+    {
+        InvokeAsync(() =>
+        {
+            if (channelId == ChannelId)
+            {
+                var msg = _messages.FirstOrDefault(m => m.Id == messageId);
+                if (msg != null)
+                {
+                    msg.ReadBy = readBy;
+                    RecomputeLatestReadReceipts();
+                    StateHasChanged();
+                }
+            }
+        });
+    }
+    
+    private void RecomputeLatestReadReceipts()
+    {
+        var (latest, cumulative) = ChatReadReceiptHelper.CalculateReadReceipts(_selectedChannel, _messages);
+        _latestReadReceipts = latest;
+        _cumulativeReadReceipts = cumulative;
+    }
+
+    [JSInvokable]
+    public async Task HandleMessageSeen(string messageId)
+    {
+        if (ChannelId != null && _currentUser != null && _selectedChannel != null)
+        {
+            var msg = _messages.FirstOrDefault(m => m.Id == messageId);
+            if (msg != null && (msg.SenderId == _currentUser.Id || (msg.ReadBy != null && msg.ReadBy.Contains(_currentUser.Id))))
+            {
+                return; // Already seen, no server call needed
+            }
+
+            await ChatService.MarkMessageAsReadAsync(ChannelId, messageId, _currentUser.Id);
+        }
+    }
+
+    // --- Channel Management ---
+
+    private bool CanViewArchivedChannels()
+    {
+        return _currentUser?.HasPermission(Spokes_Server.Core.Constants.AppPermissions.Chat.ViewArchive) == true ||
+               _currentUser?.IsAdmin == true;
+    }
+
+    private bool CanCurrentUserPostToChannel()
+    {
+        if (_selectedChannel == null || _currentUser == null) return false;
+        return ChatService.CanUserPostToChannel(_selectedChannel, _currentUser);
+    }
+
+    private async Task ArchiveChannel(ChatChannel channel)
+    {
+        channel.IsArchived = true;
+        await ChatService.UpdateChannelAsync(channel);
+        LoadChannels();
+        StateHasChanged();
+    }
+
+    private async Task UnarchiveChannel(ChatChannel channel)
+    {
+        channel.IsArchived = false;
+        await ChatService.UpdateChannelAsync(channel);
+        LoadChannels();
+        StateHasChanged();
+    }
+
+    private void LoadChannels()
+    {
+        if (_currentUser == null) return;
+
+        _channels = ChatService.GetChannelsForUser(_currentUser.Id);
+    }
+
+    // --- Channel Selection ---
+
+    private async Task SelectChannel(string channelId)
+    {
+        await SelectChannelInternal(channelId, updateUrl: true, autoJoinVoice: true);
+    }
+
+    private string? _previousChannelId;
+
+    private async Task SelectChannelInternal(string channelId, bool updateUrl, bool autoJoinVoice = false)
+    {
+        // Cancel any in-flight operations from the previous channel (StreamMessagesAsync, etc.)
+        // Note: We intentionally do NOT Dispose() the old CTS here. Dispose() is optional for
+        // CancellationTokenSource and calling it creates a race condition where concurrent code
+        // (e.g. the Dispose pathway or LoadOlderMessages) can access a disposed CTS, throwing
+        // ObjectDisposedException and crashing the Blazor circuit. Cancel() alone is sufficient.
+        _channelCts?.Cancel();
+        var newCts = new CancellationTokenSource();
+        _channelCts = newCts;
+        var token = newCts.Token;
+
+        // Guard against race conditions where the user switches channels while loading
+        var newChannelId = channelId;
+        
+        bool currentlyInChannel = !string.IsNullOrEmpty(ChannelId);
+        
+        // Prune the PREVIOUS channel logic
+        // We do this before updating ChannelId so we know what we are leaving
+        if (_previousChannelId != null && _previousChannelId != newChannelId)
+        {
+             // Mark the channel we are leaving as fully read
+             await ChatNotifications.MarkChannelAsReadAsync(_previousChannelId);
+             
+             // Fire and forget pruning - don't block UI
+             _ = Task.Run(() => Db.ChatMessages.EnforceGlobalCacheSizeLimit());
+        }
+        _previousChannelId = newChannelId;
+        ChannelId = newChannelId;
+        
+        _selectedChannel = _channels.FirstOrDefault(c => c.Id == channelId);
+        if (_selectedChannel == null)
+        {
+            LoadChannels();
+            _selectedChannel = _channels.FirstOrDefault(c => c.Id == channelId);
+        }
+        
+        // If the channel was not found (access denied / deleted), don't proceed
+        if (_selectedChannel == null) return;
+
+        _channelTeams = GetChannelTeams();
+        _channelEmployees = GetChannelEmployees();
+
+        _messages.Clear();
+        _sortedMessages = new();
+        _decryptedChannelKey = null;
+        _typingUsers.Clear();
+        _hasMoreMessages = false;
+        
+        _isLoadingMessages = true;
+        StateHasChanged();
+
+        // Artificial delay removed to avoid layout thrashing and flicker.
+        // The synchronous data fetch is fast enough to not require a forced UI yield here.
+
+        // Race condition check: Did the user switch away while we waited?
+        if (ChannelId != channelId) return;
+
+        _messages = Db.ChatMessages.GetByChannel(channelId, 15);
+        
+        var cachedCount = Db.ChatMessages.GetMessageCount(channelId);
+        _hasMoreMessages = cachedCount > _messages.Count;
+        
+        // Race condition check again
+        if (ChannelId != channelId) return;
+
+        // Proactively mark unread loaded messages as read for the current user
+        if (_currentUser != null)
+        {
+            var unreadLoaded = _messages
+                .Where(m => m.SenderId != _currentUser.Id && (m.ReadBy == null || !m.ReadBy.Contains(_currentUser.Id)))
+                .ToList();
+
+            if (unreadLoaded.Any())
+            {
+                foreach (var m in unreadLoaded)
+                {
+                    m.ReadBy ??= new List<string>();
+                    m.ReadBy.Add(_currentUser.Id);
+                    Db.ChatMessages.Save(m);
+                    ChatState.NotifyMessageRead(channelId, m.Id, m.ReadBy);
+                }
+            }
+        }
+
+        TryDecryptMessages();
+        RecomputeSortedMessages();
+        RecomputeLatestReadReceipts();
+
+        _isLoadingMessages = false;
+        _shouldScrollToBottomAndInitObserver = true;
+
+        // Reset view states
+        _showSecondaryChat = false;
+
+        // Auto-join Voice Channel if applicable
+        if (autoJoinVoice && _selectedChannel.IsVoiceChannel && !VoiceService.IsInVoiceCall)
+        {
+            _ = JoinVoiceChannelInternal(isInitiator: false);
+        }
+
+
+
+        StateHasChanged();
+        
+        // Note: Scrolling and observer initialization are now handled in OnAfterRenderAsync
+        // to ensure the DOM is fully updated before JS calls are made.
+
+        if (updateUrl)
+        {
+            Nav.NavigateTo($"/chat/{channelId}", replace: currentlyInChannel);
+        }
+        
+        await ChatNotifications.MarkChannelAsReadAsync(channelId);
+
+        // Load notification level preference
+        if (_currentUser != null)
+        {
+            _notificationLevel = Db.ChatReadStates.GetNotificationLevel(
+                _currentUser.Id, channelId, _selectedChannel.ChannelType.ToString(), _selectedChannel.IsVoiceChannel);
+        }
+
+        // Push shortcuts to native OS
+        try
+        {
+            var serverUrl = Configuration["ServerUrl"] ?? Nav.BaseUri;
+            var channelName = GetChannelDisplayName(_selectedChannel);
+            string? channelIconBase64 = null;
+            if (_selectedChannel.ChannelType == ChatChannelType.Direct && _currentUser != null)
+            {
+                var otherEmpId = _selectedChannel.ParticipantIds.FirstOrDefault(id => id != _currentUser.Id) ?? _currentUser.Id;
+                if (otherEmpId != null)
+                {
+                    channelIconBase64 = ShortcutIconService.GetShortcutIconBase64(GetEmployee(otherEmpId));
+                }
+            }
+
+            if (string.IsNullOrEmpty(channelIconBase64))
+            {
+                var companyProfile = Db.CompanyProfile.Get();
+                channelIconBase64 = ShortcutIconService.GetCompanyLogoBase64(companyProfile?.LogoBase64);
+            }
+            
+            await JS.InvokeVoidAsync("spokesPushDirectShareShortcut", serverUrl, channelId, channelName, channelIconBase64 ?? "");
+        }
+        catch (Exception e)
+        {
+            Console.WriteLine($"[Shortcuts] Failed to push shortcut for {channelId}: {e.Message}");
+        }
+
+        // --- Stream the remaining messages to reach an initial 50-message cache ---
+        if (_hasMoreMessages && _messages.Count < 50 && !token.IsCancellationRequested)
+        {
+            int amountToBackfill = 50 - _messages.Count;
+            _ = StreamMessagesAsync(channelId, amountToBackfill, 10, token);
+        }
+    }
+
+    // --- Message Actions ---
+
+    private async Task HandleSendMessage((string Content, List<ChatAttachment> Attachments) args)
+    {
+        if (_currentUser == null || ChannelId == null) return;
+        await ChatService.SendMessageWithAttachmentsAsync(new SendMessageOptions
+        {
+            SenderId = _currentUser.Id,
+            ChannelId = ChannelId,
+            Content = args.Content,
+            Attachments = args.Attachments,
+            ReplyToId = _replyingTo?.Id,
+            PrivateKey = ScopedKeystore.GetPrivateKey()
+        });
+        _replyingTo = null;
+    }
+
+    private async Task StartReply(ChatMessage message)
+    {
+        _replyingTo = message;
+        StateHasChanged();
+        
+        await Task.Delay(10);
+        if (_composer != null)
+        {
+            await _composer.FocusInputAsync();
+        }
+    }
+
+    private void CancelReply()
+    {
+        _replyingTo = null;
+        StateHasChanged();
+    }
+
+    private void HandleNotificationLevelChanged(string level)
+    {
+        if (_currentUser == null || ChannelId == null) return;
+        _notificationLevel = level;
+        Db.ChatReadStates.SetNotificationLevel(_currentUser.Id, ChannelId, level);
+        StateHasChanged();
+    }
+
+    [Inject] private IBrowserViewportService ViewportService { get; set; } = default!;
+
+    // --- Voice Interop Methods ---
+    private async Task JoinVoiceChannel()
+    {
+        await JoinVoiceChannelInternal(isInitiator: true);
+    }
+    
+    private async Task JoinCallFromInvite(ChatMessage msg)
+    {
+        await JoinVoiceChannelInternal(isInitiator: false);
+    }
+
+    private async Task JoinVoiceChannelInternal(bool isInitiator)
+    {
+        try
+        {
+            if (_currentUser == null || _selectedChannel == null) return;
+            
+            bool isDemo = Configuration.GetValue<bool>("Spokes_DemoMode");
+            if (isDemo)
+            {
+                var demoConfig = Db.DemoConfigs.Get();
+                var mockParticipants = demoConfig.AutoLoginEmployeeIds.ToHashSet();
+                if (!mockParticipants.Contains(_currentUser.Id))
+                {
+                    mockParticipants.Add(_currentUser.Id);
+                }
+                
+                if (_selectedChannel.ChannelType == ChatChannelType.Direct)
+                {
+                    mockParticipants.IntersectWith(_selectedChannel.ParticipantIds);
+                }
+
+                VoiceService.ConnectMockForDemo(_selectedChannel.Id, _currentUser.Id, mockParticipants);
+                StateHasChanged();
+                return;
+            }
+
+            try
+            {
+                var token = VoiceChannelService.GenerateJoinToken(_selectedChannel.Id, _currentUser.Id, _currentUser.FullName);
+                var sysConfig = Db.SystemConfigs.Get();
+                var baseUriString = !string.IsNullOrWhiteSpace(sysConfig.ServerPublicUrl) ? sysConfig.ServerPublicUrl : Nav.BaseUri;
+                var baseUri = new Uri(baseUriString);
+                var wsScheme = baseUri.Scheme == "https" ? "wss" : "ws";
+                var defaultUrl = $"{wsScheme}://{baseUri.Authority}";
+                var url = Configuration["LiveKit:ServerUrl"] ?? defaultUrl;
+                var noiseSuppression = await JS.InvokeAsync<string>("localStorage.getItem", "spokes_noise_filter") ?? "rnnoise";
+                await VoiceService.ConnectAsync(token, url, _selectedChannel.Id, _currentUser.Id, _selectedChannel.AudioBitrateKbps, noiseSuppression);
+            }
+            catch (Exception ex)
+            {
+                Snackbar.Add($"Voice Configuration Error: {ex.Message}", Severity.Error);
+            }
+
+            if (VoiceService.IsInVoiceCall)
+            {
+                 await ChatService.JoinVoiceAsync(_currentUser.Id, _selectedChannel.Id);
+                 
+                 if (isInitiator && _selectedChannel.ChannelType == ChatChannelType.Direct)
+                 {
+                     await ChatService.SendCallInviteAsync(_currentUser.Id, _selectedChannel.Id);
+                 }
+            }
+            StateHasChanged();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Error joining voice: {ex.Message}", Severity.Error);
+        }
+    }
+    
+    private async Task DeclineCallInvite(ChatMessage msg)
+    {
+        await ChatService.UpdateCallInviteStatusAsync(msg.Id, "Declined");
+    }
+
+    // --- Utility Methods ---
+
+    private bool _userDisabledAutoFaceTime = false;
+    private bool _prevShouldAutoFaceTime = false;
+    private int _prevCameraCount = 0;
+    private bool _prevIsFaceTimeGlobal = false;
+
+    private async void HandleVoiceStateChanged()
+    {
+        bool isTwoPersonCall = VoiceService.CallParticipants.Count == 2;
+        bool hasAnyCamera = VoiceService.CallParticipants.Any(p => 
+            (p == VoiceService.CurrentUserId && VoiceService.IsVideoOn) || 
+            (VoiceService.RemoteVideoHeights.GetValueOrDefault(p, 0) > 0)
+        );
+        bool shouldAuto = isTwoPersonCall && hasAnyCamera;
+
+        if (shouldAuto && !_prevShouldAutoFaceTime && !_userDisabledAutoFaceTime)
+        {
+            var otherPerson = VoiceService.CallParticipants.FirstOrDefault(p => p != VoiceService.CurrentUserId);
+            if (otherPerson != null)
+            {
+                _focusedParticipantId = otherPerson;
+            }
+        }
+        else if (!shouldAuto && _prevShouldAutoFaceTime)
+        {
+            if (VoiceService.CallParticipants.Count != 2 || !hasAnyCamera)
+            {
+                _focusedParticipantId = null;
+                _userDisabledAutoFaceTime = false;
+            }
+        }
+
+        int activeCameras = VoiceService.CallParticipants.Count(p => 
+            (p == VoiceService.CurrentUserId && VoiceService.IsVideoOn) || 
+            (VoiceService.RemoteVideoHeights.GetValueOrDefault(p, 0) > 0));
+            
+        bool isFaceTimeLayoutGlobal = shouldAuto && _focusedParticipantId != null;
+        
+        bool needsRefresh = false;
+        if (activeCameras != _prevCameraCount || isFaceTimeLayoutGlobal != _prevIsFaceTimeGlobal)
+        {
+            needsRefresh = true;
+        }
+        
+        _prevCameraCount = activeCameras;
+        _prevIsFaceTimeGlobal = isFaceTimeLayoutGlobal;
+        _prevShouldAutoFaceTime = shouldAuto;
+
+        await InvokeAsync(StateHasChanged);
+        
+        if (needsRefresh)
+        {
+            await Task.Delay(300);
+            try
+            {
+                await VoiceService.RefreshVideoLayoutsAsync();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[Voice] Failed to refresh video layouts: {ex.Message}");
+            }
+        }
+    }
+
+    private async Task ToggleFocusParticipant(string participantId)
+    {
+        if (_focusedParticipantId == participantId)
+        {
+            _focusedParticipantId = null;
+            if (VoiceService.CallParticipants.Count == 2)
+            {
+                _userDisabledAutoFaceTime = true;
+            }
+        }
+        else
+        {
+            _focusedParticipantId = participantId;
+            _userDisabledAutoFaceTime = false;
+        }
+            
+        StateHasChanged();
+        
+        await Task.Delay(300);
+        try
+        {
+            await VoiceService.RefreshVideoLayoutsAsync();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[Voice] Failed to refresh video layouts: {ex.Message}");
+        }
+    }
+
+    private Dictionary<string, string> _remoteVideoQualities = new();
+
+    private string GetRemoteQuality(string participantId)
+    {
+        if (_remoteVideoQualities.TryGetValue(participantId, out var q)) return q;
+        return "Auto";
+    }
+
+    private async Task SetRemoteQuality(string participantId, string quality)
+    {
+        _remoteVideoQualities[participantId] = quality;
+        await VoiceService.SetRemoteVideoQualityAsync(participantId, quality);
+        StateHasChanged();
+    }
+
+    private async Task ToggleInfoPanel()
+    {
+        var breakpoint = await ViewportService.GetCurrentBreakpointAsync();
+        if (breakpoint <= Breakpoint.Sm)
+        {
+             var parameters = new DialogParameters<Spokes_Server.Components.Dialogs.ChannelInfoDialog>
+            {
+                { x => x.Channel, _selectedChannel },
+                { x => x.DisplayName, GetChannelDisplayName(_selectedChannel!) },
+                { x => x.Employees, _employees },
+                { x => x.CurrentUserId, _currentUser?.Id },
+                { x => x.OnPinnedMessageClickedCb, EventCallback.Factory.Create<string>(this, ScrollToMessage) },
+                { x => x.OnChannelUpdatedCallback, EventCallback.Factory.Create(this, HandleChannelUpdated) },
+                { x => x.OnLeaveGroupCallback, EventCallback.Factory.Create(this, HandleLeaveGroup) },
+                { x => x.OnArchiveChannelCallback, EventCallback.Factory.Create(this, HandleArchiveChannel) },
+                { x => x.OnDeleteChannelCallback, EventCallback.Factory.Create(this, HandleDeleteChannel) },
+                { x => x.OnRemoveMemberCallback, EventCallback.Factory.Create<string>(this, HandleRemoveMember) }
+            };
+
+            var options = new DialogOptions 
+            { 
+                FullScreen = true, 
+                CloseButton = false,
+                NoHeader = true
+            };
+            
+            await DialogService.ShowAsync<Spokes_Server.Components.Dialogs.ChannelInfoDialog>("", parameters, options);
+        }
+        else
+        {
+            _showInfoPanel = !_showInfoPanel;
+            StateHasChanged();
+        }
+    }
+
+    private async Task ScrollToMessage(string messageId)
+    {
+        if (ChannelId == null) return;
+        
+        bool requiresRender = false;
+        if (!_messages.Any(m => m.Id == messageId))
+        {
+            // Find how far back this message is in the channel index
+            int pos = Db.ChatMessages.GetIndexPosition(ChannelId, messageId);
+            
+            // Load messages up to this position + 50 buffer
+            _messages = Db.ChatMessages.GetByChannel(ChannelId, pos + 50);
+            
+            TryDecryptMessages();
+            RecomputeSortedMessages();
+            requiresRender = true;
+            
+            // Recalculate lazy loading state
+            var cachedCount = Db.ChatMessages.GetMessageCount(ChannelId);
+            _hasMoreMessages = cachedCount > _messages.Count;
+        }
+
+        if (requiresRender)
+        {
+            StateHasChanged();
+            // Give the DOM a moment to render the newly populated list
+            await Task.Delay(100);
+        }
+
+        // Scroll the message into view using JS interop
+        try
+        {
+            if (_module != null)
+            {
+                await _module.InvokeVoidAsync("scrollToMessage", messageId);
+            }
+        }
+        catch { /* ignore */ }
+    }
+
+    private async Task OpenLightbox((ChatMessage Message, List<ChatAttachment> Images, int Index) args)
+    {
+        var lightboxItems = args.Images.Select(m => new Spokes_Server.Core.Models.UI.LightboxMediaItem
+        {
+            Id = m.Id,
+            FileName = m.FileName,
+            FilePath = GetTokenizedFileUrl(m.FilePath, m.FileName),
+            ContentType = m.ContentType,
+            FileSizeBytes = m.FileSizeBytes,
+            HasServerThumbnail = m.HasServerThumbnail
+        }).ToList();
+
+        var parameters = new DialogParameters
+        {
+            { "MediaList", lightboxItems },
+            { "InitialIndex", args.Index }
+        };
+        var options = new DialogOptions
+        {
+            MaxWidth = MaxWidth.Medium,
+            FullWidth = true,
+            NoHeader = true,
+            CloseButton = false
+        };
+        await DialogService.ShowAsync<Spokes_Server.Components.Dialogs.MediaViewerDialog>("Media Lightbox", parameters, options);
+    }
+
+    private async Task EditMessage(ChatMessage message)
+    {
+        _editingMessageId = message.Id;
+        StateHasChanged();
+        // Wait for DOM to update with the inline composer before scrolling
+        await Task.Delay(100);
+        await ScrollToMessage(message.Id);
+    }
+
+    private async Task SaveEditMessage((ChatMessage message, string newContent) args)
+    {
+        var message = args.message;
+        var newContent = args.newContent;
+        if (!string.IsNullOrWhiteSpace(newContent) && newContent != message.Content)
+        {
+            var privateKey = ScopedKeystore.IsUnlocked ? ScopedKeystore.GetPrivateKey() : null;
+            await ChatService.EditMessageAsync(_currentUser?.Id, message.Id, newContent, privateKey);
+        }
+        _editingMessageId = null;
+        StateHasChanged();
+    }
+
+    private void CancelEditMessage()
+    {
+        _editingMessageId = null;
+        StateHasChanged();
+    }
+
+    private async Task HandleEditLastMessage()
+    {
+        if (_currentUser == null) return;
+        var lastSentMsg = _messages.Where(m => m.SenderId == _currentUser.Id).OrderByDescending(m => m.SentAt).FirstOrDefault();
+        if (lastSentMsg != null)
+        {
+            _editingMessageId = lastSentMsg.Id;
+            StateHasChanged();
+            await Task.Delay(100);
+            await ScrollToMessage(lastSentMsg.Id);
+        }
+    }
+
+    private async Task DeleteMessage(ChatMessage message)
+    {
+        if (_currentUser != null)
+        {
+            await ChatService.DeleteMessageAsync(_currentUser.Id, message.Id);
+        }
+    }
+
+    private async Task AddReaction((string messageId, string emoji) args)
+    {
+        var messageId = args.messageId;
+        var emoji = args.emoji;
+        if (ChannelId == null || _currentUser == null) return;
+        {
+            await ChatService.ToggleReactionAsync(_currentUser.Id, messageId, emoji);
+        }
+    }
+
+    // --- Mobile Action Sheet ---
+
+    [JSInvokable]
+    public void OnMobileLongPress(string messageId)
+    {
+        InvokeAsync(() =>
+        {
+            _actionSheetMessage = _messages.FirstOrDefault(m => m.Id == messageId);
+            StateHasChanged();
+        });
+    }
+
+    private void CloseActionSheet()
+    {
+        _actionSheetMessage = null;
+        _showMobileEmojiPicker = false;
+        StateHasChanged();
+    }
+
+    private async Task ActionSheetReply()
+    {
+        if (_actionSheetMessage != null) await StartReply(_actionSheetMessage);
+        _actionSheetMessage = null;
+    }
+
+    private async Task ActionSheetViewReactions()
+    {
+        var msg = _actionSheetMessage;
+        CloseActionSheet();
+
+        if (msg != null)
+        {
+            await OpenReactionsDialog(msg);
+        }
+    }
+
+    private async Task OpenReactionsDialog(ChatMessage msg)
+    {
+        if (msg == null) return;
+
+        var parameters = new DialogParameters<MessageReactionsDialog>
+        {
+            { x => x.Message, msg },
+            { x => x.Employees, _employees }
+        };
+
+        var options = new DialogOptions { CloseButton = true, MaxWidth = MaxWidth.Small, FullWidth = true };
+        await DialogService.ShowAsync<MessageReactionsDialog>("Reactions", parameters, options);
+    }
+
+    private async Task ActionSheetViewReadReceipts()
+    {
+        var msg = _actionSheetMessage;
+        CloseActionSheet();
+
+        if (msg != null)
+        {
+            await OpenReadReceiptsDialog(msg);
+        }
+    }
+
+    private async Task OpenReadReceiptsDialog(ChatMessage msg)
+    {
+        if (msg == null) return;
+
+        var userIds = _cumulativeReadReceipts.TryGetValue(msg.Id, out var readers) ? readers : new List<string>();
+
+        var parameters = new DialogParameters<MessageReactionsDialog>
+        {
+            { x => x.Message, msg },
+            { x => x.Employees, _employees },
+            { x => x.IsReadReceiptMode, true },
+            { x => x.ReadReceiptUserIds, userIds }
+        };
+
+        var options = new DialogOptions { CloseButton = true, MaxWidth = MaxWidth.Small, FullWidth = true };
+        await DialogService.ShowAsync<MessageReactionsDialog>("Read Receipts", parameters, options);
+    }
+
+    private async Task ActionSheetEdit()
+    {
+        var msg = _actionSheetMessage;
+        _actionSheetMessage = null;
+        StateHasChanged();
+        if (msg != null) await EditMessage(msg);
+    }
+
+    private async Task ActionSheetDelete()
+    {
+        var msg = _actionSheetMessage;
+        _actionSheetMessage = null;
+        StateHasChanged();
+        if (msg != null) await DeleteMessage(msg);
+    }
+
+    private async Task ActionSheetReact(string emoji)
+    {
+        var msg = _actionSheetMessage;
+        _actionSheetMessage = null;
+        _showMobileEmojiPicker = false;
+        StateHasChanged();
+        if (msg != null) await AddReaction((msg.Id, emoji));
+    }
+
+    private async Task ActionSheetCopy()
+    {
+        if (_actionSheetMessage?.Content != null)
+        {
+            var textToCopy = _decryptedContents.GetValueOrDefault(_actionSheetMessage.Id) ?? _actionSheetMessage.Content;
+            try { await JS.InvokeVoidAsync("spokesCopyText", textToCopy); }
+            catch { Snackbar.Add("Failed to copy", Severity.Warning); }
+        }
+        _actionSheetMessage = null;
+    }
+
+    private async Task DownloadMedia(ChatMessage message)
+    {
+        if (message == null) return;
+        ChatAttachment? media = message.Attachments.FirstOrDefault(a => {
+            var ext = System.IO.Path.GetExtension(a.FileName).ToLowerInvariant();
+            return ext is ".jpg" or ".jpeg" or ".png" or ".gif" or ".webp" or ".bmp" or ".mp4" or ".webm" or ".ogg" or ".mov";
+        });
+
+        if (media != null)
+        {
+            await JS.InvokeVoidAsync("downloadMediaFromUrl", media.FileName, GetTokenizedFileUrl(media.FilePath, media.FileName));
+        }
+    }
+
+    private async Task ShareAttachment(ChatMessage message)
+    {
+        if (message == null) return;
+        ChatAttachment? attachment = message.Attachments.FirstOrDefault();
+
+        if (attachment != null)
+        {
+            await JS.InvokeVoidAsync("shareFileFromUrl", attachment.FileName, GetTokenizedFileUrl(attachment.FilePath, attachment.FileName));
+        }
+    }
+
+    private async Task ActionSheetDownloadMedia()
+    {
+        if (_actionSheetMessage != null) await DownloadMedia(_actionSheetMessage);
+        CloseActionSheet();
+    }
+
+    private async Task ActionSheetShareAttachment()
+    {
+        if (_actionSheetMessage != null) await ShareAttachment(_actionSheetMessage);
+        CloseActionSheet();
+    }
+
+    private async Task ActionSheetBlockUserParam(ChatMessage msg)
+    {
+        _actionSheetMessage = msg;
+        await ActionSheetBlockUser();
+    }
+
+    private async Task ActionSheetReportMessageParam(ChatMessage msg)
+    {
+        _actionSheetMessage = msg;
+        await ActionSheetReportMessage();
+    }
+
+    private async Task ActionSheetBlockUser()
+    {
+        if (_currentUser == null || _actionSheetMessage == null) return;
+        if (_actionSheetMessage.SenderId == _currentUser.Id) return;
+
+        if (!_currentUser.BlockedUserIds.Contains(_actionSheetMessage.SenderId))
+        {
+            _currentUser.BlockedUserIds.Add(_actionSheetMessage.SenderId);
+            Db.Employees.Save(_currentUser);
+        }
+        CloseActionSheet();
+        StateHasChanged();
+    }
+
+    private async Task ActionSheetReportMessage()
+    {
+        if (_actionSheetMessage == null || _currentUser == null) return;
+        if (_actionSheetMessage.SenderId == _currentUser.Id) return;
+
+        var msg = _actionSheetMessage;
+        CloseActionSheet();
+        
+        var decContent = _decryptedContents.GetValueOrDefault(msg.Id) ?? msg.Content;
+        
+        var parameters = new DialogParameters<Spokes_Server.Components.Dialogs.ReportMessageDialog>
+        {
+            { x => x.Message, msg },
+            { x => x.SnapshotContent, decContent }
+        };
+        var dialog = await DialogService.ShowAsync<Spokes_Server.Components.Dialogs.ReportMessageDialog>("Report Message", parameters);
+        var result = await dialog.Result;
+        if (!result.Canceled && result.Data is ReportedMessage report)
+        {
+            report.ReporterId = _currentUser?.Id ?? "";
+            Db.ReportedMessages.Save(report);
+            Snackbar.Add("Message reported successfully.", Severity.Success);
+            await NotificationRoutingService.RouteModerationNotificationAsync(report);
+            ChatState.NotifyModerationAlert(report);
+        }
+    }
+
+    // --- Lazy Loading ---
+
+    [JSInvokable]
+    public async Task LoadOlderMessagesJS()
+    {
+        await LoadOlderMessages();
+    }
+
+    private async Task LoadOlderMessages()
+    {
+        if (ChannelId == null || _isLoadingOlder) return;
+
+        _isLoadingOlder = true;
+        StateHasChanged();
+
+        // Allow UI to paint the loading spinner
+        await Task.Delay(50);
+
+        try
+        {
+            // Capture the CTS reference locally to avoid races where _channelCts is swapped
+            // between the null-check and the .Token access.
+            var cts = _channelCts;
+            var token = cts?.Token ?? CancellationToken.None;
+            await StreamMessagesAsync(ChannelId, 50, 10, token);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[Chat] Error loading older messages: {ex}");
+        }
+        finally
+        {
+            _isLoadingOlder = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task StreamMessagesAsync(string channelId, int totalToLoad, int chunkSize = 10, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrEmpty(channelId)) return;
+
+        int loadedCount = 0;
+        
+        while (loadedCount < totalToLoad)
+        {
+            if (cancellationToken.IsCancellationRequested || ChannelId != channelId) return;
+
+            int currentChunkSize = Math.Min(chunkSize, totalToLoad - loadedCount);
+            
+            // Wait a brief moment to allow UI thread to render the previous chunk
+            try { await Task.Delay(50, cancellationToken); } catch (TaskCanceledException) { return; }
+            if (cancellationToken.IsCancellationRequested || ChannelId != channelId) return;
+
+            var oldestDisplayed = _messages.LastOrDefault(); // Newest-first sorting
+            List<ChatMessage> chunk = new();
+            
+            if (oldestDisplayed != null)
+            {
+                chunk = Db.ChatMessages.GetByChannelBefore(channelId, oldestDisplayed.SentAt, currentChunkSize);
+            }
+            else if (_messages.Count == 0)
+            {
+                chunk = Db.ChatMessages.GetByChannel(channelId, currentChunkSize);
+            }
+            
+            if (!chunk.Any()) break;
+
+            await InvokeAsync(() =>
+            {
+                if (cancellationToken.IsCancellationRequested || ChannelId != channelId) return;
+                
+                _messages.AddRange(chunk);
+                TryDecryptMessages(); 
+                RecomputeSortedMessages();
+                RecomputeLatestReadReceipts();
+                
+                var cachedCount = Db.ChatMessages.GetMessageCount(channelId);
+                _hasMoreMessages = cachedCount > _messages.Count;
+                
+                StateHasChanged();
+            });
+            
+            loadedCount += chunk.Count;
+            
+            if (chunk.Count < currentChunkSize) break; // Exhausted available messages
+        }
+    }
+
+    // --- JS Interop Callbacks ---
+
+    [JSInvokable]
+    public void SetDraggingState(bool isDragging)
+    {
+        _isDraggingFiles = isDragging;
+        InvokeAsync(StateHasChanged);
+    }
+
+    [Inject] private Spokes_Server.Core.Services.Security.FileTokenService FileTokens { get; set; } = default!;
+
+    [JSInvokable]
+    public string GetUploadUrl()
+    {
+        if (_selectedChannel?.IsEncrypted == true && ScopedKeystore.IsUnlocked && _currentUser != null)
+        {
+            var token = FileTokens.GenerateAccessToken("chat", ChannelId, "*", _decryptedChannelKey);
+            return $"/spokesapi/files/chat/{ChannelId}?t={token}";
+        }
+        else if (_selectedChannel != null && _currentUser != null)
+        {
+            var token = FileTokens.GenerateAccessToken("chat", ChannelId, "*");
+            return $"/spokesapi/files/chat/{ChannelId}?t={token}";
+        }
+        return $"/spokesapi/files/chat/{ChannelId}";
+    }
+
+    private string GetTokenizedFileUrl(string filePath, string fileName)
+    {
+        if (_selectedChannel == null || !_selectedChannel.IsEncrypted || string.IsNullOrEmpty(_decryptedChannelKey))
+            return filePath;
+        var token = FileTokens.GenerateAccessToken("chat", ChannelId, filePath, _decryptedChannelKey);
+        return filePath.Contains("?") ? $"{filePath}&t={token}" : $"{filePath}?t={token}";
+    }
+
+    [JSInvokable]
+    public void OnPasteUploadStarted()
+    {
+        if (_composer != null) _composer.OnPasteUploadStarted();
+    }
+
+    [JSInvokable]
+    public void OnPasteProgressUpdate(double progress)
+    {
+        if (_composer != null) _composer.OnPasteProgressUpdate(progress);
+    }
+
+    [JSInvokable]
+    public async Task OnPasteUploadCompleted(string resultJson)
+    {
+        if (_composer != null) await _composer.OnPasteUploadCompleted(resultJson);
+    }
+
+    [JSInvokable]
+    public void OnPasteUploadError(string error)
+    {
+        if (_composer != null) _composer.OnPasteUploadError(error);
+    }
+
+    // --- Utilities ---
+
+    private async Task ScrollToBottom()
+    {
+        _isScrolledUp = false;
+        try
+        {
+            if (_module != null)
+            {
+                await _module.InvokeVoidAsync("scrollToBottomWhenLoaded", _messagesContainer);
+            }
+            else
+            {
+                await JS.InvokeVoidAsync("eval", $"var el = document.getElementById('chat-messages-container'); if(el) el.scrollTop = el.scrollHeight;");
+            }
+        }
+        catch (Exception) { /* Silent ignore */ }
+    }
+
+
+
+    private Employee? GetEmployee(string employeeId)
+    {
+        return _employeeLookup.GetValueOrDefault(employeeId);
+    }
+
+    /// <summary>
+    /// Recompute the cached sorted message list. Call this whenever _messages is mutated.
+    /// </summary>
+    private void RecomputeSortedMessages()
+    {
+        _sortedMessages = _messages
+            .Where(m => _currentUser?.BlockedUserIds.Contains(m.SenderId) != true)
+            .OrderByDescending(m => m.SentAt)
+            .ToList();
+    }
+
+    private string GetChannelDisplayName(ChatChannel channel)
+    {
+        return ChatChannelFormatter.GetDisplayName(channel, _currentUser?.Id, GetEmployee);
+    }
+
+    private void GoBack()
+    {
+        Nav.NavigateTo("/chat");
+    }
+
+    private List<Employee> GetChannelEmployees()
+    {
+        if (_selectedChannel == null) return new List<Employee>();
+
+        switch (_selectedChannel.ChannelType)
+        {
+            case ChatChannelType.Direct:
+            case ChatChannelType.Group:
+                return _employees.Where(e => _selectedChannel.ParticipantIds.Contains(e.Id)).ToList();
+
+            case ChatChannelType.Team:
+                if (_selectedChannel.ParticipantIds.Any())
+                {
+                    return _employees.Where(e => _selectedChannel.ParticipantIds.Contains(e.Id)).ToList();
+                }
+                else if (!string.IsNullOrEmpty(_selectedChannel.LinkedEntityId))
+                {
+                    var team = Db.Teams.GetById(_selectedChannel.LinkedEntityId);
+                    if (team != null)
+                    {
+                        return _employees.Where(e => e.TeamId == team.Id || e.Id == team.LeaderId).ToList();
+                    }
+                }
+                return new List<Employee>();
+
+            case ChatChannelType.Project:
+                if (_selectedChannel.ParticipantIds.Any())
+                {
+                    return _employees.Where(e => _selectedChannel.ParticipantIds.Contains(e.Id)).ToList();
+                }
+                return _employees.Where(e => e.IsActive).ToList();
+
+            default:
+                if (_selectedChannel.ParticipantIds.Any())
+                {
+                    return _employees.Where(e => _selectedChannel.ParticipantIds.Contains(e.Id)).ToList();
+                }
+                else if (_selectedChannel.AllowedTeamIds.Any())
+                {
+                    return _employees.Where(e =>
+                        _selectedChannel.AllowedTeamIds.Contains(e.TeamId) ||
+                        Db.Teams.GetAll().Any(t => _selectedChannel.AllowedTeamIds.Contains(t.Id) && t.LeaderId == e.Id)
+                    ).ToList();
+                }
+                return _employees.Where(e => e.IsActive).ToList();
+        }
+    }
+
+    private List<Team> GetChannelTeams()
+    {
+        if (_selectedChannel == null) return new List<Team>();
+        
+        if (_selectedChannel.AllowedTeamIds.Any())
+        {
+             return Db.Teams.GetAll().Where(t => _selectedChannel.AllowedTeamIds.Contains(t.Id)).ToList();
+        }
+        
+        if (_selectedChannel.ChannelType == ChatChannelType.Direct || _selectedChannel.ChannelType == ChatChannelType.Group)
+             return new List<Team>(); 
+
+        return Db.Teams.GetAll();
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (ChannelId != _selectedChannel?.Id)
+        {
+             if (ChannelId == null)
+             {
+                 _selectedChannel = null;
+                 _messages.Clear();
+                 StateHasChanged();
+             }
+             else
+             {
+                 await SelectChannelInternal(ChannelId, updateUrl: false);
+             }
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        try
+        {
+            if (!string.IsNullOrEmpty(ChannelId))
+            {
+                await ChatNotifications.MarkChannelAsReadAsync(ChannelId);
+            }
+
+            _typingCleanupTimer?.Stop();
+            _typingCleanupTimer?.Dispose();
+
+            _objRef?.Dispose();
+            
+            if (_module != null)
+            {
+                 try { await _module.InvokeVoidAsync("dispose"); } catch { }
+                 await _module.DisposeAsync();
+            }
+        }
+        catch (JSDisconnectedException)
+        {
+            // Expected when the circuit is lost
+        }
+        catch (TaskCanceledException)
+        {
+            // Also expected during disposal
+        }
+        catch (InvalidOperationException)
+        {
+            // Expected when prerendering
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error disposing Chat component: {ex.Message}");
+        }
+        
+        // Prune the cache to free up memory
+        if (ChannelId != null)
+        {
+            Db.ChatMessages.EnforceGlobalCacheSizeLimit();
+        }
+        
+        _channelCts?.Cancel();
+        
+        VoiceService.OnChange -= HandleVoiceStateChanged;
+        UnsubscribeFromLocalEvents();
+    }
+
+    // DTOs for SignalR deserialization
+    public class ChatMessageDto
+    {
+        public string Id { get; set; } = "";
+        public string ChannelId { get; set; } = "";
+        public string SenderId { get; set; } = "";
+        public string SenderName { get; set; } = "";
+        public string Content { get; set; } = "";
+        public DateTime SentAt { get; set; }
+        public string? ReplyToId { get; set; }
+        public List<ChatAttachment> Attachments { get; set; } = new();
+    }
+
+    public class TypingDto
+    {
+        public string ChannelId { get; set; } = "";
+        public string UserId { get; set; } = "";
+        public string UserName { get; set; } = "";
+    }
+
+    public class EditedMessageDto
+    {
+        public string Id { get; set; } = "";
+        public string ChannelId { get; set; } = "";
+        public string Content { get; set; } = "";
+        public DateTime? EditedAt { get; set; }
+    }
+
+    public class DeletedMessageDto
+    {
+        public string Id { get; set; } = "";
+        public string ChannelId { get; set; } = "";
+    }
+
+    public class ReactionDto
+    {
+        public string MessageId { get; set; } = "";
+        public string ChannelId { get; set; } = "";
+        public string Emoji { get; set; } = "";
+        public string UserId { get; set; } = "";
+        public string? UserName { get; set; }
+    }
+
+    // ──────── Channel Info Panel Handlers ────────
+
+    private async Task HandleChannelUpdated()
+    {
+        // Refresh the channel from DB to pick up name/icon/member changes
+        if (_selectedChannel != null)
+        {
+            var refreshed = Db.ChatChannels.GetById(_selectedChannel.Id);
+            if (refreshed != null)
+                _selectedChannel = refreshed;
+        }
+        LoadChannels();
+        StateHasChanged();
+    }
+
+    private async Task HandleLeaveGroup()
+    {
+        if (ChannelId != null)
+        {
+            try { await JS.InvokeVoidAsync("spokesRemoveShortcut", Configuration["ServerUrl"] ?? Nav.BaseUri, ChannelId); } catch {}
+        }
+        _showInfoPanel = false;
+        _selectedChannel = null;
+        LoadChannels();
+        Nav.NavigateTo("/chat");
+    }
+
+    private bool IsAdminOrCreator(ChatChannel channel)
+    {
+        if (_currentUser == null) return false;
+        if (_currentUser.IsAdmin) return true;
+        
+        if (channel.ChannelType == ChatChannelType.Team)
+        {
+            var teams = Db.Teams.GetAll().Where(t => channel.AllowedTeamIds.Contains(t.Id)).ToList();
+            return teams.Any(t => t.LeaderId == _currentUser.Id);
+        }
+        
+        return channel.CreatedById == _currentUser.Id;
+    }
+
+    private async Task HandleArchiveChannel()
+    {
+        if (_selectedChannel != null && IsAdminOrCreator(_selectedChannel))
+        {
+            try { await JS.InvokeVoidAsync("spokesRemoveShortcut", Configuration["ServerUrl"] ?? Nav.BaseUri, _selectedChannel.Id); } catch {}
+            _selectedChannel.IsArchived = true;
+            await ChatService.UpdateChannelAsync(_selectedChannel);
+            _showInfoPanel = false;
+            _selectedChannel = null;
+            LoadChannels();
+            Nav.NavigateTo("/chat");
+            Snackbar.Add("Channel archived", Severity.Warning);
+        }
+    }
+
+    private async Task HandleDeleteChannel()
+    {
+        if (_selectedChannel != null && IsAdminOrCreator(_selectedChannel))
+        {
+            var channelId = _selectedChannel.Id;
+            try { await JS.InvokeVoidAsync("spokesRemoveShortcut", Configuration["ServerUrl"] ?? Nav.BaseUri, channelId); } catch {}
+            
+            Db.ChatChannels.Delete(channelId);
+            
+            var msgs = Db.ChatMessages.GetAll().Where(m => m.ChannelId == channelId).ToList();
+            foreach (var m in msgs) Db.ChatMessages.Delete(m.Id);
+
+            var readStates = Db.ChatReadStates.GetAll().Where(rs => rs.ChannelId == channelId).ToList();
+            foreach (var rs in readStates) Db.ChatReadStates.Delete(rs.Id);
+
+            _showInfoPanel = false;
+            _selectedChannel = null;
+            LoadChannels();
+            Nav.NavigateTo("/chat");
+            Snackbar.Add("Channel permanently deleted", Severity.Error);
+        }
+    }
+
+    private async Task HandleRemoveMember(string memberId)
+    {
+        // Refresh channel state after member removal
+        if (_selectedChannel != null)
+        {
+            var refreshed = Db.ChatChannels.GetById(_selectedChannel.Id);
+            if (refreshed != null)
+                _selectedChannel = refreshed;
+        }
+        LoadChannels();
+        StateHasChanged();
+    }
+}
+

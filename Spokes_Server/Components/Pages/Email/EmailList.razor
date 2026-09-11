@@ -1,0 +1,227 @@
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Models.HR
+
+<MudPaper Width="100%" Elevation="0" Class="d-flex flex-column border-r mud-theme-border-color custom-scrollbar"
+    Style="flex: none; height: 100%;">
+    <!-- Mobile Header -->
+    <div class="d-md-none pa-2 border-b mud-theme-border-color d-flex align-center gap-2">
+        <MudIconButton Icon="@Icons.Material.Filled.ArrowBack" OnClick="@(async () => await OnGoBack.InvokeAsync())"
+            Size="Size.Small" />
+        <MudText Typo="Typo.h6" Class="flex-grow-1 text-truncate">@(FolderName ?? "Folder")</MudText>
+            <MudButton Variant="Variant.Filled" EndIcon="@Icons.Material.Filled.Edit" Color="Color.Primary"
+                OnClick="@(async () => await OnCompose.InvokeAsync())">Compose</MudButton>
+        </div>
+
+        <!-- Search Bar & Filters -->
+        <div class="pa-2 border-b mud-theme-border-color d-flex flex-column gap-2">
+        <MudTextField @bind-Value="SearchText" T="string" OnDebounceIntervalElapsed="HandleSearchDebounce"
+                Placeholder="Search..." Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search"
+                Variant="Variant.Outlined" Margin="Margin.Dense" DebounceInterval="500" />
+
+            <!-- Search Scope Toggle -->
+        @if (!string.IsNullOrWhiteSpace(SearchText))
+        {
+            <div class="d-flex align-center justify-space-between px-1">
+                <MudText Typo="Typo.caption" Color="Color.Secondary">Search across:</MudText>
+                <MudToggleGroup T="bool" Value="@SearchAllFolders"
+                    ValueChanged="@(async (v) => await OnSearchAllFoldersChanged.InvokeAsync(v))" Size="Size.Small"
+                    Outline="true" Color="Color.Primary" SelectionMode="SelectionMode.SingleSelection">
+                    <MudToggleItem Value="false" Text="Current Folder" />
+                    <MudToggleItem Value="true" Text="All Folders" />
+                </MudToggleGroup>
+            </div>
+        }
+        <MudToggleGroup T="string" SelectionMode="SelectionMode.MultiSelection" Values="_selectedFilters"
+                        ValuesChanged="OnFilterChanged" Color="Color.Primary" CheckMark="true" Delimiters="true"
+                        Outlined="true">
+            <MudToggleItem Value="@("Unread")" Text="Unread" />
+            <MudToggleItem Value="@("Important")" Text="Important" />
+        </MudToggleGroup>
+    </div>
+
+    @* <div class="pa-2 border-b mud-theme-border-color">
+        <MudToggleGroup T="string" SelectionMode="SelectionMode.MultiSelection" Values="_selectedFilters"
+            ValuesChanged="OnFilterChanged" Color="Color.Primary" CheckMark="true" Delimiters="true"
+             Outlined="true">
+             <MudToggleItem Value="@("Unread")" Text="Unread" />
+             <MudToggleItem Value="@("Important")" Text="Important" />
+         </MudToggleGroup>
+     </div> *@
+
+    @if (Messages == null)
+    {
+        <div class="d-flex justify-center pa-4">
+            <MudProgressCircular Indeterminate="true" />
+        </div>
+    }
+    else if (!Messages.Any() && !IsSearching)
+    {
+        <div class="d-flex flex-column align-center justify-center flex-grow-1 pa-4">
+            <MudIcon Icon="@Icons.Material.Filled.Inbox" Size="Size.Large" Color="Color.Tertiary" />
+            <MudText Typo="Typo.body2" Color="Color.Secondary">No messages</MudText>
+        </div>
+    }
+    else if (Messages.Any() || IsSearching)
+    {
+        <MudList T="string" SelectedValue="@SelectedMessageId" Dense="true" SelectionMode="SelectionMode.SingleSelection"
+            Class="flex-grow-1 overflow-y-auto" id="email-message-list">
+            @foreach (var msg in FilteredMessages)
+            {
+                <MudListItem Value="@msg.Id" OnClick="@(() => OnSelectMessage.InvokeAsync(msg))" Class="pa-0 mt-n1">
+                    <div class="d-flex px-3 py-2 gap-2"
+                        style="@(msg.IsFlagged ? "background-color: rgba(var(--mud-palette-error-rgb), 0.08); border-left: 4px solid var(--mud-palette-error); padding-left: 8px;" : (msg.IsRead ? "" : "background-color: rgba(var(--mud-palette-primary-rgb), 0.08); border-left: 4px solid var(--mud-palette-primary); padding-left: 8px;"))">
+                        @* Left column: Avatar + Star/Unread buttons *@
+                        <div class="d-flex flex-column align-center" style="flex-shrink:0;" @onclick:stopPropagation="true">
+                            <MudAvatar Size="Size.Small" Color="Color.Primary" Style="font-size:0.75rem; width:28px; height:28px;">
+                                @(string.IsNullOrWhiteSpace(msg.FromName) ? (msg.FromAddress.Length > 0 ? msg.FromAddress[0].ToString().ToUpper() : "?") : msg.FromName[0].ToString().ToUpper())
+                            </MudAvatar>
+                            <MudIconButton Icon="@(msg.IsFlagged ? Icons.Material.Filled.Star : Icons.Material.Outlined.StarBorder)"
+                                Color="@(msg.IsFlagged ? Color.Warning : Color.Default)"
+                                Size="Size.Small" OnClick="@(() => OnToggleFlag.InvokeAsync(msg))" Style="padding:2px;" />
+                            @if (msg.IsRead)
+                            {
+                                <MudIconButton Icon="@Icons.Material.Filled.MarkEmailUnread"
+                                    Size="Size.Small" Color="Color.Default"
+                                    OnClick="@(() => OnMarkAsUnread.InvokeAsync(msg))" Style="padding:2px;" />
+                            }
+                        </div>
+                        @* Right column: message content *@
+                        <div class="d-flex flex-column" style="flex:1; min-width:0;">
+                            <div class="d-flex justify-space-between">
+                                <MudText Typo="Typo.body1" Style="@(msg.IsRead ? "" : "font-weight: 700;")" Class="text-truncate">
+                                    @(string.IsNullOrWhiteSpace(msg.FromName) ? msg.FromAddress : msg.FromName)
+                                </MudText>
+                                <div class="d-flex align-center">
+                                    @if (msg.HasAttachments)
+                                    {
+                                        <MudIcon Icon="@Icons.Material.Filled.AttachFile" Size="Size.Small"
+                                            Color="@(msg.IsRead ? Color.Secondary : Color.Primary)" />
+                                    }
+                                    <MudText Typo="Typo.caption" Color="@(msg.IsRead ? Color.Secondary : Color.Primary)"
+                                        Style="@(msg.IsRead ? "" : "font-weight: 700;")">
+                                        @FormatDate(msg.Date)
+                                    </MudText>
+                                </div>
+                            </div>
+                            <MudText Typo="Typo.body2"
+                                Style="@((msg.IsRead ? "" : "font-weight: 700; ") + "white-space: nowrap; overflow: hidden; text-overflow: ellipsis;")">
+                                @msg.Subject
+                            </MudText>
+                            @if (!string.IsNullOrWhiteSpace(msg.Snippet))
+                            {
+                                <MudText Typo="Typo.caption" Color="Color.Secondary" Style="display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; text-overflow: ellipsis;">
+                                    @msg.Snippet
+                                </MudText>
+                            }
+                        </div>
+                    </div>
+                    <MudDivider Class="mb-n1" />
+                </MudListItem>
+            }
+            <!-- Sentinel for Infinite Scroll -->
+            @if (HasMoreMessages || IsSearching)
+            {
+                <div id="email-list-sentinel" style="height: 1px;"></div>
+                @if (IsLoadingOlder || IsSearching)
+                {
+                    <div class="d-flex flex-column align-center justify-center my-2 gap-1">
+                        <MudProgressCircular Size="Size.Small" Indeterminate="true" Color="Color.Primary" />
+                        @if (IsSearching)
+                        {
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">Searching @SearchProcessedCount / @SearchTotalCount...</MudText>
+                        }
+                    </div>
+                }
+            }
+        </MudList>
+    }
+</MudPaper>
+
+@code {
+    [Parameter] public List<EmailMessage> Messages { get; set; }
+    [Parameter] public string? SelectedMessageId { get; set; }
+    [Parameter] public string SearchText { get; set; } = "";
+    [Parameter] public bool HasMoreMessages { get; set; }
+    [Parameter] public bool IsLoadingOlder { get; set; }
+    [Parameter] public bool SearchAllFolders { get; set; } = false;
+    [Parameter] public bool IsSearching { get; set; } = false;
+    [Parameter] public int SearchProcessedCount { get; set; } = 0;
+    [Parameter] public int SearchTotalCount { get; set; } = 0;
+    [Parameter] public string? TimeZoneId { get; set; }
+    [Parameter] public EventCallback<EmailMessage> OnSelectMessage { get; set; }
+    [Parameter] public EventCallback<string> OnSearch { get; set; }
+    [Parameter] public EventCallback<bool> OnSearchAllFoldersChanged { get; set; }
+    [Parameter] public EventCallback OnGoBack { get; set; }
+    [Parameter] public EventCallback OnCompose { get; set; }
+    [Parameter] public string? FolderName { get; set; }
+    [Parameter] public EventCallback<EmailMessage> OnToggleFlag { get; set; }
+    [Parameter] public EventCallback<EmailMessage> OnMarkAsUnread { get; set; }
+
+    private IEnumerable<string> _selectedFilters = new HashSet<string>();
+
+    //private string _localSearchText = "";
+
+    // protected override void OnParametersSet()
+    // {
+    //     if (_localSearchText != SearchText)
+    //     {
+    //         _localSearchText = SearchText ?? "";
+    //     }
+    // }
+
+    private async Task HandleSearchDebounce(string value)
+    {
+        await OnSearch.InvokeAsync(value);
+    }
+
+    private void OnFilterChanged(IEnumerable<string> values)
+    {
+        _selectedFilters = values;
+        StateHasChanged();
+    }
+
+    private IEnumerable<EmailMessage> FilteredMessages
+    {
+        get
+        {
+            if (Messages == null) return Enumerable.Empty<EmailMessage>();
+            if (_selectedFilters == null || !_selectedFilters.Any()) return Messages;
+
+            return Messages.Where(m =>
+            {
+                bool matches = false;
+                if (_selectedFilters.Contains("Unread")) matches |= !m.IsRead;
+                if (_selectedFilters.Contains("Important")) matches |= m.IsFlagged;
+                return matches;
+            });
+        }
+    }
+
+    // Helper method for date formatting
+    private string FormatDate(DateTimeOffset date)
+    {
+        DateTime localDate;
+        if (!string.IsNullOrWhiteSpace(TimeZoneId))
+        {
+            try
+            {
+                localDate = TimeZoneInfo.ConvertTimeBySystemTimeZoneId(date, TimeZoneId).DateTime;
+            }
+            catch
+            {
+                localDate = date.LocalDateTime;
+            }
+        }
+        else
+        {
+            localDate = date.LocalDateTime;
+        }
+
+        if (localDate.Date == DateTime.Today) return localDate.ToString("t");
+        if (localDate.Year == DateTime.Now.Year) return localDate.ToString("M");
+        return localDate.ToString("d");
+    }
+}

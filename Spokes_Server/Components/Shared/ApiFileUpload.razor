@@ -1,0 +1,291 @@
+@inject IJSRuntime JS
+@using Microsoft.JSInterop
+@inject Microsoft.Extensions.Configuration.IConfiguration Config
+@inject MudBlazor.IDialogService DialogService
+@implements IAsyncDisposable
+
+<div class="api-file-upload d-inline-block @Class" style="@Style">
+    <input type="file"
+           id="@_inputId"
+           multiple="@(MaximumFileCount > 1)"
+           accept="@Accept"
+           capture="@Capture"
+           data-upload-url="@(string.IsNullOrEmpty(UploadUrl) ? $"/spokesapi/files/{Category}/{ContextId}" : UploadUrl)"
+           style="position: absolute; width: 0; height: 0; opacity: 0; overflow: hidden; z-index: -1;" />
+           
+    <!-- Native inline onclick is REQUIRED because async Blazor JSInterop loses the browser's trusted user-gesture token, which silently blocks input.click() -->
+    @if (Config.GetValue<bool>("Spokes_DemoMode"))
+    {
+        <div class="d-inline-block" style="position: relative; cursor: pointer; margin: 0;" @onclick="HandleDemoClick">
+            @CustomContent
+            <div style="position: absolute; inset: 0; z-index: 10;"></div>
+        </div>
+    }
+    else
+    {
+        <div class="d-inline-block" style="position: relative; cursor: pointer; margin: 0;" onclick="spokesUpload.openFilePicker('@_inputId')">
+            @CustomContent
+            <div style="position: absolute; inset: 0; z-index: 10;"></div>
+        </div>
+    }
+
+    <!-- Optional internal progress indicator if not handled externally -->
+    @if (ShowProgress && _isUploading)
+    {
+        <div class="d-flex align-center gap-2 mt-1">
+            <MudProgressCircular Size="Size.Small" Indeterminate="@(_progress < 0)" Value="@(_progress < 0 ? 0 : _progress)" Max="100" Color="Color.Primary" />
+            <MudText Typo="Typo.caption" Color="Color.Secondary">
+                @if (_isDownloadingFromICloud) {
+                    <text>Downloading from iCloud @(Math.Round(_progress))%</text>
+                } else if (_isCompressing) {
+                    if (_progress < 0) {
+                        <text>Preparing...</text>
+                    } else {
+                        <text>Compressing @(Math.Round(_progress))%</text>
+                    }
+                } else if (_isProcessing) {
+                    <text>Finishing up...</text>
+                } else {
+                    <text>@(Math.Round(_progress))%</text>
+                }
+            </MudText>
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter] public string Category { get; set; } = default!;
+    [Parameter] public string ContextId { get; set; } = default!;
+    [Parameter] public string? UploadUrl { get; set; }
+    [Parameter] public string Class { get; set; } = "";
+    [Parameter] public int MaximumFileCount { get; set; } = 1;
+    [Parameter] public string Accept { get; set; } = "*/*";
+    [Parameter] public string? Capture { get; set; }
+    [Parameter] public string Style { get; set; } = "";
+    [Parameter] public int? CompressionMaxDim { get; set; }
+    [Parameter] public double? CompressionQuality { get; set; }
+    [Parameter] public RenderFragment? CustomContent { get; set; }
+    [Parameter] public bool ShowProgress { get; set; } = false;
+
+    // Events
+    [Parameter] public EventCallback OnUploadStarted { get; set; }
+    [Parameter] public EventCallback<double> OnProgressUpdate { get; set; }
+    [Parameter] public EventCallback<(string State, double Progress)> OnDetailedProgressUpdate { get; set; }
+    [Parameter] public EventCallback<List<UploadResult>> OnUploadCompleted { get; set; }
+    [Parameter] public EventCallback<string> OnUploadError { get; set; }
+
+    [Parameter] public EventCallback<int> OnUploadStartedWithCount { get; set; }
+
+    [Parameter] public string? Id { get; set; }
+
+    private string _inputId = "";
+    private DotNetObjectReference<ApiFileUpload>? _objRef;
+    public DotNetObjectReference<ApiFileUpload>? ObjRef => _objRef;
+    private bool _isUploading = false;
+    private bool _isDownloadingFromICloud = false;
+    private bool _isCompressing = false;
+    private bool _isProcessing = false;
+    private double _progress = 0;
+
+    protected override void OnInitialized()
+    {
+        _inputId = Id ?? $"api-upload-{Guid.NewGuid()}";
+        _objRef = DotNetObjectReference.Create(this);
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            try
+            {
+                // Initialize the native JS file input handler to bypass SignalR instability 
+                // when returning from heavyweight mobile tasks (like camera apps)
+                await JS.InvokeVoidAsync("spokesUpload.initializeInput", _inputId, _objRef, 268435456, CompressionMaxDim ?? 3840, CompressionQuality ?? 0.9);
+            }
+            catch { /* Ignore prerendering errors */ }
+        }
+    }
+
+    private async Task HandleDemoClick()
+    {
+        var options = new MudBlazor.DialogOptions { CloseOnEscapeKey = true, MaxWidth = MudBlazor.MaxWidth.Medium, FullWidth = true };
+        var dialog = await DialogService.ShowAsync<Spokes_Server.Components.Dialogs.DemoMediaPicker>("Select Sample Media", options);
+        var result = await dialog.Result;
+        
+        if (!result.Canceled && result.Data is string filename)
+        {
+            var mockResult = new UploadResult
+            {
+                FileName = filename,
+                FilePath = $"/spokesapi/files/demo-media/{filename}",
+                ContentType = "image/jpeg",
+                FileSizeBytes = 1000,
+                HasThumbnail = true,
+                ImageWidth = 800,
+                ImageHeight = 600,
+                Category = this.Category,
+                ContextId = this.ContextId
+            };
+            
+            await OnUploadStarted.InvokeAsync();
+            await OnUploadCompleted.InvokeAsync(new List<UploadResult> { mockResult });
+        }
+    }
+
+    [JSInvokable]
+    public async Task OnUploadStartedCallback(int fileCount = 0)
+    {
+        Console.WriteLine($"[ApiFileUpload] Upload started via JS for {_inputId} with {fileCount} files");
+        _isUploading = true;
+        await OnUploadStarted.InvokeAsync();
+        await OnUploadStartedWithCount.InvokeAsync(fileCount);
+        StateHasChanged();
+    }
+
+    [JSInvokable]
+    public async Task OnUploadCompletedCallback(string resultJson)
+    {
+        Console.WriteLine($"[ApiFileUpload] Upload completed via JS for {_inputId}.");
+        _isUploading = false;
+        _isDownloadingFromICloud = false;
+        _isCompressing = false;
+        _isProcessing = false;
+
+        try
+        {
+            var results = System.Text.Json.JsonSerializer.Deserialize<List<UploadResult>>(
+                resultJson ?? "[]", 
+                new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true }
+            );
+
+            if (results != null && results.Any())
+            {
+                foreach (var r in results)
+                {
+                    r.Category = this.Category;
+                    r.ContextId = this.ContextId;
+                }
+                Console.WriteLine($"[ApiFileUpload] Upload complete. Processed {results.Count} result(s).");
+                await OnUploadCompleted.InvokeAsync(results);
+            }
+            else 
+            {
+                Console.WriteLine("[ApiFileUpload] Warning: Upload finished but results were empty.");
+                await OnUploadError.InvokeAsync("Upload completed but server returned no file data.");
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[ApiFileUpload] Error parsing results: {ex}");
+            await OnUploadError.InvokeAsync("Failed to process upload results.");
+        }
+        
+        StateHasChanged();
+    }
+
+    [JSInvokable]
+    public async Task OnUploadErrorCallback(string errorMessage)
+    {
+        Console.WriteLine($"[ApiFileUpload] Upload error via JS for {_inputId}: {errorMessage}");
+        _isUploading = false;
+        _isDownloadingFromICloud = false;
+        _isCompressing = false;
+        _isProcessing = false;
+        await OnUploadError.InvokeAsync(errorMessage);
+        StateHasChanged();
+    }
+
+    [JSInvokable]
+    public async Task OnDownloadingCallback(System.Text.Json.JsonElement percentElement)
+    {
+        double percentComplete = 0;
+        if (percentElement.TryGetDouble(out double dVal)) percentComplete = dVal;
+        else if (percentElement.TryGetInt32(out int iVal)) percentComplete = iVal;
+
+        _isDownloadingFromICloud = true;
+        _isCompressing = false;
+        _isProcessing = false;
+        _progress = percentComplete;
+        
+        if (OnDetailedProgressUpdate.HasDelegate)
+            await OnDetailedProgressUpdate.InvokeAsync(("Downloading from iCloud...", percentComplete));
+        else
+            await OnProgressUpdate.InvokeAsync(percentComplete);
+
+        await InvokeAsync(StateHasChanged);
+    }
+
+    [JSInvokable]
+    public async Task OnCompressingCallback(System.Text.Json.JsonElement percentElement)
+    {
+        double percentComplete = 0;
+        if (percentElement.TryGetDouble(out double dVal)) percentComplete = dVal;
+        else if (percentElement.TryGetInt32(out int iVal)) percentComplete = iVal;
+
+        _isDownloadingFromICloud = false;
+        _isCompressing = true;
+        _isProcessing = false;
+        _progress = percentComplete;
+        
+        string stateString = percentComplete < 0 ? "Preparing..." : "Compressing...";
+        
+        if (OnDetailedProgressUpdate.HasDelegate)
+            await OnDetailedProgressUpdate.InvokeAsync((stateString, percentComplete));
+        else
+            await OnProgressUpdate.InvokeAsync(percentComplete);
+
+        await InvokeAsync(StateHasChanged);
+    }
+
+    [JSInvokable]
+    public async Task OnProgressUpdateCallback(System.Text.Json.JsonElement percentElement)
+    {
+        double percentComplete = 0;
+        if (percentElement.TryGetDouble(out double dVal)) percentComplete = dVal;
+        else if (percentElement.TryGetInt32(out int iVal)) percentComplete = iVal;
+
+        _isDownloadingFromICloud = false;
+        _isCompressing = false;
+        _progress = percentComplete;
+        if (percentComplete >= 99.9) // Handle float precision 100% boundary
+        {
+            _isProcessing = true;
+        }
+
+        if (OnDetailedProgressUpdate.HasDelegate)
+            await OnDetailedProgressUpdate.InvokeAsync((_isProcessing ? "Finishing up..." : "Uploading...", percentComplete));
+        else
+            await OnProgressUpdate.InvokeAsync(percentComplete);
+
+        await InvokeAsync(StateHasChanged);
+    }
+
+    public async Task AbortUpload()
+    {
+        try
+        {
+            await JS.InvokeVoidAsync("spokesUpload.abortUpload");
+        }
+        catch { /* Ignore */ }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        _objRef?.Dispose();
+        await Task.CompletedTask;
+    }
+
+    public class UploadResult
+    {
+        public string FilePath { get; set; } = "";
+        public string FileName { get; set; } = "";
+        public string ContentType { get; set; } = "";
+        public long FileSizeBytes { get; set; }
+        public bool HasThumbnail { get; set; } = false;
+        public int? ImageWidth { get; set; }
+        public int? ImageHeight { get; set; }
+        public string Category { get; set; } = "";
+        public string ContextId { get; set; } = "";
+    }
+}

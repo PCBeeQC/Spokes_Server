@@ -1,0 +1,53 @@
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Data
+@inject Database Db
+@using MudBlazor
+
+<MudDialog>
+    <TitleContent>
+        <MudText Typo="Typo.h6">Generate Document</MudText>
+    </TitleContent>
+    <DialogContent>
+        <MudText Class="mb-4">Select a standard document template to generate for this project.</MudText>
+        <MudSelect T="StandardDocument" Label="Select Template" @bind-Value="_selectedTemplate" Required="true"
+            Variant="Variant.Outlined" AnchorOrigin="Origin.BottomCenter">
+            @foreach (var template in _templates)
+            {
+                <MudSelectItem Value="@template">@template.Name</MudSelectItem>
+            }
+        </MudSelect>
+        @if (_selectedTemplate != null && !string.IsNullOrEmpty(_selectedTemplate.Description))
+        {
+            <MudAlert Severity="Severity.Info" Class="mt-4" Icon="@Icons.Material.Filled.Info">
+                @_selectedTemplate.Description
+            </MudAlert>
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="Submit"
+            Disabled="@(_selectedTemplate == null)">Generate</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
+
+    private List<StandardDocument> _templates = new();
+    private StandardDocument? _selectedTemplate;
+
+    protected override void OnInitialized()
+    {
+        _templates = Db.StandardDocuments.GetAll().OrderBy(t => t.Name).ToList();
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+
+    private void Submit()
+    {
+        if (_selectedTemplate != null)
+        {
+            MudDialog.Close(DialogResult.Ok(_selectedTemplate));
+        }
+    }
+}

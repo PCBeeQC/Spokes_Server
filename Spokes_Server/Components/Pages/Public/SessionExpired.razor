@@ -1,0 +1,84 @@
+@page "/session-expired"
+@layout Spokes_Server.Components.Layout.LoginLayout
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Components.Authorization
+@attribute [AllowAnonymous]
+
+<MudContainer MaxWidth="MaxWidth.False" Class="d-flex align-center justify-center mud-width-full"
+    Style="height: 100vh; background-color: var(--mud-palette-background-grey);">
+
+    <MudPaper Elevation="3" Class="pa-8 d-flex flex-column align-center" Width="100%" MaxWidth="500px">
+        
+        <MudIcon Icon="@Icons.Material.Filled.Autorenew" Color="Color.Primary" Style="font-size: 5rem;" Class="mb-4" />
+        
+        <MudText Typo="Typo.h4" Align="Align.Center" GutterBottom="true">Session Expired</MudText>
+        
+        <MudText Typo="Typo.body1" Align="Align.Center" Color="Color.Secondary" Class="mb-8">
+            Your login session has expired or could not automatically resume. Please click the button below to sign in again.
+        </MudText>
+
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Large" FullWidth="true"
+            StartIcon="@Icons.Material.Filled.Login" OnClick="GoLogin" Class="py-3">
+            Sign In Again
+        </MudButton>
+
+    </MudPaper>
+</MudContainer>
+
+@code {
+    [Inject] private NavigationManager Nav { get; set; } = default!;
+    [Inject] private IJSRuntime JSRuntime { get; set; } = default!;
+    [Inject] private AuthenticationStateProvider AuthStateProvider { get; set; } = default!;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+            if (authState.User.Identity?.IsAuthenticated == true)
+            {
+                Nav.NavigateTo("/", forceLoad: true);
+            }
+        }
+    }
+
+    private async Task GoLogin()
+    {
+        bool isNative = false;
+        try 
+        {
+            isNative = await JSRuntime.InvokeAsync<bool>("eval", "!!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform())");
+            await JSRuntime.InvokeVoidAsync("console.log", "[SSO] SessionExpired evaluated isNative:", isNative);
+        }
+        catch (Exception ex) 
+        { 
+            await JSRuntime.InvokeVoidAsync("console.error", "[SSO] SessionExpired isNative eval threw exception:", ex.Message);
+        }
+
+        string deviceId = "";
+        try {
+            deviceId = await JSRuntime.InvokeAsync<string>("pushNotifications.getDeviceId");
+        } catch { }
+
+        if (isNative)
+        {
+            await JSRuntime.InvokeVoidAsync("console.log", "[SSO] SessionExpired routing to openSsoAuth...");
+            // Use SsoAuthPlugin (ASWebAuthenticationSession/AuthTabIntent) with fallback
+            var hasSsoAuth = await JSRuntime.InvokeAsync<bool>("eval", "typeof window.openSsoAuth === 'function'");
+            var url = $"/sso/login/auto?deviceId={Uri.EscapeDataString(deviceId)}&returnUrl=/";
+            if (hasSsoAuth)
+            {
+                await JSRuntime.InvokeVoidAsync("openSsoAuth", url);
+            }
+            else
+            {
+                Nav.NavigateTo(url, forceLoad: true);
+            }
+        }
+        else
+        {
+            await JSRuntime.InvokeVoidAsync("console.log", "[SSO] SessionExpired routing to /sso/login/auto...");
+            Nav.NavigateTo($"/sso/login/auto?deviceId={Uri.EscapeDataString(deviceId)}&returnUrl=/", forceLoad: true);
+        }
+    }
+}

@@ -1,0 +1,304 @@
+@using Spokes_Server.Core.Models.UI
+@using MudBlazor
+@implements IAsyncDisposable
+@inject IJSRuntime JS
+
+<style>
+    .album-media-dialog-container .mud-dialog-content {
+        padding: 0 !important;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+        flex-grow: 1;
+    }
+    .lightbox-img-base {
+        max-width: 100%;
+        max-height: 100%;
+        object-fit: contain;
+        border-radius: 8px;
+        box-shadow: 0 8px 32px rgba(0,0,0,0.6);
+        -webkit-touch-callout: none;
+        -webkit-user-select: none;
+        user-select: none;
+    }
+    .lightbox-img-loading {
+        opacity: 0.5;
+    }
+    .lightbox-img-loaded {
+        opacity: 1;
+    }
+    @if (_isFullscreen)
+    {
+        <text>
+        .mud-dialog {
+            max-width: none !important;
+            margin: 0 !important;
+        }
+        .album-media-dialog-container .mud-dialog-actions {
+            display: none !important;
+        }
+        </text>
+    }
+</style>
+
+<MudDialog Class="album-media-dialog-container album-media-dialog" Style="@($"background-color: {(_isFullscreen ? "black" : "rgba(18, 18, 20, 0.95)")}; color: white; width: {(_isFullscreen ? "100vw" : "95vw")}; max-width: {(_isFullscreen ? "100vw" : "1400px")}; height: {(_isFullscreen ? "100vh" : "95vh")}; display: flex; flex-direction: column; border-radius: {(_isFullscreen ? "0px" : "16px")}; overflow: hidden; transition: all 0.2s ease;")" OnKeyDown="HandleKeyDown">
+    <DialogContent>
+        <div class="d-flex flex-grow-1 flex-column position-relative pa-2" style="outline: none; overflow: hidden; min-height: 0;" tabindex="0" @ref="DialogContainer">
+            @if (CurrentMedia != null)
+            {
+                <div id="lightbox-image-area" class="d-flex flex-grow-1 justify-center align-center w-100" style="touch-action: none; min-height: 0; border-radius: 8px; position: relative;">
+                    @if (_isImageLoading && CurrentMedia.ContentType.StartsWith("image/"))
+                    {
+                        <div style="position: absolute; z-index: 5; display: flex; justify-content: center; align-items: center;">
+                            <MudProgressCircular Color="Color.Primary" Indeterminate="true" Size="Size.Large" />
+                        </div>
+                    }
+                    @if (CurrentMedia.ContentType.StartsWith("image/"))
+                    {
+                        <img id="lightbox-image" src="@CurrentMedia.FilePath" @onload="OnImageLoaded" alt="@CurrentMedia.FileName" class="lightbox-img-base @(_isImageLoading ? "lightbox-img-loading" : "lightbox-img-loaded")" />
+                    }
+                    else if (CurrentMedia.ContentType.StartsWith("video/"))
+                    {
+                        <video id="lightbox-video" controls src="@CurrentMedia.FilePath" poster="@(CurrentMedia.HasServerThumbnail ? CurrentMedia.ThumbnailUrl : null)" style="max-width: 100%; max-height: 100%; border-radius: 8px;">
+                            Your browser does not support video playback.
+                        </video>
+                    }
+                </div>
+
+                @if (MediaList.Count > 1 && !_isFullscreen)
+                {
+                    <MudIconButton Icon="@Icons.Material.Filled.ChevronLeft" Color="Color.Surface" Size="Size.Large"
+                                   OnClick="OnPrevClick" Style="position: absolute; left: 8px; top: 50%; transform: translateY(-50%); background: rgba(0,0,0,0.5); color: white; z-index: 10;" />
+                    <MudIconButton Icon="@Icons.Material.Filled.ChevronRight" Color="Color.Surface" Size="Size.Large"
+                                   OnClick="OnNextClick" Style="position: absolute; right: 8px; top: 50%; transform: translateY(-50%); background: rgba(0,0,0,0.5); color: white; z-index: 10;" />
+                }
+            }
+        </div>
+    </DialogContent>
+    <DialogActions>
+        <div class="px-6 py-3 d-flex flex-column flex-sm-row justify-space-between align-start align-sm-center w-100 gap-4" style="border-top: 1px solid rgba(255,255,255,0.12);">
+            <div>
+                @if (CurrentMedia != null)
+                {
+                    <MudText Typo="Typo.subtitle1" Style="color: white; font-weight: 600;">@CurrentMedia.FileName</MudText>
+                    <MudText Typo="Typo.caption" Style="color: rgba(255,255,255,0.7);">
+                        @if (CurrentMedia.AddedAt.HasValue)
+                        {
+                            <span>Added @CurrentMedia.AddedAt.Value.ToString("MMM dd, yyyy HH:mm")</span>
+                        }
+                        @if (CurrentMedia.FileSizeBytes > 0)
+                        {
+                            <span> • @FormatFileSize(CurrentMedia.FileSizeBytes)</span>
+                        }
+                        @if (MediaList.Count > 1)
+                        {
+                            <span> • (@(CurrentIndex + 1) of @MediaList.Count)</span>
+                        }
+                    </MudText>
+                }
+            </div>
+            <div class="d-flex align-center flex-wrap gap-2">
+                @if (CurrentMedia != null)
+                {
+                    <MudButton Variant="Variant.Outlined" Size="Size.Small" Color="Color.Surface" StartIcon="@Icons.Material.Filled.Share" OnClick="ShareCurrent" Style="color: white; border-color: rgba(255,255,255,0.3);">Share</MudButton>
+                    <MudButton Variant="Variant.Outlined" Size="Size.Small" Color="Color.Surface" StartIcon="@Icons.Material.Filled.Download" OnClick="DownloadCurrent" Style="color: white; border-color: rgba(255,255,255,0.3);">Download</MudButton>
+                }
+                <MudButton Variant="Variant.Filled" Size="Size.Small" Color="Color.Primary" OnClick="Close">Close</MudButton>
+            </div>
+        </div>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+    
+    [Parameter] public List<LightboxMediaItem> MediaList { get; set; } = new();
+    [Parameter] public int InitialIndex { get; set; } = 0;
+
+    private int CurrentIndex { get; set; }
+    private LightboxMediaItem? CurrentMedia => (MediaList.Count > 0 && CurrentIndex >= 0 && CurrentIndex < MediaList.Count) ? MediaList[CurrentIndex] : null;
+    private bool _isFullscreen = false;
+    private bool _isImageLoading = true;
+
+    private IJSObjectReference? _module;
+    private DotNetObjectReference<MediaViewerDialog>? _objRef;
+    private ElementReference DialogContainer;
+
+    protected override void OnInitialized()
+    {
+        CurrentIndex = (InitialIndex >= 0 && InitialIndex < MediaList.Count) ? InitialIndex : 0;
+        _isImageLoading = true;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            try
+            {
+                _module = await JS.InvokeAsync<IJSObjectReference>("import", $"./{Assets.Bypassed("Components/Dialogs/MediaViewerDialog.razor.js")}");
+                _objRef = DotNetObjectReference.Create(this);
+                
+                await _module.InvokeVoidAsync("initLightboxState", _objRef);
+                await _module.InvokeVoidAsync("initGestureHandler", "lightbox-image-area", _objRef);
+                await DialogContainer.FocusAsync();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Failed to load MediaViewerDialog.razor.js: {ex.Message}");
+            }
+        }
+
+        if (_module != null)
+        {
+            await _module.InvokeVoidAsync("updateImage", "lightbox-image");
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        // Ensure status bar is restored when dialog is disposed
+        try { await JS.InvokeVoidAsync("eval", "if(window.Capacitor && window.Capacitor.Plugins.StatusBar) { window.Capacitor.Plugins.StatusBar.show(); }"); } catch { }
+        try { await JS.InvokeVoidAsync("eval", "if(document.fullscreenElement) { document.exitFullscreen().catch(()=>{}); }"); } catch { }
+
+        if (_module != null)
+        {
+            try
+            {
+                await _module.InvokeVoidAsync("cleanupLightboxState", false);
+                await _module.InvokeVoidAsync("destroyGestureHandler");
+            }
+            catch { /* ignore */ }
+        }
+        _objRef?.Dispose();
+        if (_module != null)
+        {
+            try { await _module.DisposeAsync(); }
+            catch (Microsoft.JSInterop.JSDisconnectedException) { /* Circuit already gone */ }
+        }
+    }
+
+    [JSInvokable]
+    public void HandleBack()
+    {
+        MudDialog.Cancel();
+        StateHasChanged();
+    }
+
+    [JSInvokable]
+    public void HandleLongPress()
+    {
+        // For now, no-op or we can implement share menu on long press
+    }
+
+    [JSInvokable]
+    public void ToggleFullscreen()
+    {
+        _isFullscreen = !_isFullscreen;
+        
+        if (_isFullscreen)
+        {
+            _ = JS.InvokeVoidAsync("eval", "if(window.Capacitor && window.Capacitor.Plugins.StatusBar) { window.Capacitor.Plugins.StatusBar.hide(); } else if(document.documentElement.requestFullscreen) { document.documentElement.requestFullscreen().catch(()=>{}); }");
+        }
+        else
+        {
+            _ = JS.InvokeVoidAsync("eval", "if(window.Capacitor && window.Capacitor.Plugins.StatusBar) { window.Capacitor.Plugins.StatusBar.show(); } else if(document.fullscreenElement) { document.exitFullscreen().catch(()=>{}); }");
+        }
+        
+        StateHasChanged();
+    }
+
+    [JSInvokable]
+    public void HandleSwipeDownClose()
+    {
+        Close();
+    }
+
+    [JSInvokable]
+    public void ChangeImage(string direction)
+    {
+        if (MediaList.Count == 0) return;
+        
+        if (direction == "left")
+        {
+            CurrentIndex = (CurrentIndex + 1) % MediaList.Count;
+        }
+        else if (direction == "right")
+        {
+            CurrentIndex = (CurrentIndex - 1 + MediaList.Count) % MediaList.Count;
+        }
+        
+        _isImageLoading = true;
+        StateHasChanged();
+    }
+    
+    private void OnImageLoaded()
+    {
+        _isImageLoading = false;
+        StateHasChanged();
+    }
+    
+    private void OnPrevClick()
+    {
+        ChangeImage("right");
+    }
+
+    private void OnNextClick()
+    {
+        ChangeImage("left");
+    }
+
+    private async Task HandleKeyDown(KeyboardEventArgs e)
+    {
+        switch (e.Key)
+        {
+            case "ArrowLeft":
+                OnPrevClick();
+                break;
+            case "ArrowRight":
+                OnNextClick();
+                break;
+        }
+    }
+
+    private async Task DownloadCurrent()
+    {
+        if (CurrentMedia != null)
+        {
+            await JS.InvokeVoidAsync("downloadMediaFromUrl", CurrentMedia.FileName, CurrentMedia.FilePath);
+        }
+    }
+
+    private async Task ShareCurrent()
+    {
+        if (CurrentMedia != null)
+        {
+            await JS.InvokeVoidAsync("shareFileFromUrl", CurrentMedia.FileName, CurrentMedia.FilePath);
+        }
+    }
+
+    private void Close()
+    {
+        // Ensure status bar is restored when closing
+        _ = JS.InvokeVoidAsync("eval", "if(window.Capacitor && window.Capacitor.Plugins.StatusBar) { window.Capacitor.Plugins.StatusBar.show(); } else if(document.fullscreenElement) { document.exitFullscreen().catch(()=>{}); }");
+
+        if (_module != null)
+        {
+            _module.InvokeVoidAsync("cleanupLightboxState", true);
+        }
+        MudDialog.Close();
+    }
+
+    private string FormatFileSize(long bytes)
+    {
+        string[] sizes = { "B", "KB", "MB", "GB" };
+        int order = 0;
+        double len = bytes;
+        while (len >= 1024 && order < sizes.Length - 1)
+        {
+            order++;
+            len /= 1024;
+        }
+        return $"{len:0.##} {sizes[order]}";
+    }
+}

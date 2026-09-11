@@ -1,0 +1,238 @@
+@using Spokes_Server.Core.Data
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Services
+@inject BoardService BoardService
+@inject IDialogService DialogService
+@inject NavigationManager Nav
+@inject Database Db
+
+<MudPaper Elevation="0" Class="pa-3 px-6 d-flex flex-column gap-2"
+    Style="border-bottom: 1px solid var(--mud-palette-divider);">
+    <MudStack Row="true" AlignItems="AlignItems.Center">
+        <MudIcon Icon="@(Board.Icon ?? Icons.Material.Filled.Dashboard)" Size="Size.Large" Color="Color.Primary" />
+
+        @if (_isEditingTitle)
+        {
+            <MudTextField @bind-Value="Board.Title" OnBlur="SaveTitle" AutoFocus="true" Variant="Variant.Outlined"
+                Margin="Margin.Dense" Style="font-weight: bold; font-size: 1.5rem;" />
+        }
+        else
+        {
+            <MudText Typo="Typo.h5" Style="font-weight: 700; cursor: pointer;" @onclick="() => _isEditingTitle = true">
+                @Board.Title</MudText>
+        }
+
+        <MudSpacer />
+
+        <!-- MEMBERS FACEPILE -->
+        <MudAvatarGroup Max="3" Spacing="3" MaxColor="Color.Primary">
+            @foreach (var memberId in Board.MemberIds)
+            {
+                var m = Db.Employees.GetById(memberId);
+                if (m != null)
+                {
+                    <MudAvatar Size="Size.Small" Color="Color.Secondary" title="@m.FullName">@m.FirstName[0]</MudAvatar>
+                }
+            }
+        </MudAvatarGroup>
+
+        <MudButton Variant="Variant.Outlined" Size="Size.Small" StartIcon="@Icons.Material.Filled.PersonAdd"
+            OnClick="ShareBoard" Class="ml-2">
+            Share
+        </MudButton>
+
+        <MudMenu Icon="@Icons.Material.Filled.MoreHoriz">
+            <MudMenuItem Icon="@Icons.Material.Filled.List" OnClick="OpenProperties">Properties</MudMenuItem>
+            <MudMenuItem Icon="@Icons.Material.Filled.Save" OnClick="SaveAsTemplate">Save as Template</MudMenuItem>
+            <MudMenuItem Icon="@Icons.Material.Filled.Download" OnClick="ExportBoard">Export to JSON</MudMenuItem>
+            <MudDivider />
+            <MudListSubheader>Current View</MudListSubheader>
+            <MudMenuItem Icon="@Icons.Material.Filled.ArrowBack" OnClick="MoveViewLeft" Disabled="@IsFirstView">Move
+                Left</MudMenuItem>
+            <MudMenuItem Icon="@Icons.Material.Filled.ArrowForward" OnClick="MoveViewRight" Disabled="@IsLastView">Move
+                Right</MudMenuItem>
+            <MudMenuItem Icon="@Icons.Material.Filled.Close" IconColor="Color.Error" OnClick="DeleteView">Delete View
+            </MudMenuItem>
+            <MudDivider />
+            <MudMenuItem Icon="@Icons.Material.Filled.Delete" IconColor="Color.Error" OnClick="DeleteBoard">Delete Board
+            </MudMenuItem>
+        </MudMenu>
+    </MudStack>
+
+    @if (!string.IsNullOrEmpty(Board.Description) || _isEditingDesc)
+    {
+        @if (_isEditingDesc)
+        {
+            <MudTextField @bind-Value="Board.Description" OnBlur="SaveDesc" AutoFocus="true" Lines="2"
+                Variant="Variant.Outlined" />
+        }
+        else
+        {
+            <MudText Typo="Typo.body2" Color="Color.Secondary" Style="cursor: pointer;" @onclick="() => _isEditingDesc = true">
+                @(Board.Description ?? "Add description...")
+            </MudText>
+        }
+    }
+
+    <!-- TABS -->
+    <MudTabs Elevation="0" Rounded="true" ApplyEffectsToContainer="true" TabPanelsClass="px-0"
+        ActivePanelIndex="@GetActiveViewIndex()" ActivePanelIndexChanged="OnTabChanged">
+        @foreach (var view in Board.Views)
+        {
+            <MudTabPanel Text="@view.Name" ID="@view.Id">
+                <!-- Content handled by parent -->
+            </MudTabPanel>
+        }
+        <MudTabPanel Icon="@Icons.Material.Filled.Add" ID="@("ADD")" OnClick="AddView" />
+    </MudTabs>
+</MudPaper>
+
+@code {
+    [Parameter] public Board Board { get; set; } = default!;
+    [Parameter] public BoardView ActiveView { get; set; } = default!;
+    [Parameter] public EventCallback<BoardView> ActiveViewChanged { get; set; }
+    [Parameter] public EventCallback OnChange { get; set; }
+
+    [Inject] IJSRuntime JS { get; set; } = default!;
+
+    private bool _isEditingTitle = false;
+    private bool _isEditingDesc = false;
+
+    int GetActiveViewIndex()
+    {
+        return Board.Views.IndexOf(ActiveView);
+    }
+
+    async Task OnTabChanged(int index)
+    {
+        if (index >= 0 && index < Board.Views.Count)
+        {
+            await ActiveViewChanged.InvokeAsync(Board.Views[index]);
+        }
+    }
+
+    void SaveTitle()
+    {
+        _isEditingTitle = false;
+        BoardService.UpdateBoard(Board);
+    }
+
+    void SaveDesc()
+    {
+        _isEditingDesc = false;
+        BoardService.UpdateBoard(Board);
+    }
+
+    async Task AddView()
+    {
+        var parameters = new DialogParameters { ["BoardId"] = Board.Id };
+        var dialog = await DialogService.ShowAsync<AddViewDialog>("New View", parameters);
+        var result = await dialog.Result;
+
+        if (result != null && !result.Canceled && result.Data is BoardView newView)
+        {
+            Board.Views.Add(newView);
+            BoardService.UpdateBoard(Board);
+            await ActiveViewChanged.InvokeAsync(newView);
+        }
+    }
+
+    async Task OpenProperties()
+    {
+        var parameters = new DialogParameters
+            {
+                ["Board"] = Board,
+                ["OnChange"] = OnChange
+            };
+        await DialogService.ShowAsync<BoardPropertiesDialog>("Board Properties", parameters);
+    }
+
+    async Task ExportBoard()
+    {
+        var json = BoardService.ExportBoardToJson(Board.Id);
+        var fileName = $"{Board.Title.Replace(" ", "_")}_Export_{DateTime.Now:yyyyMMdd}.json";
+        await JS.InvokeVoidAsync("downloadFile", fileName, "application/json", json);
+    }
+
+    async Task SaveAsTemplate()
+    {
+        var dialog = await DialogService.ShowAsync<SaveTemplateDialog>("Save Template");
+        var result = await dialog.Result;
+
+        if (result != null && !result.Canceled && result.Data is string name)
+        {
+            BoardService.SaveAsTemplate(Board, name);
+            // Maybe show snackbar?
+        }
+    }
+
+    async Task ShareBoard()
+    {
+        var parameters = new DialogParameters { ["Board"] = Board };
+        await DialogService.ShowAsync<ShareBoardDialog>("Share Board", parameters);
+    }
+
+    // --- VIEW MANAGEMENT ---
+    bool IsFirstView => GetActiveViewIndex() == 0;
+    bool IsLastView => GetActiveViewIndex() == Board.Views.Count - 1;
+
+    void MoveViewLeft()
+    {
+        var idx = GetActiveViewIndex();
+        if (idx > 0)
+        {
+            var view = Board.Views[idx];
+            Board.Views.RemoveAt(idx);
+            Board.Views.Insert(idx - 1, view);
+            BoardService.UpdateBoard(Board);
+        }
+    }
+
+    void MoveViewRight()
+    {
+        var idx = GetActiveViewIndex();
+        if (idx < Board.Views.Count - 1)
+        {
+            var view = Board.Views[idx];
+            Board.Views.RemoveAt(idx);
+            Board.Views.Insert(idx + 1, view);
+            BoardService.UpdateBoard(Board);
+        }
+    }
+
+    async Task DeleteView()
+    {
+        if (Board.Views.Count <= 1)
+        {
+            // Don't allow deleting the last view? Or maybe just recreate a default one?
+            // For now, prevent empty board.
+            // await DialogService.ShowMessageBoxAsync("Error", "Cannot delete the only view.");
+            return;
+        }
+
+        var result = await DialogService.ShowMessageBoxAsync("Delete View?", "Are you sure you want to delete this view?", yesText:
+        "Delete", cancelText: "Cancel");
+        if (result == true)
+        {
+            var idx = GetActiveViewIndex();
+            Board.Views.RemoveAt(idx);
+
+            // Activate adjacent view
+            var newIdx = Math.Min(idx, Board.Views.Count - 1);
+            if (newIdx >= 0) await ActiveViewChanged.InvokeAsync(Board.Views[newIdx]);
+
+            BoardService.UpdateBoard(Board);
+        }
+    }
+
+    void DeleteBoard()
+    {
+        // TODO: Confirmation?
+        BoardService.DeleteBoard(Board.Id);
+        Nav.NavigateTo("/boards");
+    }
+}

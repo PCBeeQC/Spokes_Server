@@ -1,0 +1,127 @@
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Services.Communication
+@inject ChatService ChatService
+@inject ScopedKeystoreService ScopedKeystore
+
+<div style="position: relative;">
+    <MudTextField @bind-Value="_searchQuery" Placeholder="Search messages..." Variant="Variant.Outlined"
+        Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search"
+        Immediate="true" DebounceInterval="300" Margin="Margin.Dense"
+        OnDebounceIntervalElapsed="OnSearchChanged"
+        Clearable="true" OnClearButtonClick="ClearSearch"
+        Class="my-n2"
+        Style="min-width: 340px;" UserAttributes="@_inputAttributes" />
+
+    @if (_searchResults != null && _searchResults.Any())
+    {
+        <MudPaper Elevation="4" Class="pa-0" Style="position: absolute; top: 100%; right: 0; z-index: 100; min-width: 360px; max-width: 480px; max-height: 400px; overflow-y: auto; margin-top: 4px; border-radius: 8px;">
+            <MudList T="string" Dense="true" Class="py-1">
+                <MudText Typo="Typo.caption" Color="Color.Secondary" Class="px-3 py-1">
+                    @_searchResults.Count result@(_searchResults.Count != 1 ? "s" : "") found
+                </MudText>
+                @foreach (var msg in _searchResults)
+                {
+                    var sender = Employees.FirstOrDefault(e => e.Id == msg.SenderId);
+                    var senderName = sender?.FullName ?? "Unknown";
+                    var timeStr = msg.SentAt.ToLocalTime().ToString("MMM d, yyyy h:mm tt");
+                    var content = string.IsNullOrEmpty(msg.Content)
+                        ? "[Attachment]"
+                        : msg.Content;
+                    content = System.Text.RegularExpressions.Regex.Replace(content, @"!\[gif\]\([^)]+\)|\[gif\]", "Sent a GIF", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                    content = content.Length > 80 ? content.Substring(0, 77) + "..." : content;
+
+                    <MudListItem T="string" Dense="true" OnClick="@(() => SelectResult(msg.Id))">
+                        <div>
+                            <div class="d-flex align-center gap-2">
+                                <MudText Typo="Typo.body2" Style="font-weight: 600;">@senderName</MudText>
+                                <MudText Typo="Typo.caption" Color="Color.Secondary">@timeStr</MudText>
+                            </div>
+                            <MudText Typo="Typo.body2" Color="Color.Secondary" Class="text-truncate" Style="display: block;">
+                                @HighlightMatch(content)
+                            </MudText>
+                        </div>
+                    </MudListItem>
+                }
+            </MudList>
+        </MudPaper>
+    }
+    else if (_searchResults != null && !_searchResults.Any() && !string.IsNullOrWhiteSpace(_searchQuery))
+    {
+        <MudPaper Elevation="4" Class="pa-3" Style="position: absolute; top: 100%; right: 0; z-index: 100; min-width: 280px; margin-top: 4px; border-radius: 8px;">
+            <MudText Typo="Typo.body2" Color="Color.Secondary" Align="Align.Center">
+                No messages found
+            </MudText>
+        </MudPaper>
+    }
+</div>
+
+@code {
+    [Parameter] public string? ChannelId { get; set; }
+    [Parameter] public string? CurrentUserId { get; set; }
+    [Parameter] public List<Employee> Employees { get; set; } = new();
+    [Parameter] public EventCallback<string> OnResultSelected { get; set; }
+
+    private string _searchQuery = "";
+    private List<ChatMessage>? _searchResults;
+
+    private Dictionary<string, object> _inputAttributes = new()
+    {
+        { "autocomplete", "off" },
+        { "data-lpignore", "true" },
+        { "data-1p-ignore", "true" },
+        { "data-bwignore", "true" },
+        { "data-form-type", "other" }
+    };
+
+    private async Task OnSearchChanged(string query)
+    {
+        _searchQuery = query;
+        if (string.IsNullOrWhiteSpace(query) || string.IsNullOrEmpty(ChannelId) || string.IsNullOrEmpty(CurrentUserId))
+        {
+            _searchResults = null;
+            return;
+        }
+
+        string? privateKey = ScopedKeystore.IsUnlocked ? ScopedKeystore.GetPrivateKey() : null;
+        _searchResults = await ChatService.SecureSearchMessagesAsync(ChannelId, query, CurrentUserId, privateKey);
+    }
+
+    private void ClearSearch()
+    {
+        _searchQuery = "";
+        _searchResults = null;
+    }
+
+    private async Task SelectResult(string messageId)
+    {
+        await OnResultSelected.InvokeAsync(messageId);
+        ClearSearch();
+    }
+
+    private MarkupString HighlightMatch(string text)
+    {
+        if (string.IsNullOrWhiteSpace(_searchQuery))
+            return new MarkupString(System.Net.WebUtility.HtmlEncode(text));
+
+        var escaped = System.Net.WebUtility.HtmlEncode(text);
+        var escapedQuery = System.Net.WebUtility.HtmlEncode(_searchQuery);
+
+        // Case-insensitive highlight
+        var idx = escaped.IndexOf(escapedQuery, StringComparison.OrdinalIgnoreCase);
+        if (idx >= 0)
+        {
+            var before = escaped.Substring(0, idx);
+            var match = escaped.Substring(idx, escapedQuery.Length);
+            var after = escaped.Substring(idx + escapedQuery.Length);
+            return new MarkupString($"{before}<mark style=\"background: var(--mud-palette-warning-lighten); padding: 0 2px; border-radius: 2px;\">{match}</mark>{after}");
+        }
+
+        return new MarkupString(escaped);
+    }
+}
+

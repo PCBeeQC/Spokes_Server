@@ -1,0 +1,36 @@
+@using MudBlazor
+@using Spokes_Server.Core.Models.Core
+
+<MudDialog>
+    <TitleContent>
+        <MudText Typo="Typo.h6">Select Block Type</MudText>
+    </TitleContent>
+    <DialogContent>
+        <MudList T="IDocumentBlock" Clickable="true" @bind-SelectedValue="SelectedBlock">
+            @foreach (var block in AvailableBlocks)
+            {
+                <MudListItem Value="block">
+                    <div class="d-flex flex-column">
+                        <MudText Typo="Typo.subtitle1"><b>@block.DisplayName</b></MudText>
+                        <MudText Typo="Typo.body2" Color="Color.Secondary">@block.Description</MudText>
+                    </div>
+                </MudListItem>
+            }
+        </MudList>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="Submit" Disabled="@(SelectedBlock == null)">
+            Select</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
+
+    private IReadOnlyList<IDocumentBlock> AvailableBlocks = DocumentBlockLibrary.GetAll();
+    private IDocumentBlock? SelectedBlock;
+
+    private void Cancel() => MudDialog.Cancel();
+    private void Submit() => MudDialog.Close(DialogResult.Ok(SelectedBlock));
+}

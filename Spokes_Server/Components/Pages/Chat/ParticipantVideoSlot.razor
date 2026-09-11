@@ -1,0 +1,30 @@
+@* 
+    ParticipantVideoSlot — Render-once container for JS-managed LiveKit video elements.
+    
+    After the first render places the <div id="participant-video-{pId}"> in the DOM,
+    ShouldRender() permanently returns false. This prevents Blazor's diff algorithm
+    from stripping <video> elements injected by voiceInterop.js attachTrack().
+*@
+
+<video id="@($"participant-video-{ParticipantId}")"
+       autoplay playsinline webkit-playsinline muted
+       style="position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+              object-fit: contain; background: #000; z-index: 1; opacity: 0; pointer-events: none; transition: opacity 0.3s ease;">
+</video>
+
+@code {
+    [Parameter] public string ParticipantId { get; set; } = "";
+
+    private bool _rendered;
+
+    protected override bool ShouldRender()
+    {
+        if (_rendered) return false;
+        return true;
+    }
+
+    protected override void OnAfterRender(bool firstRender)
+    {
+        if (firstRender) _rendered = true;
+    }
+}

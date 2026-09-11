@@ -1,0 +1,309 @@
+
+/* Disable 300ms tap delay and double-tap-to-zoom on all interactive elements */
+a, button, input, select, textarea, [contenteditable], [role="button"] {
+    touch-action: manipulation;
+}
+
+/* Prevent white flash during viewport resize (e.g., mobile keyboard opening) */
+html, body {
+    background-color: var(--mud-palette-background);
+}
+
+/* Prevent iOS native text selection and long-press callout globally on touch devices */
+@media (hover: none) and (pointer: coarse) {
+    body {
+        -webkit-touch-callout: none;
+        -webkit-user-select: none;
+        user-select: none;
+    }
+
+    /* Allow text selection and interaction in input elements */
+    input, textarea, [contenteditable="true"] {
+        -webkit-touch-callout: default;
+        -webkit-user-select: auto;
+        user-select: auto;
+    }
+}
+
+/* Hide native scrollbars globally (Android WebView compatibility) */
+*::-webkit-scrollbar {
+    display: none !important;
+}
+* {
+    scrollbar-width: none !important;
+    -ms-overflow-style: none !important;
+}
+
+/* Hide Android WebView default play button on WebRTC video streams */
+video.livekit-camera::-webkit-media-controls-overlay-play-button,
+video.livekit-screenshare::-webkit-media-controls-overlay-play-button {
+    display: none !important;
+}
+
+/* --- WEB DEFAULTS (Screen Only) --- */
+/* Padding matches the combined browser print margin + content area */
+.print-body {
+    padding: 15mm 20mm 10mm 20mm;
+}
+
+/* --- Page-based viewer --- */
+/* Container holding all page cards with a gray background */
+.viewer-page-container {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 24px;
+    padding: 24px 0;
+    background-color: var(--mud-palette-background-gray, #e0e0e0);
+    border-radius: 8px;
+    margin-bottom: 40px;
+}
+
+/* Enforce white background and black text on documents in all themes */
+#printable-area, .viewer-page {
+    --mud-palette-surface: #ffffff;
+    --mud-palette-background: #ffffff;
+    --mud-palette-text-primary: #000000;
+    --mud-palette-text-secondary: #424242;
+    --mud-palette-action-default: #000000;
+    --mud-palette-divider: #e0e0e0;
+    --mud-palette-lines-default: #e0e0e0;
+    --mud-palette-table-lines: #e0e0e0;
+    --mud-palette-table-striped: rgba(0,0,0,0.02);
+    background-color: #ffffff !important;
+    color: #000000 !important;
+    color-scheme: light !important;
+}
+
+/* Page number inside each page's footer */
+.footer-page-number {
+    margin-left: auto;
+    font-size: 10px;
+    color: #888;
+}
+
+
+
+/* --- PRINT / PDF STYLES --- */
+@media print {
+    /* 1. RESET */
+    body {
+        color-scheme: light;
+        --mud-palette-background: #ffffff !important;
+        --mud-palette-surface: #ffffff !important;
+        --mud-palette-text-primary: #000000 !important;
+        --mud-palette-text-secondary: #000000 !important;
+        --mud-palette-table-lines: #e0e0e0 !important;
+        background-color: #ffffff !important;
+        color: #000000 !important;
+    }
+
+    body * {
+        visibility: hidden;
+    }
+
+    .mud-layout-appbar, .mud-layout-drawer, .mud-drawer, .mud-appbar, .d-print-none, header, nav, aside {
+        display: none !important;
+        height: 0 !important;
+    }
+
+    /* 2. SHOW DOCUMENT */
+    #printable-area, #printable-area *,
+    [data-paginated-for], [data-paginated-for] * {
+        visibility: visible;
+    }
+
+    /* Hide original paper when paginated (JS sets display:none) */
+    #printable-area[style*="display: none"] {
+        display: none !important;
+    }
+
+    /* 3. DOCUMENT CONTAINER */
+    #printable-area,
+    [data-paginated-for] {
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: 100%;
+        margin: 0;
+        padding: 0 !important;
+        box-shadow: none !important;
+        background-color: white !important;
+        color: black !important;
+        z-index: 9999;
+        min-height: 0 !important;
+    }
+
+    /* 3b. PAGE-BASED VIEWER PRINT OVERRIDES */
+
+    .viewer-page-container {
+        background: none !important;
+        gap: 0 !important;
+        padding: 0 !important;
+        margin: 0 !important;
+        border-radius: 0 !important;
+        display: block !important;
+    }
+
+    .viewer-page-container .viewer-page {
+        box-shadow: none !important;
+        border-radius: 0 !important;
+        height: 11in !important;
+        width: 8.5in !important;
+        margin: 0 auto !important;
+        position: relative !important;
+        box-sizing: border-box !important;
+        padding: 10mm 0 !important;
+        overflow: hidden !important;
+    }
+
+    /* Override fixed footer to absolute within each page */
+    .viewer-page-container .print-footer-custom {
+        position: absolute !important;
+        bottom: 10mm !important;
+        left: 0;
+        right: 0;
+    }
+
+    /* Each viewer-page except the last triggers a page break */
+    .viewer-page-container .viewer-page:not(:last-child) {
+        page-break-after: always;
+        break-after: page;
+    }
+
+    /* 4. CONTENT PADDING */
+    /* Bottom padding increased to 10mm to avoid overlapping the footer */
+    .print-body {
+        padding: 0mm 20mm 10mm 20mm !important;
+    }
+
+    /* 5. PAGE SETUP - THE PAGINATION FIX */
+    @page {
+        size: letter;
+        margin: 0mm !important;
+    }
+
+    html, body {
+        margin: 0 !important;
+        padding: 0 !important;
+        background-color: white !important;
+    }
+
+    /* 6. REPEATING CUSTOM FOOTER (Optional Branding) */
+    /* This allows you to put "Quote #Q-002" at the bottom of every page */
+    .print-footer-custom {
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        height: 8mm;
+        padding-left: 20mm;
+        padding-right: 20mm;
+        font-size: 10px;
+        color: #888;
+        background-color: white;
+        display: flex;
+        align-items: center;
+        justify-content: space-between; /* Spacing for Left/Right content */
+        z-index: 10000;
+        visibility: visible !important;
+    }
+
+
+
+    /* 7. UTILITIES */
+    /* Apply this to sections you want to stay intact (Pricing Table, Terms block) */
+    .keep-together {
+        break-inside: avoid !important; /* Don't cut this block in half */
+        page-break-inside: avoid !important; /* Legacy support */
+        display: block; /* Required for break-inside to work on most divs */
+        position: relative; /* Stability fix */
+        margin-bottom: 1rem; /* Spacing between sections */
+    }
+
+    /* Override display: block for table elements so they don't lose their table layout */
+    tr.keep-together {
+        display: table-row !important;
+        margin-bottom: 0 !important;
+    }
+
+    thead.keep-together {
+        display: table-header-group !important;
+        margin-bottom: 0 !important;
+    }
+
+    tbody.keep-together {
+        display: table-row-group !important;
+        margin-bottom: 0 !important;
+    }
+
+    tfoot.keep-together {
+        display: table-footer-group !important;
+        margin-bottom: 0 !important;
+    }
+
+    /* Use this ONLY if you strictly need a forced break (e.g. Terms must always be separate) */
+    .force-break {
+        break-before: page !important;
+        page-break-before: always !important;
+        display: block;
+    }
+
+    .no-break {
+        break-inside: avoid !important;
+        page-break-inside: avoid !important;
+        display: block;
+    }
+
+    /* 9. TABLE BORDER FIXES */
+    /* Force table borders and backgrounds to show despite browser "ink saving" settings */
+    .mud-table-cell, .mud-table-row, tr {
+        -webkit-print-color-adjust: exact !important;
+        print-color-adjust: exact !important;
+    }
+
+    /* 5. Force Background Colors (for Striped Rows) */
+    .mud-table-striped .mud-table-container .mud-table-root .mud-table-body .mud-table-row:nth-of-type(odd) {
+        background-color: #f0f0f0 !important;
+        -webkit-print-color-adjust: exact !important;
+        print-color-adjust: exact !important;
+    }
+
+    /* 10. ROW BREAKING LOGIC */
+    /* Allow the table to break across pages, but keep individual rows intact */
+    tr {
+        break-inside: avoid !important;
+        page-break-inside: avoid !important;
+    }
+
+    /* Ensure the header repeats on the new page (Browser dependent, but good practice) */
+    thead {
+        display: table-header-group !important;
+    }
+
+    .print-row {
+        display: flex !important;
+        flex-direction: row !important;
+        width: 100%;
+    }
+
+    .print-col-6 {
+        width: 50% !important;
+    }
+
+    .print-col-7 {
+        width: 60% !important;
+    }
+
+    .print-col-5 {
+        width: 40% !important;
+    }
+
+    .mud-divider {
+        visibility: visible !important;
+        border-color: #9e9e9e !important;
+        border-bottom-width: 1px !important;
+        margin: 1rem 0 !important;
+        opacity: 1 !important;
+    }
+}

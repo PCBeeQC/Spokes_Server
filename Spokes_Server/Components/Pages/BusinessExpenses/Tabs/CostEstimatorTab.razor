@@ -1,0 +1,215 @@
+@using Spokes_Server.Core.Data
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.HR
+@using MudBlazor
+@inject Database Db
+
+<MudPaper Class="pa-4 mb-4" Elevation="0" Outlined="true">
+    <MudText Typo="Typo.h6" Class="mb-3">Cost Estimator</MudText>
+    
+    <MudGrid>
+        <MudItem xs="12" sm="4">
+            <MudSelect T="string" Label="Timeframe" @bind-Value="Timeframe" Variant="Variant.Outlined" 
+                SelectedValuesChanged="CalculateData">
+                <MudSelectItem Value="@("Weekly")">Weekly</MudSelectItem>
+                <MudSelectItem Value="@("Bi-Weekly")">Bi-Weekly</MudSelectItem>
+                <MudSelectItem Value="@("Monthly")">Monthly</MudSelectItem>
+                <MudSelectItem Value="@("Annually")">Annually</MudSelectItem>
+            </MudSelect>
+        </MudItem>
+        <MudItem xs="12" sm="8" Class="d-flex align-center justify-end">
+            <MudText Typo="Typo.h6">Total Estimated Cost (@Timeframe): <MudText Color="Color.Primary" Typo="Typo.h5" Class="d-inline">@TotalCost.ToString("C2")</MudText></MudText>
+        </MudItem>
+    </MudGrid>
+</MudPaper>
+
+<MudGrid>
+    <MudItem xs="12" md="6">
+        <MudPaper Class="pa-4" Elevation="0" Outlined="true" Style="height: 100%">
+            <MudText Typo="Typo.subtitle1" Class="mb-4">Expense Breakdown</MudText>
+            @if (ChartData != null && ChartData.Length > 0)
+            {
+                <MudChart ChartOptions="options" ChartType="ChartType.Pie" ChartSeries="@ChartData.AsChartDataSet()" @bind-SelectedIndex="ChartIndex" 
+                    ChartLabels="@ChartLabels" Width="100%" Height="300px" />
+                @if (ChartIndex >= 0 && ChartIndex < ChartLabels.Length)
+                {
+                    <MudText Typo="Typo.subtitle2" Class="mt-4 text-center">Selected: @ChartLabels[ChartIndex] (@ChartData[ChartIndex].ToString("C2"))</MudText>
+                }
+            }
+            else
+            {
+                <MudText Typo="Typo.body2" Class="mud-text-secondary text-center mt-8">No estimate data available.</MudText>
+            }
+        </MudPaper>
+    </MudItem>
+    
+    <MudItem xs="12" md="6">
+        <MudPaper Class="pa-4" Elevation="0" Outlined="true" Style="height: 100%">
+            <MudText Typo="Typo.subtitle1" Class="mb-4">Summary Table (@Timeframe)</MudText>
+            <MudTable Items="@CostBreakdown" Dense="true" Hover="true" Striped="true" Elevation="0">
+                <HeaderContent>
+                    <MudTh>Category</MudTh>
+                    <MudTh Style="text-align: right">Estimated Cost</MudTh>
+                    <MudTh Style="text-align: right">% of Total</MudTh>
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd DataLabel="Category">
+                        <div class="d-flex align-center">
+                            <div style="width: 12px; height: 12px; border-radius: 50%; background-color: @GetColorForCategory(context.Category); margin-right: 8px;"></div>
+                            @context.Category
+                        </div>
+                    </MudTd>
+                    <MudTd DataLabel="Cost" Style="text-align: right">@context.Cost.ToString("C2")</MudTd>
+                    <MudTd DataLabel="Percentage" Style="text-align: right">@((context.Cost / TotalCost * 100).ToString("F1"))%</MudTd>
+                </RowTemplate>
+                <FooterContent>
+                    <MudTd><b>Total</b></MudTd>
+                    <MudTd Style="text-align: right"><b>@TotalCost.ToString("C2")</b></MudTd>
+                    <MudTd Style="text-align: right"><b>100%</b></MudTd>
+                </FooterContent>
+            </MudTable>
+        </MudPaper>
+    </MudItem>
+</MudGrid>
+
+@code {
+    private string Timeframe { get; set; } = "Monthly";
+    private decimal TotalCost = 0;
+    
+    private double[] ChartData = Array.Empty<double>();
+    private string[] ChartLabels = Array.Empty<string>();
+    private int ChartIndex = -1;
+    
+    private ChartOptions options = new ChartOptions
+    {
+        ChartPalette = new[] { "#594AE2", "#FF4081", "#4CAF50", "#FFC107", "#00BCD4", "#E91E63", "#9C27B0" },
+        ShowToolTips = true,
+        ShowLegend=true
+    };
+    
+    private List<CostCategory> CostBreakdown = new();
+    
+    public class CostCategory
+    {
+        public string Category { get; set; } = "";
+        public decimal Cost { get; set; }
+    }
+
+    protected override void OnInitialized()
+    {
+        CalculateData();
+    }
+
+    private void CalculateData()
+    {
+        var estimates = Db.RecurringExpenses.GetAll().Where(e => e.IsEstimate).ToList();
+        var salaries = Db.Employees.GetAll().Where(e => e.IsActive).ToList();
+        
+        decimal multiplier = Timeframe switch
+        {
+            "Weekly" => 1m / 52m,
+            "Bi-Weekly" => 1m / 26m,
+            "Monthly" => 1m / 12m,
+            "Annually" => 1m,
+            _ => 1m / 12m
+        };
+        
+        CostBreakdown.Clear();
+        
+        // 1. Calculate Recurring Costs
+        decimal recurringAnnual = 0;
+        foreach (var e in estimates.Where(e => e.Frequency != RecurringExpenseFrequency.OneTime))
+        {
+            recurringAnnual += e.Frequency switch
+            {
+                RecurringExpenseFrequency.Weekly => e.Amount * 52m,
+                RecurringExpenseFrequency.BiWeekly => e.Amount * 26m,
+                RecurringExpenseFrequency.Monthly => e.Amount * 12m,
+                RecurringExpenseFrequency.Yearly => e.Amount,
+                _ => e.Amount * 12m
+            };
+        }
+        decimal recurringCost = recurringAnnual * multiplier;
+        if (recurringCost > 0)
+        {
+            CostBreakdown.Add(new CostCategory { Category = "Recurring Costs", Cost = recurringCost });
+        }
+        
+        // 2. Calculate One-Time Expenses
+        // For one-time expenses, we just distribute them across the year for the estimator
+        decimal oneTimeAnnual = estimates.Where(e => e.Frequency == RecurringExpenseFrequency.OneTime).Sum(e => e.Amount);
+        decimal oneTimeCost = oneTimeAnnual * multiplier;
+        if (oneTimeCost > 0)
+        {
+            CostBreakdown.Add(new CostCategory { Category = "One-Time Expenses (Amortized)", Cost = oneTimeCost });
+        }
+        
+        // 3. Calculate Salaries
+        decimal salariesAnnual = salaries.Sum(e => e.WeeklyHours * e.HourlyRate * 52);
+        decimal salariesCost = salariesAnnual * multiplier;
+        if (salariesCost > 0)
+        {
+            CostBreakdown.Add(new CostCategory { Category = "Gross Salaries", Cost = salariesCost });
+        }
+        
+        // 4. Calculate Employer Contributions
+        decimal contribAnnual = 0;
+        var contributions = Db.EmployerContributions.GetAll();
+        foreach (var emp in salaries)
+        {
+            decimal empAnnualGross = emp.WeeklyHours * emp.HourlyRate * 52;
+            foreach (var c in contributions)
+            {
+                bool applies = false;
+                if (c.Scope == EmployerContributionScope.Global) applies = true;
+                else if (c.Scope == EmployerContributionScope.Employee && c.TargetIds.Contains(emp.Id)) applies = true;
+                else if (c.Scope == EmployerContributionScope.Team && !string.IsNullOrEmpty(emp.TeamId) && c.TargetIds.Contains(emp.TeamId)) applies = true;
+
+                if (applies)
+                {
+                    if (c.Type == EmployerContributionType.Percentage)
+                        contribAnnual += empAnnualGross * (c.Value / 100m);
+                    else
+                        contribAnnual += c.Value;
+                }
+            }
+        }
+        decimal contribCost = contribAnnual * multiplier;
+        if (contribCost > 0)
+        {
+            CostBreakdown.Add(new CostCategory { Category = "Employer Contributions", Cost = contribCost });
+        }
+        
+        // Update Chart Data
+        TotalCost = CostBreakdown.Sum(c => c.Cost);
+        
+        if (CostBreakdown.Any())
+        {
+            ChartLabels = CostBreakdown.Select(c => $"{c.Category} - {c.Cost:N2}").ToArray();
+            ChartData = CostBreakdown.Select(c => (double)Math.Round(c.Cost, 2)).ToArray();
+        }
+        else
+        {
+            ChartLabels = Array.Empty<string>();
+            ChartData = Array.Empty<double>();
+            TotalCost = 0;
+        }
+        
+        StateHasChanged();
+    }
+    
+    // MudBlazor's default chart colors so we can match the legend dots to the pie chart slices
+    private string GetColorForCategory(string category)
+    {
+        var categoryNames = CostBreakdown.Select(c => c.Category).ToList();
+        int index = categoryNames.IndexOf(category);
+        
+        // MudBlazor default palette colors used in charts
+        string[] colors = { "#594AE2", "#FF4081", "#4CAF50", "#FFC107", "#00BCD4", "#E91E63", "#9C27B0" };
+        
+        if (index >= 0 && index < colors.Length)
+            return colors[index];
+            
+        return "#7E6FFF"; // Default purple
+    }
+}

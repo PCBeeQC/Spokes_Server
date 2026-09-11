@@ -1,0 +1,249 @@
+@using Spokes_Server.Core.Data
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Models.Accounting
+@using MudBlazor
+@using System.Linq
+@using System.Collections.Generic
+@using System;
+@inject Database Db
+
+<MudDialog>
+    <DialogContent>
+        <MudTabs Elevation="0" Rounded="true" PanelClass="pa-4" Border="true">
+            <MudTabPanel Text="Quotes">
+                <MudTextField @bind-Value="searchQuote" Placeholder="SearchQuotes..." Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search" IconSize="Size.Medium" Class="mt-0 mb-3" />
+                <MudTable Items="@Quotes" MultiSelection="true" @bind-SelectedItems="SelectedQuotes" Filter="new Func<DocumentItem,bool>(FilterQuote)" Dense="true" Hover="true" FixedHeader="true" Height="400px">
+                    <HeaderContent>
+                        <MudTh>Number</MudTh>
+                        <MudTh>Project</MudTh>
+                        <MudTh>Date</MudTh>
+                    </HeaderContent>
+                    <RowTemplate>
+                        <MudTd DataLabel="Number">@context.Number 
+                            @if(!string.IsNullOrEmpty(context.Name)) { <span>- @context.Name</span> }
+                        </MudTd>
+                        <MudTd DataLabel="Project">@context.ProjectName</MudTd>
+                        <MudTd DataLabel="Date">@context.Date.ToShortDateString()</MudTd>
+                    </RowTemplate>
+                </MudTable>
+            </MudTabPanel>
+
+            <MudTabPanel Text="Invoices">
+                <MudTextField @bind-Value="searchInvoice" Placeholder="Search Invoices..." Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search" IconSize="Size.Medium" Class="mt-0 mb-3" />
+                <MudTable Items="@Invoices" MultiSelection="true" @bind-SelectedItems="SelectedInvoices" Filter="new Func<DocumentItem,bool>(FilterInvoice)" Dense="true" Hover="true" FixedHeader="true" Height="400px">
+                    <HeaderContent>
+                        <MudTh>Number</MudTh>
+                        <MudTh>Project</MudTh>
+                        <MudTh>Date</MudTh>
+                    </HeaderContent>
+                    <RowTemplate>
+                        <MudTd DataLabel="Number">@context.Number</MudTd>
+                        <MudTd DataLabel="Project">@context.ProjectName</MudTd>
+                        <MudTd DataLabel="Date">@context.Date.ToShortDateString()</MudTd>
+                    </RowTemplate>
+                </MudTable>
+            </MudTabPanel>
+
+            <MudTabPanel Text="Project Documents">
+                <MudTextField @bind-Value="searchDoc" Placeholder="Search Documents..." Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search" IconSize="Size.Medium" Class="mt-0 mb-3" />
+                <MudTable Items="@Documents" MultiSelection="true" @bind-SelectedItems="SelectedDocuments" Filter="new Func<DocumentItem,bool>(FilterDoc)" Dense="true" Hover="true" FixedHeader="true" Height="400px">
+                    <HeaderContent>
+                        <MudTh>Name</MudTh>
+                        <MudTh>Project</MudTh>
+                        <MudTh>Date</MudTh>
+                    </HeaderContent>
+                    <RowTemplate>
+                        <MudTd DataLabel="Name">@context.Name</MudTd>
+                        <MudTd DataLabel="Project">@context.ProjectName</MudTd>
+                        <MudTd DataLabel="Date">@context.Date.ToShortDateString()</MudTd>
+                    </RowTemplate>
+                </MudTable>
+            </MudTabPanel>
+
+            <MudTabPanel Text="Business Documents">
+                <MudTextField @bind-Value="searchBizDoc" Placeholder="Search Business Documents..." Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search" IconSize="Size.Medium" Class="mt-0 mb-3" />
+                <MudTable Items="@BusinessDocuments" MultiSelection="true" @bind-SelectedItems="SelectedBusinessDocuments" Filter="new Func<DocumentItem,bool>(FilterBizDoc)" Dense="true" Hover="true" FixedHeader="true" Height="400px">
+                    <HeaderContent>
+                        <MudTh>Name</MudTh>
+                        <MudTh>Date</MudTh>
+                    </HeaderContent>
+                    <RowTemplate>
+                        <MudTd DataLabel="Name">@context.Name</MudTd>
+                        <MudTd DataLabel="Date">@context.Date.ToShortDateString()</MudTd>
+                    </RowTemplate>
+                </MudTable>
+            </MudTabPanel>
+
+            <MudTabPanel Text="Purchase Orders">
+                <MudTextField @bind-Value="searchPO" Placeholder="Search POs..." Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search" IconSize="Size.Medium" Class="mt-0 mb-3" />
+                <MudTable Items="@PurchaseOrders" MultiSelection="true" @bind-SelectedItems="SelectedPOs" Filter="new Func<DocumentItem,bool>(FilterPO)" Dense="true" Hover="true" FixedHeader="true" Height="400px">
+                    <HeaderContent>
+                        <MudTh>PO Number</MudTh>
+                        <MudTh>Supplier</MudTh>
+                        <MudTh>Date</MudTh>
+                    </HeaderContent>
+                    <RowTemplate>
+                        <MudTd DataLabel="PO Number">@context.Number</MudTd>
+                        <MudTd DataLabel="Supplier">@context.Name</MudTd>
+                        <MudTd DataLabel="Date">@context.Date.ToShortDateString()</MudTd>
+                    </RowTemplate>
+                </MudTable>
+            </MudTabPanel>
+        </MudTabs>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Close">Close</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="Submit" Disabled="@(TotalSelected == 0)">Attach Selected (@TotalSelected)</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
+
+    public class DocumentItem
+    {
+        public string Id { get; set; } = "";
+        public string Number { get; set; } = "";
+        public string Name { get; set; } = "";
+        public string ProjectName { get; set; } = "";
+        public DateTime Date { get; set; }
+        public string PdfPath { get; set; } = "";
+        
+        public string DisplayName => !string.IsNullOrEmpty(Number) 
+            ? $"{Number}{(string.IsNullOrEmpty(Name) ? "" : " - " + Name)}"
+            : Name;
+    }
+
+    private List<DocumentItem> Quotes = new();
+    private List<DocumentItem> Invoices = new();
+    private List<DocumentItem> Documents = new();
+    private List<DocumentItem> PurchaseOrders = new();
+
+    private List<DocumentItem> BusinessDocuments = new();
+
+    private HashSet<DocumentItem> SelectedQuotes = new();
+    private HashSet<DocumentItem> SelectedInvoices = new();
+    private HashSet<DocumentItem> SelectedDocuments = new();
+    private HashSet<DocumentItem> SelectedPOs = new();
+    private HashSet<DocumentItem> SelectedBusinessDocuments = new();
+
+    private string searchQuote = "";
+    private string searchInvoice = "";
+    private string searchDoc = "";
+    private string searchPO = "";
+    private string searchBizDoc = "";
+
+    private int TotalSelected => SelectedQuotes.Count + SelectedInvoices.Count + SelectedDocuments.Count + SelectedPOs.Count + SelectedBusinessDocuments.Count;
+
+    protected override void OnInitialized()
+    {
+        var projects = Db.Projects.GetAll().ToDictionary(p => p.Id, p => p.DisplayName);
+
+        // Quotes
+        Quotes = Db.Quotes.GetAll()
+            .Where(q => q.Status == "Final" && !string.IsNullOrEmpty(q.PdfPath) && System.IO.File.Exists(q.PdfPath))
+            .OrderByDescending(q => q.Date)
+            .Select(q => new DocumentItem
+            {
+                Id = q.Id,
+                Number = q.QuoteNumber,
+                Name = q.Title,
+                ProjectName = projects.TryGetValue(q.ProjectId, out var pName) ? pName : "Unknown Project",
+                Date = q.Date,
+                PdfPath = q.PdfPath
+            }).ToList();
+
+        // Invoices
+        Invoices = Db.Invoices.GetAll()
+            .Where(i => i.Status != "Draft" && !string.IsNullOrEmpty(i.PdfPath) && System.IO.File.Exists(i.PdfPath))
+            .OrderByDescending(i => i.Date)
+            .Select(i => new DocumentItem
+            {
+                Id = i.Id,
+                Number = i.InvoiceNumber,
+                ProjectName = projects.TryGetValue(i.ProjectId, out var pName) ? pName : "Unknown Project",
+                Date = i.Date,
+                PdfPath = i.PdfPath
+            }).ToList();
+
+        // Documents
+        var allDocs = Db.ProjectDocuments.GetAll()
+            .Where(d => d.Status == "Final" && !string.IsNullOrEmpty(d.ProjectId) && !string.IsNullOrEmpty(d.PdfPath) && System.IO.File.Exists(d.PdfPath))
+            .OrderByDescending(d => d.CreatedAt)
+            .ToList();
+            
+        foreach (var doc in allDocs)
+        {
+            var pId = projects.Keys.FirstOrDefault(pid => System.IO.Directory.Exists($"AppData/Projects/{pid}/Documents") && new System.IO.DirectoryInfo($"AppData/Projects/{pid}/Documents").GetFiles($"{doc.Id}.json").Any());
+            
+            Documents.Add(new DocumentItem
+            {
+                Id = doc.Id,
+                Name = doc.Name,
+                ProjectName = pId != null && projects.TryGetValue(pId, out var dpName) ? dpName : "Unknown Project",
+                Date = doc.CreatedAt,
+                PdfPath = doc.PdfPath
+            });
+        }
+
+        // POs
+        PurchaseOrders = Db.Purchases.GetAll()
+            .Where(po => po.Status != "Draft" && !string.IsNullOrEmpty(po.PdfPath) && System.IO.File.Exists(po.PdfPath))
+            .OrderByDescending(po => po.Date)
+            .Select(po => new DocumentItem
+            {
+                Id = po.Id,
+                Number = po.PoNumber,
+                Name = po.Supplier?.BusinessName ?? "Unknown Supplier",
+                Date = po.Date,
+                PdfPath = po.PdfPath
+            }).ToList();
+
+        // Business Documents
+        var allBizDocs = Db.ProjectDocuments.GetBusinessDocuments()
+            .Where(d => d.Status == "Final" && !string.IsNullOrEmpty(d.PdfPath) && System.IO.File.Exists(d.PdfPath))
+            .ToList();
+            
+        foreach(var doc in allBizDocs)
+        {
+            BusinessDocuments.Add(new DocumentItem
+            {
+                Id = doc.Id,
+                Name = doc.Name,
+                ProjectName = "Business",
+                Date = doc.CreatedAt,
+                PdfPath = doc.PdfPath
+            });
+        }
+    }
+
+    private bool FilterQuote(DocumentItem item) => FilterItem(item, searchQuote);
+    private bool FilterInvoice(DocumentItem item) => FilterItem(item, searchInvoice);
+    private bool FilterDoc(DocumentItem item) => FilterItem(item, searchDoc);
+    private bool FilterPO(DocumentItem item) => FilterItem(item, searchPO);
+    private bool FilterBizDoc(DocumentItem item) => FilterItem(item, searchBizDoc);
+
+    private bool FilterItem(DocumentItem item, string searchString)
+    {
+        if (string.IsNullOrWhiteSpace(searchString)) return true;
+        if (item.Number.Contains(searchString, StringComparison.OrdinalIgnoreCase)) return true;
+        if (item.Name.Contains(searchString, StringComparison.OrdinalIgnoreCase)) return true;
+        if (item.ProjectName.Contains(searchString, StringComparison.OrdinalIgnoreCase)) return true;
+        return false;
+    }
+
+    private void Close() => MudDialog.Cancel();
+
+    private void Submit()
+    {
+        var selectedFiles = new List<(string PdfPath, string DisplayName)>();
+
+        foreach (var item in SelectedQuotes) selectedFiles.Add((item.PdfPath, $"{item.DisplayName}.pdf"));
+        foreach (var item in SelectedInvoices) selectedFiles.Add((item.PdfPath, $"Invoice_{item.DisplayName}.pdf"));
+        foreach (var item in SelectedDocuments) selectedFiles.Add((item.PdfPath, $"{item.DisplayName}.pdf"));
+        foreach (var item in SelectedPOs) selectedFiles.Add((item.PdfPath, $"PO_{item.DisplayName}.pdf"));
+        foreach (var item in SelectedBusinessDocuments) selectedFiles.Add((item.PdfPath, $"{item.DisplayName}.pdf"));
+
+        MudDialog.Close(DialogResult.Ok(selectedFiles));
+    }
+}

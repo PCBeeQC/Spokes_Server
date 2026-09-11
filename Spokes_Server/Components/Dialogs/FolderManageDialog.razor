@@ -1,0 +1,49 @@
+@using Spokes_Server.Core.Models.Communication
+@using MudBlazor
+
+<MudDialog>
+    <DialogContent>
+        <MudTextField @bind-Value="FolderName" Label="Folder Name" Variant="Variant.Outlined" AutoFocus="true" Immediate="true"
+            OnKeyDown="HandleKeyDown" />
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Close">Close</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="Submit"
+            Disabled="@string.IsNullOrWhiteSpace(FolderName)">@SubmitText</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = null!;
+
+    [Parameter] public string CurrentFolderName { get; set; } = "";
+    [Parameter] public string SubmitText { get; set; } = "Save";
+
+    private string FolderName { get; set; } = "";
+
+    protected override void OnInitialized()
+    {
+        FolderName = CurrentFolderName;
+    }
+
+    private void Close()
+    {
+        MudDialog.Cancel();
+    }
+
+    private void Submit()
+    {
+        if (!string.IsNullOrWhiteSpace(FolderName))
+        {
+            MudDialog.Close(DialogResult.Ok(FolderName.Trim()));
+        }
+    }
+
+    private void HandleKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter" && !string.IsNullOrWhiteSpace(FolderName))
+        {
+            Submit();
+        }
+    }
+}

@@ -1,0 +1,1406 @@
+@inherits LayoutComponentBase
+@using Microsoft.AspNetCore.Components.Authorization
+@using Spokes_Server.Core.Data
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Constants
+@inject Database Db
+@inject Microsoft.Extensions.Configuration.IConfiguration Config
+@inject AuthenticationStateProvider AuthStateProvider
+@using Spokes_Server.Core.Services
+@inject UserService UserService
+@inject NavigationManager Nav
+@inject IDialogService DialogService
+@inject IJSRuntime JS
+@inject TimerService TimerService
+@inject ISnackbar Snackbar
+@inject PresenceStateService PresenceState
+@inject UserCircuitContext CircuitContext
+@inject IBrowserViewportService ViewportService
+@inject Spokes_Server.Core.Services.Core.AppLabelService AppLabels
+@inject Spokes_Server.Core.Services.Licensing.LicenseValidationService LicenseValidationService
+@inject Spokes_Server.Core.Services.Core.IFileService FileService
+@inject Spokes_Server.Core.Services.Communication.Chat.ChatNotificationService ChatNotifications
+@inject Spokes_Server.Core.Services.Communication.ShareTargetStateService ShareTargetStateService
+@inject Spokes_Server.Core.Services.Core.ServerUpdateService ServerUpdateService
+@inject Spokes_Server.Core.Services.Security.ScopedKeystoreService ScopedKeystore
+@inject Spokes_Server.Core.Services.Security.ICryptoService Crypto
+@inject Spokes_Server.Core.Services.Security.GlobalKeystoreService GlobalKeystore
+@inject Spokes_Server.Core.Services.UI.ImageRecoveryService ImageRecovery
+@inject Microsoft.AspNetCore.Http.IHttpContextAccessor HttpContextAccessor
+@implements IAsyncDisposable
+@implements IBrowserViewportObserver
+
+<MudThemeProvider Theme="@_theme" @bind-IsDarkMode="_isDarkMode" ObserveSystemDarkModeChange="false" />
+<MudPopoverProvider />
+<MudDialogProvider />
+<MudSnackbarProvider />
+
+<MudLayout>
+    <MudAppBar Class="@($"py-n2{(_isChatChannelOpen ? " hide-appbar-mobile" : "")}")" Elevation="1" Dense="true">
+        <MudIconButton Icon="@Icons.Material.Filled.Menu" Color="Color.Inherit" Edge="Edge.Start"
+            OnClick="@((e) => DrawerToggle())" />
+        <div class="d-flex align-center ml-1">
+            @if (!string.IsNullOrEmpty(Profile?.IconBase64))
+            {
+                <MudImage Src="@Profile.IconBase64" Height="32" Class="mr-2" />
+            }
+            else if (!string.IsNullOrEmpty(Profile?.LogoBase64))
+            {
+                <MudImage Src="@Profile.LogoBase64" Height="32" Class="mr-2" />
+            }
+
+            @if(!IsFriendEdition)
+            {
+                <MudHidden Breakpoint="Breakpoint.SmAndDown">
+                    <MudText Typo="Typo.h6" Style="font-weight: 700;">@Profile?.CompanyName</MudText>
+                </MudHidden>
+            }
+            else
+            {
+                <MudText Typo="Typo.h6" Style="font-weight: 700;">@Profile?.CompanyName</MudText>
+            }
+
+
+
+        </div>
+
+        @* Desktop Toolbar *@
+        <MudHidden Breakpoint="Breakpoint.SmAndDown">
+            @if (!IsFriendEdition)
+            {
+                <MudMenu Icon="@Icons.Material.Filled.Add" Color="Color.Inherit" Edge="Edge.Start" Class="ml-4">
+                    <MudMenuItem OnClick="@(() => Nav.NavigateTo("/projects/new"))">New Project</MudMenuItem>
+                    <MudMenuItem OnClick="@(() => Nav.NavigateTo("/my-timesheet"))">Log Time</MudMenuItem>
+                    <MudMenuItem OnClick="@(() => Nav.NavigateTo("/me/expenses"))">New Expense</MudMenuItem>
+                </MudMenu>
+
+                <Spokes_Server.Components.Shared.TimerButton />
+            }
+            
+            <MudSpacer />
+			@if (!IsFriendEdition)
+            {
+                <Spokes_Server.Components.Shared.GlobalSearchBar @ref="_searchBar" />
+            }
+            
+
+            <MudSpacer />
+
+            <MudIconButton Icon="@Icons.Material.Filled.Settings" Color="Color.Inherit"
+                OnClick="OpenUserSettingsDialog" />
+            <MudIconButton Icon="@DarkLightModeButtonIcon" Color="Color.Inherit" OnClick="@DarkModeToggle"
+                Class="mr-4" />
+
+            <AuthorizeView>
+                <Authorized Context="auth">
+                    <div class="d-flex align-center cursor-pointer mr-4" @onclick="OpenProfileDialog">
+                        <EmployeeAvatar Employee="@_currentUser" Size="Size.Small" Class="mr-2" />
+                        <MudText>
+                            @(_currentUser?.FullName
+                                ?? _currentUser?.Email
+                                ?? auth.User.FindFirst("email")?.Value
+                                ?? auth.User.FindFirst(System.Security.Claims.ClaimTypes.Email)?.Value
+                                ?? auth.User.Identity?.Name)
+                        </MudText>
+                    </div>
+
+                    <form action="logout" method="post" data-enhance="false">
+                        <MudButton ButtonType="ButtonType.Submit" Variant="Variant.Filled" Color="Color.Error">Logout
+                        </MudButton>
+                        <AntiforgeryToken />
+                    </form>
+                </Authorized>
+            </AuthorizeView>
+        </MudHidden>
+
+        @* Mobile Toolbar *@
+        <MudHidden Breakpoint="Breakpoint.MdAndUp">
+            <MudSpacer />
+
+            @* Running timer indicator on mobile *@
+            @if (_timerState.IsRunning)
+            {
+                <div class="d-flex align-center gap-1 mr-2" @onclick="StopTimerFromMenu">
+                    <MudIcon Icon="@Icons.Material.Filled.FiberManualRecord" Color="Color.Error" Size="Size.Small"
+                        Class="timer-pulse" />
+                    <MudText Typo="Typo.body2" Style="font-family: monospace; font-weight: 600;">
+                        @_timerElapsed.ToString(@"hh\:mm\:ss")
+                    </MudText>
+                </div>
+            }
+
+            <AuthorizeView>
+                <Authorized Context="auth">
+                    <div class="d-flex align-center cursor-pointer" @onclick="OpenProfileDialog">
+                        <EmployeeAvatar Employee="@_currentUser" Size="Size.Small" />
+                    </div>
+                </Authorized>
+            </AuthorizeView>
+
+            <MudMenu Icon="@Icons.Material.Filled.MoreVert" Color="Color.Inherit"
+                AnchorOrigin="Origin.BottomRight" TransformOrigin="Origin.TopRight" Class="mr-n5">
+
+                @if (!IsFriendEdition)
+                {
+                    @* New Project *@
+                    <MudMenuItem Icon="@Icons.Material.Filled.Add" OnClick="@(() => Nav.NavigateTo("/projects/new"))">
+                        New Project
+                    </MudMenuItem>
+
+                    @* Start/Stop Timer *@
+                    @if (_timerState.IsRunning)
+                    {
+                        <MudMenuItem Icon="@Icons.Material.Filled.Stop" IconColor="Color.Error" OnClick="StopTimerFromMenu">
+                            Stop Timer
+                        </MudMenuItem>
+                    }
+                    else
+                    {
+                        <MudMenuItem Icon="@Icons.Material.Filled.PlayArrow" IconColor="Color.Success"
+                                     OnClick="StartTimerFromMenu">
+                            Start Timer
+                        </MudMenuItem>
+                    }
+                }
+                
+                @if (!IsFriendEdition)
+                {
+                    @* Search *@
+                    <MudMenuItem Icon="@Icons.Material.Filled.Search" OnClick="FocusMobileSearch">
+                        Search
+                    </MudMenuItem>
+				}
+				
+
+                @* Settings *@
+                <MudMenuItem Icon="@Icons.Material.Filled.Settings"
+                    OnClick="OpenUserSettingsDialog">
+                    Settings
+                </MudMenuItem>
+
+                @* Theme *@
+                <MudMenuItem Icon="@DarkLightModeButtonIcon" OnClick="DarkModeToggle">
+                    Switch Theme
+                </MudMenuItem>
+
+                <MudDivider />
+
+                @* Profile *@
+                <AuthorizeView>
+                    <Authorized Context="auth">
+                        <MudMenuItem Icon="@Icons.Material.Filled.Person" IconColor="Color.Transparent" OnClick="OpenProfileDialog">
+                            <span style="position: absolute; left: 12px; top: 50%; transform: translateY(-50%); z-index: 10; pointer-events: none;">
+                                <EmployeeAvatar Employee="@_currentUser" Size="Size.Small" />
+                            </span>
+                            @(_currentUser?.FirstName ?? "Profile")
+                        </MudMenuItem>
+
+                        @* Logout *@
+                        <MudMenuItem Icon="@Icons.Material.Filled.Logout" IconColor="Color.Error">
+                            <form action="logout" method="post" data-enhance="false" id="logout-form-mobile" style="width: 100%; display: flex; flex-grow: 1;">
+                                <button type="submit"
+                                    style="background: none; border: none; padding: 0; margin: 0; color: inherit; width: 100%; text-align: left; cursor: pointer; display: flex; align-items: center; justify-content: flex-start;">
+                                    Logout
+                                </button>
+                                <AntiforgeryToken />
+                            </form>
+                        </MudMenuItem>
+
+                    </Authorized>
+                </AuthorizeView>
+            </MudMenu>
+        </MudHidden>
+    </MudAppBar>
+
+    <MudDrawer id="nav-drawer" @bind-Open="_drawerOpen" ClipMode="DrawerClipMode.Always" Variant="@_drawerVariant" Elevation="1" Class="@((_isLoaded ? "" : "mobile-preload-hide") + (_drawerOpen ? " is-nav-drawer-open" : " is-nav-drawer-closed"))">
+        @if (Db.CompanyProfile.Get()?.Edition == "Family")
+        {
+            <NavMenu_Friend drawerOpen="_drawerOpen" _isEditingFavorites="_isEditingFavorites" />
+        }
+        else
+        {
+            <NavMenu drawerOpen="_drawerOpen" _isEditingFavorites="_isEditingFavorites" />
+        }
+        <MudPaper Class="mb-2 d-flex flex-grow-1 flex-column" Elevation="0" Style="background-color: transparent;">
+            <MudPaper Class="py-2 flex-grow-1" Height="16" Elevation="0" Style="background-color: transparent;" />
+			@if (_drawerOpen)
+            {
+                @if (!IsFriendEdition)
+                {
+                    <MudPaper Class="d-flex flex-row" Elevation="0" Style="background-color: transparent;">
+                        <MudSpacer></MudSpacer>
+                        <MudSwitch @bind-Value="_isEditingFavorites" Size="Size.Small" ThumbIcon="@(_isEditingFavorites == true ? Icons.Material.Filled.Edit : Icons.Material.Filled.EditOff)" ThumbIconColor="@(_isEditingFavorites == true ? Color.Success : Color.Default)">Edit @AppLabels.Favorites</MudSwitch>
+                        <MudSpacer></MudSpacer>
+                    </MudPaper>
+                }
+
+                <MudText Typo="Typo.caption" Align="Align.Center"
+                         Style="color: var(--mud-palette-text-disabled); font-size: 0.7rem;">
+                    @_appVersion
+                </MudText>
+            }
+        </MudPaper>
+    </MudDrawer>
+
+    <MudMainContent Class="@(_isChatPage ? $"pr-1 d-flex flex-column{(_isChatChannelOpen ? " chat-channel-open" : " pt-12")} print-layout" : "pt-12 pb-4 px-0 px-md-4 d-flex flex-column print-layout")" Style="height: 100vh; overflow: hidden;">
+        @if (_licenseStatus == Spokes_Server.Core.Services.Licensing.LicenseStatus.HardLock)
+        {
+            <div class="d-flex flex-column align-center justify-center" style="height: 100%; width: 100%;">
+                <MudIcon Icon="@Icons.Material.Filled.Lock" Color="Color.Error" Style="font-size: 8rem;" Class="mb-4" />
+                <MudText Typo="Typo.h4" GutterBottom="true">License Expired</MudText>
+                <MudText Typo="Typo.body1" Class="mb-4 text-center" Style="max-width: 500px;">
+                    @(_licenseError ?? "The software license is invalid or has expired.")
+                </MudText>
+                
+                @if (!string.IsNullOrEmpty(_firstInstalledVersion) && !string.IsNullOrEmpty(_lockupVersion) && string.IsNullOrEmpty(Profile?.LicensePayload))
+                {
+                    <MudText Typo="Typo.body2" Color="Color.Info" Class="mb-6">
+                        The first installed version is <b>@_firstInstalledVersion</b>. Your demo lockup begins on version <b>@_lockupVersion</b>
+                    </MudText>
+                }
+                else if (!string.IsNullOrEmpty(_allowedVersion))
+                {
+                    <MudText Typo="Typo.body2" Color="Color.Info" Class="mb-6">
+                        Maximum allowed server version: <b>@_allowedVersion</b>
+                    </MudText>
+                }
+
+                @if (_currentUser != null && (_currentUser.IsAdmin || _currentUser.HasPermission(AppPermissions.Admin.ManageSettings)))
+                {
+                    <div class="d-flex flex-column align-center w-100" style="max-width: 600px;">
+                        <Spokes_Server.Components.Shared.ApiFileUpload 
+                            Category="temp" 
+                            ContextId="@Guid.NewGuid().ToString()" 
+                            OnUploadCompleted="HandleLicenseUploaded">
+                            <CustomContent>
+                                <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.UploadFile" Class="mb-6">
+                                    Upload New License
+                                </MudButton>
+                            </CustomContent>
+                        </Spokes_Server.Components.Shared.ApiFileUpload>
+
+                        <MudPaper Elevation="0" Class="pa-4 mt-4" Style="background-color: var(--mud-palette-background-grey); width: 100%;">
+                            <MudText Typo="Typo.h6" GutterBottom="true" Class="mb-4">How to fix this</MudText>
+                            
+                            @if (!_isCapacitorApp)
+                            {
+                                <MudAlert Severity="Severity.Success" Variant="Variant.Outlined" Class="mb-4" Icon="@Icons.Material.Filled.Favorite">
+                                    <MudText Typo="Typo.subtitle2" Class="mb-1"><b>If you want to keep using your server, receive updates and support the developer :)</b></MudText>
+                                    <MudText Typo="Typo.body2">
+                                        You need to purchase a license at <MudLink Href="https://www.spokes.sh" Target="_blank" Color="Color.Success"><b>https://www.spokes.sh</b></MudLink>
+                                    </MudText>
+                                </MudAlert>
+                            }
+                            
+                            <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Class="mb-4" Icon="@Icons.Material.Filled.UpdateDisabled">
+                                <MudText Typo="Typo.subtitle2" Class="mb-1"><b>If you want to keep using your server, but don't care about updates</b></MudText>
+                                <MudText Typo="Typo.body2" Class="mb-2">
+                                    You need to edit your container to pull a specific version of Spokes.
+                                </MudText>
+                                <MudText Typo="Typo.body2">
+                                    Right now, you are using <code style="background: rgba(128,128,128,0.2); padding: 2px 4px; border-radius: 4px;">ghcr.io/pcbeeqc/spokes:latest</code>, you need to specify a version ex : <code style="background: rgba(128,128,128,0.2); padding: 2px 4px; border-radius: 4px;">ghcr.io/pcbeeqc/spokes:@_allowedVersionStripped</code>
+                                </MudText>
+                            </MudAlert>
+
+                            <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Icon="@Icons.Material.Filled.DeleteForever">
+                                <MudText Typo="Typo.subtitle2" Class="mb-1"><b>If this is just for testing</b></MudText>
+                                <MudText Typo="Typo.body2">
+                                    If you don't mind losing all your data, you can start over. Stop the container, delete the content of the data folder, and restart the container. This will give you a fresh, updated instance. With a reset clock on the demo.
+                                </MudText>
+                            </MudAlert>
+                        </MudPaper>
+                    </div>
+                }
+                else
+                {
+                    <MudText Typo="Typo.body2" Color="Color.Secondary">Please contact your system administrator.</MudText>
+                }
+            </div>
+        }
+        else
+        {
+            @if (_licenseStatus == Spokes_Server.Core.Services.Licensing.LicenseStatus.Tolerated && _currentUser != null && (_currentUser.IsAdmin || _currentUser.HasPermission(AppPermissions.Admin.ManageSettings)))
+            {
+                <MudAlert Severity="Severity.Warning" Dense="true" Class="mb-0 mx-2 mt-2" ShowCloseIcon="false" Style="z-index: 100;">
+                    <div class="d-flex align-center">
+                        <span class="mr-2"><b>License Outdated:</b> @_licenseError</span>
+                        <MudButton Variant="Variant.Text" Color="Color.Inherit" Size="Size.Small" OnClick="@(() => Nav.NavigateTo("/admin/settings?tab=licensing"))">Resolve</MudButton>
+                    </div>
+                </MudAlert>
+            }
+            <Spokes_Server.Components.Shared.GlobalVoiceBar />
+            <div class="flex-grow-1 d-flex flex-column overflow-auto print-scroll" style="position: relative; min-height: 0;">
+                @Body
+            </div>
+        }
+    </MudMainContent>
+</MudLayout>
+
+<div id="blazor-error-ui" data-nosnippet>
+    An unhandled error has occurred.
+    <a href="." class="reload">Reload</a>
+    <span class="dismiss">🗙</span>
+</div>
+
+<style>
+    :root {
+        --safe-area-top: env(safe-area-inset-top, 0px);
+        --safe-area-bottom: env(safe-area-inset-bottom, 0px);
+    }
+
+    html.keyboard-open-ios {
+        --safe-area-bottom: 0px !important;
+    }
+
+    .mud-layout > .mud-appbar {
+        padding-top: var(--safe-area-top) !important;
+        height: calc(48px + var(--safe-area-top)) !important;
+    }
+
+    .mud-layout > .mud-main-content:not(.chat-channel-open) {
+        padding-top: calc(48px + var(--safe-area-top)) !important;
+        padding-bottom: var(--safe-area-bottom) !important;
+    }
+
+    #nav-drawer {
+        top: calc(48px + var(--safe-area-top)) !important;
+        height: calc(100vh - 48px - var(--safe-area-top) - var(--safe-area-bottom)) !important;
+    }
+
+    .timer-pulse {
+        animation: pulse 1.5s infinite;
+    }
+
+    @@keyframes pulse {
+        0% {
+            opacity: 1;
+        }
+
+        50% {
+            opacity: 0.3;
+        }
+
+        100% {
+            opacity: 1;
+        }
+    }
+
+    /* Default: chat page still needs top padding for the app bar */
+    .mud-layout > .mud-main-content.chat-channel-open {
+        padding-top: calc(48px + var(--safe-area-top)) !important;
+        padding-bottom: var(--safe-area-bottom) !important;
+    }
+
+    /* On mobile (sm and down), hide the app bar when a chat channel is open */
+    @@media (max-width: 959.98px) {
+        .mobile-preload-hide {
+            display: none !important;
+        }
+
+        .hide-appbar-mobile {
+            display: none !important;
+        }
+
+        .mud-layout > .mud-main-content.chat-channel-open {
+            padding-top: var(--safe-area-top) !important;
+            padding-bottom: var(--safe-area-bottom) !important;
+            height: var(--viewport-height, 100dvh) !important;
+            position: absolute !important;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            width: 100%;
+        }
+    }
+
+    /* On desktop (md and up), keep normal top padding */
+    @@media (min-width: 960px) {
+        .mud-layout > .mud-main-content.chat-channel-open {
+            padding-top: calc(48px + var(--safe-area-top)) !important;
+        }
+    }
+
+    /* Print styling to reset restricted viewports so browsers capture full pages */
+    @@media print {
+        .print-layout {
+            height: auto !important;
+            overflow: visible !important;
+            display: block !important;
+            position: static !important;
+        }
+
+        .print-scroll {
+            overflow: visible !important;
+            display: block !important;
+            position: static !important;
+        }
+    }
+</style>
+
+@code {
+    public class ServerTiming
+    {
+        public string Name { get; set; } = "";
+        public long Timestamp { get; set; }
+    }
+    private List<ServerTiming> _serverTimings = new();
+    private bool _isLoaded = false;
+    private bool _isCapacitorApp = false;
+    private bool _isEditingFavorites = false;
+    private bool _drawerOpen = true;
+    private DrawerVariant _drawerVariant = DrawerVariant.Responsive;
+    private bool _isDarkMode = true;
+    private MudTheme? _theme = null;
+    private Employee? _currentUser;
+    private CompanyProfile? Profile;
+    private DotNetObjectReference<MainLayout>? _dotNetRef;
+    private Spokes_Server.Components.Shared.GlobalSearchBar? _searchBar;
+    private bool IsFriendEdition => Db.CompanyProfile.Get()?.Edition == "Family";
+
+    // Timer State
+    private TimerState _timerState = new();
+    private TimeSpan _timerElapsed;
+    private System.Timers.Timer? _uiTimer;
+
+    // Notification / Presence State
+    private string? _currentSubscriptionEndpoint;
+    private string? _currentSubscriptionId;
+    private string? _currentSessionId;
+    private bool _isChatPage;
+    private bool _isChatChannelOpen;
+    private bool _isThisTabFocused = true; // Assume focused on initial load
+    private string _appVersion = Spokes_Server.Core.Services.Licensing.LicenseValidationService.AppVersion;
+    private string? _licenseError;
+    private string? _allowedVersion;
+    private string? _firstInstalledVersion;
+    private string? _lockupVersion;
+    private string? _allowedVersionStripped;
+    private Spokes_Server.Core.Services.Licensing.LicenseStatus _licenseStatus = Spokes_Server.Core.Services.Licensing.LicenseStatus.Valid;
+
+    private void HandleLicenseUploaded(List<Spokes_Server.Components.Shared.ApiFileUpload.UploadResult> results)
+    {
+        if (results == null || results.Count == 0) return;
+        
+        var result = results.First();
+        var parts = result.FilePath.Substring("/spokesapi/files/".Length).Split('/');
+        if (parts.Length != 3) return;
+        var fullPath = FileService.GetPhysicalPath(parts[0], parts[1], parts[2]);
+        
+        if (File.Exists(fullPath))
+        {
+            try
+            {
+                var json = File.ReadAllText(fullPath);
+                var config = Db.ServerConfigs.GetOrCreateGlobalConfig();
+                var validationResult = LicenseValidationService.ValidateLicense(json, config);
+
+                if (validationResult.Status == Spokes_Server.Core.Services.Licensing.LicenseStatus.Valid || validationResult.Status == Spokes_Server.Core.Services.Licensing.LicenseStatus.Tolerated)
+                {
+                    if (validationResult.ParsedLicense != null)
+                    {
+                        if(Profile != null)
+                        {
+                            Profile.LicensePayload = json;
+                            
+                            var newEditions = Spokes_Server.Core.Services.Licensing.LicenseValidationService.GetAvailableEditions(validationResult);
+                            if (!newEditions.Contains(Profile.Edition))
+                            {
+                                Profile.Edition = newEditions.FirstOrDefault() ?? "Family";
+                            }
+                            
+                            Db.CompanyProfile.Save(Profile);
+                        }
+                        Snackbar.Add("License Validated & Saved Successfully!", Severity.Success);
+                        
+                        _licenseStatus = validationResult.Status;
+                        _licenseError = null;
+                        _allowedVersion = null;
+                        _firstInstalledVersion = null;
+                        _lockupVersion = null;
+                    }
+                    else
+                    {
+                        Snackbar.Add("License is valid but could not be parsed.", Severity.Warning);
+                    }
+                }
+                else
+                {
+                    Snackbar.Add($"Invalid License: {validationResult.Message}", Severity.Error);
+                }
+                
+                FileService.CleanTempContext(parts[1]);
+                StateHasChanged();
+            }
+            catch (Exception ex)
+            {
+                Snackbar.Add($"Upload Failed: {ex.Message}", Severity.Error);
+                FileService.CleanTempContext(parts[1]);
+            }
+        }
+    }
+
+    protected override void OnInitialized()
+    {
+        _serverTimings.Add(new ServerTiming { Name = "Server: Layout OnInitialized", Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() });
+        Console.WriteLine($"[STARTUP-DIAGNOSTIC] {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss.fff} - MainLayout.OnInitialized started");
+        _isChatPage = Nav.Uri.Contains("/chat", StringComparison.OrdinalIgnoreCase);
+        _isChatChannelOpen = IsChatChannelUrl(Nav.Uri);
+        Nav.LocationChanged += HandleLocationChanged;
+        
+        PresenceState.OnSessionRevoked += HandleSessionRevoked;
+
+        if (Db.CompanyProfile.Get()?.Edition == "Family")
+        {
+            _drawerOpen = false;
+        }
+    }
+
+    private async void HandleSessionRevoked(string sessionId)
+    {
+        if (!string.IsNullOrEmpty(_currentSessionId) && sessionId == _currentSessionId)
+        {
+            await InvokeAsync(() =>
+            {
+                Nav.NavigateTo("/spokesapi/auth/force-logout", forceLoad: true);
+            });
+        }
+    }
+
+    private void HandleLocationChanged(object? sender, LocationChangedEventArgs e)
+    {
+        _isChatPage = e.Location.Contains("/chat", StringComparison.OrdinalIgnoreCase);
+        _isChatChannelOpen = IsChatChannelUrl(e.Location);
+        
+        if (_currentUser != null)
+        {
+            PresenceState.PingUserActive(_currentUser.Id);
+        }
+        
+        StateHasChanged();
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        _serverTimings.Add(new ServerTiming { Name = "Server: Layout OnInitializedAsync Start", Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() });
+        Console.WriteLine($"[STARTUP-DIAGNOSTIC] {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss.fff} - MainLayout.OnInitializedAsync started");
+        Profile = Db.CompanyProfile.Get();
+
+        // 1. Setup Theme
+        _theme = new()
+            {
+                PaletteLight = _lightPalette,
+                PaletteDark = _darkPalette,
+                LayoutProperties = new LayoutProperties()
+            };
+
+        // 2. Load User Preference
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        var user = authState.User;
+
+        // Use UserService to get the employee (time this operation)
+        var empStopwatch = System.Diagnostics.Stopwatch.StartNew();
+        _currentUser = await UserService.GetEmployeeAsync();
+        empStopwatch.Stop();
+        
+        _serverTimings.Add(new ServerTiming { Name = "Server: Layout GetEmployeeAsync Done", Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() });
+        Console.WriteLine($"[STARTUP-DIAGNOSTIC] {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss.fff} - MainLayout.OnInitializedAsync: GetEmployeeAsync took {empStopwatch.ElapsedMilliseconds}ms. Employee ID: {_currentUser?.Id ?? "null"}. Avatar Base64 length: {_currentUser?.AvatarBase64?.Length ?? 0} chars.");
+
+        // Redirect to access-pending if authenticated but no employee linked
+        if (user.Identity?.IsAuthenticated == true && _currentUser == null)
+        {
+            var currentUri = Nav.Uri;
+            if (!currentUri.Contains("/access-pending"))
+            {
+                Nav.NavigateTo("/access-pending", replace: true);
+                return;
+            }
+        }
+
+        if (_currentUser != null)
+        {
+            if (_currentUser.IsBanned)
+            {
+                var currentUri = Nav.Uri;
+                if (!currentUri.Contains("/banned", StringComparison.OrdinalIgnoreCase))
+                {
+                    Nav.NavigateTo("/banned", replace: true);
+                    return;
+                }
+            }
+
+            if (_currentUser.IsSuspended)
+            {
+                Snackbar.Add("Your account has been suspended. You are in read-only mode.", Severity.Warning, config =>
+                {
+                    config.VisibleStateDuration = int.MaxValue;
+                });
+            }
+
+            _isDarkMode = _currentUser.IsDarkMode;
+
+            // Init Timer
+            _timerState = TimerService.GetState(_currentUser.Id);
+            TimerService.OnTimerChanged += OnTimerChanged;
+            if (_timerState.IsRunning) StartUiTimer();
+            
+            // Verify License
+            var result = LicenseValidationService.ValidateLicense(Profile?.LicensePayload, Db.ServerConfigs.GetOrCreateGlobalConfig());
+            _licenseStatus = result.Status;
+            if (result.Status != Spokes_Server.Core.Services.Licensing.LicenseStatus.Valid)
+            {
+                _licenseError = result.Message;
+                _allowedVersion = result.MaxAllowedVersion;
+                
+                if (result.ParsedLicense != null)
+                {
+                    _allowedVersionStripped = GetVersionNumbersOnly(_allowedVersion);
+                }
+                else if (string.IsNullOrEmpty(Profile?.LicensePayload))
+                {
+                    _firstInstalledVersion = result.FirstInstalledVersion ?? Db.ServerConfigs.GetOrCreateGlobalConfig().DatabaseCreationVersion;
+                    _lockupVersion = result.LockupVersion ?? _firstInstalledVersion;
+                    _allowedVersionStripped = GetVersionNumbersOnly(_allowedVersion);
+                }
+            }
+
+            // Server-side vault unlock: read the HttpOnly cookie directly from HttpContext
+            // before the circuit switches to WebSocket.
+            // This is required so Web clients have the vault unlocked before Albums.razor renders.
+            if (_currentUser != null && !string.IsNullOrEmpty(_currentUser.EncryptedPrivateKey) && !ScopedKeystore.IsUnlocked)
+            {
+                ScopedKeystore.TryInitializeFromVaultCookie(
+                    HttpContextAccessor.HttpContext, _currentUser.Id, _currentUser.EncryptedPrivateKey, Crypto, GlobalKeystore);
+            }
+        }
+        _serverTimings.Add(new ServerTiming { Name = "Server: Layout OnInitializedAsync Done", Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() });
+        Console.WriteLine($"[STARTUP-DIAGNOSTIC] {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss.fff} - MainLayout.OnInitializedAsync completed");
+    }
+
+    private string GetVersionNumbersOnly(string? version)
+    {
+        if (string.IsNullOrEmpty(version)) return "latest";
+        int firstDigitIndex = -1;
+        for (int i = 0; i < version.Length; i++)
+        {
+            if (char.IsDigit(version[i]))
+            {
+                firstDigitIndex = i;
+                break;
+            }
+        }
+        if (firstDigitIndex >= 0)
+        {
+            return version.Substring(firstDigitIndex);
+        }
+        return version.TrimStart('v', 'V');
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            _serverTimings.Add(new ServerTiming { Name = "Server: Layout OnAfterRenderAsync Start", Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() });
+            Console.WriteLine($"[STARTUP-DIAGNOSTIC] {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss.fff} - MainLayout.OnAfterRenderAsync (firstRender) entered");
+            try
+            {
+                await JS.InvokeVoidAsync("startupDiagnostics.reportInteractive", _currentUser?.Id, _currentUser?.AvatarBase64?.Length ?? 0, _serverTimings);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[STARTUP-DIAGNOSTIC] Failed to call reportInteractive in JS: {ex.Message}");
+            }
+
+            _dotNetRef = DotNetObjectReference.Create(this);
+            await JS.InvokeVoidAsync("registerCtrlK", _dotNetRef);
+            await JS.InvokeVoidAsync("registerWindowFocus", _dotNetRef);
+            await JS.InvokeVoidAsync("registerActivityTracker", _dotNetRef);
+            await JS.InvokeVoidAsync("registerShareTarget", _dotNetRef);
+            await JS.InvokeVoidAsync("registerImageRecoveryCoordinator", _dotNetRef);
+            await JS.InvokeVoidAsync("pushNotifications.registerPresenceLayout", _dotNetRef);
+
+            try
+            {
+                var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+                _currentSessionId = authState.User.FindFirst("SessionId")?.Value;
+            }
+            catch { }
+
+            // Register this connection for presence tracking
+            await RegisterPresenceConnection();
+            if (_currentUser != null)
+            {
+                PresenceState.SetConnectionFocus(_currentUser.Id, _currentSubscriptionId, _isThisTabFocused);
+            }
+
+            // Auto-unlock vault on Native Mobile (since cookies aren't passed reliably in HTTP initial request)
+            if (_currentUser != null && _currentUser.HasChatPassword && !string.IsNullOrEmpty(_currentUser.EncryptedPrivateKey) && !ScopedKeystore.IsUnlocked)
+            {
+                try
+                {
+                    await ScopedKeystore.InitializeFromDeviceCookieAsync(JS, _currentUser.Id, _currentUser.EncryptedPrivateKey, Crypto, GlobalKeystore);
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[MainLayout] Failed to initialize Keystore from device: {ex.Message}");
+                }
+            }
+
+            // Auto-prompt for push notifications on new devices
+            if (_currentUser != null && string.IsNullOrEmpty(_currentSubscriptionEndpoint) && !Config.GetValue<bool>("Spokes_DemoMode"))
+            {
+                try
+                {
+                    var profile = Db.CompanyProfile.Get();
+                    if (!string.IsNullOrEmpty(profile?.VapidPublicKey))
+                    {
+                        var hasPrompted = await JS.InvokeAsync<bool>("pushNotifications.hasBeenPromptedForPush", profile.VapidPublicKey);
+                        if (!hasPrompted)
+                        {
+                            var isSupported = await JS.InvokeAsync<bool>("pushNotifications.isSupported");
+                            if (isSupported)
+                            {
+                                await JS.InvokeVoidAsync("pushNotifications.setPushPrompted", profile.VapidPublicKey);
+                                
+                                Snackbar.Add("Would you like to enable push notifications for this server?", Severity.Info, config =>
+                                {
+                                    config.Action = "Enable";
+                                    config.ActionColor = Color.Success;
+                                    config.OnClick = snackbar =>
+                                    {
+                                        _ = TriggerAutoPushRegistration(profile.VapidPublicKey);
+                                        return Task.CompletedTask;
+                                    };
+                                    config.ShowCloseIcon = true;
+                                    config.RequireInteraction = true;
+                                });
+                            }
+                        }
+                    }
+                }
+                catch { /* Ignore errors if push is unsupported or network fails */ }
+            }
+
+            // Server Update Notification for Admins
+            if (_currentUser != null && (_currentUser.IsAdmin || _currentUser.HasPermission(AppPermissions.Admin.ManageSettings)))
+            {
+                if (ServerUpdateService.IsUpdateAvailable && !string.IsNullOrEmpty(ServerUpdateService.LatestVersion))
+                {
+                    if (_currentUser.LastSeenUpdateVersion != ServerUpdateService.LatestVersion)
+                    {
+                        var profile = Db.CompanyProfile.Get();
+                        var valResult = LicenseValidationService.ValidateLicense(profile?.LicensePayload, Db.ServerConfigs.GetOrCreateGlobalConfig());
+                        string maxVer = valResult.MaxAllowedVersion ?? "";
+                        bool latestExceedsAllowed = false;
+
+                        if (Version.TryParse(ServerUpdateService.LatestVersion.TrimStart('v'), out Version? lv) && 
+                            Version.TryParse(maxVer.TrimStart('v'), out Version? mv))
+                        {
+                            latestExceedsAllowed = lv > mv;
+                        }
+
+                        if (latestExceedsAllowed)
+                        {
+                            bool isDemo = string.IsNullOrEmpty(profile?.LicensePayload);
+                            string msg = isDemo 
+                                ? $"A new update (v{ServerUpdateService.LatestVersion}) is available, but your Demo limits updates to {maxVer}."
+                                : $"A new update (v{ServerUpdateService.LatestVersion}) is available, but your license limits updates to {maxVer}.";
+
+                            Snackbar.Add(msg, Severity.Warning, config =>
+                            {
+                                config.Action = "More Info";
+                                config.ActionColor = Color.Warning;
+                                config.OnClick = snackbar =>
+                                {
+                                    Nav.NavigateTo("/admin/settings");
+                                    return Task.CompletedTask;
+                                };
+                                config.RequireInteraction = true;
+                                config.ShowCloseIcon = true;
+                            });
+                        }
+                        else
+                        {
+                            Snackbar.Add($"A new server update is available (v{ServerUpdateService.LatestVersion})", Severity.Info, config =>
+                            {
+                                config.Action = "More Info";
+                                config.ActionColor = Color.Primary;
+                                config.OnClick = snackbar =>
+                                {
+                                    Nav.NavigateTo("/admin/settings");
+                                    return Task.CompletedTask;
+                                };
+                                config.RequireInteraction = true;
+                                config.ShowCloseIcon = true;
+                            });
+                        }
+                        
+                        _currentUser.LastSeenUpdateVersion = ServerUpdateService.LatestVersion;
+                        Db.Employees.Save(_currentUser);
+                    }
+                }
+            }
+
+            if (_currentUser != null && !_currentUser.HasChatPassword && !_currentUser.DismissedChatWizardPermanently)
+            {
+                if ((_currentUser.ChatWizardRemindLaterDate == null || DateTimeOffset.UtcNow > _currentUser.ChatWizardRemindLaterDate) && !Config.GetValue<bool>("Spokes_DemoMode"))
+                {
+                    var options = new DialogOptions { CloseOnEscapeKey = false, BackdropClick = false, MaxWidth = MaxWidth.Small, FullWidth = true };
+                    var parameters = new DialogParameters { { "Employee", _currentUser } };
+                    var dialog = await DialogService.ShowAsync<Spokes_Server.Components.Dialogs.SecureChatSetupWizardDialog>("Secure Chat Setup", parameters, options);
+                    var result = await dialog.Result;
+                }
+            }
+
+            await ViewportService.SubscribeAsync(this);
+            var bp = await ViewportService.GetCurrentBreakpointAsync();
+            var isMobile = bp <= Breakpoint.Sm;
+            
+            Snackbar.Configuration.PositionClass = isMobile ? Defaults.Classes.Position.TopCenter : Defaults.Classes.Position.BottomRight;
+            
+            if (!isMobile)
+            {
+                _drawerVariant = DrawerVariant.Mini;
+            }
+            else
+            {
+                _drawerVariant = DrawerVariant.Responsive;
+                _drawerOpen = false;
+            }
+            
+            try { await JS.InvokeVoidAsync("setCapacitorStatusBarStyle", _isDarkMode); } catch { }
+            try { _isCapacitorApp = await JS.InvokeAsync<bool>("eval", "!!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform())"); } catch { }
+            try { await JS.InvokeVoidAsync("pushNotifications.initializeNativePushListeners", _dotNetRef); } catch { }
+            
+            _isLoaded = true;
+            StateHasChanged();
+        }
+    }
+
+    public Guid Id { get; } = Guid.NewGuid();
+    public ResizeOptions ResizeOptions { get; } = new();
+
+    public async Task NotifyBrowserViewportChangeAsync(BrowserViewportEventArgs args)
+    {
+        var isMobile = args.Breakpoint <= Breakpoint.Sm;
+        var newVariant = isMobile ? DrawerVariant.Responsive : DrawerVariant.Mini;
+        
+        var newPosition = isMobile ? Defaults.Classes.Position.TopCenter : Defaults.Classes.Position.BottomRight;
+        if (Snackbar.Configuration.PositionClass != newPosition)
+        {
+            Snackbar.Configuration.PositionClass = newPosition;
+        }
+
+        if (_drawerVariant != newVariant)
+        {
+            _drawerVariant = newVariant;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        try
+        {
+            if (_dotNetRef != null)
+            {
+                await JS.InvokeVoidAsync("unregisterCtrlK");
+                await JS.InvokeVoidAsync("unregisterWindowFocus");
+                await JS.InvokeVoidAsync("unregisterActivityTracker");
+                await JS.InvokeVoidAsync("unregisterShareTarget");
+                await JS.InvokeVoidAsync("pushNotifications.stopIdleDetector");
+            }
+
+            // Remove this connection from presence tracking
+            if (_currentUser != null && PresenceState != null)
+            {
+                if (!string.IsNullOrEmpty(_currentSubscriptionId))
+                {
+                    PresenceState.RemoveConnection(_currentSubscriptionId);
+                }
+            }
+
+            await ViewportService.UnsubscribeAsync(this);
+        }
+        catch (JSDisconnectedException) { }
+        catch (InvalidOperationException) { }
+
+        TimerService.OnTimerChanged -= OnTimerChanged;
+        StopUiTimer();
+        Nav.LocationChanged -= HandleLocationChanged;
+        PresenceState.OnSessionRevoked -= HandleSessionRevoked;
+        _dotNetRef?.Dispose();
+    }
+
+    [JSInvokable]
+    public async Task OnCtrlK()
+    {
+        if (_searchBar != null)
+            await _searchBar.FocusSearchField();
+    }
+
+    [JSInvokable]
+    public void NavigateTo(string url)
+    {
+        Nav.NavigateTo(url);
+    }
+
+    [JSInvokable]
+    public void OnWindowFocusChanged(bool isFocused)
+    {
+        if (_isThisTabFocused == isFocused) return; // Prevent spurious updates
+        _isThisTabFocused = isFocused;
+        CircuitContext.IsFocused = isFocused;
+
+        if (_currentUser != null)
+        {
+            PresenceState.SetConnectionFocus(_currentUser.Id, _currentSubscriptionId, isFocused);
+        }
+
+        // Force a UI re-render when returning to the app 
+        // to un-stick the iOS WKWebView 100vh viewport bug.
+        if (isFocused)
+        {
+            // Heal any desynced unread counters that were missed while the app was asleep/backgrounded
+            ChatNotifications.ReloadUnreadCounts();
+            
+            InvokeAsync(StateHasChanged);
+        }
+    }
+
+    public class SharePayload
+    {
+        public string? Title { get; set; }
+        public string? Text { get; set; }
+        public string? Url { get; set; }
+        public List<SharedFile>? Files { get; set; }
+        public string? TargetChannelId { get; set; }
+        public string? TargetServerUrl { get; set; }
+
+        /// <summary>
+        /// Compat: @capgo/capacitor-share-target sends "texts" (plural array).
+        /// Merged into Text/Url by OnShareReceived if present.
+        /// </summary>
+        public List<string>? Texts { get; set; }
+    }
+
+    public class SharedFile
+    {
+        public string? Name { get; set; }
+        public string? MimeType { get; set; }
+        public string? Uri { get; set; }
+    }
+
+    [JSInvokable]
+    public Task OnShareReceived(SharePayload payload)
+    {
+        // Normalize plugin's "texts" array into Text/Url if those are empty
+        if (payload.Texts is { Count: > 0 })
+        {
+            foreach (var t in payload.Texts)
+            {
+                if (Uri.TryCreate(t, UriKind.Absolute, out var uri)
+                    && (uri.Scheme == "http" || uri.Scheme == "https"))
+                {
+                    payload.Url ??= t;
+                }
+                else
+                {
+                    payload.Text = string.IsNullOrEmpty(payload.Text) ? t : payload.Text + "\n" + t;
+                }
+            }
+            // If only URLs were in texts and Text is still null, put the URL there too
+            payload.Text ??= payload.Url;
+        }
+
+        if (!string.IsNullOrEmpty(payload.TargetChannelId))
+        {
+            ShareTargetStateService.SetPayload(payload, payload.TargetChannelId);
+            Nav.NavigateTo($"/chat/{payload.TargetChannelId}");
+            return Task.CompletedTask;
+        }
+
+        _ = ShowShareModalAsync(payload);
+        return Task.CompletedTask;
+    }
+
+    private async Task ShowShareModalAsync(SharePayload payload)
+    {
+        var parameters = new DialogParameters
+        {
+            { "SharedTitle", payload.Title },
+            { "SharedText", payload.Text },
+            { "SharedUrl", payload.Url },
+            { "SharedFiles", payload.Files ?? new List<SharedFile>() }
+        };
+
+        var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Large, FullWidth = true };
+        var dialog = await DialogService.ShowAsync<Spokes_Server.Components.Dialogs.ShareModal>("Share to Spokes", parameters,options);
+        var result = await dialog.Result;
+
+        if (result != null && !result.Canceled && result.Data is Spokes_Server.Components.Dialogs.ShareModal.ShareResult shareResult)
+        {
+            if (!string.IsNullOrEmpty(shareResult.ChannelId))
+            {
+                ShareTargetStateService.SetPayload(payload, shareResult.ChannelId);
+                Nav.NavigateTo($"/chat/{shareResult.ChannelId}");
+            }
+        }
+    }
+
+    // --- Search ---
+    private async Task FocusMobileSearch()
+    {
+        var options = new DialogOptions
+            {
+                MaxWidth = MaxWidth.Medium,
+                FullWidth = true,
+                NoHeader = true,
+                CloseOnEscapeKey = true
+            };
+        await DialogService.ShowAsync<Spokes_Server.Components.Dialogs.GlobalSearchDialog>(null, options);
+    }
+
+    // --- Drawer & Theme ---
+    private void DrawerToggle()
+    {
+        _drawerOpen = !_drawerOpen;
+    }
+
+    private async Task ChangeServerMobileApp()
+    {
+        try { await JS.InvokeVoidAsync("changeCapacitorServer"); } catch { }
+    }
+
+    private void DarkModeToggle()
+    {
+        _isDarkMode = !_isDarkMode;
+
+        try { _ = JS.InvokeVoidAsync("setCapacitorStatusBarStyle", _isDarkMode); } catch { }
+
+        if (_currentUser != null)
+        {
+            var freshUser = Db.Employees.GetById(_currentUser.Id);
+            if (freshUser != null)
+            {
+                freshUser.IsDarkMode = _isDarkMode;
+                Db.Employees.Save(freshUser);
+            }
+        }
+    }
+
+    private async Task OpenProfileDialog()
+    {
+        if (_currentUser == null) return;
+
+        var parameters = new DialogParameters<Spokes_Server.Components.Dialogs.EditProfileDialog>
+{
+{ x => x.Employee, _currentUser }
+};
+        var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Small, FullWidth = true };
+        var dialog = await DialogService.ShowAsync<Spokes_Server.Components.Dialogs.EditProfileDialog>("Edit Profile", parameters);
+        var result = await dialog.Result;
+
+        if (!result.Canceled && result.Data is Employee updatedEmployee)
+        {
+            StateHasChanged();
+        }
+    }
+
+    // --- Timer Logic ---
+    private async Task StartTimerFromMenu()
+    {
+        var options = new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true, CloseButton = true };
+        var dialog = await DialogService.ShowAsync<Spokes_Server.Components.Dialogs.StartTimerDialog>("Start Timer", options);
+        // The dialog handles the actual starting through TimerService
+    }
+
+    private void StopTimerFromMenu()
+    {
+        if (_currentUser == null) return;
+        var elapsed = TimerService.Stop(_currentUser.Id);
+        if (elapsed.TotalMinutes >= 1)
+        {
+            Snackbar.Add($"Logged {elapsed.Hours}h {elapsed.Minutes}m", Severity.Success);
+        }
+        else
+        {
+            Snackbar.Add("Timer < 1 min - discarded", Severity.Warning);
+        }
+    }
+
+    private void OnTimerChanged()
+    {
+        if (_currentUser == null) return;
+        _timerState = TimerService.GetState(_currentUser.Id);
+
+        if (_timerState.IsRunning) StartUiTimer();
+        else StopUiTimer();
+
+        InvokeAsync(StateHasChanged);
+    }
+
+    private void StartUiTimer()
+    {
+        _uiTimer?.Dispose();
+        _uiTimer = new System.Timers.Timer(1000);
+        _uiTimer.Elapsed += (_, _) =>
+        {
+            if (_timerState.IsRunning && _timerState.StartedAt.HasValue)
+            {
+                _timerElapsed = DateTime.UtcNow - _timerState.StartedAt.Value;
+                InvokeAsync(StateHasChanged);
+            }
+        };
+        _uiTimer.Start();
+        if (_timerState.StartedAt.HasValue)
+            _timerElapsed = DateTime.UtcNow - _timerState.StartedAt.Value;
+    }
+
+    private void StopUiTimer()
+    {
+        _uiTimer?.Dispose();
+        _uiTimer = null;
+    }
+
+    // --- User Settings Dialog ---
+    private async Task OpenUserSettingsDialog()
+    {
+        var options = new DialogOptions
+        {
+            CloseOnEscapeKey = true,
+            MaxWidth = MaxWidth.Small,
+            FullWidth = true
+        };
+        await DialogService.ShowAsync<Spokes_Server.Components.Dialogs.UserSettingsDialog>(null);
+    }
+
+    // --- Presence Connection Registration ---
+    private async Task RegisterPresenceConnection()
+    {
+        if (_currentUser == null) return;
+
+        // Give this browser tab a robust unique ID so presence works even without push notifications.
+        _currentSubscriptionId = Guid.NewGuid().ToString();
+        var deviceType = "Desktop"; // Default
+        bool hasPushEnabled = false;
+
+        try
+        {
+            var existingSub = await JS.InvokeAsync<Dictionary<string, object>?>("pushNotifications.getExistingSubscription");
+            if (existingSub != null && existingSub.TryGetValue("endpoint", out var epObj))
+            {
+                _currentSubscriptionEndpoint = epObj?.ToString();
+
+                // Look up the subscription ID from the endpoint
+                if (!string.IsNullOrEmpty(_currentSubscriptionEndpoint))
+                {
+                    var currentSession = !string.IsNullOrEmpty(_currentSessionId) ? Db.DeviceSessions.GetById(_currentSessionId) : null;
+                    var sub = Db.DeviceSessions.GetByPushEndpoint(_currentSubscriptionEndpoint);
+
+                    if (sub != null && sub.Id == currentSession?.Id && currentSession.HasPush)
+                    {
+                        hasPushEnabled = true;
+                        deviceType = sub.DeviceType;
+                    }
+                    else
+                    {
+                        // Active push subscription exists in browser; re-sync or register to current session
+                        hasPushEnabled = true;
+                        try
+                        {
+                            await JS.InvokeAsync<bool>("pushNotifications.sendSubscriptionToServer", existingSub, deviceType, "", false);
+                        }
+                        catch { /* Ignore */ }
+                    }
+                }
+            }
+        }
+        catch { /* Push not available — will track presence using the anonymous ID */ }
+
+        // Fallback: If push is disabled but we are clearly running in a native Capacitor shell, mark as Mobile
+        try
+        {
+            var isNative = await JS.InvokeAsync<bool>("eval", "typeof window.isCapacitorNative === 'function' ? window.isCapacitorNative() : !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform())");
+            if (isNative)
+            {
+                deviceType = "Mobile";
+            }
+        }
+        catch { }
+
+        // Populate scoped circuit context for PresenceCircuitHandler
+        CircuitContext.UserId = _currentUser.Id;
+        CircuitContext.SubscriptionId = _currentSubscriptionId;
+        CircuitContext.SessionId = _currentSessionId;
+        CircuitContext.DeviceType = deviceType;
+        CircuitContext.HasPushEnabled = hasPushEnabled;
+        CircuitContext.IsFocused = _isThisTabFocused;
+
+        // Register the connection in the PresenceState service
+        PresenceState.RegisterConnection(_currentUser.Id, _currentSubscriptionId, deviceType, hasPushEnabled, _currentSessionId, _isThisTabFocused);
+        
+        try
+        {
+            await JS.InvokeVoidAsync("eval", $"window._currentSubscriptionId = '{_currentSubscriptionId}';");
+        }
+        catch { /* Ignore errors if circuit is disconnecting */ }
+
+        // If this device has Idle Detection enabled, try to start it
+        if (_currentSubscriptionEndpoint != null)
+        {
+            var sub = Db.DeviceSessions.GetByPushEndpoint(_currentSubscriptionEndpoint);
+            if (sub != null && sub.IsIdleDetectionEnabled && sub.DeviceType == "Desktop")
+            {
+                try
+                {
+                    await JS.InvokeAsync<bool>("pushNotifications.startIdleDetector", _dotNetRef);
+                }
+                catch { /* Ignore errors if browser doesn't support it */ }
+            }
+            else
+            {
+                try
+                {
+                    await JS.InvokeVoidAsync("pushNotifications.stopIdleDetector");
+                }
+                catch { }
+            }
+        }
+
+        // Note: Legacy "session consolidation" block removed.
+        // Device ID mismatch is now handled at SSO login time (Program.cs /sso/login/auto)
+        // and at layout load time (OnAfterRenderAsync deviceId validation above).
+    }
+
+    [JSInvokable]
+    public void OnDeviceActivePing()
+    {
+        PresenceState.PingDeviceActive(_currentSubscriptionId);
+    }
+
+    public string DarkLightModeButtonIcon => _isDarkMode switch
+    {
+        true => Icons.Material.Rounded.LightMode,
+        false => Icons.Material.Outlined.DarkMode,
+    };
+
+    /// <summary>
+    /// Checks if the URL is a chat channel URL (i.e. /chat/{channelId}).
+    /// This is used to hide the app bar on mobile to maximize chat space.
+    /// </summary>
+    private static bool IsChatChannelUrl(string url)
+    {
+        // Extract the path from the full URL
+        if (Uri.TryCreate(url, UriKind.Absolute, out var uri))
+        {
+            var path = uri.AbsolutePath.TrimEnd('/');
+            // Match /chat/{something} but not just /chat
+            var segments = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
+            return segments.Length >= 2 
+                && segments[0].Equals("chat", StringComparison.OrdinalIgnoreCase);
+        }
+        return false;
+    }
+
+    private readonly PaletteLight _lightPalette = new()
+        {
+            Black = "#110e2d",
+            AppbarText = "#424242",
+            AppbarBackground = "rgba(255,255,255,0.8)",
+            DrawerBackground = "#ffffff",
+            GrayLight = "#e8e8e8",
+            GrayLighter = "#f9f9f9",
+        };
+
+    private readonly PaletteDark _darkPalette = new()
+        {
+            Primary = "#7e6fff",
+            Surface = "#1e1e2d",
+            Background = "#1a1a27",
+            BackgroundGray = "#151521",
+            AppbarText = "#92929f",
+            AppbarBackground = "rgba(26,26,39,0.8)",
+            DrawerBackground = "#1a1a27",
+            ActionDefault = "#74718e",
+            ActionDisabled = "#9999994d",
+            ActionDisabledBackground = "#605f6d4d",
+            TextPrimary = "#b2b0bf",
+            TextSecondary = "#92929f",
+            TextDisabled = "#ffffff33",
+            DrawerIcon = "#92929f",
+            DrawerText = "#92929f",
+            GrayLight = "#2a2833",
+            GrayLighter = "#1e1e2d",
+            Info = "#4a86ff",
+            Success = "#3dcb6c",
+            Warning = "#ffb545",
+            Error = "#ff3f5f",
+            LinesDefault = "#33323e",
+            TableLines = "#33323e",
+            Divider = "#292838",
+            OverlayLight = "#1e1e2d80",
+        };
+
+    private async Task TriggerAutoPushRegistration(string vapidPublicKey)
+    {
+        try
+        {
+            // 1. Request permission
+            var permResult = await JS.InvokeAsync<Dictionary<string, object>>("pushNotifications.requestPermission", _dotNetRef);
+            var permission = permResult?.GetValueOrDefault("permission")?.ToString();
+            
+            if (permission == "granted")
+            {
+                // 2. Register service worker
+                var swResult = await JS.InvokeAsync<Dictionary<string, object>>("pushNotifications.registerServiceWorker");
+                var swSuccess = swResult?.GetValueOrDefault("success")?.ToString() == "True";
+                
+                if (swSuccess)
+                {
+                    // 3. Subscribe to push
+                    var subscription = await JS.InvokeAsync<Dictionary<string, object>>("pushNotifications.subscribe", vapidPublicKey, _dotNetRef);
+                    
+                    if (subscription != null && subscription.ContainsKey("endpoint"))
+                    {
+                        // 4. Save to server
+                        var deviceType = await JS.InvokeAsync<string>("pushNotifications.detectDeviceType");
+                        var success = await JS.InvokeAsync<bool>("pushNotifications.sendSubscriptionToServer", subscription, deviceType, "", false);
+                        
+                        if (success)
+                        {
+                            Snackbar.Add("Push notifications enabled!", Severity.Success);
+                            // Refresh endpoint and presence so other tabs see it
+                            _currentSubscriptionEndpoint = subscription.GetValueOrDefault("endpoint")?.ToString();
+                            CircuitContext.HasPushEnabled = true;
+                            PresenceState.UpdatePushEnabledState(_currentSubscriptionId, true);
+                        }
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error auto-registering push notifications: {ex.Message}");
+        }
+    }
+
+    [JSInvokable]
+    public void OnAppShortcutReceived(string channelId)
+    {
+        if (!string.IsNullOrEmpty(channelId))
+        {
+            Nav.NavigateTo($"/chat/{channelId}");
+        }
+    }
+
+    [JSInvokable]
+    public void TriggerTokenRecovery()
+    {
+        ImageRecovery.NotifyTokensWiped();
+    }
+}

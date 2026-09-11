@@ -1,0 +1,604 @@
+@using Microsoft.AspNetCore.Components.Authorization
+@using Spokes_Server.Core.Data
+@using Spokes_Server.Core.Services
+@using Spokes_Server.Core.Constants
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Models.HR
+@inject Database Db
+@inject UserService UserService
+@inject AuthenticationStateProvider AuthStateProvider
+@inject ChatNotificationService ChatNotifications
+@inject EmailNotificationService EmailNotifications
+@inject Spokes_Server.Core.Services.Core.AppLabelService AppLabels
+@inject IConfiguration Config
+@inject IJSRuntime JS
+@implements IDisposable
+
+<MudNavMenu>
+    @* --- Home (Always Pinned) --- *@
+    <MudNavLink Href="" Match="NavLinkMatch.All" Icon="@Icons.Material.Filled.Home">
+        <div class="d-flex align-center" style="width: 100%;">
+            <span style="flex: 1;">Home</span>
+        </div>
+    </MudNavLink>
+
+    @* --- Favorites --- *@
+    @if (_currentUser?.FavoriteLinks.Any(h => h != "") == true)
+    {
+        @foreach (var href in _currentUser.FavoriteLinks.Where(h => h != ""))
+        {
+            var meta = GetLinkMetadata(href);
+            <MudNavLink Href="@href" Match="@(href == "" ? NavLinkMatch.All : NavLinkMatch.Prefix)" Icon="@meta.Icon">
+                <div class="d-flex align-center" style="width: 100%;">
+                    <span style="flex: 1;">@meta.Title</span>
+                    @if (href == "chat" && _unreadCount > 0)
+                    {
+                        <span style="display: inline-flex; align-items: center; justify-content: center; min-width: 20px; height: 20px; padding: 0 6px; margin-right: 8px; border-radius: 10px; background: var(--mud-palette-error); color: white; font-size: 11px; font-weight: 700;">@_unreadCount</span>
+                    }
+                    else if (href == "email" && _unreadEmailCount > 0)
+                    {
+                        <span class="d-inline-flex align-center justify-center rounded-pill px-2 py-0 mr-2" style="min-width: 20px; height: 20px; background: var(--mud-palette-error); color: white; font-size: 11px; font-weight: 700;">@_unreadEmailCount</span>
+                    }
+                    
+                    @if (_isEditingFavorites)
+                    {
+                        <span @onclick:stopPropagation="true" @onclick:preventDefault="true" class="d-flex">
+                            <MudIconButton Icon="@Icons.Material.Filled.ArrowUpward" Color="Color.Default" Size="Size.Small" OnClick="@(() => MoveFavoriteUp(href))" />
+                            <MudIconButton Icon="@Icons.Material.Filled.ArrowDownward" Color="Color.Default" Size="Size.Small" OnClick="@(() => MoveFavoriteDown(href))" />
+                            <MudIconButton Icon="@Icons.Material.Filled.Star" Color="Color.Default" Size="Size.Small" OnClick="@(() => ToggleFavorite(href))" />
+                        </span>
+                    }
+                </div>
+            </MudNavLink>
+        }
+    }
+
+    @if (drawerOpen)
+    {
+        <MudDivider Class="my-4"></MudDivider>
+
+        @* --- Communication --- *@
+        @if (HasPerm(AppPermissions.Chat.Use) || HasPerm(AppPermissions.Email.Use) || HasPerm(AppPermissions.Calendar.View) || HasPerm(AppPermissions.Albums.View))
+        {
+            <MudNavGroup Title="Communication" Icon="@Icons.Material.Filled.Forum" Expanded="false">
+                @if (HasPerm(AppPermissions.Chat.Use))
+                {
+                    <MudNavLink Href="chat" Match="NavLinkMatch.Prefix" Icon="@Icons.Material.Filled.Chat">
+                        <div class="d-flex align-center" style="width: 100%;">
+                            <span style="flex: 1;">Chat</span>
+                            @if (_unreadCount > 0)
+                            {
+                                <span style="display: inline-flex; align-items: center; justify-content: center; min-width: 20px; height: 20px; padding: 0 6px; margin-right: 8px; border-radius: 10px; background: var(--mud-palette-error); color: white; font-size: 11px; font-weight: 700;">@_unreadCount</span>
+                            }
+                            @if (_isEditingFavorites)
+                            {
+                                <span @onclick:stopPropagation="true" @onclick:preventDefault="true">
+                                    <MudIconButton Icon='@(_currentUser?.FavoriteLinks.Contains("chat") == true ? Icons.Material.Filled.Star : Icons.Material.Outlined.StarBorder)' Color="Color.Default" Size="Size.Small" OnClick='@(() => ToggleFavorite("chat"))' />
+                                </span>
+                            }
+                        </div>
+                    </MudNavLink>
+                }
+
+                @if (HasPerm(AppPermissions.Email.Use))
+                {
+                    <MudNavLink Href="email" Match="NavLinkMatch.Prefix" Icon="@Icons.Material.Filled.Email">
+                        <div class="d-flex align-center" style="width: 100%;">
+                            <span style="flex: 1;">Email</span>
+                            @if (_unreadEmailCount > 0)
+                            {
+                                <span class="d-inline-flex align-center justify-center rounded-pill px-2 py-0 mr-2" style="min-width: 20px; height: 20px; background: var(--mud-palette-error); color: white; font-size: 11px; font-weight: 700;">@_unreadEmailCount</span>
+                            }
+                            @if (_isEditingFavorites)
+                            {
+                                <span @onclick:stopPropagation="true" @onclick:preventDefault="true">
+                                    <MudIconButton Icon='@(_currentUser?.FavoriteLinks.Contains("email") == true ? Icons.Material.Filled.Star : Icons.Material.Outlined.StarBorder)' Color="Color.Default" Size="Size.Small" OnClick='@(() => ToggleFavorite("email"))' />
+                                </span>
+                            }
+                        </div>
+                    </MudNavLink>
+                }
+
+                @if (HasPerm(AppPermissions.Calendar.View))
+                {
+                    <MudNavLink Href="planning/calendar" Match="NavLinkMatch.Prefix" Icon="@Icons.Material.Filled.CalendarMonth">
+                        <div class="d-flex align-center" style="width: 100%;">
+                            <span style="flex: 1;">Calendar</span>
+                            @if (_isEditingFavorites)
+                            {
+                                <span @onclick:stopPropagation="true" @onclick:preventDefault="true">
+                                    <MudIconButton Icon='@(_currentUser?.FavoriteLinks.Contains("planning/calendar") == true ? Icons.Material.Filled.Star : Icons.Material.Outlined.StarBorder)' Color="Color.Default" Size="Size.Small" OnClick='@(() => ToggleFavorite("planning/calendar"))' />
+                                </span>
+                            }
+                        </div>
+                    </MudNavLink>
+                }
+
+                @if (HasPerm(AppPermissions.Albums.View))
+                {
+                    <MudNavLink Href="albums" Match="NavLinkMatch.Prefix" Icon="@Icons.Material.Filled.PhotoAlbum">
+                        <div class="d-flex align-center" style="width: 100%;">
+                            <span style="flex: 1;">Albums</span>
+                            @if (_isEditingFavorites)
+                            {
+                                <span @onclick:stopPropagation="true" @onclick:preventDefault="true">
+                                    <MudIconButton Icon='@(_currentUser?.FavoriteLinks.Contains("albums") == true ? Icons.Material.Filled.Star : Icons.Material.Outlined.StarBorder)' Color="Color.Default" Size="Size.Small" OnClick='@(() => ToggleFavorite("albums"))' />
+                                </span>
+                            }
+                        </div>
+                    </MudNavLink>
+                }
+
+                <MudNavLink Href="organization" Match="NavLinkMatch.Prefix" Icon="@Icons.Material.Filled.AccountTree">
+                    <div class="d-flex align-center" style="width: 100%;">
+                        <span style="flex: 1;">@AppLabels.Teams & @AppLabels.Employees</span>
+                        @if (_isEditingFavorites)
+                        {
+                            <span @onclick:stopPropagation="true" @onclick:preventDefault="true">
+                                <MudIconButton Icon='@(_currentUser?.FavoriteLinks.Contains("organization") == true ? Icons.Material.Filled.Star : Icons.Material.Outlined.StarBorder)' Color="Color.Default" Size="Size.Small" OnClick='@(() => ToggleFavorite("organization"))' />
+                            </span>
+                        }
+                    </div>
+                </MudNavLink>
+            </MudNavGroup>
+        }
+
+        @* --- My Workspace --- *@
+        @if (!IsFamilyEdition && (HasPerm(AppPermissions.Timesheets.AccessTimesheet) || HasPerm(AppPermissions.Finance.AccessExpenses)))
+        {
+            <MudNavGroup Title="My Workspace" Icon="@Icons.Material.Filled.Person" Expanded="false">
+                @if (HasPerm(AppPermissions.Timesheets.AccessTimesheet))
+                {
+                    <MudNavLink Href="my-timesheet" Match="NavLinkMatch.Prefix" Icon="@Icons.Material.Filled.AccessTime">
+                        <div class="d-flex align-center" style="width: 100%;">
+                            <span style="flex: 1;">My Timesheet</span>
+                            @if (_isEditingFavorites)
+                            {
+                                <span @onclick:stopPropagation="true" @onclick:preventDefault="true">
+                                    <MudIconButton Icon='@(_currentUser?.FavoriteLinks.Contains("my-timesheet") == true ? Icons.Material.Filled.Star : Icons.Material.Outlined.StarBorder)' Color="Color.Default" Size="Size.Small" OnClick='@(() => ToggleFavorite("my-timesheet"))' />
+                                </span>
+                            }
+                        </div>
+                    </MudNavLink>
+                    
+                }
+                @if (HasPerm(AppPermissions.Finance.AccessExpenses))
+                {
+                    <MudNavLink Href="me/expenses" Match="NavLinkMatch.Prefix" Icon="@Icons.Material.Filled.Receipt">
+                        <div class="d-flex align-center" style="width: 100%;">
+                            <span style="flex: 1;">My Expenses</span>
+                            @if (_isEditingFavorites)
+                            {
+                                <span @onclick:stopPropagation="true" @onclick:preventDefault="true">
+                                    <MudIconButton Icon='@(_currentUser?.FavoriteLinks.Contains("me/expenses") == true ? Icons.Material.Filled.Star : Icons.Material.Outlined.StarBorder)' Color="Color.Default" Size="Size.Small" OnClick='@(() => ToggleFavorite("me/expenses"))' />
+                                </span>
+                            }
+                        </div>
+                    </MudNavLink>
+                }
+            </MudNavGroup>
+        }
+
+        @* --- Operations --- *@
+        @if (!IsFamilyEdition && (HasPerm(AppPermissions.Projects.View) || HasAnyPerm(AppPermissions.Purchases.ViewPOs, AppPermissions.Purchases.ViewBills, AppPermissions.Purchases.ManagePOs, AppPermissions.Purchases.ManageBills, AppPermissions.AddressBook.View, AppPermissions.AddressBook.Manage, AppPermissions.BusinessDocuments.View)))
+        {
+            <MudNavGroup Title="Operations" Icon="@Icons.Material.Filled.Layers" Expanded="false">
+                @if (HasPerm(AppPermissions.Projects.View))
+                {
+                    <MudNavLink Href="projects" Match="NavLinkMatch.Prefix" Icon="@Icons.Material.Filled.Work">
+                        <div class="d-flex align-center" style="width: 100%;">
+                            <span style="flex: 1;">Projects</span>
+                            @if (_isEditingFavorites)
+                            {
+                                <span @onclick:stopPropagation="true" @onclick:preventDefault="true">
+                                    <MudIconButton Icon='@(_currentUser?.FavoriteLinks.Contains("projects") == true ? Icons.Material.Filled.Star : Icons.Material.Outlined.StarBorder)' Color="Color.Default" Size="Size.Small" OnClick='@(() => ToggleFavorite("projects"))' />
+                                </span>
+                            }
+                        </div>
+                    </MudNavLink>
+                }
+                @if (HasAnyPerm(AppPermissions.Purchases.ViewPOs, AppPermissions.Purchases.ViewBills, AppPermissions.Purchases.ManagePOs, AppPermissions.Purchases.ManageBills))
+                {
+                    <MudNavLink Href="purchases" Match="NavLinkMatch.Prefix" Icon="@Icons.Material.Filled.AttachMoney">
+                        <div class="d-flex align-center" style="width: 100%;">
+                            <span style="flex: 1;">Purchases</span>
+                            @if (_isEditingFavorites)
+                            {
+                                <span @onclick:stopPropagation="true" @onclick:preventDefault="true">
+                                    <MudIconButton Icon='@(_currentUser?.FavoriteLinks.Contains("purchases") == true ? Icons.Material.Filled.Star : Icons.Material.Outlined.StarBorder)' Color="Color.Default" Size="Size.Small" OnClick='@(() => ToggleFavorite("purchases"))' />
+                                </span>
+                            }
+                        </div>
+                    </MudNavLink>
+                }
+                @if (HasAnyPerm(AppPermissions.AddressBook.View, AppPermissions.AddressBook.Manage))
+                {
+                    <MudNavLink Href="/business/address-book" Match="NavLinkMatch.Prefix" Icon="@Icons.Material.Filled.Contacts">
+                        <div class="d-flex align-center" style="width: 100%;">
+                            <span style="flex: 1;">Address Book</span>
+                            @if (_isEditingFavorites)
+                            {
+                                <span @onclick:stopPropagation="true" @onclick:preventDefault="true">
+                                    <MudIconButton Icon='@(_currentUser?.FavoriteLinks.Contains("/business/address-book") == true ? Icons.Material.Filled.Star : Icons.Material.Outlined.StarBorder)' Color="Color.Default" Size="Size.Small" OnClick='@(() => ToggleFavorite("/business/address-book"))' />
+                                </span>
+                            }
+                        </div>
+                    </MudNavLink>
+                }
+
+                @if (HasPerm(AppPermissions.BusinessDocuments.View))
+                {
+                    <MudNavLink Href="business/documents" Match="NavLinkMatch.Prefix" Icon="@Icons.Material.Filled.Description">
+                        <div class="d-flex align-center" style="width: 100%;">
+                            <span style="flex: 1;">Business Documents</span>
+                            @if (_isEditingFavorites)
+                            {
+                                <span @onclick:stopPropagation="true" @onclick:preventDefault="true">
+                                    <MudIconButton Icon='@(_currentUser?.FavoriteLinks.Contains("business/documents") == true ? Icons.Material.Filled.Star : Icons.Material.Outlined.StarBorder)' Color="Color.Default" Size="Size.Small" OnClick='@(() => ToggleFavorite("business/documents"))' />
+                                </span>
+                            }
+                        </div>
+                    </MudNavLink>
+                }
+
+            </MudNavGroup>
+        }
+
+        @* --- My Team --- *@
+        @if (!IsFamilyEdition && IsTeamLeader)
+        {
+            <MudNavGroup Title="@($"My {AppLabels.Team}")" Icon="@Icons.Material.Filled.People" Expanded="false">
+                @if (Db.CompanyProfile.Get()?.TimesheetConfig?.EnableWeeklyPlan ?? true)
+                {
+                    <MudNavLink Href="planning/manager" Match="NavLinkMatch.Prefix" Icon="@Icons.Material.Filled.SupervisorAccount">
+                        <div class="d-flex align-center" style="width: 100%;">
+                            <span style="flex: 1;">@AppLabels.Team Planning</span>
+                            @if (_isEditingFavorites)
+                            {
+                                <span @onclick:stopPropagation="true" @onclick:preventDefault="true">
+                                    <MudIconButton Icon='@(_currentUser?.FavoriteLinks.Contains("planning/manager") == true ? Icons.Material.Filled.Star : Icons.Material.Outlined.StarBorder)' Color="Color.Default" Size="Size.Small" OnClick='@(() => ToggleFavorite("planning/manager"))' />
+                                </span>
+                            }
+                        </div>
+                    </MudNavLink>
+                }
+                <MudNavLink Href="planning/timesheet-approvals" Match="NavLinkMatch.Prefix" Icon="@Icons.Material.Filled.FactCheck">
+                    <div class="d-flex align-center" style="width: 100%;">
+                        <span style="flex: 1;">Timesheet Approvals</span>
+                        @if (_isEditingFavorites)
+                        {
+                            <span @onclick:stopPropagation="true" @onclick:preventDefault="true">
+                                <MudIconButton Icon='@(_currentUser?.FavoriteLinks.Contains("planning/timesheet-approvals") == true ? Icons.Material.Filled.Star : Icons.Material.Outlined.StarBorder)' Color="Color.Default" Size="Size.Small" OnClick='@(() => ToggleFavorite("planning/timesheet-approvals"))' />
+                            </span>
+                        }
+                    </div>
+                </MudNavLink>
+            </MudNavGroup>
+        }
+
+        @* --- Business --- *@
+        @if (!IsFamilyEdition && (HasPerm(AppPermissions.Finance.AccessAccounting) || HasPerm(AppPermissions.Finance.TeamCapacity)))
+        {
+            <MudNavGroup Title="Accounting" Icon="@Icons.Material.Filled.AccountBalance" Expanded="false">
+                
+                @if (HasPerm(AppPermissions.Finance.AccessAccounting))
+                {
+                    <MudNavLink Href="/business-dashboard" Match="NavLinkMatch.Prefix" Icon="@Icons.Material.Filled.Dashboard">
+                        <div class="d-flex align-center" style="width: 100%;">
+                            <span style="flex: 1;">Business Dashboard</span>
+                            @if (_isEditingFavorites)
+                            {
+                                <span @onclick:stopPropagation="true" @onclick:preventDefault="true">
+                                    <MudIconButton Icon='@(_currentUser?.FavoriteLinks.Contains("/business-dashboard") == true ? Icons.Material.Filled.Star : Icons.Material.Outlined.StarBorder)' Color="Color.Default" Size="Size.Small" OnClick='@(() => ToggleFavorite("/business-dashboard"))' />
+                                </span>
+                            }
+                        </div>
+                    </MudNavLink>
+                    <MudNavLink Href="business/accounting" Match="NavLinkMatch.Prefix" Icon="@Icons.Material.Filled.AccountBalance">
+                        <div class="d-flex align-center" style="width: 100%;">
+                            <span style="flex: 1;">Payables & Receivables</span>
+                            @if (_isEditingFavorites)
+                            {
+                                <span @onclick:stopPropagation="true" @onclick:preventDefault="true">
+                                    <MudIconButton Icon='@(_currentUser?.FavoriteLinks.Contains("business/accounting") == true ? Icons.Material.Filled.Star : Icons.Material.Outlined.StarBorder)' Color="Color.Default" Size="Size.Small" OnClick='@(() => ToggleFavorite("business/accounting"))' />
+                                </span>
+                            }
+                        </div>
+                    </MudNavLink>
+                }
+            </MudNavGroup>
+
+            <MudNavGroup Title="Planning & Reports" Icon="@Icons.Material.Filled.Business" Expanded="false">
+                <MudNavLink Href="business/timesheet-reports" Match="NavLinkMatch.Prefix" Icon="@Icons.Material.Filled.Assessment">
+                    <div class="d-flex align-center" style="width: 100%;">
+                        <span style="flex: 1;">Timesheet Reports</span>
+                        @if (_isEditingFavorites)
+                        {
+                            <span @onclick:stopPropagation="true" @onclick:preventDefault="true">
+                                <MudIconButton Icon='@(_currentUser?.FavoriteLinks.Contains("business/timesheet-reports") == true ? Icons.Material.Filled.Star : Icons.Material.Outlined.StarBorder)' Color="Color.Default" Size="Size.Small" OnClick='@(() => ToggleFavorite("business/timesheet-reports"))' />
+                            </span>
+                        }
+                    </div>
+                </MudNavLink>
+
+                <MudNavLink Href="planning/timesheet-approvals" Match="NavLinkMatch.Prefix" Icon="@Icons.Material.Filled.FactCheck">
+                    <div class="d-flex align-center" style="width: 100%;">
+                        <span style="flex: 1;">Timesheet Approvals</span>
+                        @if (_isEditingFavorites)
+                        {
+                            <span @onclick:stopPropagation="true" @onclick:preventDefault="true">
+                                <MudIconButton Icon='@(_currentUser?.FavoriteLinks.Contains("planning/timesheet-approvals") == true ? Icons.Material.Filled.Star : Icons.Material.Outlined.StarBorder)' Color="Color.Default" Size="Size.Small" OnClick='@(() => ToggleFavorite("planning/timesheet-approvals"))' />
+                            </span>
+                        }
+                    </div>
+                </MudNavLink>
+
+                <MudNavLink Href="/business/expenses" Match="NavLinkMatch.Prefix" Icon="@Icons.Material.Filled.AccountBalanceWallet">
+                    <div class="d-flex align-center" style="width: 100%;">
+                        <span style="flex: 1;">Forward Planning</span>
+                        @if (_isEditingFavorites)
+                        {
+                            <span @onclick:stopPropagation="true" @onclick:preventDefault="true">
+                                <MudIconButton Icon='@(_currentUser?.FavoriteLinks.Contains("/business/expenses") == true ? Icons.Material.Filled.Star : Icons.Material.Outlined.StarBorder)' Color="Color.Default" Size="Size.Small" OnClick='@(() => ToggleFavorite("/business/expenses"))' />
+                            </span>
+                        }
+                    </div>
+                </MudNavLink>
+            </MudNavGroup>
+
+        }
+
+        @* --- Administration --- *@
+        @if (HasPerm(AppPermissions.Admin.ManageUsers) || HasPerm(AppPermissions.Admin.ManageSettings) || HasPerm(AppPermissions.Chat.Moderator))
+        {
+            <MudNavGroup Title="Administration" Icon="@Icons.Material.Filled.AdminPanelSettings" Expanded="false">
+                @if (HasPerm(AppPermissions.Admin.ManageSettings))
+                {
+                    <MudNavLink Href="admin/definitions" Match="NavLinkMatch.Prefix" Icon="@Icons.Material.Filled.ListAlt">
+                        <div class="d-flex align-center" style="width: 100%;">
+                            <span style="flex: 1;">Task Definitions</span>
+                            @if (_isEditingFavorites)
+                            {
+                                <span @onclick:stopPropagation="true" @onclick:preventDefault="true">
+                                    <MudIconButton Icon='@(_currentUser?.FavoriteLinks.Contains("admin/definitions") == true ? Icons.Material.Filled.Star : Icons.Material.Outlined.StarBorder)' Color="Color.Default" Size="Size.Small" OnClick='@(() => ToggleFavorite("admin/definitions"))' />
+                                </span>
+                            }
+                        </div>
+                    </MudNavLink>
+                    <MudNavLink Href="admin/standard-documents" Match="NavLinkMatch.Prefix" Icon="@Icons.Material.Filled.Description">
+                        <div class="d-flex align-center" style="width: 100%;">
+                            <span style="flex: 1;">Standard Documents</span>
+                            @if (_isEditingFavorites)
+                            {
+                                <span @onclick:stopPropagation="true" @onclick:preventDefault="true">
+                                    <MudIconButton Icon='@(_currentUser?.FavoriteLinks.Contains("admin/standard-documents") == true ? Icons.Material.Filled.Star : Icons.Material.Outlined.StarBorder)' Color="Color.Default" Size="Size.Small" OnClick='@(() => ToggleFavorite("admin/standard-documents"))' />
+                                </span>
+                            }
+                        </div>
+                    </MudNavLink>
+                    <MudNavLink Href="admin/settings" Match="NavLinkMatch.Prefix" Icon="@Icons.Material.Filled.Settings">
+                        <div class="d-flex align-center" style="width: 100%;">
+                            <span style="flex: 1;">Spokes Settings</span>
+                            @if (_isEditingFavorites)
+                            {
+                                <span @onclick:stopPropagation="true" @onclick:preventDefault="true">
+                                    <MudIconButton Icon='@(_currentUser?.FavoriteLinks.Contains("admin/settings") == true ? Icons.Material.Filled.Star : Icons.Material.Outlined.StarBorder)' Color="Color.Default" Size="Size.Small" OnClick='@(() => ToggleFavorite("admin/settings"))' />
+                                </span>
+                            }
+                        </div>
+                    </MudNavLink>
+                }
+                @if (HasPerm(AppPermissions.Admin.ManageSettings) && Config.GetValue<bool>("Spokes_DemoSetup"))
+                {
+                    <MudNavLink Href="admin/demo-settings" Match="NavLinkMatch.Prefix" Icon="@Icons.Material.Filled.Build">
+                        <div class="d-flex align-center" style="width: 100%;">
+                            <span style="flex: 1;">Demo Settings</span>
+                        </div>
+                    </MudNavLink>
+                }
+                @if (HasPerm(AppPermissions.Chat.Moderator))
+                {
+                    <MudNavLink Href="admin/moderation" Match="NavLinkMatch.Prefix" Icon="@Icons.Material.Filled.Gavel">
+                        <div class="d-flex align-center" style="width: 100%;">
+                            <span style="flex: 1;">Moderation</span>
+                            @if (_isEditingFavorites)
+                            {
+                                <span @onclick:stopPropagation="true" @onclick:preventDefault="true">
+                                    <MudIconButton Icon='@(_currentUser?.FavoriteLinks.Contains("admin/moderation") == true ? Icons.Material.Filled.Star : Icons.Material.Outlined.StarBorder)' Color="Color.Default" Size="Size.Small" OnClick='@(() => ToggleFavorite("admin/moderation"))' />
+                                </span>
+                            }
+                        </div>
+                    </MudNavLink>
+                }
+            </MudNavGroup>
+        }
+    }
+    
+
+</MudNavMenu>
+
+
+
+@code {
+    [Parameter] public bool _isEditingFavorites { get; set; } = false;
+    [Parameter] public bool drawerOpen { get; set; } = true;
+    
+    private bool IsFamilyEdition => Db.CompanyProfile.Get()?.Edition == "Family";
+    
+    private bool IsAdmin = false;
+    private bool IsTeamLeader = false;
+    private Employee? _currentUser;
+    private int _unreadCount = 0;
+    private int _unreadEmailCount = 0;
+    private string? _currentUserId;
+    private string _appVersion = Spokes_Server.Core.Services.Licensing.LicenseValidationService.AppVersion;
+
+    private (string Title, string Icon) GetLinkMetadata(string href) => href switch
+    {
+        "" => ("Home", Icons.Material.Filled.Home),
+        "chat" => ("Chat", Icons.Material.Filled.Chat),
+        "email" => ("Email", Icons.Material.Filled.Email),
+        "my-timesheet" => ("Timesheet", Icons.Material.Filled.AccessTime),
+        "planning/calendar" => (IsFamilyEdition ? "Family Calendar" : "My Calendar", Icons.Material.Filled.CalendarMonth),
+        "me/expenses" => ("My Expenses", Icons.Material.Filled.Receipt),
+        "projects" => ("Projects", Icons.Material.Filled.Work),
+        "purchases" => ("Purchases", Icons.Material.Filled.AttachMoney),
+        "planning/manager" => ($"{AppLabels.Team} Planning", Icons.Material.Filled.SupervisorAccount),
+        "/business/address-book" => ("Address Book", Icons.Material.Filled.Contacts),
+        "/business-dashboard" => ("Business Dashboard", Icons.Material.Filled.Dashboard),
+        "business/accounting" => ("Payables & Receivables", Icons.Material.Filled.AccountBalance),
+        "business/timesheet-reports" => ("Timesheet Reports", Icons.Material.Filled.Assessment),
+        "planning/timesheet-approvals" => ("Timesheet Approvals", Icons.Material.Filled.FactCheck),
+        "/business/expenses" => ("Forward Planning", Icons.Material.Filled.AccountBalanceWallet),
+        "business/capacity" => ($"{AppLabels.Teams} Capacity", Icons.Material.Filled.Groups),
+        "business/documents" => ("Business Documents", Icons.Material.Filled.Description),
+        "organization" => ($"{AppLabels.Team} & {AppLabels.Employees}", Icons.Material.Filled.AccountTree),
+        "admin/definitions" => ("Task Definitions", Icons.Material.Filled.ListAlt),
+        "admin/standard-documents" => ("Standard Documents", Icons.Material.Filled.Description),
+        "admin/settings" => ("Spokes Settings", Icons.Material.Filled.Settings),
+        "admin/moderation" => ("Moderation", Icons.Material.Filled.Gavel),
+        "albums" => ("Albums", Icons.Material.Filled.PhotoAlbum),
+        _ => ("Unknown", Icons.Material.Filled.Link)
+    };
+
+    private void MoveFavoriteUp(string href)
+    {
+        if (_currentUser == null) return;
+        var index = _currentUser.FavoriteLinks.IndexOf(href);
+        if (index > 0)
+        {
+            _currentUser.FavoriteLinks.RemoveAt(index);
+            _currentUser.FavoriteLinks.Insert(index - 1, href);
+            Db.Employees.Save(_currentUser);
+            StateHasChanged();
+        }
+    }
+
+    private void MoveFavoriteDown(string href)
+    {
+        if (_currentUser == null) return;
+        var index = _currentUser.FavoriteLinks.IndexOf(href);
+        if (index >= 0 && index < _currentUser.FavoriteLinks.Count - 1)
+        {
+            _currentUser.FavoriteLinks.RemoveAt(index);
+            _currentUser.FavoriteLinks.Insert(index + 1, href);
+            Db.Employees.Save(_currentUser);
+            StateHasChanged();
+        }
+    }
+
+    private void ToggleFavorite(string href)
+    {
+        if (_currentUser == null) return;
+        
+        if (_currentUser.FavoriteLinks.Contains(href))
+        {
+            _currentUser.FavoriteLinks.Remove(href);
+        }
+        else
+        {
+            _currentUser.FavoriteLinks.Add(href);
+        }
+        
+        Db.Employees.Save(_currentUser);
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        _currentUser = await UserService.GetEmployeeAsync();
+        if (_currentUser != null)
+        {
+            if (_currentUser.FavoriteLinks.Contains("planning/my-week"))
+            {
+                var index = _currentUser.FavoriteLinks.IndexOf("planning/my-week");
+                _currentUser.FavoriteLinks[index] = "planning/calendar";
+                Db.Employees.Save(_currentUser);
+            }
+
+            IsAdmin = _currentUser.IsAdmin;
+            _currentUserId = _currentUser.Id;
+
+            // Check if Team Leader
+            if (_currentUser != null)
+            {
+                IsTeamLeader = Db.Teams.GetAll().Any(t => t.LeaderId == _currentUser.Id);
+            }
+
+            // Initialize chat notifications
+            if (_currentUser != null)
+            {
+                // Subscribe to unread count changes first so we don't miss any incoming events
+                ChatNotifications.OnUnreadCountChanged += UpdateUnreadCount;
+                EmailNotifications.OnUnreadCountChanged += UpdateUnreadEmailCount;
+
+                // Fire and forget the heavy initialization
+                _ = InitializeNotificationsAsync(_currentUser.Id);
+            }
+        }
+    }
+
+    private async Task InitializeNotificationsAsync(string userId)
+    {
+        try
+        {
+            await Task.Run(async () =>
+            {
+                await ChatNotifications.InitializeAsync(userId);
+                await EmailNotifications.InitializeAsync(userId);
+            });
+
+            await InvokeAsync(() =>
+            {
+                _unreadCount = ChatNotifications.TotalUnreadCount;
+                _unreadEmailCount = EmailNotifications.TotalUnreadCount;
+                StateHasChanged();
+            });
+            UpdateUnreadCount();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[NavMenu] Error initializing notifications: {ex.Message}");
+        }
+    }
+
+
+    private bool HasPerm(string perm) => _currentUser?.HasPermission(perm) ?? false;
+
+    private bool HasAnyPerm(params string[] perms)
+    {
+        if (_currentUser == null) return false;
+        if (_currentUser.IsAdmin) return true;
+        return perms.Any(p => _currentUser.HasPermission(p));
+    }
+
+    private void UpdateUnreadCount()
+    {
+        _unreadCount = ChatNotifications.TotalUnreadCount;
+        InvokeAsync(async () =>
+        {
+            StateHasChanged();
+            await Task.Delay(250);
+            try { await JS.InvokeVoidAsync("pushNotifications.updateBadge", _unreadCount + _unreadEmailCount); } catch { }
+        });
+    }
+
+    private void UpdateUnreadEmailCount()
+    {
+        _unreadEmailCount = EmailNotifications.TotalUnreadCount;
+        InvokeAsync(async () =>
+        {
+            StateHasChanged();
+            await Task.Delay(250);
+            try { await JS.InvokeVoidAsync("pushNotifications.updateBadge", _unreadCount + _unreadEmailCount); } catch { }
+        });
+    }
+
+    public void Dispose()
+    {
+        ChatNotifications.OnUnreadCountChanged -= UpdateUnreadCount;
+        EmailNotifications.OnUnreadCountChanged -= UpdateUnreadEmailCount;
+    }
+}

@@ -1,0 +1,235 @@
+@using MudBlazor
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Services.Core
+
+<MudPaper Elevation="0" Outlined="true" Class="pa-4 mt-4">
+    <div class="d-flex justify-space-between align-center mb-4">
+        <MudText Typo="Typo.subtitle1" Style="font-weight: bold;">Document Blocks</MudText>
+        <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small"
+            StartIcon="@Icons.Material.Filled.Add" OnClick="AddBlock">
+            Add Block
+        </MudButton>
+    </div>
+
+    @if (Blocks == null || !Blocks.Any())
+    {
+        <MudText Typo="Typo.body2" Color="Color.Secondary">No blocks added yet.</MudText>
+    }
+    else
+    {
+        <MudExpansionPanels>
+            @foreach (var block in Blocks)
+            {
+                var libraryDef = DocumentBlockLibrary.GetByType(block.Type);
+                if (libraryDef == null) continue;
+
+                <MudExpansionPanel Text="@($"{libraryDef.DisplayName}: {block.Name}")">
+                    <TitleContent>
+                        <div class="d-flex align-center">
+                            <MudIcon Icon="@Icons.Material.Filled.ViewModule" Class="mr-3" />
+                            <MudText><b>@libraryDef.DisplayName</b>: @block.Name</MudText>
+                        </div>
+                    </TitleContent>
+                    <ChildContent>
+                        <MudGrid Class="mb-4">
+                            <MudItem xs="12">
+                                <MudTextField @bind-Value="block.Name" Label="Instance Name (Identifier)"
+                                    HelperText="@($"Used as @@Block.{block.Name}")" Required="true"
+                                    OnBlur="@(() => HandleNameBlur(block))" />
+                            </MudItem>
+
+                            @foreach (var field in libraryDef.Fields)
+                            {
+                                var currentBlock = block;
+                                var currentField = field;
+                                var val = GetPropertyValue(currentBlock, currentField);
+
+                                @if (currentField.FieldType == "toggle")
+                                {
+                                    <MudItem xs="12" sm="6">
+                                        <MudSwitch T="bool" Value="@(val == "true")"
+                                            ValueChanged="@((v) => SetPropertyValue(currentBlock, currentField, v ? "true" : "false"))"
+                                            Label="@currentField.Label" Color="Color.Primary" />
+                                    </MudItem>
+                                }
+                                else if (currentField.FieldType == "signature")
+                                {
+                                    <MudItem xs="12" Class="my-2">
+                                        <MudText Typo="Typo.subtitle2" Class="mb-2">@currentField.Label</MudText>
+                                        @if (!string.IsNullOrEmpty(val))
+                                        {
+                                            <MudPaper Elevation="0" Outlined="true" Class="pa-2 mb-2 d-flex justify-center" Style="background-color: #fafafa; width: 100%; max-width: 300px;">
+                                                <img src="@val" style="max-height: 80px; object-fit: contain;" />
+                                            </MudPaper>
+                                        }
+                                        else
+                                        {
+                                            <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-2">No signature applied.</MudText>
+                                        }
+                                        <div class="d-flex gap-2">
+                                            <MudButton Variant="Variant.Filled" Color="Color.Secondary" Size="Size.Small" StartIcon="@Icons.Material.Filled.Draw"
+                                                OnClick="@(() => ApplyCurrentUserSignature(currentBlock, currentField))">
+                                                Apply My Signature
+                                            </MudButton>
+                                            @if (!string.IsNullOrEmpty(val))
+                                            {
+                                                <MudButton Variant="Variant.Outlined" Color="Color.Error" Size="Size.Small" OnClick="@(() => SetPropertyValue(currentBlock, currentField, ""))">Clear</MudButton>
+                                            }
+                                        </div>
+                                    </MudItem>
+                                }
+                                else
+                                {
+                                    <MudItem xs="12" sm="6">
+                                        <div class="d-flex align-end gap-1">
+                                            <MudTextField T="string" Value="@val"
+                                                ValueChanged="@((v) => SetPropertyValue(currentBlock, currentField, v))"
+                                                Label="@currentField.Label" Class="flex-grow-1" />
+                                            <MudMenu Icon="@Icons.Material.Filled.Code" Size="Size.Small"
+                                                Variant="Variant.Text" Color="Color.Primary"
+                                                AnchorOrigin="Origin.BottomRight" TransformOrigin="Origin.TopRight"
+                                                Dense="true" title="Insert Tag">
+                                                @foreach (var group in _availableTags.GroupBy(t => t.Category))
+                                                {
+                                                    <MudText Typo="Typo.overline" Class="px-4 pt-2" Style="color: var(--mud-palette-text-secondary);">@group.Key</MudText>
+                                                    @foreach (var tag in group)
+                                                    {
+                                                        <MudMenuItem OnClick="@(() => InsertTagIntoField(currentBlock, currentField, tag.Tag))">
+                                                            <div class="d-flex justify-space-between" style="min-width: 200px;">
+                                                                <MudText Typo="Typo.body2">@tag.Tag</MudText>
+                                                            </div>
+                                                        </MudMenuItem>
+                                                    }
+                                                }
+                                            </MudMenu>
+                                        </div>
+                                    </MudItem>
+                                }
+                            }
+                        </MudGrid>
+                        <div class="d-flex justify-end">
+                            <MudButton Variant="Variant.Text" Color="Color.Error" StartIcon="@Icons.Material.Filled.Delete"
+                                OnClick="@(() => RemoveBlock(block))">
+                                Remove Block
+                            </MudButton>
+                        </div>
+                    </ChildContent>
+                </MudExpansionPanel>
+            }
+        </MudExpansionPanels>
+    }
+</MudPaper>
+
+@code {
+    [Parameter] public List<DocumentBlockInstance> Blocks { get; set; } = new();
+    [Parameter] public EventCallback<List<DocumentBlockInstance>> BlocksChanged { get; set; }
+    [Parameter] public EventCallback<string> OnBlockAdded { get; set; }
+    [Parameter] public EventCallback<(string OldName, string NewName)> OnBlockRenamed { get; set; }
+    [Parameter] public List<ContextTagDefinition>? AvailableTags { get; set; }
+
+    [Inject] private IDialogService DialogService { get; set; } = default!;
+    [Inject] private ISnackbar Snackbar { get; set; } = default!;
+    [Inject] private Spokes_Server.Core.Services.Core.UserService UserService { get; set; } = default!;
+
+    // Track block names by ID to detect renames (OnFocus doesn't fire on MudTextField)
+    private Dictionary<string, string> _knownNames = new();
+    private List<ContextTagDefinition> _availableTags => AvailableTags ?? ContextTagRegistry.GetAvailableTags();
+
+    protected override void OnParametersSet()
+    {
+        // Build initial name snapshot for any blocks we haven't seen yet
+        foreach (var block in Blocks)
+        {
+            if (!_knownNames.ContainsKey(block.Id))
+                _knownNames[block.Id] = block.Name;
+        }
+    }
+
+    private async Task HandleNameBlur(DocumentBlockInstance block)
+    {
+        var oldName = _knownNames.TryGetValue(block.Id, out var n) ? n : block.Name;
+        Console.WriteLine($"[HandleNameBlur] oldName='{oldName}' currentName='{block.Name}'");
+        if (oldName != block.Name)
+        {
+            Console.WriteLine($"[HandleNameBlur] Name changed! Firing OnBlockRenamed");
+            await OnBlockRenamed.InvokeAsync((oldName, block.Name));
+            _knownNames[block.Id] = block.Name; // Update snapshot
+        }
+        await NotifyChanged();
+    }
+
+    private string GetPropertyValue(DocumentBlockInstance block, BlockFieldDefinition field)
+    {
+        if (block.Properties.TryGetValue(field.Key, out var value))
+        {
+            return value;
+        }
+        return field.DefaultValue;
+    }
+
+    private async Task SetPropertyValue(DocumentBlockInstance block, BlockFieldDefinition field, string value)
+    {
+        block.Properties[field.Key] = value;
+        await NotifyChanged();
+    }
+
+    private async Task ApplyCurrentUserSignature(DocumentBlockInstance block, BlockFieldDefinition field)
+    {
+        var user = await UserService.GetEmployeeAsync();
+        if (user == null || string.IsNullOrEmpty(user.SignatureImageBase64))
+        {
+            Snackbar.Add("You do not have a signature set up in your profile.", Severity.Warning);
+            return;
+        }
+        await SetPropertyValue(block, field, user.SignatureImageBase64);
+    }
+
+    private async Task InsertTagIntoField(DocumentBlockInstance block, BlockFieldDefinition field, string tag)
+    {
+        var current = GetPropertyValue(block, field);
+        block.Properties[field.Key] = string.IsNullOrEmpty(current) ? tag : current + tag;
+        await NotifyChanged();
+    }
+
+    private async Task RemoveBlock(DocumentBlockInstance block)
+    {
+        Blocks.Remove(block);
+        await NotifyChanged();
+    }
+
+    private async Task AddBlock()
+    {
+        var parameters = new DialogParameters();
+        var dialog = await DialogService.ShowAsync<SelectBlockDialog>("Select Block Type", parameters, new DialogOptions
+            {
+                MaxWidth = MaxWidth.Small,
+                FullWidth = true,
+                CloseButton = true
+            });
+        var result = await dialog.Result;
+
+        if (!result.Canceled && result.Data is IDocumentBlock selectedBlock)
+        {
+            var newBlock = new DocumentBlockInstance
+                {
+                    Type = selectedBlock.Type,
+                    Name = $"New {selectedBlock.DisplayName}"
+                };
+
+            // Pre-fill default properties
+            foreach (var field in selectedBlock.Fields)
+            {
+                newBlock.Properties[field.Key] = field.DefaultValue;
+            }
+
+            Blocks.Add(newBlock);
+            await NotifyChanged();
+            await OnBlockAdded.InvokeAsync(newBlock.Name);
+        }
+    }
+
+    private async Task NotifyChanged()
+    {
+        await BlocksChanged.InvokeAsync(Blocks);
+    }
+}

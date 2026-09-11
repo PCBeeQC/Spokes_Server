@@ -1,0 +1,864 @@
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Constants
+@using Spokes_Server.Core.Services
+@using Spokes_Server.Components.Dialogs
+@inject EmailService EmailService
+@inject UserService UserService
+@inject Spokes_Server.Aggregate.Database Db
+@inject EmailIdleService EmailIdleService
+@inject EmailNotificationService EmailNotifications
+@inject IDialogService _dialogService
+@inject NavigationManager Nav
+@inject IJSRuntime JS
+@inject ISnackbar Snackbar
+@inject IConfiguration _config
+@implements IDisposable
+
+@page "/email"
+@page "/email/{FolderId}"
+@page "/email/{FolderId}/{MessageId}"
+@using Microsoft.AspNetCore.Components.Authorization
+@using Spokes_Server.Core.Constants
+@attribute [Authorize(Policy = AppPermissions.Email.Use)]
+
+<PageTitle>Email</PageTitle>
+
+<!-- Main Layout Container -->
+<div class="d-flex flex-row" style="height: calc(100dvh - 84px); overflow: hidden;">
+
+    <style>
+        .email-sidebar-container { width: 100%; }
+        .email-list-container { width: 100%; }
+
+        @@media (min-width: 960px) {
+            .email-sidebar-container { width: 250px; flex-shrink: 0; }
+            .email-list-container { width: 350px; flex-shrink: 0; }
+        }
+    </style>
+
+    <!-- Left Pane: Sidebar (Folders) -->
+    <div class="@SidebarClass email-sidebar-container">
+        <EmailSidebar Folders="_folders"
+                      SelectedFolderId="@_selectedFolderId"
+                      OnSelectFolder="SelectFolder"
+                      OnCompose="OpenComposer"
+                      OnRepairAttachments="RepairAttachments"
+                      OnFoldersChanged="LoadFolders"
+                      IsRepairing="_isRepairing" />
+    </div>
+
+    <!-- Middle Pane: Message List -->
+    <div class="@ListClass email-list-container">
+        <EmailList Messages="_messages"
+                   FolderName="@(_folders.FirstOrDefault(f => f.Id == _selectedFolderId)?.Name)"
+                   OnGoBack="@(() => { _showMobileFolders = true; StateHasChanged(); })"
+                   OnCompose="OpenComposer"
+                   SelectedMessageId="@_selectedMessageId"
+                   SearchText="@_searchText"
+                   HasMoreMessages="_hasMoreMessages"
+                   IsLoadingOlder="_isLoadingOlder"
+                   SearchAllFolders="@_searchAllFolders"
+                   IsSearching="@_isSearching"
+                   SearchProcessedCount="@_searchProcessedCount"
+                   SearchTotalCount="@_searchTotalCount"
+                   TimeZoneId="@_timeZoneId"
+                   OnSelectMessage="SelectMessage"
+                   OnSearch="HandleSearch"
+                   OnSearchAllFoldersChanged="HandleSearchScopeChanged"
+                   OnToggleFlag="ToggleFlag"
+                   OnMarkAsUnread="MarkMessageAsUnread" />
+    </div>
+
+    <!-- Right Pane: Reader -->
+    <div class="@ReaderClass" style="flex: 1; min-width: 0;">
+        <EmailReader SelectedMessage="_selectedMessage"
+                     SelectedMessageId="@_selectedMessageId"
+                     MessageBody="@_messageBody"
+                     IsLoadingBody="_isLoadingBody"
+                     TimeZoneId="@_timeZoneId"
+                     Folders="_folders"
+                     CurrentFolderPath="@(_folders.FirstOrDefault(f => f.Id == _selectedFolderId)?.Path)"
+                     OnClose="@(() => SelectMessage(null))"
+                     OnToggleFlag="ToggleFlag"
+                     OnDownloadAttachment="DownloadAttachment"
+                     OnMarkAsUnread="MarkAsUnread"
+                     OnMoveTo="MoveFolderTo"
+                     OnReply="Reply"
+                     OnReplyAll="ReplyAll"
+                     OnForward="Forward"
+                     OnDelete="DeleteMessage"
+                     OnArchive="ArchiveMessage"
+                     OnJunk="JunkMessage"
+                     OnPrint="PrintMessage"
+                     CanAddToTimeline="_canAddToTimeline"
+                     OnAddToTimeline="AddEmailToTimeline"
+                     HasNextMessage="HasNextMessage"
+                     HasPreviousMessage="HasPreviousMessage"
+                     OnNextMessage="SelectNextMessage"
+                     OnPreviousMessage="SelectPreviousMessage"
+                     EmployeeId="@_currentEmployee?.Id" />
+    </div>
+
+</div>
+
+@code {
+    [Parameter] public string? FolderId { get; set; }
+    [Parameter] public string? MessageId { get; set; }
+
+    private string? _selectedFolderId;
+    private string? _selectedMessageId;
+    private bool _showMobileFolders = false;
+
+    // Responsive Visibility Logic
+    private string SidebarClass
+    {
+        get
+        {
+            if (_selectedMessageId != null) return "d-none d-md-block";
+            if (_showMobileFolders) return "d-block";
+            return "d-none d-md-block";
+        }
+    }
+
+    private string ListClass
+    {
+        get
+        {
+            if (_selectedMessageId != null) return "d-none d-md-block";
+            if (_showMobileFolders) return "d-none d-md-block";
+            return "d-block";
+        }
+    }
+
+    // If no message, hide reader on mobile.
+    private string ReaderClass =>
+        (_selectedMessageId == null ? "d-none d-md-block" : "d-block");
+
+
+    private List<EmailFolder> _folders = new();
+    private List<EmailMessage> _messages = new();
+    private EmailMessage? _selectedMessage;
+
+    private Employee? _currentEmployee;
+    private string _searchText = "";
+    private bool _searchAllFolders = false;
+    private string _messageBody = "";
+    private bool _isLoadingBody = false;
+    private string _timeZoneId = "";
+    private bool _canAddToTimeline = false;
+
+    // Search state
+    private bool _isSearching = false;
+    private int _searchProcessedCount = 0;
+    private int _searchTotalCount = 0;
+    private CancellationTokenSource? _searchCts;
+
+    // JS Interop
+    private IJSObjectReference? _module;
+    private DotNetObjectReference<EmailLayout>? _objRef;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        // Ensure data is loaded first (Only once)
+        if (_currentEmployee == null)
+        {
+            _currentEmployee = await UserService.GetEmployeeAsync();
+            if (_currentEmployee == null) return;
+
+            var profile = Db.CompanyProfile.Get();
+            _timeZoneId = profile?.TimeZoneId ?? "";
+
+            // Check if user has permission to add emails to project timeline
+            _canAddToTimeline = _currentEmployee.HasPermission(AppPermissions.Projects.Edit);
+
+            // Subscribe to Realtime Events (Only once)
+            EmailIdleService.MessageReceived += OnMessageReceived;
+            EmailIdleService.MessageFlagsChanged += OnMessageFlagsChanged;
+            EmailNotifications.OnUnreadCountChanged += OnUnreadCountChanged;
+
+            LoadFolders();
+        }
+
+        // Handle Routing / Selection logic
+        if (FolderId != null)
+        {
+            if (_selectedFolderId != FolderId)
+            {
+                var found = SelectFolderById(FolderId);
+                // If folder provided but not found (unauthorized or invalid), fallback to Inbox
+                if (!found && _folders.Any())
+                {
+                    var inbox = _folders.FirstOrDefault(f => f.IsInbox) ?? _folders.First();
+                    SelectFolder(inbox);
+                }
+            }
+        }
+        else if (_folders.Any() && _selectedFolderId == null)
+        {
+            var inbox = _folders.FirstOrDefault(f => f.IsInbox) ?? _folders.First();
+            SelectFolder(inbox);
+        }
+
+        if (MessageId != null)
+        {
+            if (_selectedMessageId != MessageId)
+            {
+                var msg = _messages.FirstOrDefault(m => m.Id == MessageId);
+                if (msg != null) await SelectMessage(msg);
+            }
+        }
+    }
+
+    // ... (Realtime Event Handlers unchanged) ...
+    private void OnUnreadCountChanged()
+    {
+        InvokeAsync(() =>
+        {
+            LoadFolders();
+            StateHasChanged();
+        });
+    }
+
+    private void OnMessageReceived(string employeeId, string folderPath, MailKit.UniqueId uid)
+    {
+        if (_currentEmployee?.Id != employeeId || _selectedFolderId == null) return;
+
+        var currentFolder = _folders.FirstOrDefault(f => f.Id == _selectedFolderId);
+        if (currentFolder == null || currentFolder.Path != folderPath) return;
+
+        InvokeAsync(() =>
+        {
+            Console.WriteLine($"[EmailLayout] New Message detected in {folderPath}. Refreshing.");
+            _ = Task.Run(async () =>
+            {
+                await EmailService.SyncSingleFolderAsync(employeeId, folderPath);
+                await InvokeAsync(() => LoadMessages(_selectedFolderId));
+            });
+        });
+    }
+
+    private void OnMessageFlagsChanged(string employeeId, string folderPath, MailKit.UniqueId uid)
+    {
+        if (_currentEmployee?.Id != employeeId || _selectedFolderId == null) return;
+
+        var currentFolder = _folders.FirstOrDefault(f => f.Id == _selectedFolderId);
+        if (currentFolder == null || currentFolder.Path != folderPath) return;
+
+        InvokeAsync(() =>
+        {
+            Console.WriteLine($"[EmailLayout] Flags changed in {folderPath}. Refreshing.");
+            _ = Task.Run(async () =>
+            {
+                await EmailService.SyncSingleFolderAsync(employeeId, folderPath);
+                await InvokeAsync(() => LoadMessages(_selectedFolderId));
+            });
+        });
+    }
+
+    private bool SelectFolderById(string folderId)
+    {
+        var folder = _folders.FirstOrDefault(f => f.Id == folderId);
+        if (folder != null)
+        {
+            SelectFolder(folder);
+            return true;
+        }
+        return false;
+    }
+
+    public void Dispose()
+    {
+        if (_currentEmployee != null && _selectedFolderId != null)
+        {
+            var folder = _folders.FirstOrDefault(f => f.Id == _selectedFolderId);
+            if (folder != null && !folder.IsInbox)
+            {
+                EmailIdleService.StopWatching(_currentEmployee.Id, folder.Path);
+            }
+        }
+
+        _searchCts?.Cancel();
+        _searchCts?.Dispose();
+
+        EmailIdleService.MessageReceived -= OnMessageReceived;
+        EmailIdleService.MessageFlagsChanged -= OnMessageFlagsChanged;
+        EmailNotifications.OnUnreadCountChanged -= OnUnreadCountChanged;
+
+        _objRef?.Dispose();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            try
+            {
+                _objRef = DotNetObjectReference.Create(this);
+                // Adjust path if needed, assuming same file
+                _module = await JS.InvokeAsync<IJSObjectReference>("import", $"./{Assets.Bypassed("Components/Pages/Email/EmailLayout.razor.js")}");
+            }
+            catch { /* Ignore */ }
+        }
+
+        if (_messages.Any() && _module != null && _hasMoreMessages)
+        {
+            try
+            {
+                await _module.InvokeVoidAsync("initInfiniteScroll", "email-message-list", "email-list-sentinel", _objRef);
+            }
+            catch { /* Ignore */ }
+        }
+    }
+
+    [JSInvokable]
+    public async Task LoadOlderMessagesJS()
+    {
+        await LoadOlderMessages();
+    }
+
+    private void LoadFolders()
+    {
+        if (_currentEmployee == null) return;
+        _folders = Db.EmailFolders.GetByEmployee(_currentEmployee.Id);
+        
+        // Dynamically compute UnreadCount from local cache to prevent IMAP desyncs
+        foreach(var folder in _folders)
+        {
+            folder.UnreadCount = Db.EmailMessages.GetUnreadCount(_currentEmployee.Id, folder.Path);
+        }
+    }
+
+    private void LoadMessages(string folderId)
+    {
+        if (_currentEmployee == null) return;
+        var folder = _folders.FirstOrDefault(f => f.Id == folderId);
+        if (folder == null) return;
+
+        // Lazy Load: Get recent 50 messages
+        _messages = Db.EmailMessages.GetByFolderRecent(_currentEmployee.Id, folder.Path, 50);
+        _hasMoreMessages = Db.EmailMessages.HasMoreMessages(_currentEmployee.Id, folder.Path);
+        StateHasChanged();
+    }
+
+    private bool _isLoadingOlder = false;
+    private bool _hasMoreMessages = true;
+
+    private async Task LoadOlderMessages()
+    {
+        if (_currentEmployee == null || _selectedFolderId == null || _isLoadingOlder) return;
+        
+        // Prevent infinite scroll from fetching non-searched messages during an active search
+        if (_isSearching || !string.IsNullOrWhiteSpace(_searchText)) return;
+
+        var folder = _folders.FirstOrDefault(f => f.Id == _selectedFolderId);
+        if (folder == null) return;
+
+        _isLoadingOlder = true;
+        StateHasChanged();
+
+        try
+        {
+            var oldestDate = _messages.LastOrDefault()?.Date.UtcDateTime ?? DateTime.UtcNow;
+            var olderMessages = new List<EmailMessage>();
+            await Task.Run(() =>
+            {
+                olderMessages = Db.EmailMessages.GetByFolderBeforeDate(_currentEmployee.Id, folder.Path, oldestDate, 30);
+            });
+
+            if (olderMessages.Any())
+            {
+                _messages.AddRange(olderMessages);
+                StateHasChanged();
+            }
+            else
+            {
+                _hasMoreMessages = false;
+            }
+        }
+        finally
+        {
+            _isLoadingOlder = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task HandleSearch(string value)
+    {
+        _searchText = value ?? "";
+
+        _searchCts?.Cancel();
+        _searchCts?.Dispose();
+        _searchCts = new CancellationTokenSource();
+        var token = _searchCts.Token;
+
+        if (string.IsNullOrWhiteSpace(_searchText) && _selectedFolderId != null)
+        {
+            _isSearching = false;
+            LoadMessages(_selectedFolderId);
+            return;
+        }
+
+        if (_currentEmployee == null || string.IsNullOrWhiteSpace(_searchText)) return;
+
+        var folder = _folders.FirstOrDefault(f => f.Id == _selectedFolderId);
+        string? folderPath = _searchAllFolders ? null : folder?.Path;
+
+        _isSearching = true;
+        _messages = new List<EmailMessage>(); // Clear previous results IMMEDIATELY
+        _searchProcessedCount = 0;
+        _searchTotalCount = 0;
+        StateHasChanged(); // Force update to show empty list
+
+        var progress = new Progress<(int processed, int total)>(p =>
+        {
+            _searchProcessedCount = p.processed;
+            _searchTotalCount = p.total;
+            InvokeAsync(StateHasChanged);
+        });
+
+        try
+        {
+            // Offload the entire streaming process to a background thread to keep UI responsive
+            await Task.Run(async () =>
+            {
+                await foreach (var msg in Db.EmailMessages.SearchStreamingAsync(_currentEmployee.Id, _searchText, _config["DataPath"] ?? "Data", folderPath, progress, token))
+                {
+                    if (token.IsCancellationRequested) break;
+                    
+                    await InvokeAsync(() =>
+                    {
+                        _messages.Add(msg);
+                        StateHasChanged();
+                    });
+                }
+            }, token);
+
+            if (!token.IsCancellationRequested)
+            {
+                _hasMoreMessages = false;
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Ignored, new search started or cleared
+        }
+        finally
+        {
+            if (!token.IsCancellationRequested)
+            {
+                _isSearching = false;
+                StateHasChanged();
+            }
+        }
+    }
+
+    private async Task HandleSearchScopeChanged(bool searchAll)
+    {
+        _searchAllFolders = searchAll;
+        await HandleSearch(_searchText);
+    }
+
+    private void SelectFolder(EmailFolder folder)
+    {
+        if (_currentEmployee != null && _selectedFolderId != null)
+        {
+            var prevFolder = _folders.FirstOrDefault(f => f.Id == _selectedFolderId);
+            if (prevFolder != null && !prevFolder.IsInbox)
+            {
+                EmailIdleService.StopWatching(_currentEmployee.Id, prevFolder.Path);
+            }
+        }
+
+        _showMobileFolders = false;
+        _selectedFolderId = folder.Id;
+        _selectedMessageId = null;
+        _selectedMessage = null;
+        _searchText = "";
+
+        if (FolderId != folder.Id)
+        {
+            Nav.NavigateTo($"/email/{folder.Id}");
+        }
+
+        LoadMessages(folder.Id);
+
+        if (_currentEmployee != null)
+        {
+            if (!folder.IsInbox)
+            {
+                EmailIdleService.WatchFolder(_currentEmployee.Id, folder.Path);
+            }
+            // Just sync the selected folder for fresh data — IDLE is managed by background service
+            _ = Task.Run(() => EmailService.SyncSingleFolderAsync(_currentEmployee.Id, folder.Path));
+        }
+    }
+
+    private async Task SelectMessage(EmailMessage? msg)
+    {
+        if (msg == null)
+        {
+            _selectedMessageId = null;
+            _selectedMessage = null;
+            _messageBody = "";
+            return;
+        }
+
+        // Check if Draft
+        var folder = _folders.FirstOrDefault(f => f.Id == _selectedFolderId);
+        if (folder != null && folder.IsDrafts)
+        {
+            OpenComposerDialog(draftId: msg.Id);
+            return;
+        }
+
+        _selectedMessageId = msg.Id;
+        _selectedMessage = msg;
+        _isLoadingBody = true;
+        _messageBody = "";
+
+        _messageBody = await EmailService.GetEmailBodyAsync(msg.Id, _currentEmployee.Id);
+
+        if (!msg.IsRead)
+        {
+            msg.IsRead = true;
+            _ = EmailService.MarkMessageReadAsync(msg.Id, true);
+            if (folder != null && folder.UnreadCount > 0)
+            {
+                folder.UnreadCount--;
+                Db.EmailFolders.Save(folder);
+            }
+        }
+        _isLoadingBody = false;
+        StateHasChanged();
+    }
+
+    private async Task ToggleFlag(EmailMessage msg)
+    {
+        msg.IsFlagged = !msg.IsFlagged;
+        await EmailService.MarkMessageFlaggedAsync(msg.Id, msg.IsFlagged);
+    }
+
+    private async Task DownloadAttachment(EmailAttachmentMeta att)
+    {
+        if (_selectedMessage == null || _currentEmployee == null) return;
+        
+        var url = $"/internal/attachments/email/{Uri.EscapeDataString(_selectedMessage.Id)}/{Uri.EscapeDataString(att.Id)}" +
+                  $"?employeeId={Uri.EscapeDataString(_currentEmployee.Id)}" +
+                  $"&fn={Uri.EscapeDataString(att.FileName)}" +
+                  "&download=true";
+
+        await JS.InvokeVoidAsync("open", url, "_blank");
+    }
+
+    private bool _isRepairing = false;
+    private async Task RepairAttachments()
+    {
+        if (_currentEmployee == null) return;
+        _isRepairing = true;
+        StateHasChanged();
+        await Task.Run(() => EmailService.RepairEmailInstallationAsync(_currentEmployee.Id));
+        _isRepairing = false;
+        StateHasChanged();
+    }
+
+    private void OpenComposer() => OpenComposerDialog();
+
+    private async Task OpenComposerDialog(string? to = null, string? subject = null, string? body = null, string? draftId = null, List<(string Path, string FileName)>? preloadedFiles = null)
+    {
+        var parameters = new DialogParameters();
+        if (to != null) parameters.Add("To", to);
+        if (subject != null) parameters.Add("Subject", subject);
+        if (body != null) parameters.Add("Body", body);
+        if (draftId != null) parameters.Add("DraftId", draftId);
+        if (preloadedFiles != null) parameters.Add("PreloadedFiles", preloadedFiles);
+
+        var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.ExtraLarge, FullWidth = true };
+        var dialog = await _dialogService.ShowAsync<EmailComposer>("Compose Message", parameters, options);
+        await dialog.Result;
+
+        // Refresh folders (a new LocalDrafts folder may have been created) and message list
+        LoadFolders();
+        if (_selectedFolderId != null) LoadMessages(_selectedFolderId);
+        StateHasChanged();
+    }
+
+    // --- Toolbar Actions ---
+    // Wired up in EmailReader
+
+    private string GetCleanQuotedBody(string fullHtml)
+    {
+        if (string.IsNullOrWhiteSpace(fullHtml)) return "";
+
+        var cleanHtml = fullHtml;
+        var bodyMatch = System.Text.RegularExpressions.Regex.Match(cleanHtml, @"<body[^>]*>(.*?)</body>", System.Text.RegularExpressions.RegexOptions.Singleline | System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        if (bodyMatch.Success)
+        {
+            cleanHtml = bodyMatch.Groups[1].Value;
+        }
+
+        // Just remove script tags for safety, but leave style tags intact to preserve the layout!
+        cleanHtml = System.Text.RegularExpressions.Regex.Replace(cleanHtml, @"<script[^>]*>.*?</script>", "", System.Text.RegularExpressions.RegexOptions.Singleline | System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+        return cleanHtml;
+    }
+
+    private void Reply()
+    {
+        if (_selectedMessage == null) return;
+        var subject = _selectedMessage.Subject.StartsWith("Re:", StringComparison.OrdinalIgnoreCase)
+            ? _selectedMessage.Subject
+            : $"Re: {_selectedMessage.Subject}";
+        
+        var dateStr = FormatDate(_selectedMessage.Date);
+        var cleanQuote = GetCleanQuotedBody(_messageBody);
+        var body = $"On {dateStr}, {_selectedMessage.FromName} wrote:<br><blockquote style=\"margin: 0 0 0 .8ex; border-left: 1px #ccc solid; padding-left: 1ex;\">{cleanQuote}</blockquote>";
+
+        OpenComposerDialog(to: _selectedMessage.FromAddress, subject: subject, body: body);
+    }
+
+    private void ReplyAll()
+    {
+        if (_selectedMessage == null) return;
+        var subject = _selectedMessage.Subject.StartsWith("Re:", StringComparison.OrdinalIgnoreCase)
+            ? _selectedMessage.Subject
+            : $"Re: {_selectedMessage.Subject}";
+
+        var toList = new List<string> { _selectedMessage.FromAddress };
+        toList.AddRange(_selectedMessage.ToAddresses.Where(a => a != _currentEmployee?.Email));
+        var to = string.Join(", ", toList);
+
+        var dateStr = FormatDate(_selectedMessage.Date);
+        var cleanQuote = GetCleanQuotedBody(_messageBody);
+        var body = $"On {dateStr}, {_selectedMessage.FromName} wrote:<br><blockquote style=\"margin: 0 0 0 .8ex; border-left: 1px #ccc solid; padding-left: 1ex;\">{cleanQuote}</blockquote>";
+        OpenComposerDialog(to: to, subject: subject, body: body);
+    }
+
+    private void Forward()
+    {
+        if (_selectedMessage == null) return;
+        var subject = $"Fwd: {_selectedMessage.Subject}";
+        var cleanQuote = GetCleanQuotedBody(_messageBody);
+        var dateStr = FormatDate(_selectedMessage.Date);
+        var body = $"---------- Forwarded message ---------<br>From: {_selectedMessage.FromName} &lt;{_selectedMessage.FromAddress}&gt;<br>Date: {dateStr}<br>Subject: {_selectedMessage.Subject}<br><br>{cleanQuote}";
+
+        var preloadedFiles = new List<(string Path, string FileName)>();
+        if (_selectedMessage.HasAttachments && _currentEmployee != null)
+        {
+            foreach (var att in _selectedMessage.Attachments)
+            {
+                var path = EmailService.GetAttachmentPath(_selectedMessage.Id, att.Id, _currentEmployee.Id);
+                if (System.IO.File.Exists(path))
+                {
+                    preloadedFiles.Add((path, att.FileName));
+                }
+            }
+        }
+
+        OpenComposerDialog(subject: subject, body: body, preloadedFiles: preloadedFiles);
+    }
+
+    private async Task MarkAsUnread()
+    {
+        if (_selectedMessage == null || _selectedFolderId == null) return;
+        await MarkMessageAsUnread(_selectedMessage);
+    }
+
+    private async Task MarkMessageAsUnread(EmailMessage msg)
+    {
+        if (msg == null || _selectedFolderId == null) return;
+
+        // Optimistic Update
+        msg.IsRead = false;
+
+        var folder = _folders.FirstOrDefault(f => f.Id == _selectedFolderId);
+        if (folder != null)
+        {
+            folder.UnreadCount++;
+            Db.EmailFolders.Save(folder);
+        }
+
+        var msgId = msg.Id;
+
+        // If this is the selected message, remove selection
+        if (_selectedMessageId == msgId)
+        {
+            _selectedMessageId = null;
+            _selectedMessage = null;
+            _messageBody = "";
+        }
+
+        // Server update
+        await EmailService.MarkMessageReadAsync(msgId, false);
+        StateHasChanged();
+    }
+
+    // --- Navigation ---
+    private bool HasNextMessage
+    {
+        get
+        {
+            if (_selectedMessageId == null) return false;
+            var idx = _messages.FindIndex(m => m.Id == _selectedMessageId);
+            return idx >= 0 && idx < _messages.Count - 1;
+        }
+    }
+
+    private bool HasPreviousMessage
+    {
+        get
+        {
+            if (_selectedMessageId == null) return false;
+            var idx = _messages.FindIndex(m => m.Id == _selectedMessageId);
+            return idx > 0;
+        }
+    }
+
+    private async Task SelectNextMessage()
+    {
+        if (_selectedMessageId == null) return;
+        var idx = _messages.FindIndex(m => m.Id == _selectedMessageId);
+        if (idx >= 0 && idx < _messages.Count - 1)
+        {
+            await SelectMessage(_messages[idx + 1]);
+        }
+    }
+
+    private async Task SelectPreviousMessage()
+    {
+        if (_selectedMessageId == null) return;
+        var idx = _messages.FindIndex(m => m.Id == _selectedMessageId);
+        if (idx > 0)
+        {
+            await SelectMessage(_messages[idx - 1]);
+        }
+    }
+
+    private string FormatDate(DateTimeOffset date)
+    {
+        DateTime localDate;
+        if (!string.IsNullOrWhiteSpace(_timeZoneId))
+        {
+            try
+            {
+                localDate = TimeZoneInfo.ConvertTimeBySystemTimeZoneId(date, _timeZoneId).DateTime;
+            }
+            catch
+            {
+                localDate = date.LocalDateTime;
+            }
+        }
+        else
+        {
+            localDate = date.LocalDateTime;
+        }
+
+        return localDate.ToString("g");
+    }
+
+    private async Task MoveFolderTo(string destFolderPath)
+    {
+        if (_selectedMessage == null || _currentEmployee == null || string.IsNullOrEmpty(destFolderPath)) return;
+
+        var msgId = _selectedMessage.Id;
+        _messages.Remove(_selectedMessage);
+        _selectedMessage = null;
+        _selectedMessageId = null;
+        _messageBody = "";
+
+        await EmailService.MoveMessageAsync(msgId, _currentEmployee.Id, destFolderPath);
+
+        // Reload folders (counts changed) and messages to stay in sync with IDLE events
+        LoadFolders();
+        if (_selectedFolderId != null) LoadMessages(_selectedFolderId);
+        StateHasChanged();
+    }
+
+    private async Task DeleteMessage()
+    {
+        if (_selectedMessage == null || _currentEmployee == null) return;
+
+        // Optimistic UI Update: Remove from list
+        _messages.Remove(_selectedMessage);
+
+        var msgId = _selectedMessage.Id;
+        _selectedMessage = null;
+        _selectedMessageId = null;
+        _messageBody = "";
+
+        // Server Move to Trash
+        await EmailService.MoveMessageToTrashAsync(msgId, _currentEmployee.Id);
+
+        StateHasChanged();
+    }
+
+    private async Task ArchiveMessage()
+    {
+        if (_selectedMessage == null || _currentEmployee == null) return;
+
+        // Optimistic UI Update: Remove from list
+        _messages.Remove(_selectedMessage);
+
+        var msgId = _selectedMessage.Id;
+        _selectedMessage = null;
+        _selectedMessageId = null;
+        _messageBody = "";
+
+        await EmailService.ArchiveMessageAsync(msgId, _currentEmployee.Id);
+        StateHasChanged();
+    }
+
+    private async Task JunkMessage()
+    {
+        if (_selectedMessage == null || _currentEmployee == null) return;
+
+        // Optimistic UI Update: Remove from list
+        _messages.Remove(_selectedMessage);
+
+        var msgId = _selectedMessage.Id;
+        _selectedMessage = null;
+        _selectedMessageId = null;
+        _messageBody = "";
+
+        await EmailService.JunkMessageAsync(msgId, _currentEmployee.Id);
+        StateHasChanged();
+    }
+    private async Task PrintMessage()
+    {
+        if (_selectedMessage == null || _module == null) return;
+
+        var subject = _selectedMessage.Subject;
+        var from = string.IsNullOrWhiteSpace(_selectedMessage.FromName) 
+            ? _selectedMessage.FromAddress 
+            : $"{_selectedMessage.FromName} <{_selectedMessage.FromAddress}>";
+        var to = string.Join(", ", _selectedMessage.ToAddresses ?? new List<string>());
+        var dateStr = FormatDate(_selectedMessage.Date);
+
+        await _module.InvokeVoidAsync("printEmail",
+            System.Net.WebUtility.HtmlEncode(subject ?? ""),
+            System.Net.WebUtility.HtmlEncode(from),
+            System.Net.WebUtility.HtmlEncode(to),
+            System.Net.WebUtility.HtmlEncode(dateStr),
+            _messageBody);
+    }
+
+    private async Task AddEmailToTimeline()
+    {
+        if (_selectedMessage == null || _currentEmployee == null) return;
+
+        var parameters = new DialogParameters
+        {
+            { "Email", _selectedMessage },
+            { "EmployeeId", _currentEmployee.Id },
+            { "CurrentUser", _currentEmployee.FullName }
+        };
+
+        var options = new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true };
+        var dialog = await _dialogService.ShowAsync<AddEmailToTimelineDialog>("Add Email to Timeline", parameters, options);
+        await dialog.Result;
+    }
+}
+

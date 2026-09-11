@@ -1,0 +1,27 @@
+@* Horizontal date divider between message groups *@
+
+<div class="d-flex align-center my-1" style="width: 100%;">
+    <MudDivider Style="flex: 1;" />
+    <MudChip T="string" Size="Size.Small" Variant="Variant.Text" Color="Color.Default"
+        Style="font-weight: 600; cursor: default; pointer-events: none;">
+        @GetLabel()
+    </MudChip>
+    <MudDivider Style="flex: 1;" />
+</div>
+
+@code {
+    [Parameter] public DateTime Date { get; set; }
+
+    private string GetLabel()
+    {
+        var localDate = Date.ToLocalTime().Date;
+        var today = DateTime.Now.Date;
+
+        if (localDate == today)
+            return "Today";
+        if (localDate == today.AddDays(-1))
+            return "Yesterday";
+
+        return localDate.ToString("MMMM d, yyyy");
+    }
+}

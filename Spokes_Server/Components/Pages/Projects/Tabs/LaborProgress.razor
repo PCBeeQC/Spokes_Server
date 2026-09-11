@@ -1,0 +1,227 @@
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Data
+@using System.Globalization
+@inject Database Db
+@inject Spokes_Server.Core.Services.Accounting.FinancialCalculationEngine CalcEngine
+
+@if (SubTaskGroups.Any())
+{
+    <MudStack Spacing="4">
+        @foreach (var group in SubTaskGroups)
+        {
+            <MudCard Elevation="1">
+                <MudCardHeader>
+                    <CardHeaderContent>
+                        <MudText Typo="Typo.h6">@group.Title</MudText>
+                    </CardHeaderContent>
+                </MudCardHeader>
+                <MudCardContent>
+                    <MudSimpleTable Dense="true" Hover="true" Striped="true" Style="overflow-x: auto;">
+                        <thead>
+                            <tr>
+                                <th>Week</th>
+                                @foreach (var emp in group.Employees)
+                                {
+                                    <th>@emp.Name</th>
+                                }
+                                <th><strong>Total</strong></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var row in group.Rows)
+                            {
+                                <tr>
+                                    <td>@row.WeekLabel</td>
+                                    @foreach (var emp in group.Employees)
+                                    {
+                                        var hours = row.GetHours(emp.Id);
+                                        <td>@(hours > 0 ? hours.ToString("N1") : "-")</td>
+                                    }
+                                    <td><strong>@row.TotalHours.ToString("N1")</strong></td>
+                                </tr>
+                            }
+                        </tbody>
+                        <tfoot>
+                            <tr>
+                                <td><strong>Total</strong></td>
+                                @foreach (var emp in group.Employees)
+                                {
+                                    <td><strong>@group.GetTotalForEmployee(emp.Id).ToString("N1")</strong></td>
+                                }
+                                <td><strong>@group.GrandTotal.ToString("N1")</strong></td>
+                            </tr>
+                        </tfoot>
+                    </MudSimpleTable>
+                </MudCardContent>
+            </MudCard>
+        }
+    </MudStack>
+}
+else
+{
+    <MudAlert Severity="Severity.Info">No labor entries found for this project.</MudAlert>
+}
+
+@code {
+    [Parameter] public string ProjectId { get; set; }
+
+    private List<SubTaskGroupViewModels> SubTaskGroups = new();
+
+    protected override void OnInitialized()
+    {
+        LoadData();
+    }
+
+    private void LoadData()
+    {
+        var allTimesheets = Db.Timesheets.GetAll();
+        var workTypes = Db.WorkTypes.GetAll().ToDictionary(x => x.Id, x => x);
+        var employees = Db.Employees.GetAll().ToDictionary(x => x.Id, x => x);
+
+        // Flatten entries
+        var entries = new List<LaborEntry>();
+
+        foreach (var ts in allTimesheets)
+        {
+            foreach (var entry in ts.Entries)
+            {
+                if (entry.ProjectId == ProjectId)
+                {
+                    entries.Add(new LaborEntry
+                        {
+                            EmployeeId = ts.EmployeeId,
+                            EmployeeName = employees.TryGetValue(ts.EmployeeId, out var emp) ? emp.FirstName + " " + emp.LastName[0] + "." :
+                        "Unknown",
+                            WorkTypeId = entry.WorkTypeId,
+                            SubTaskId = entry.SubTaskId,
+                            Year = ts.Year,
+                            WeekNumber = ts.WeekNumber,
+                            Hours = entry.Hours
+                        });
+                }
+            }
+        }
+
+        // Group by (WorkType, SubTask)
+        var grouped = entries
+        .GroupBy(x => new { x.WorkTypeId, x.SubTaskId })
+        .OrderBy(x => x.Key.WorkTypeId)
+        .ToList();
+
+        SubTaskGroups.Clear();
+
+        foreach (var g in grouped)
+        {
+            var workType = workTypes.TryGetValue(g.Key.WorkTypeId, out var wt) ? wt : null;
+            var taskName = workType?.Name ?? "Unknown Task";
+
+            string subTaskName = "";
+            string title = taskName;
+
+            if (!string.IsNullOrEmpty(g.Key.SubTaskId) && workType != null)
+            {
+                var st = workType.SubTasks.FirstOrDefault(s => s.Id == g.Key.SubTaskId);
+                if (st != null)
+                {
+                    subTaskName = st.Name;
+                    title = $"{taskName} - {subTaskName}";
+                }
+            }
+
+            var uniqueEmployeeIds = g.Select(x => x.EmployeeId).Distinct().ToList();
+            var distinctEmployees = uniqueEmployeeIds
+            .Select(id => new EmployeeHeader { Id = id, Name = employees.TryGetValue(id, out var e) ? e.FirstName : "Unknown" })
+            .OrderBy(e => e.Name)
+            .ToList();
+
+            var rowData = g.GroupBy(x => new { x.Year, x.WeekNumber })
+            .Select(weekGroup => new RowViewModel
+                {
+                    Year = weekGroup.Key.Year,
+                    Week = weekGroup.Key.WeekNumber,
+                    EmployeeHours = weekGroup.GroupBy(x => x.EmployeeId)
+                .ToDictionary(x => x.Key, x => x.Sum(e => e.Hours))
+                })
+            .OrderByDescending(r => r.Year).ThenByDescending(r => r.Week)
+            .ToList();
+
+            var groupVm = new SubTaskGroupViewModels
+                {
+                    Title = title, // Changed property name
+                    TaskName = taskName,
+                    SubTaskName = subTaskName,
+                    Employees = distinctEmployees,
+                    Rows = rowData
+                };
+            SubTaskGroups.Add(groupVm);
+        }
+    }
+
+    private class LaborEntry
+    {
+        public string EmployeeId { get; set; }
+        public string EmployeeName { get; set; }
+        public string WorkTypeId { get; set; }
+        public string? SubTaskId { get; set; }
+        public int Year { get; set; }
+        public int WeekNumber { get; set; }
+        public decimal Hours { get; set; }
+    }
+
+    private class SubTaskGroupViewModels
+    {
+        public string Title { get; set; } // Changed property name
+        public string TaskName { get; set; }
+        public string SubTaskName { get; set; }
+        public List<EmployeeHeader> Employees { get; set; } = new();
+        public List<RowViewModel> Rows { get; set; } = new();
+
+        public decimal GetTotalForEmployee(string empId)
+        {
+            return Rows.Sum(r => r.GetHours(empId));
+        }
+
+        public decimal GrandTotal => Rows.Sum(r => r.TotalHours);
+    }
+
+    private class EmployeeHeader
+    {
+        public string Id { get; set; }
+        public string Name { get; set; }
+    }
+
+    private class RowViewModel
+    {
+        public int Year { get; set; }
+        public int Week { get; set; }
+        public Dictionary<string, decimal> EmployeeHours { get; set; } = new();
+
+        public string WeekLabel
+        {
+            get
+            {
+                try
+                {
+                    var date = ISOWeek.ToDateTime(Year, Week, DayOfWeek.Monday);
+                    return $"Week {Week} ({date:MMM dd})";
+                }
+                catch
+                {
+                    return $"Week {Week}, {Year}";
+                }
+            }
+        }
+
+        public decimal GetHours(string empId)
+        {
+            return EmployeeHours.TryGetValue(empId, out var h) ? h : 0;
+        }
+
+        public decimal TotalHours => EmployeeHours.Values.Sum();
+    }
+}
+

@@ -1,0 +1,150 @@
+@using Spokes_Server.Core.Data
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Services
+@inject Database Db
+@inject BoardService BoardService
+@inject IDialogService DialogService
+
+<MudContainer MaxWidth="MaxWidth.False" Class="pa-4 h-100 overflow-y-auto">
+    <MudGrid Spacing="3">
+        @if (!Cards.Any())
+        {
+            <MudItem xs="12">
+                <MudText Typo="Typo.body1" Class="pa-4 font-italic text-center" Color="Color.Secondary">No cards found. Add
+                    one to get started.</MudText>
+            </MudItem>
+        }
+        else
+        {
+            @foreach (var card in Cards)
+            {
+                <MudItem xs="12" sm="6" md="4" lg="3" xl="2">
+                    <MudPaper Elevation="2" Class="pa-4 cursor-pointer hover-effect" @onclick="() => OpenCard(card)"
+                        Style="height: 100%; transition: box-shadow 0.2s;">
+                        <MudStack Spacing="2">
+                            <div class="d-flex align-center gap-2">
+                                <MudIcon Icon="@Icons.Material.Filled.Description" Size="Size.Small" Color="Color.Default" />
+                                <MudText Typo="Typo.h6"
+                                    Style="font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                                    @(string.IsNullOrWhiteSpace(card.Title) ? "Untitled" : card.Title)
+                                </MudText>
+                            </div>
+
+                            <MudDivider Class="my-1" />
+
+                            @foreach (var prop in Board.Properties.Where(p => View.VisiblePropertyIds.Contains(p.Id)))
+                            {
+                                <div class="d-flex align-center gap-2" style="overflow: hidden;">
+                                    <MudIcon Icon="@GetPropertyIcon(prop.Type)" Size="Size.Small"
+                                        Style="font-size: 1rem; opacity: 0.6;" />
+                                    <MudText Typo="Typo.body2" Color="Color.Secondary"
+                                        Style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                                        @GetPropertyValue(card, prop)
+                                    </MudText>
+                                </div>
+                            }
+                        </MudStack>
+                    </MudPaper>
+                </MudItem>
+            }
+        }
+
+        <MudItem xs="12" sm="6" md="4" lg="3" xl="2">
+            <MudPaper Elevation="0" Outlined="true"
+                Class="pa-4 cursor-pointer d-flex align-center justify-center dashed-border hover-bg"
+            @onclick="CreateNewCard" Style="height: 100%; min-height: 150px;">
+                <MudStack AlignItems="AlignItems.Center">
+                    <MudIcon Icon="@Icons.Material.Filled.Add" Size="Size.Large" Color="Color.Secondary" />
+                    <MudText Typo="Typo.button" Color="Color.Secondary">New Card</MudText>
+                </MudStack>
+            </MudPaper>
+        </MudItem>
+
+    </MudGrid>
+</MudContainer>
+
+<style>
+    .hover-effect:hover {
+        box-shadow: var(--mud-elevation-8) !important;
+    }
+
+    .dashed-border {
+        border: 2px dashed var(--mud-palette-divider) !important;
+    }
+
+    .hover-bg:hover {
+        background-color: var(--mud-palette-action-hover);
+    }
+</style>
+
+@code {
+    [Parameter] public Board Board { get; set; } = default!;
+    [Parameter] public BoardView View { get; set; } = default!;
+    [Parameter] public List<BoardCard> Cards { get; set; } = new();
+
+    protected override void OnParametersSet()
+    {
+        // No local data fetch needed
+    }
+
+    async Task CreateNewCard()
+    {
+        var newCard = BoardService.CreateCard(Board.Id, "Untitled");
+        Cards.Add(newCard);
+        await OpenCard(newCard);
+    }
+
+    async Task OpenCard(BoardCard card)
+    {
+        var parameters = new DialogParameters<CardDetailDialog> { { x => x.Card, card }, { x => x.Board, Board } };
+        var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Medium, FullWidth = true };
+        await DialogService.ShowAsync<CardDetailDialog>("Card Details", parameters, options);
+    }
+
+    string GetPropertyValue(BoardCard card, BoardProperty prop)
+    {
+        if (card.PropertyValues.TryGetValue(prop.Id, out var val))
+        {
+            if (string.IsNullOrEmpty(val)) return "-";
+
+            if (prop.Type == BoardPropertyType.Select)
+            {
+                var option = prop.Options.FirstOrDefault(o => o.Id == val);
+                return option?.Name ?? val;
+            }
+            if (prop.Type == BoardPropertyType.Person)
+            {
+                var emp = Db.Employees.GetById(val);
+                return emp != null ? $"{emp.FirstName} {emp.LastName}" : val;
+            }
+            if (prop.Type == BoardPropertyType.Date)
+            {
+                if (DateTime.TryParse(val, out var d)) return d.ToShortDateString();
+            }
+            if (prop.Type == BoardPropertyType.Checkbox)
+            {
+                return val == "true" ? "Yes" : "No";
+            }
+
+            return val;
+        }
+        return "-";
+    }
+
+    string GetPropertyIcon(BoardPropertyType type) => type switch
+    {
+        BoardPropertyType.Select => Icons.Material.Filled.ArrowDropDownCircle,
+        BoardPropertyType.Person => Icons.Material.Filled.Person,
+        BoardPropertyType.Date => Icons.Material.Filled.CalendarToday,
+        BoardPropertyType.Checkbox => Icons.Material.Filled.CheckBox,
+        BoardPropertyType.URL => Icons.Material.Filled.Link,
+        BoardPropertyType.Email => Icons.Material.Filled.Email,
+        BoardPropertyType.Number => Icons.Material.Filled.Numbers,
+        BoardPropertyType.Phone => Icons.Material.Filled.Phone,
+        _ => Icons.Material.Filled.ShortText
+    };
+}

@@ -1,0 +1,44 @@
+@inherits SpokesComponentBase
+
+<MudTextField T="string" 
+              Value="@Value" 
+              ValueChanged="@HandleValueChanged" 
+              Placeholder="@Placeholder" 
+              Adornment="Adornment.Start" 
+              AdornmentIcon="@Icons.Material.Filled.Search" 
+              IconSize="MudBlazor.Size.Medium" 
+              Class="@Class" 
+              Immediate="true"
+              Clearable="true" />
+
+@code {
+    [Parameter] public string Value { get; set; } = "";
+    [Parameter] public EventCallback<string> ValueChanged { get; set; }
+    [Parameter] public string Placeholder { get; set; } = "Search...";
+    [Parameter] public string Class { get; set; } = "mt-0";
+    [Parameter] public int DebounceInterval { get; set; } = 300;
+
+    private System.Timers.Timer? _debounceTimer;
+
+    protected override void OnInitialized()
+    {
+        base.OnInitialized();
+        _debounceTimer = new System.Timers.Timer(DebounceInterval);
+        _debounceTimer.AutoReset = false;
+        _debounceTimer.Elapsed += async (s, e) =>
+        {
+            await SafeInvokeAsync(() => ValueChanged.InvokeAsync(Value));
+        };
+        _disposables.Add(_debounceTimer);
+    }
+
+    private void HandleValueChanged(string newValue)
+    {
+        Value = newValue;
+        if (_debounceTimer != null)
+        {
+            _debounceTimer.Stop();
+            _debounceTimer.Start();
+        }
+    }
+}

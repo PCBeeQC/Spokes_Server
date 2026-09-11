@@ -1,0 +1,182 @@
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Data
+@using Spokes_Server.Core.Services
+@using Spokes_Server.Core.Services.Communication
+@using Spokes_Server.Core.Services.Core
+@using MudBlazor
+@inject Spokes_Server.Aggregate.Database Db
+@inject ISnackbar Snackbar
+@inject IFileService FileService
+@inject EmailService EmailService
+
+<MudDialog>
+    <DialogContent>
+        <MudForm>
+            <MudGrid>
+                <!-- Project Picker -->
+                <MudItem xs="12">
+                    <MudAutocomplete T="Project" Label="Project" @bind-Value="SelectedProject"
+                        SearchFunc="SearchProjects" ToStringFunc="@(p => p?.DisplayName ?? "")"
+                        Variant="Variant.Outlined" Required="true"
+                        Placeholder="Search for a project..." />
+                </MudItem>
+
+                <!-- Title -->
+                <MudItem xs="12">
+                    <MudTextField @bind-Value="NoteTitle" Label="Title" Required="true" Variant="Variant.Outlined" />
+                </MudItem>
+
+                <!-- Date -->
+                <MudItem xs="6">
+                    <MudDatePicker @bind-Date="NoteDate" Label="Date" />
+                </MudItem>
+
+                <!-- Category (read-only) -->
+                <MudItem xs="6" Class="d-flex align-end">
+                    <MudChip T="string" Label="true" Color="Color.Info" Size="Size.Medium">EMAIL</MudChip>
+                </MudItem>
+
+                <!-- Notes / Context -->
+                <MudItem xs="12">
+                    <MudText Typo="Typo.subtitle2" Class="mb-1">Notes (optional)</MudText>
+                    <Spokes_Server.Components.Shared.MarkdownEditor @bind-Value="NoteContent" />
+                </MudItem>
+            </MudGrid>
+        </MudForm>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Close">Close</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="Submit" Disabled="_isSaving">
+            @if (_isSaving)
+            {
+                <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" />
+            }
+            Add to Timeline
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
+
+    /// <summary>The email message to add to the timeline.</summary>
+    [Parameter] public EmailMessage Email { get; set; } = default!;
+
+    /// <summary>The employee ID of the current user (needed to locate the .eml file).</summary>
+    [Parameter] public string EmployeeId { get; set; } = string.Empty;
+
+    /// <summary>The display name of the current user (for CreatedBy).</summary>
+    [Parameter] public string CurrentUser { get; set; } = string.Empty;
+
+    private Project? SelectedProject;
+    private string NoteTitle = string.Empty;
+    private DateTime? NoteDate;
+    private string NoteContent = string.Empty;
+    private bool _isSaving = false;
+
+    protected override void OnInitialized()
+    {
+        // Pre-fill from email
+        NoteTitle = Email?.Subject ?? "Email";
+        NoteDate = Email?.Date.DateTime ?? DateTime.Today;
+    }
+
+    private Task<IEnumerable<Project>> SearchProjects(string value, CancellationToken token)
+    {
+        var projects = Db.Projects.GetAll()
+            .Where(p => p.IsActive)
+            .OrderByDescending(p => p.CreatedAt);
+
+        if (string.IsNullOrWhiteSpace(value))
+            return Task.FromResult(projects.Take(20));
+
+        var filtered = projects
+            .Where(p => p.DisplayName.Contains(value, StringComparison.OrdinalIgnoreCase)
+                     || (p.Client?.BusinessName?.Contains(value, StringComparison.OrdinalIgnoreCase) ?? false));
+
+        return Task.FromResult(filtered.Take(20));
+    }
+
+    private async Task Submit()
+    {
+        if (SelectedProject == null)
+        {
+            Snackbar.Add("Please select a project", Severity.Warning);
+            return;
+        }
+
+        if (Email == null)
+        {
+            Snackbar.Add("No email selected", Severity.Error);
+            return;
+        }
+
+        _isSaving = true;
+        StateHasChanged();
+
+        try
+        {
+            // 1. Copy the .eml file to project uploads
+            var mimePath = EmailService.GetMimeFilePath(Email.Id, EmployeeId);
+            if (string.IsNullOrEmpty(mimePath))
+            {
+                Snackbar.Add("Email file not found on disk", Severity.Error);
+                _isSaving = false;
+                return;
+            }
+
+            string emlUrl;
+            using (var stream = new FileStream(mimePath, FileMode.Open, FileAccess.Read))
+            {
+                // 'projectnotes' has a valid IFileAccessProvider mapping, unlike 'projectemails'
+                emlUrl = await FileService.UploadStreamAsync("projectnotes", SelectedProject.Id, stream, $"{Email.Id}.eml");
+            }
+
+            // 2. Ensure "Email" category exists on the project
+            if (!SelectedProject.NoteCategories.Contains("Email"))
+            {
+                SelectedProject.NoteCategories.Add("Email");
+                Db.Projects.Save(SelectedProject);
+            }
+
+            // 3. Build the content — user notes + email metadata
+            var metadataBlock = $"---\n**From:** {Email.FromName} <{Email.FromAddress}>\n**To:** {string.Join(", ", Email.ToAddresses)}\n**Date:** {Email.Date:g}\n**Subject:** {Email.Subject}\n---";
+            var fullContent = string.IsNullOrWhiteSpace(NoteContent)
+                ? metadataBlock
+                : $"{NoteContent}\n\n{metadataBlock}";
+
+            // 4. Create the timeline note
+            var note = new ProjectNote
+            {
+                ProjectId = SelectedProject.Id,
+                Title = NoteTitle,
+                Date = NoteDate ?? DateTime.Today,
+                Category = "Email",
+                Content = fullContent,
+                IsEmail = true,
+                EmailHtmlPath = emlUrl,
+                CreatedBy = CurrentUser
+            };
+
+            Db.ProjectNotes.Save(note);
+
+            Snackbar.Add($"Email added to {SelectedProject.DisplayName} timeline", Severity.Success);
+            MudDialog.Close(DialogResult.Ok(true));
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Error: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _isSaving = false;
+            StateHasChanged();
+        }
+    }
+
+    private void Close() => MudDialog.Cancel();
+}

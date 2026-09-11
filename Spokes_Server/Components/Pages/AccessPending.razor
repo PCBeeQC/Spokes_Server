@@ -1,0 +1,82 @@
+@page "/access-pending"
+@layout LoginLayout
+@using Microsoft.AspNetCore.Components.Authorization
+@using Spokes_Server.Components.Layout
+@inject AuthenticationStateProvider AuthStateProvider
+@inject NavigationManager Nav
+
+<PageTitle>Access Pending - Spokes</PageTitle>
+
+<MudContainer MaxWidth="MaxWidth.Small" Class="mt-16">
+    <MudPaper Class="pa-8 text-center" Elevation="3">
+        <MudIcon Icon="@Icons.Material.Filled.HourglassEmpty" Size="Size.Large" Color="Color.Warning" Class="mb-4" />
+
+        <MudText Typo="Typo.h4" Class="mb-2">Access Pending</MudText>
+
+        <MudText Typo="Typo.body1" Color="Color.Tertiary" Class="mb-6">
+            Your account has been authenticated but is not yet linked to an Spokes employee profile.
+            Please contact your administrator to complete your account setup.
+        </MudText>
+
+        <MudDivider Class="my-4" />
+
+        <MudText Typo="Typo.subtitle2" Class="mb-2">Your Account Details</MudText>
+
+        <MudSimpleTable Dense="true" Class="mb-6">
+            <tbody>
+                <tr>
+                    <td><strong>Name:</strong></td>
+                    <td>@userName</td>
+                </tr>
+                <tr>
+                    <td><strong>Email:</strong></td>
+                    <td>@userEmail</td>
+                </tr>
+            </tbody>
+        </MudSimpleTable>
+
+        <MudText Typo="Typo.caption" Color="Color.Tertiary" Class="mb-4 d-block">
+            Once an administrator links your OpenID account to your employee profile,
+            you will have full access to Spokes.
+        </MudText>
+
+        <form method="post" action="/logout">
+            <MudButton ButtonType="ButtonType.Submit" Variant="Variant.Filled" Color="Color.Primary"
+                StartIcon="@Icons.Material.Filled.Logout">
+                Sign Out
+            </MudButton>
+        </form>
+    </MudPaper>
+</MudContainer>
+
+@code {
+    private string userName = "";
+    private string userEmail = "";
+
+    protected override async Task OnInitializedAsync()
+    {
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        var user = authState.User;
+
+        if (user.Identity?.IsAuthenticated == true)
+        {
+            userName = user.FindFirst("name")?.Value
+            ?? user.Identity.Name
+            ?? "Unknown";
+            userEmail = user.FindFirst("email")?.Value
+            ?? user.FindFirst(System.Security.Claims.ClaimTypes.Email)?.Value
+            ?? "Not provided";
+
+            // If user has an EmployeeId claim, they shouldn't be here - redirect to home
+            if (user.HasClaim(c => c.Type == "EmployeeId"))
+            {
+                Nav.NavigateTo("/", replace: true);
+            }
+        }
+        else
+        {
+            // Not authenticated, redirect to login
+            Nav.NavigateTo("/sso/login", replace: true);
+        }
+    }
+}

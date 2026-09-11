@@ -1,0 +1,371 @@
+@using Spokes_Server.Core.Services.Communication
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Data
+@inject GlobalVoiceService VoiceService
+@inject Database Db
+@inject NavigationManager Nav
+@inject IJSRuntime JS
+@implements IDisposable
+
+@inject Microsoft.Extensions.Configuration.IConfiguration Config
+
+@if (VoiceService.IsInVoiceCall)
+{
+    var channel = Db.ChatChannels.GetById(VoiceService.CurrentChannelId ?? "");
+    var channelName = channel?.Name ?? "Voice channel";
+    var isDemo = Config.GetValue<bool>("Spokes_DemoMode");
+    
+    <div style="position: relative; width: 100%; z-index: 100;">
+        <div class="voice-call-panel px-4 py-1 d-flex align-center justify-space-between" style="background: var(--mud-palette-primary-darken); color: white; width: 100%; min-height: 48px; box-shadow: 0 2px 4px rgba(0,0,0,0.2); position: relative; z-index: 101;">
+            @if (isDemo)
+            {
+                <div class="d-flex align-center gap-2" style="cursor: pointer;" @onclick="ReturnToChat">
+                    <MudIcon Icon="@Icons.Material.Filled.RecordVoiceOver" Color="Color.Success" Size="Size.Small" />
+                    <MudText Typo="Typo.body2" Style="text-decoration: underline; text-underline-offset: 2px;"><b>@channelName</b></MudText>
+                </div>
+                <div class="d-flex align-center">
+                    <MudText Typo="Typo.caption" Style="color: var(--mud-palette-warning);" Class="mr-4">This is just a UI demo, voice chat is inactive in the Demo Server.</MudText>
+                    <MudIconButton Icon="@Icons.Material.Filled.PhoneDisabled" Style="height: 28px;"
+                                   Color="Color.Error" Variant="Variant.Filled" Class="ml-2"
+                                   OnClick="Disconnect" Size="Size.Small" />
+                </div>
+            }
+            else
+            {
+                <div class="d-flex align-center gap-2" style="cursor: pointer;" @onclick="ReturnToChat">
+                    <MudIcon Icon="@Icons.Material.Filled.RecordVoiceOver" Color="Color.Success" Size="Size.Small" />
+                    <MudText Typo="Typo.body2" Style="text-decoration: underline; text-underline-offset: 2px;"><b>@channelName</b></MudText>
+                    <MudText Typo="Typo.body2" Class="d-none d-sm-block">- @VoiceService.ActiveSpeakers.Count speaking</MudText>
+                </div>
+                <div class="d-flex gap-2 align-center">
+                    <MudIconButton Icon="@(VoiceService.IsMuted ? Icons.Material.Filled.MicOff : Icons.Material.Filled.Mic)" 
+                                   Color="@(VoiceService.IsMuted ? Color.Error : Color.Success)" 
+                                   OnClick="() => VoiceService.ToggleMute()" Size="Size.Small" />
+                    <MudIconButton Icon="@(VoiceService.IsVideoOn ? Icons.Material.Filled.Videocam : Icons.Material.Filled.VideocamOff)" 
+                                   Color="@(VoiceService.IsVideoOn ? Color.Success : Color.Inherit)" 
+                                   OnClick="() => VoiceService.ToggleVideo()" Size="Size.Small" />
+
+                    <MudIconButton Class="d-none d-sm-inline-flex"
+                                   Icon="@(VoiceService.IsScreenSharing ? Icons.Material.Filled.ScreenShare : Icons.Material.Filled.StopScreenShare)" 
+                                   Color="@(VoiceService.IsScreenSharing ? Color.Success : Color.Inherit)" 
+                                   OnClick="() => VoiceService.ToggleScreenShare()" Size="Size.Small" />
+                    <MudIconButton Icon="@Icons.Material.Filled.PhoneDisabled" Style="height: 28px;"
+                                   Color="Color.Error" Variant="Variant.Filled" Class="ml-2"
+                                   OnClick="Disconnect" Size="Size.Small" />
+                </div>
+            }
+        </div>
+
+        @if (VoiceService.IsVideoOn || VoiceService.IsScreenSharing || _isChangingVideo || _isChangingScreen || VoiceService.AvailableMicrophones.Count > 0 || VoiceService.AvailableSpeakers.Count > 0)
+        {
+            <div style="position: absolute; bottom: -20px; left: 50%; transform: translateX(-50%); z-index: 100; cursor: pointer; display: flex; justify-content: center; width: 60px; height: 20px; background: var(--mud-palette-primary-darken); border-bottom-left-radius: 8px; border-bottom-right-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.3);"
+                 @onclick="() => _isDrawerExpanded = !_isDrawerExpanded">
+                <MudIcon Icon="@(_isDrawerExpanded ? Icons.Material.Filled.KeyboardArrowUp : Icons.Material.Filled.KeyboardArrowDown)" Size="Size.Small" Style="color: white; margin-top: -2px;" />
+            </div>
+
+            <MudCollapse Expanded="_isDrawerExpanded">
+                <div class="voice-drawer-content py-3 px-4 d-flex flex-column align-center justify-center gap-4 flex-wrap" style="background: linear-gradient(rgba(0, 0, 0, 0.1), rgba(0, 0, 0, 0.1)), var(--mud-palette-primary-darken); border-bottom: 1px solid rgba(0, 0, 0, 0.2); box-shadow: inset 0 3px 6px rgba(0,0,0,0.1); --mud-palette-text-primary: #ffffff; --mud-palette-action-default: rgba(255,255,255,0.3);">
+                    
+                    @if ((VoiceService.AvailableMicrophones.Count > 0 && !VoiceService.IsAndroid) || (VoiceService.AvailableSpeakers.Count > 0) || VoiceService.IsAndroid)
+                    {
+                        <div class="d-flex align-center justify-center gap-6 flex-wrap" style="width: 100%">
+                            @if (VoiceService.AvailableMicrophones.Count > 0 && !VoiceService.IsAndroid)
+                            {
+                                <div class="d-flex align-center gap-3">
+                                    <MudText Typo="Typo.caption" Style="color: rgba(255, 255, 255, 0.7); font-weight: 600; letter-spacing: 0.5px;">INPUT</MudText>
+                                    <MudSelect T="string" Value="@VoiceService.ActiveMicrophoneDeviceId" ValueChanged="OnMicrophoneSelected" 
+                                               Dense="true" Variant="Variant.Outlined" Margin="Margin.Dense" 
+                                               Style="color: white; font-size: 0.75rem; background-color: rgba(255,255,255,0.1); border-radius: 4px; min-width: 150px; max-width: 250px;"
+                                               PopupStyle="background-color: var(--mud-palette-surface); color: var(--mud-palette-text-primary);"
+                                               DisableUnderLine="true" ReadOnly="@(VoiceService.AvailableMicrophones.Count <= 1)">
+                                        @foreach (var mic in VoiceService.AvailableMicrophones)
+                                        {
+                                            <MudSelectItem Value="@mic.DeviceId">@mic.Label</MudSelectItem>
+                                        }
+                                    </MudSelect>
+                                </div>
+                            }
+                            
+                            @if (VoiceService.AvailableSpeakers.Count > 0 && !VoiceService.IsIOS)
+                            {
+                                <div class="d-flex align-center gap-3">
+                                    <MudText Typo="Typo.caption" Style="color: rgba(255, 255, 255, 0.7); font-weight: 600; letter-spacing: 0.5px;">OUTPUT</MudText>
+                                    <MudSelect T="string" Value="@VoiceService.ActiveSpeakerDeviceId" ValueChanged="OnSpeakerSelected" 
+                                               Dense="true" Variant="Variant.Outlined" Margin="Margin.Dense" 
+                                               Style="color: white; font-size: 0.75rem; background-color: rgba(255,255,255,0.1); border-radius: 4px; min-width: 150px; max-width: 250px;"
+                                               PopupStyle="background-color: var(--mud-palette-surface); color: var(--mud-palette-text-primary);"
+                                               DisableUnderLine="true" ReadOnly="@(VoiceService.AvailableSpeakers.Count <= 1)">
+                                        @foreach (var spk in VoiceService.AvailableSpeakers)
+                                        {
+                                            <MudSelectItem Value="@spk.DeviceId">@spk.Label</MudSelectItem>
+                                        }
+                                    </MudSelect>
+                                </div>
+                            }
+
+                            @if ((VoiceService.AvailableMicrophones.Count > 0 || VoiceService.IsAndroid) && !VoiceService.IsIOS)
+                            {
+                                <div class="d-flex align-center gap-3">
+                                    <MudText Typo="Typo.caption" Style="color: rgba(255, 255, 255, 0.7); font-weight: 600; letter-spacing: 0.5px;">NOISE FILTER</MudText>
+                                    <MudSelect T="string" Value="@VoiceService.CurrentNoiseSuppression" ValueChanged="OnNoiseSuppressionChanged" 
+                                               Dense="true" Variant="Variant.Outlined" Margin="Margin.Dense" 
+                                               Style="color: white; font-size: 0.75rem; background-color: rgba(255,255,255,0.1); border-radius: 4px; min-width: 150px; max-width: 250px;"
+                                               PopupStyle="background-color: var(--mud-palette-surface); color: var(--mud-palette-text-primary);"
+                                               DisableUnderLine="true">
+                                        <MudSelectItem Value="@("webrtc")">Basic</MudSelectItem>
+                                        <MudSelectItem Value="@("rnnoise")">RNNoise</MudSelectItem>
+                                        <MudSelectItem Value="@("deepfilternet")">DeepFilterNet</MudSelectItem>
+                                        <MudSelectItem Value="@("none")">None</MudSelectItem>
+                                    </MudSelect>
+                                </div>
+                            }
+                        </div>
+                    }
+
+                    @if (VoiceService.IsVideoOn || _isChangingVideo)
+                    {
+                        <div class="d-flex align-center justify-center gap-6 flex-wrap" style="width: 100%">
+                            <div class="d-flex align-center justify-center gap-2" style="width: 100px;">
+                                <MudIcon Icon="@Icons.Material.Filled.Videocam" Size="Size.Small" Style="color: rgba(255, 255, 255, 0.7);" />
+                                <MudText Typo="Typo.caption" Style="color: rgba(255, 255, 255, 0.7); font-weight: 600; letter-spacing: 0.5px;">CAMERA</MudText>
+                            </div>
+
+                            <div class="d-flex align-center gap-3">
+                                <MudText Typo="Typo.caption" Style="color: rgba(255, 255, 255, 0.7); font-weight: 600; letter-spacing: 0.5px;">FPS</MudText>
+                                <MudToggleGroup T="int" Value="@VoiceService.MaxVideoSendFps" ValueChanged="OnFpsChanged" Outline="true" Delimiters="true" Dense="true" Rounded="true" CheckMark="false" Color="Color.Secondary" Size="Size.Small">
+                                    <MudToggleItem Value="30" Text="30" Disabled="@(VoiceService.MaxVideoSendQuality == "Auto")" />
+                                    <MudToggleItem Value="60" Text="60" Disabled="@(VoiceService.MaxVideoSendQuality == "Auto")" />
+                                </MudToggleGroup>
+                            </div>
+
+                            <div class="d-flex align-center gap-3">
+                                <MudText Typo="Typo.caption" Style="color: rgba(255, 255, 255, 0.7); font-weight: 600; letter-spacing: 0.5px;">QUALITY</MudText>
+                                <MudToggleGroup T="string" Value="@VoiceService.MaxVideoSendQuality" ValueChanged="OnQualityChanged" Outline="true" Delimiters="true" Dense="true" Rounded="true" CheckMark="false" Color="Color.Secondary" Size="Size.Small">
+                                    <MudToggleItem Value="@("Auto")" Text="Auto" />
+                                    <MudToggleItem Value="@("1080p")" Text="1080p" Disabled="@(VoiceService.MaxCameraHeight < 1800)" />
+                                    <MudToggleItem Value="@("2160p")" Text="4K" Disabled="@(VoiceService.MaxCameraHeight < 3000)" />
+                                </MudToggleGroup>
+                            </div>
+
+                            @if (VoiceService.AvailableCameras.Count > 1)
+                            {
+                                <div class="d-flex align-center gap-3">
+                                    <MudText Typo="Typo.caption" Style="color: rgba(255, 255, 255, 0.7); font-weight: 600; letter-spacing: 0.5px;">DEVICE</MudText>
+                                    <MudSelect T="string" Value="@VoiceService.ActiveCameraDeviceId" ValueChanged="OnCameraSelected" 
+                                               Dense="true" Variant="Variant.Outlined" Margin="Margin.Dense" 
+                                               Style="color: white; font-size: 0.75rem; background-color: rgba(255,255,255,0.1); border-radius: 4px; min-width: 150px; max-width: 250px;"
+                                               PopupStyle="background-color: var(--mud-palette-surface); color: var(--mud-palette-text-primary);"
+                                               DisableUnderLine="true">
+                                        @foreach (var cam in VoiceService.AvailableCameras)
+                                        {
+                                            <MudSelectItem Value="@cam.DeviceId">@cam.Label</MudSelectItem>
+                                        }
+                                    </MudSelect>
+                                </div>
+                            }
+                        </div>
+                    }
+
+                    @if (VoiceService.IsScreenSharing || _isChangingScreen)
+                    {
+                        <div class="d-flex align-center justify-center gap-6 flex-wrap" style="width: 100%">
+                            <div class="d-flex align-center justify-center gap-2" style="width: 100px;">
+                                <MudIcon Icon="@Icons.Material.Filled.ScreenShare" Size="Size.Small" Style="color: rgba(255, 255, 255, 0.7);" />
+                                <MudText Typo="Typo.caption" Style="color: rgba(255, 255, 255, 0.7); font-weight: 600; letter-spacing: 0.5px;">SCREEN</MudText>
+                            </div>
+
+                            <div class="d-flex align-center gap-3">
+                                <MudText Typo="Typo.caption" Style="color: rgba(255, 255, 255, 0.7); font-weight: 600; letter-spacing: 0.5px;">FPS</MudText>
+                                <MudToggleGroup T="int" Value="@VoiceService.MaxScreenShareFps" ValueChanged="OnScreenFpsChanged" Outline="true" Delimiters="true" Dense="true" Rounded="true" CheckMark="false" Color="Color.Secondary" Size="Size.Small">
+                                    <MudToggleItem Value="30" Text="30" />
+                                    <MudToggleItem Value="60" Text="60" />
+                                </MudToggleGroup>
+                            </div>
+
+                            <div class="d-flex align-center gap-3">
+                                <MudText Typo="Typo.caption" Style="color: rgba(255, 255, 255, 0.7); font-weight: 600; letter-spacing: 0.5px;">QUALITY</MudText>
+                                <MudToggleGroup T="string" Value="@VoiceService.MaxScreenShareQuality" ValueChanged="OnScreenQualityChanged" Outline="true" Delimiters="true" Dense="true" Rounded="true" CheckMark="false" Color="Color.Secondary" Size="Size.Small">
+                                    <MudToggleItem Value="@("Auto")" Text="Auto" />
+                                    <MudToggleItem Value="@("1080p")" Text="1080p" Disabled="@(VoiceService.MaxScreenHeight < 1800)" />
+                                    <MudToggleItem Value="@("1440p")" Text="1440p" Disabled="@(VoiceService.MaxScreenHeight < 2400)" />
+                                    <MudToggleItem Value="@("2160p")" Text="4K" Disabled="@(VoiceService.MaxScreenHeight < 3000)" />
+                                </MudToggleGroup>
+                            </div>
+                        </div>
+                    }
+                </div>
+            </MudCollapse>
+        }
+    </div>
+}
+
+<div id="voice-audio-container" style="display: none;"></div>
+
+@* Blazor must render a div for each participant's audio track so LiveKit can attach it globally *@
+@if (VoiceService.IsInVoiceCall || VoiceService.IsConnecting)
+{
+    @foreach (var pId in VoiceService.CallParticipants)
+    {
+        <div id="@($"participant-audio-{pId}")" style="display: none;" @key="pId"></div>
+    }
+}
+
+@code {
+    private bool _isDrawerExpanded = false;
+    private bool _isChangingVideo = false;
+    private bool _isChangingScreen = false;
+    private string? _lastChannelId;
+
+    protected override void OnInitialized()
+    {
+        _lastChannelId = VoiceService.CurrentChannelId;
+        VoiceService.OnChange += OnVoiceServiceChanged;
+    }
+
+    public void Dispose()
+    {
+        VoiceService.OnChange -= OnVoiceServiceChanged;
+    }
+
+    private void OnVoiceServiceChanged()
+    {
+        if (_lastChannelId != VoiceService.CurrentChannelId)
+        {
+            _lastChannelId = VoiceService.CurrentChannelId;
+            _isDrawerExpanded = false;
+        }
+        
+        InvokeAsync(StateHasChanged);
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (VoiceService.RequiresIntegrityCheck)
+        {
+            await VoiceService.VerifyServerStateIntegrityAsync();
+        }
+    }
+
+    private async Task OnQualityChanged(string newQuality)
+    {
+        VoiceService.MaxVideoSendQuality = newQuality;
+        // If already broadcasting, toggle off then back on to apply new preset
+        if (VoiceService.IsVideoOn)
+        {
+            _isChangingVideo = true;
+            try
+            {
+                await VoiceService.ToggleVideo();
+                await VoiceService.ToggleVideo();
+            }
+            finally
+            {
+                _isChangingVideo = false;
+            }
+        }
+    }
+
+    private async Task OnFpsChanged(int newFps)
+    {
+        VoiceService.MaxVideoSendFps = newFps;
+        if (VoiceService.IsVideoOn)
+        {
+            _isChangingVideo = true;
+            try
+            {
+                await VoiceService.ToggleVideo();
+                await VoiceService.ToggleVideo();
+            }
+            finally
+            {
+                _isChangingVideo = false;
+            }
+        }
+    }
+
+    private async Task OnScreenQualityChanged(string newQuality)
+    {
+        VoiceService.MaxScreenShareQuality = newQuality;
+        if (VoiceService.IsScreenSharing)
+        {
+            _isChangingScreen = true;
+            try
+            {
+                await VoiceService.ToggleScreenShare();
+                await VoiceService.ToggleScreenShare();
+            }
+            finally
+            {
+                _isChangingScreen = false;
+            }
+        }
+    }
+
+    private async Task OnScreenFpsChanged(int newFps)
+    {
+        VoiceService.MaxScreenShareFps = newFps;
+        if (VoiceService.IsScreenSharing)
+        {
+            _isChangingScreen = true;
+            try
+            {
+                await VoiceService.ToggleScreenShare();
+                await VoiceService.ToggleScreenShare();
+            }
+            finally
+            {
+                _isChangingScreen = false;
+            }
+        }
+    }
+
+    private async Task OnCameraSelected(string deviceId)
+    {
+        await VoiceService.SwitchCameraAsync(deviceId);
+    }
+
+    private async Task OnMicrophoneSelected(string deviceId)
+    {
+        await VoiceService.SwitchMicrophoneAsync(deviceId);
+    }
+
+    private async Task OnNoiseSuppressionChanged(string type)
+    {
+        await VoiceService.SetNoiseSuppressionAsync(type);
+        await JS.InvokeVoidAsync("localStorage.setItem", "spokes_noise_filter", type);
+    }
+
+    private async Task OnSpeakerSelected(string deviceId)
+    {
+        await VoiceService.SwitchSpeakerAsync(deviceId);
+    }
+
+    private async Task Disconnect()
+    {
+        var isDemo = Config.GetValue<bool>("Spokes_DemoMode");
+        if (isDemo)
+        {
+            VoiceService.DisconnectMockForDemo();
+        }
+        else
+        {
+            await VoiceService.DisconnectAsync();
+        }
+    }
+
+    private void ReturnToChat()
+    {
+        if (!string.IsNullOrEmpty(VoiceService.CurrentChannelId))
+        {
+            Nav.NavigateTo($"/chat/{VoiceService.CurrentChannelId}");
+        }
+    }
+}
+
+<style>
+    .voice-drawer-content .mud-disabled {
+        opacity: 0.25 !important;
+        background-color: rgba(0, 0, 0, 0.15) !important;
+        border-color: transparent !important;
+    }
+</style>

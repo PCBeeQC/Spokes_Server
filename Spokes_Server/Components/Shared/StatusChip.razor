@@ -1,0 +1,26 @@
+@using MudBlazor
+@using Spokes_Server.Core.Helpers
+
+@{
+    var effectiveColor = Color ?? StatusColorHelper.GetColor(Status);
+    var displayText = !string.IsNullOrEmpty(Text) ? Text : (Status ?? "");
+}
+
+<MudChip T="string"
+         Size="@Size"
+         Color="@effectiveColor"
+         Variant="@Variant"
+         Class="@Class"
+         Style="@Style">
+    @displayText
+</MudChip>
+
+@code {
+    [Parameter] public string? Status { get; set; }
+    [Parameter] public Color? Color { get; set; }
+    [Parameter] public Size Size { get; set; } = Size.Small;
+    [Parameter] public Variant Variant { get; set; } = Variant.Filled;
+    [Parameter] public string? Text { get; set; }
+    [Parameter] public string Class { get; set; } = "";
+    [Parameter] public string Style { get; set; } = "";
+}

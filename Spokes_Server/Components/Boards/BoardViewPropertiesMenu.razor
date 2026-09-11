@@ -1,0 +1,45 @@
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Services
+@inject BoardService BoardService
+
+<MudMenu Icon="@Icons.Material.Filled.ViewColumn" Label="Properties" Variant="Variant.Text" Dense="true"
+    AnchorOrigin="Origin.BottomRight" TransformOrigin="Origin.TopRight">
+    <div class="pa-2 d-flex flex-column" style="min-width: 200px;">
+        <MudText Typo="Typo.caption" Class="px-2 py-1" Color="Color.Secondary">SHOWN IN TABLE</MudText>
+
+        @foreach (var prop in Board.Properties)
+        {
+            var isVisible = View.VisiblePropertyIds.Contains(prop.Id);
+            <MudCheckBox T="bool" Value="@isVisible" ValueChanged="@((v) => ToggleProperty(prop.Id, v))" Label="@prop.Name"
+                Dense="true" Color="Color.Primary" />
+        }
+    </div>
+</MudMenu>
+
+@code {
+    [Parameter] public Board Board { get; set; } = default!;
+    [Parameter] public BoardView View { get; set; } = default!;
+    [Parameter] public EventCallback OnChange { get; set; }
+
+    void ToggleProperty(string propId, bool visible)
+    {
+        if (visible)
+        {
+            if (!View.VisiblePropertyIds.Contains(propId))
+            {
+                View.VisiblePropertyIds.Add(propId);
+            }
+        }
+        else
+        {
+            View.VisiblePropertyIds.Remove(propId);
+        }
+
+        BoardService.UpdateBoard(Board);
+        OnChange.InvokeAsync();
+    }
+}
