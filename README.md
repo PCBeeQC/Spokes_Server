@@ -33,7 +33,7 @@ All data stays on your server. Any data that must transit through external servi
 | 📹 **Voice & Video** | Low-latency, high-quality audio and video channels hosted directly on your server |
 | 🎙️ **Noise Cancellation** | Built-in noise cancelling for crystal clear voice chat, even in noisy environments |
 | 📱 **Mobile Apps** | Free native [iOS](https://apps.apple.com/us/app/spokes/id6763387907) and [Android](https://play.google.com/store/apps/details?id=com.pcbee.spokes) apps with reliable push notifications |
-| 🔒 **Encrypted Notifications** | Push notifications are delivered via Apple/Google but encrypted — they can't read the content |
+| 🔒 **Encrypted Notifications** | Push notifications are encrypted while in transit through the Spokes Relay and Google FCM / Apple APNs. |
 | 🛡️ **Secure Channels** | Optional encryption on specific channels to protect sensitive conversations |
 | 📸 **Photo Albums** | Shared photo albums for private, organized picture sharing with your group |
 | 📅 **Event Calendar** | Built-in calendar for event planning, availability tracking, and group coordination |
@@ -82,15 +82,17 @@ For platform-specific guides, see the [Deployment Documentation](https://spokes.
 - **Frictionless Experience**: Spokes aims to be as easy to use as possible for your friends and family. With native mobile apps, reliable notifications, GIF support and more, Spokes goal is to "just work".
 - **Easy to Self-Host**: Deploying and maintaining Spokes should be as easy as possible for the server administrator, which is why everything runs from a single all-in-one container.
 
-## Licensing
+## Licensing & Pricing
 
-Spokes Server is source-available under the [Business Source License 1.1](LICENSE.md).
+Spokes Server is source-available under the [Business Source License 1.1](LICENSE.md), converting to Apache 2.0 after four years.
 
-- **Free to use**: Deploy any version released within 2 months of your install and use it forever
-- **Paid updates**: A [$45/year license](https://spokes.sh/pricing) gives your server 1 year of updates and directly funds development
-- **No per-user fees**: One flat price per server — unlimited users, unlimited channels
-- **Perpetual fallback**: After your license expires, keep using your last installed version indefinitely
-- **Security Updates**: When the need arises, security updates will be available to all installations regardless of license status.
+- **Free Self-Hosted Server**: Spokes is free to deploy and run on your own hardware with unlimited users and channels.
+- **Web Push Included**: Browser and desktop PWA push notifications are built-in and completely free.
+- **2-Month Free Mobile Trial**: Every new server deployment includes 2 months of native mobile push notifications—no credit card required.
+- **[Spokes Pass](https://spokes.sh/pricing)**: Delivering push notifications to native iOS and Android apps requires external relay infrastructure. The Spokes Pass unlocks native mobile push notifications for your server while directly supporting development:
+  - **1-Year Pass**: $45 per server
+  - **2-Year Pass**: $70 per server
+- **Unlimited Members**: One pass covers your entire server instance. No per-user fees or scaling costs.
 
 ## Building from Source
 
