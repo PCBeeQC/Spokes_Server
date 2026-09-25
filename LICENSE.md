@@ -3,9 +3,11 @@ Business Source License 1.1
 Parameters
 
 Licensor:             Logiciel PCBee inc.
-Licensed Work:        Spokes Server 2026.9.4
+Licensed Work:        Spokes Server 2026.9.5
                       The Licensed Work is (c) Logiciel PCBee inc.
-Additional Use Grant: You may make production use of the Licensed Work for any internal, personal, or commercial purpose, provided that you do not offer the Licensed Work to third parties as a managed service or Software-as-a-Service (SaaS).
+Additional Use Grant: You may make production use of the Licensed Work for any internal, personal, or commercial purpose, provided that you do not:
+                      (a) offer the Licensed Work to third parties as a managed service or Software-as-a-Service (SaaS); or
+                      (b) market, offer, or sell commercial push notification relay services or mobile push delivery services designed to interface with the Licensed Work or derivative works thereof, without a commercial license from the Licensor.
 Change Date:          2030-09-01
 Change License:       Apache License, Version 2.0
 
