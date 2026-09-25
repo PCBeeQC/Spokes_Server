@@ -1,11 +1,3 @@
-@using Spokes_Server.Core.Data
-@using Spokes_Server.Core.Models.Core
-@using Spokes_Server.Core.Models.Projects
-@using Spokes_Server.Core.Models.Accounting
-@using Spokes_Server.Core.Models.Communication
-@using Spokes_Server.Core.Models.HR
-@using MudBlazor
-@using Microsoft.AspNetCore.Components.Authorization
 @using System.Security.Claims
 @inject Database Db
 @inject AuthenticationStateProvider AuthStateProvider
@@ -187,9 +179,6 @@
         await SelectedEmailsChanged.InvokeAsync(SelectedEmails);
     }
     
-    private async Task OpenAddressBook()
-    {
-        await OnAddressBookClick.InvokeAsync();
-    }
+    private Task OpenAddressBook() => OnAddressBookClick.InvokeAsync();
 }
 

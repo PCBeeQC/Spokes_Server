@@ -1,8 +1,6 @@
 @page "/mobile-login-success"
-@layout Spokes_Server.Components.Layout.LoginLayout
-@using Microsoft.AspNetCore.Authorization
-@attribute [Authorize]
-@inject Spokes_Server.Aggregate.Database Db
+@layout LoginLayout
+@using Spokes_Server.Components.Layout
 
 <MudContainer MaxWidth="MaxWidth.False" Class="d-flex align-center justify-center mud-width-full" Style="height: 100vh; background-color: var(--mud-palette-background-grey);">
     <MudPaper Elevation="3" Class="pa-8 d-flex flex-column align-center" Width="100%" MaxWidth="500px">

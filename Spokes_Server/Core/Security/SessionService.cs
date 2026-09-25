@@ -40,7 +40,7 @@ public class SessionService
             identity.AddClaim(new Claim(ClaimTypes.Role, AppPermissions.Admin.RoleName));
         }
 
-        var effectivePermissions = employee.PermissionGroup != null ? employee.PermissionGroup.Permissions : employee.Permissions;
+        var effectivePermissions = employee.PermissionGroup?.Permissions ?? employee.Permissions;
         if (effectivePermissions != null)
         {
             foreach (var perm in effectivePermissions)
@@ -84,9 +84,7 @@ public class SessionService
 
         expectedDeviceId = string.IsNullOrWhiteSpace(expectedDeviceId) ? null : expectedDeviceId.Trim();
 
-        using var sha256 = SHA256.Create();
-        var hashBytes = sha256.ComputeHash(Encoding.UTF8.GetBytes(rawToken));
-        var tokenHash = Convert.ToBase64String(hashBytes);
+        var tokenHash = Convert.ToBase64String(SHA256.HashData(Encoding.UTF8.GetBytes(rawToken)));
 
         var session = _db.DeviceSessions.GetByTokenHash(tokenHash);
         if (session == null || session.ExpiresAt <= DateTime.UtcNow)
@@ -158,6 +156,7 @@ public class SessionService
     public async Task SignInAndExtendAsync(HttpContext context, DeviceSession session, Employee employee)
     {
         var identity = BuildIdentity(employee, session.Id);
+        
         session.ExpiresAt = DateTime.UtcNow.AddDays(90);
         session.LastSeenAt = DateTime.UtcNow;
         _db.DeviceSessions.Save(session);

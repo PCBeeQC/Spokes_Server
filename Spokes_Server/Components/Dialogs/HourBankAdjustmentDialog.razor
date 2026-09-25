@@ -1,0 +1,55 @@
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Services.HR
+
+<MudDialog>
+    <DialogContent>
+        <MudForm @ref="form" @bind-IsValid="success">
+            <MudDatePicker Label="Date" @bind-Date="adjustmentDate" Required="true" Variant="Variant.Outlined" Margin="Margin.Dense" Class="mb-3" />
+            <MudNumericField Label="Hours" @bind-Value="Adjustment.Hours" Required="true" Variant="Variant.Outlined" Margin="Margin.Dense" Class="mb-3" HelperText="Use negative numbers to remove hours (e.g. payout or time off)" />
+            <MudTextField Label="Reason / Note" @bind-Value="Adjustment.Reason" Required="true" Variant="Variant.Outlined" Margin="Margin.Dense" Lines="2" Class="mb-3" />
+        </MudForm>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+        <MudButton Color="Color.Primary" OnClick="Submit" Disabled="!success">Save Adjustment</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
+    
+    [Parameter]
+    public string EmployeeId { get; set; } = string.Empty;
+
+    [Parameter]
+    public string CurrentUserId { get; set; } = string.Empty;
+
+    public HourBankAdjustment Adjustment { get; set; } = new();
+
+    private MudForm form = default!;
+    private bool success;
+
+    private DateTime? adjustmentDate
+    {
+        get => Adjustment.Date;
+        set => Adjustment.Date = value ?? DateTime.UtcNow;
+    }
+
+    protected override void OnInitialized()
+    {
+        Adjustment.EmployeeId = EmployeeId;
+        Adjustment.CreatedByEmployeeId = CurrentUserId;
+        Adjustment.Date = DateTime.UtcNow.Date;
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+
+    private void Submit()
+    {
+        form.Validate();
+        if (success)
+        {
+            MudDialog.Close(DialogResult.Ok(Adjustment));
+        }
+    }
+}

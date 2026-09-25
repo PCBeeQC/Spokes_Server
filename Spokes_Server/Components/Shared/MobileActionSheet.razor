@@ -137,7 +137,7 @@
                 await _module.InvokeVoidAsync("cleanupHistoryState", false);
                 await _module.DisposeAsync(); 
             }
-            catch (Microsoft.JSInterop.JSDisconnectedException) { /* Circuit already gone */ }
+            catch (JSDisconnectedException) { /* Circuit already gone */ }
         }
     }
 }

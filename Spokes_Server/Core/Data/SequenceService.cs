@@ -5,6 +5,7 @@ namespace Spokes_Server.Core.Data;
 
 public class SequenceService
 {
+    private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
     private readonly string _filePath;
     private readonly ConcurrentDictionary<string, int> _sequences;
     private readonly object _lock = new();
@@ -13,7 +14,7 @@ public class SequenceService
     {
         var dataPath = config["DataPath"] ?? "Data";
         _filePath = Path.Combine(dataPath, "sequences.json");
-        _sequences = new ConcurrentDictionary<string, int>();
+        _sequences = new();
 
         Load();
     }
@@ -69,7 +70,7 @@ public class SequenceService
         try
         {
             // Simple atomic write
-            var json = JsonSerializer.Serialize(_sequences, new JsonSerializerOptions { WriteIndented = true });
+            var json = JsonSerializer.Serialize(_sequences, JsonOptions);
             File.WriteAllText(_filePath, json);
         }
         catch (Exception ex)

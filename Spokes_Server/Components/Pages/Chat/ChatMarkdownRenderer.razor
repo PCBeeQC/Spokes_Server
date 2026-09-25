@@ -1,10 +1,7 @@
-@using Markdig
 @using System.Text.RegularExpressions
-@using Spokes_Server.Core.Services.Core
 @using Spokes_Server.Core.Services.Security
 @inject MarkdownSanitizerService MarkdownSanitizer
 @inject FileTokenService FileTokens
-@inject ScopedKeystoreService ScopedKeystore
 
 @* Render markdown content as sanitized HTML, with @mention support *@
 <div class="chat-markdown">
@@ -17,7 +14,7 @@
     [Parameter] public string? CurrentUserId { get; set; }
     [Parameter] public string? ChannelId { get; set; }
     [Parameter] public string? SessionId { get; set; }
-    [Parameter] public List<Employee> Employees { get; set; } = new();
+    [Parameter] public List<Employee> Employees { get; set; } = [];
     [Parameter] public bool IsEdited { get; set; }
     [Parameter]
     public string? ChannelKey { get; set; }
@@ -36,8 +33,6 @@
             _lastIsEdited = IsEdited;
         }
     }
-
-
 
     // Matches @[Display Name] mention tokens (simple format, no ID)
     private static readonly Regex MentionRegex = new(@"@\[([^\]]+)\]", RegexOptions.Compiled);
@@ -58,9 +53,9 @@
 
         try
         {
-            var codeMap = new Dictionary<string, string>();
+            Dictionary<string, string> codeMap = [];
             int matchIndex = 0;
-            System.Text.RegularExpressions.MatchCollection fullMatches = null;
+            MatchCollection? fullMatches = null;
             if (!string.IsNullOrEmpty(FullContent))
             {
                 fullMatches = CodeBlockRegex.Matches(FullContent);
@@ -80,7 +75,7 @@
                 // Use a deterministic hash based on the code content so the cache can hit
                 using var md5 = System.Security.Cryptography.MD5.Create();
                 var hashBytes = md5.ComputeHash(System.Text.Encoding.UTF8.GetBytes(codeContent));
-                var id = BitConverter.ToString(hashBytes).Replace("-", "").ToLowerInvariant();
+                var id = Convert.ToHexString(hashBytes).ToLowerInvariant();
                 
                 codeMap[id] = codeContent;
 
@@ -206,7 +201,7 @@
                 html = html.TrimEnd();
                 if (html.EndsWith("</p>"))
                 {
-                    html = html.Substring(0, html.Length - 4) + insertHtml + "</p>";
+                    html = html[..^4] + insertHtml + "</p>";
                 }
                 else
                 {

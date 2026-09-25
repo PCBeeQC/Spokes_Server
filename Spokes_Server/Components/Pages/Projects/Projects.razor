@@ -2,18 +2,14 @@
 <PageTitle>Projects</PageTitle>
 @using Spokes_Server.Core.Models.Core
 @using Spokes_Server.Core.Models.Projects
-@using Spokes_Server.Core.Models.Accounting
-@using Spokes_Server.Core.Models.Communication
-@using Spokes_Server.Core.Models.HR
 @using Spokes_Server.Core.Data
 @using Spokes_Server.Core.Constants
-@using Microsoft.AspNetCore.Components.Authorization
+@using Spokes_Server.Core.Services
 @inject Database Db
 @inject IDialogService DialogService
-@using Spokes_Server.Core.Services
 @inject ISnackbar Snackbar
 @inject UserService UserService
-@inject AuthenticationStateProvider AuthStateProvider
+@inject NavigationManager Nav
 
 <MudText Class="mt-2" Typo="Typo.h4" GutterBottom="true">Projects</MudText>
 
@@ -37,10 +33,10 @@
         </MudChipSet>
     </div>
 
-    @* <MudText Typo="Typo.h6" Color="Color.Default">Project Search</MudText> *@
     <MudTextField @bind-Value="globalSearchString" Margin="Margin.Dense" Variant="Variant.Outlined"
         Placeholder="Search All Projects and Groups..." Adornment="Adornment.Start"
-        AdornmentIcon="@Icons.Material.Filled.Search" IconSize="Size.Medium" Immediate="true" Clearable="true">
+        AdornmentIcon="@Icons.Material.Filled.Search" IconSize="Size.Medium"
+        DebounceInterval="500" Clearable="true">
     </MudTextField>
 
     @if (!string.IsNullOrWhiteSpace(globalSearchString))
@@ -87,32 +83,6 @@
         </MudTable>
     }
 </MudPaper>
-
-@* <div class="d-flex justify-space-between align-center">
-    @if (CanCreate)
-    {
-        <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="OpenCreateDialog">
-            Create New Project
-        </MudButton>
-    }
-    else
-    {
-        <MudSpacer />
-    }
-
-    <MudChipSet T="string" @bind-SelectedValue="SelectedFilter" CheckMark="true"
-                SelectionMode="SelectionMode.SingleSelection">
-        <MudChip T="string" Text="All" Value="@("All")" Default="true" Color="Color.Default">All</MudChip>
-        @foreach (var status in Statuses)
-        {
-            // Parse color string to Enum
-            Color chipColor = Color.Default;
-            Enum.TryParse(status.Color, out chipColor);
-
-            <MudChip T="string" Text="@status.Name" Value="@status.Name" Color="@chipColor">@status.Name</MudChip>
-        }
-    </MudChipSet>
-</div> *@
 
 <MudTable Dense="true" Striped="true" Bordered="true" Items="@ExternalProjects" Hover="true" Outlined="true"
     Elevation="0" Breakpoint="Breakpoint.Sm" Class="mt-2" SortLabel="Sort By">
@@ -182,12 +152,6 @@
         </MudTd>
     </RowTemplate>
 </MudTable>
-
-
-
-@* <div class="d-flex justify-space-between align-center mt-8">
-
-</div> *@
 
 <MudTable Dense="true" Striped="true" Bordered Items="@ProjectGroups" Hover="true" Outlined="true" Elevation="0"
      Breakpoint="Breakpoint.Sm" Class="mt-8" SortLabel="Sort By">
@@ -311,13 +275,11 @@
 </MudTable>
 
 
-@inject NavigationManager Nav
-
 @code {
-    private List<Project> ExternalProjects = new();
-    private List<Project> InternalProjects = new();
-    private List<Project> ArchivedProjects = new();
-    private List<ProjectGroup> ProjectGroups = new(); // Added Project Groups list
+    private List<Project> ExternalProjects = [];
+    private List<Project> InternalProjects = [];
+    private List<Project> ArchivedProjects = [];
+    private List<ProjectGroup> ProjectGroups = [];
 
     private string globalSearchString = "";
 
@@ -336,10 +298,9 @@
     }
 
     // Permissions
-    private bool CanCreate = false;
-    private bool CanViewFinancials = false;
+    private bool CanCreate;
 
-    private List<ProjectStatusConfig> Statuses = new();
+    private List<ProjectStatusConfig> Statuses = [];
 
     protected override async Task OnInitializedAsync()
     {
@@ -368,7 +329,6 @@
         if (emp != null)
         {
             CanCreate = emp.HasPermission(AppPermissions.Projects.Create);
-            CanViewFinancials = emp.HasPermission(AppPermissions.Projects.View);
         }
     }
 
@@ -382,8 +342,6 @@
 
         // Load Project Groups
         ProjectGroups = Db.ProjectGroups.GetAll().OrderBy(g => g.Name).ToList();
-
-
 
         ApplyFilter();
     }
@@ -423,9 +381,9 @@
         get
         {
             if (string.IsNullOrWhiteSpace(globalSearchString))
-                return Array.Empty<GlobalSearchResult>();
+                return [];
 
-            var results = new List<GlobalSearchResult>();
+            List<GlobalSearchResult> results = [];
             string search = globalSearchString.Trim();
 
             // Client Projects

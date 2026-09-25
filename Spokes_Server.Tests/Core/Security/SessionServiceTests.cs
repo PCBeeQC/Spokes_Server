@@ -1,6 +1,10 @@
+using System.Security.Claims;
+using System.Security.Cryptography;
+using System.Text;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Http;
+
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -12,14 +16,6 @@ using Spokes_Server.Core.Data.Repositories.HR;
 using Spokes_Server.Core.Models.Core;
 using Spokes_Server.Core.Models.HR;
 using Spokes_Server.Core.Security;
-using System;
-using System.Collections.Generic;
-using System.IO;
-using System.Security.Claims;
-using System.Security.Cryptography;
-using System.Text;
-using System.Threading.Tasks;
-using Xunit;
 
 namespace Spokes_Server.Tests.Core.Security;
 
@@ -824,6 +820,155 @@ public class SessionServiceTests : IDisposable
         Assert.NotNull(persistedTarget.RevokedAt);
     }
 
+    [Fact]
+    public void BuildIdentity_WhenNotAdminAndEmailNull_OmitsRoleAndHasEmptyEmail()
+    {
+        var employee = new Employee
+        {
+            Id = "emp_not_admin",
+            FirstName = "Alice",
+            LastName = "Wonderland",
+            Email = null!,
+            IsAdmin = false,
+            Permissions = new List<string> { "Sales.View" }
+        };
+
+        var identity = _service.BuildIdentity(employee, "session_regular");
+
+        Assert.Equal("emp_not_admin", identity.FindFirst("sub")?.Value);
+        Assert.Equal("Alice Wonderland", identity.FindFirst("name")?.Value);
+        Assert.Equal("", identity.FindFirst("email")?.Value);
+        Assert.Null(identity.FindFirst(ClaimTypes.Role));
+        Assert.Contains(identity.Claims, c => c.Type == "Permission" && c.Value == "Sales.View");
+    }
+
+    [Fact]
+    public void CreateSession_WithIdToken_StoresIdTokenOnSession()
+    {
+        var employee = new Employee { Id = "emp_id_token", FirstName = "Token", IsActive = true };
+        _employeeRepo.Save(employee);
+
+        var context = new DefaultHttpContext();
+        var (session, rawToken) = _service.CreateSession(
+            context, employee.Id, "device_idtoken_1", issueCookie: false, idToken: "jwt.id.token.content");
+
+        Assert.NotNull(session);
+        Assert.Equal("jwt.id.token.content", session.IdToken);
+
+        var persisted = _sessionRepo.GetById(session.Id);
+        Assert.NotNull(persisted);
+        Assert.Equal("jwt.id.token.content", persisted.IdToken);
+    }
+
+    [Fact]
+    public void ValidateToken_WhenEmployeeNotFound_ReturnsNull()
+    {
+        var rawToken = "token_for_missing_emp";
+        using var sha256 = SHA256.Create();
+        var tokenHash = Convert.ToBase64String(sha256.ComputeHash(Encoding.UTF8.GetBytes(rawToken)));
+
+        var session = new DeviceSession
+        {
+            Id = "sess_missing_emp",
+            EmployeeId = "non_existent_emp_id",
+            TokenHash = tokenHash,
+            ExpiresAt = DateTime.UtcNow.AddDays(7)
+        };
+        _sessionRepo.Save(session);
+
+        var result = _service.ValidateToken(rawToken);
+        Assert.Null(result);
+    }
+
+    [Fact]
+    public void ValidateToken_WhenAllowRevokedTrueAndEmployeeDisabled_ReturnsSessionAndEmployee()
+    {
+        var rawToken = "token_revoked_disabled";
+        using var sha256 = SHA256.Create();
+        var tokenHash = Convert.ToBase64String(sha256.ComputeHash(Encoding.UTF8.GetBytes(rawToken)));
+
+        var employee = new Employee
+        {
+            Id = "emp_revoked_banned",
+            FirstName = "Banned",
+            IsActive = false,
+            IsBanned = true
+        };
+        _employeeRepo.Save(employee);
+
+        var session = new DeviceSession
+        {
+            Id = "sess_revoked_banned",
+            EmployeeId = employee.Id,
+            TokenHash = tokenHash,
+            RevokedAt = DateTime.UtcNow,
+            ExpiresAt = DateTime.UtcNow.AddDays(7)
+        };
+        _sessionRepo.Save(session);
+
+        // Standard validation returns null
+        Assert.Null(_service.ValidateToken(rawToken, allowRevoked: false));
+
+        // When allowRevoked is true, returns session and employee despite revocation and disabled employee
+        var result = _service.ValidateToken(rawToken, allowRevoked: true);
+        Assert.NotNull(result);
+        Assert.Equal(session.Id, result.Value.Session.Id);
+        Assert.Equal(employee.Id, result.Value.Employee.Id);
+    }
+
+    [Fact]
+    public void ValidateToken_WithWhitespaceInExpectedDeviceId_TrimsAndMatches()
+    {
+        var (session, rawToken) = SetupValidSession("device_trimmed_123");
+
+        var result = _service.ValidateToken(rawToken, "   device_trimmed_123   ");
+
+        Assert.NotNull(result);
+        Assert.Equal(session.Id, result.Value.Session.Id);
+    }
+
+    [Fact]
+    public void TouchLastSeen_WhenOlderThanOneMinute_PersistsUpdatedLastSeenAt()
+    {
+        var (session, _) = SetupValidSession();
+        session.LastSeenAt = DateTime.UtcNow.AddMinutes(-5);
+        _sessionRepo.Save(session);
+
+        _service.TouchLastSeen(session);
+
+        var updated = _sessionRepo.GetById(session.Id);
+        Assert.NotNull(updated);
+        Assert.True(updated.LastSeenAt > DateTime.UtcNow.AddSeconds(-5));
+    }
+
+    [Fact]
+    public async Task SignInAndExtendAsync_WithHttpsRequest_SetsSecureCookie()
+    {
+        var employee = new Employee { Id = "emp_https_cookie", FirstName = "SecureUser", IsActive = true };
+        _employeeRepo.Save(employee);
+
+        var session = new DeviceSession
+        {
+            Id = "sess_https_cookie",
+            EmployeeId = employee.Id,
+            DeviceId = "phone_https_1",
+            ExpiresAt = DateTime.UtcNow.AddHours(1)
+        };
+        _sessionRepo.Save(session);
+
+        var authMock = new Mock<IAuthenticationService>();
+        var services = new ServiceCollection();
+        services.AddSingleton(authMock.Object);
+        var context = new DefaultHttpContext { RequestServices = services.BuildServiceProvider() };
+        context.Request.IsHttps = true;
+
+        await _service.SignInAndExtendAsync(context, session, employee);
+
+        var setCookie = context.Response.Headers.SetCookie.ToString();
+        Assert.Contains("Spokes_Device=phone_https_1", setCookie);
+        Assert.Contains("secure", setCookie, StringComparison.OrdinalIgnoreCase);
+    }
+
     private (DeviceSession Session, string RawToken) SetupValidSession(string? deviceId = null, string? employeeId = null)
     {
         var empId = employeeId ?? "emp_" + Guid.NewGuid().ToString("N");
@@ -850,4 +995,3 @@ public class SessionServiceTests : IDisposable
         return (session, rawToken);
     }
 }
-

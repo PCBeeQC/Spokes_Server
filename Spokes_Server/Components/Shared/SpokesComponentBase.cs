@@ -10,7 +10,7 @@ namespace Spokes_Server.Components.Shared;
 public abstract class SpokesComponentBase : ComponentBase, IAsyncDisposable
 {
     private readonly CancellationTokenSource _cts = new();
-    private volatile bool _isDisposed = false;
+    private volatile bool _isDisposed;
     protected readonly List<IDisposable> _disposables = new();
 
     /// <summary>

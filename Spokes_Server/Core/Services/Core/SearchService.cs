@@ -1,16 +1,6 @@
-using Spokes_Server.Core.Services.Communication;
-using Spokes_Server.Core.Services.Projects;
-using Spokes_Server.Core.Services.Core;
-using Spokes_Server.Core.Data.Repositories.Core;
 using Spokes_Server.Core.Data.Repositories.Projects;
 using Spokes_Server.Core.Data.Repositories.Accounting;
-using Spokes_Server.Core.Data.Repositories.Communication;
 using Spokes_Server.Core.Data.Repositories.HR;
-using Spokes_Server.Core.Models.Core;
-using Spokes_Server.Core.Models.Projects;
-using Spokes_Server.Core.Models.Accounting;
-using Spokes_Server.Core.Models.Communication;
-using Spokes_Server.Core.Models.HR;
 
 namespace Spokes_Server.Core.Services.Core;
 
@@ -57,9 +47,9 @@ public class SearchService
     public List<SearchResult> Search(string query, int maxResults = 20)
     {
         if (string.IsNullOrWhiteSpace(query) || query.Length < 2)
-            return new List<SearchResult>();
+            return [];
 
-        var results = new List<SearchResult>();
+        List<SearchResult> results = [];
         var q = query.Trim();
 
         // 1. Projects
@@ -186,6 +176,3 @@ public class SearchService
         return field.Contains(query, StringComparison.OrdinalIgnoreCase);
     }
 }
-
-
-

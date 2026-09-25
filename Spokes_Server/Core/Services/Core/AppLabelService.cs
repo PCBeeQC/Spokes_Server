@@ -1,6 +1,4 @@
 using Spokes_Server.Aggregate;
-using Spokes_Server.Core.Models.Core;
-using Spokes_Server.Core.Data;
 
 namespace Spokes_Server.Core.Services.Core;
 

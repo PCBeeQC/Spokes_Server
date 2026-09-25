@@ -16,14 +16,14 @@ self.addEventListener('push', function (event) {
     }
 
     // Use the explicit tag provided by the server, falling back to a unique one only if not provided
-    const tag = data.tag || `chat-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    const tag = data.tag || `chat-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
 
     const isSilent = data.isSilent === true;
 
     const options = {
         body: data.body || 'New message received',
         icon: data.icon || '/spokesapi/Media/Icon',
-        vibrate: [100, 50, 100],
+        vibrate: isSilent ? [] : [100, 50, 100],
         data: data.data || {},
         actions: data.actions || [
             { action: 'open', title: 'Open' },
@@ -31,7 +31,7 @@ self.addEventListener('push', function (event) {
         ],
         requireInteraction: false,
         tag: tag,        // Will overwrite previous notifications with the same tag
-        renotify: isSilent ? false : true,
+        renotify: !isSilent,
         silent: isSilent
     };
 
@@ -44,7 +44,9 @@ self.addEventListener('push', function (event) {
             await self.registration.showNotification(data.title || 'Spokes Chat', options);
             if (options.tag === 'test-push') {
                 const clients = await self.clients.matchAll();
-                clients.forEach(c => c.postMessage({ type: 'TEST_PUSH_RESULT', success: true }));
+                const testCategory = data.category || (data.data && data.data.category) || 'chat';
+                const testSound = data.sound || (data.data && data.data.sound);
+                clients.forEach(c => c.postMessage({ type: 'TEST_PUSH_RESULT', success: true, category: testCategory, sound: testSound }));
             }
         } catch (e) {
             if (e.name === 'TypeError') {
@@ -62,7 +64,9 @@ self.addEventListener('push', function (event) {
                     await self.registration.showNotification(data.title || 'Spokes Chat', minimalOptions);
                     if (options.tag === 'test-push') {
                         const clients = await self.clients.matchAll();
-                        clients.forEach(c => c.postMessage({ type: 'TEST_PUSH_RESULT', success: true, fallbackUsed: true }));
+                        const testCategory = data.category || (data.data && data.data.category) || 'chat';
+                        const testSound = data.sound || (data.data && data.data.sound);
+                        clients.forEach(c => c.postMessage({ type: 'TEST_PUSH_RESULT', success: true, fallbackUsed: true, category: testCategory, sound: testSound }));
                     }
                 } catch(e2) {
                     if (options.tag === 'test-push') {
@@ -88,7 +92,7 @@ self.addEventListener('push', function (event) {
 self.addEventListener('notificationclick', function (event) {
     event.notification.close();
 
-    if (event.action === 'close') {
+    if (event.action === 'close' || event.action === 'decline' || event.action === 'decline_call') {
         return;
     }
 
@@ -103,18 +107,29 @@ self.addEventListener('notificationclick', function (event) {
     // Ensure we have an absolute URL for comparisons
     const absoluteTargetUrl = new URL(targetUrl, self.location.origin).href;
     const chatBaseUrl = new URL('/chat', self.location.origin).href;
+    const calendarBaseUrl = new URL('/planning/calendar', self.location.origin).href;
 
     event.waitUntil(
         clients.matchAll({ type: 'window', includeUncontrolled: true }).then(function (clientList) {
-            // Check if there's already a chat window open
+            const isCalendar = targetUrl.includes('/planning/calendar');
+
+            // 1. Prefer existing tab matching the specific feature (calendar or chat)
             for (let client of clientList) {
-                // Issue 74: Secure prefix matching instead of substring matching
-                // Issue 75: Only reuse/navigate tabs that are already within the Chat feature
-                if (client.url.startsWith(chatBaseUrl) && 'focus' in client) {
+                if (isCalendar && client.url.startsWith(calendarBaseUrl) && 'focus' in client) {
+                    return client.navigate(absoluteTargetUrl).then(c => c ? c.focus() : client.focus());
+                } else if (!isCalendar && client.url.startsWith(chatBaseUrl) && 'focus' in client) {
                     return client.navigate(absoluteTargetUrl).then(c => c ? c.focus() : client.focus());
                 }
             }
-            // Open a new window if no chat tab exists
+
+            // 2. Fall back to reusing any open window from our origin
+            for (let client of clientList) {
+                if (client.url.startsWith(self.location.origin) && 'focus' in client) {
+                    return client.navigate(absoluteTargetUrl).then(c => c ? c.focus() : client.focus());
+                }
+            }
+
+            // 3. Open a new window if no tab exists
             if (clients.openWindow) {
                 return clients.openWindow(absoluteTargetUrl);
             }

@@ -1,14 +1,12 @@
 @page "/admin/demo-settings"
-@using Spokes_Server.Core.Services.Core
-@using Spokes_Server.Core.Models.Core
-@using Spokes_Server.Aggregate
-@using System.IO
+@using Microsoft.Extensions.Configuration
+@using Spokes_Server.Core.Constants
 @inject IConfiguration Config
 @inject Database Db
 @inject BackupService BackupService
 @inject ISnackbar Snackbar
 @inject NavigationManager Nav
-@attribute [Authorize(Policy = Spokes_Server.Core.Constants.AppPermissions.Admin.ManageSettings)]
+@attribute [Authorize(Policy = AppPermissions.Admin.ManageSettings)]
 
 <PageTitle>Demo Settings</PageTitle>
 
@@ -126,9 +124,9 @@
 
 @code {
     private bool _isDemoSetup;
-    private List<Spokes_Server.Core.Models.HR.Employee> _activeEmployees = new();
-    private Dictionary<string, bool> _selectedIds = new();
-    private List<string> _sampleMedia = new();
+    private List<Employee> _activeEmployees = [];
+    private Dictionary<string, bool> _selectedIds = [];
+    private List<string> _sampleMedia = [];
     private bool _isSaving;
     private DateTime? _lastSnapshotTime;
     private string _demoMediaPath = "";

@@ -25,7 +25,11 @@ export class CustomRNNoiseProcessor {
             throw err;
         }
 
-        this.workletNode = new AudioWorkletNode(this.audioContext, 'NoiseSuppressorWorklet');
+        this.workletNode = new AudioWorkletNode(this.audioContext, 'NoiseSuppressorWorklet', {
+            channelCount: 1,
+            channelCountMode: 'explicit',
+            outputChannelCount: [1]
+        });
 
         const stream = new MediaStream([this.originalTrack]);
         this.sourceNode = this.audioContext.createMediaStreamSource(stream);

@@ -1,11 +1,3 @@
-@using Spokes_Server.Core.Models.Core
-@using Spokes_Server.Core.Models.Projects
-@using Spokes_Server.Core.Models.Accounting
-@using Spokes_Server.Core.Models.Communication
-@using Spokes_Server.Core.Models.HR
-@using Spokes_Server.Core.Data
-@using Spokes_Server.Core.Services
-@using Spokes_Server.Core.Helpers
 @inject Database Db
 @inject IDialogService DialogService
 @inject ChatNotificationService ChatNotifications
@@ -14,8 +6,9 @@
 @inject ScopedKeystoreService ScopedKeystore
 @inject ICryptoService Crypto
 @inject ISnackbar Snackbar
-@inject Spokes_Server.Core.Services.Core.AppLabelService AppLabels
-@inject Spokes_Server.Core.Services.Core.StartupTimingService StartupTimings
+@inject AppLabelService AppLabels
+@inject StartupTimingService StartupTimings
+@inject GlobalVoiceService VoiceService
 @implements IDisposable
 
 <MudPaper Elevation="0" Style="height: 100%; display: flex; flex-direction: column;">
@@ -23,7 +16,8 @@
     <div class="pa-3 d-flex flex-column gap-2">
         <div class="d-flex gap-2 align-center">
             <MudTextField @bind-Value="_searchText" Placeholder="Search channels..." Variant="Variant.Outlined"
-                Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search" Immediate="true"
+                Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search"
+                DebounceInterval="500"
                 Margin="Margin.Dense" Class="flex-grow-1" UserAttributes="@_inputAttributes" />
             <MudMenu Icon="@Icons.Material.Filled.Sort" Size="Size.Small" AnchorOrigin="Origin.BottomRight" TransformOrigin="Origin.TopRight" Color="@(_reorderMode != ReorderMode.None ? Color.Primary : Color.Default)">
                 <MudMenuItem OnClick="() => SetReorderMode(ReorderMode.Personal)">Reorder Channels</MudMenuItem>
@@ -498,7 +492,7 @@
             c.ParticipantIds.Count <= 2 && c.ParticipantIds.Any() &&
             (string.IsNullOrEmpty(c.CategoryId) || c.CategoryId == cat.Id))
             .OrderBy(c => c.IsVoiceChannel ? 1 : 0)
-            .ThenBy(c => GetChannelOrder(c)).ToList();
+            .ThenByDescending(c => GetDirectChannelRecency(c)).ToList();
             bool directVoiceShown = false;
             int directUnread = directChannels.Sum(c => ChatNotifications.GetUnreadCount(c.Id));
         }
@@ -727,17 +721,17 @@
 </MudPaper>
 
 @code {
-    [Parameter] public List<ChatChannel> Channels { get; set; } = new();
+    [Parameter] public List<ChatChannel> Channels { get; set; } = [];
     [Parameter] public string? SelectedChannelId { get; set; }
     [Parameter] public EventCallback<string> OnChannelSelected { get; set; }
     [Parameter] public string? CurrentUserId { get; set; }
-    [Parameter] public List<Employee> Employees { get; set; } = new();
-    [Parameter] public bool CanViewArchive { get; set; } = false;
+    [Parameter] public List<Employee> Employees { get; set; } = [];
+    [Parameter] public bool CanViewArchive { get; set; }
     [Parameter] public EventCallback<ChatChannel> OnArchiveChannel { get; set; }
     [Parameter] public EventCallback<ChatChannel> OnUnarchiveChannel { get; set; }
     [Parameter] public EventCallback<Dictionary<string, int>> OnChannelOrdersChanged { get; set; }
 
-    private string _searchTextInternal = string.Empty;
+    private string _searchTextInternal = "";
     private string _searchText
     {
         get => _searchTextInternal;
@@ -753,14 +747,12 @@
 
     private Dictionary<string, object> _inputAttributes = new()
     {
-        { "autocomplete", "off" },
-        { "data-lpignore", "true" },
-        { "data-1p-ignore", "true" },
-        { "data-bwignore", "true" },
-        { "data-form-type", "other" }
+        ["autocomplete"] = "off",
+        ["data-lpignore"] = "true",
+        ["data-1p-ignore"] = "true",
+        ["data-bwignore"] = "true",
+        ["data-form-type"] = "other"
     };
-
-    private bool _globalEdit = false;
 
     private enum ReorderMode { None, Personal, Global }
     private ReorderMode _reorderMode = ReorderMode.None;
@@ -785,7 +777,7 @@
                 _currentUserObj.CustomCategoryOrder[cats[i].Id] = cats[i].Id == "sys_archive" ? 10000 : i;
             }
 
-            var allChannels = Channels.OrderBy(c => c.DisplayOrder).ToList();
+            var allChannels = Channels.Where(c => c.ChannelType != ChatChannelType.Direct).OrderBy(c => c.DisplayOrder).ToList();
             for (int i = 0; i < allChannels.Count; i++)
             {
                 _currentUserObj.CustomChannelOrder[allChannels[i].Id] = i;
@@ -896,6 +888,9 @@
 
     private int GetChannelOrder(ChatChannel chan)
     {
+        if (chan.ChannelType == ChatChannelType.Direct)
+            return 0;
+
         if (_reorderMode != ReorderMode.Global && _currentUserObj?.UsesCustomSidebarOrder == true)
         {
             if (_currentUserObj.CustomChannelOrder.TryGetValue(chan.Id, out int order))
@@ -1036,6 +1031,24 @@
             _archiveCollapsed = _currentUserObj.ChatArchiveCollapsed;
             _prefsLoaded = true;
         }
+
+        // Clean up legacy direct message IDs from CustomChannelOrder if present
+        if (_currentUserObj != null && _currentUserObj.UsesCustomSidebarOrder && _currentUserObj.CustomChannelOrder.Count > 0)
+        {
+            var directIds = Channels.Where(c => c.ChannelType == ChatChannelType.Direct).Select(c => c.Id).ToList();
+            bool modified = false;
+            foreach (var dId in directIds)
+            {
+                if (_currentUserObj.CustomChannelOrder.Remove(dId))
+                {
+                    modified = true;
+                }
+            }
+            if (modified)
+            {
+                Db.Employees.Save(_currentUserObj);
+            }
+        }
         StartupTimings.Add($"Server: ChatSidebar OnParametersSet Done (Channels: {Channels.Count}, Employees: {Employees.Count})");
     }
 
@@ -1092,6 +1105,8 @@
         ChatState.VoiceMemberJoined += OnVoicePresenceChanged;
         ChatState.VoiceMemberLeft += OnVoicePresenceChanged;
         ChatState.VoiceActiveSpeakersChanged += OnVoiceSpeakersChanged;
+        ChatState.VoiceUserMutedChanged += OnVoiceMutedChanged;
+        VoiceService.OnChange += OnVoiceStateChanged;
     }
 
     private void OnUnreadChanged()
@@ -1109,12 +1124,24 @@
         InvokeAsync(StateHasChanged);
     }
 
+    private void OnVoiceMutedChanged(string channelId, string userId, bool isMuted)
+    {
+        InvokeAsync(StateHasChanged);
+    }
+
+    private void OnVoiceStateChanged()
+    {
+        InvokeAsync(StateHasChanged);
+    }
+
     public void Dispose()
     {
         ChatNotifications.OnUnreadCountChanged -= OnUnreadChanged;
         ChatState.VoiceMemberJoined -= OnVoicePresenceChanged;
         ChatState.VoiceMemberLeft -= OnVoicePresenceChanged;
         ChatState.VoiceActiveSpeakersChanged -= OnVoiceSpeakersChanged;
+        ChatState.VoiceUserMutedChanged -= OnVoiceMutedChanged;
+        VoiceService.OnChange -= OnVoiceStateChanged;
     }
 
     private string FormatPreviewContent(string? rawContent, System.Collections.Generic.List<ChatAttachment>? attachments = null)
@@ -1131,6 +1158,16 @@
             StartupTimings.Add("Server: ChatSidebar OnAfterRenderAsync Start");
         }
         return Task.CompletedTask;
+    }
+
+    private DateTime GetDirectChannelRecency(ChatChannel channel)
+    {
+        var preview = Db.ChatMessages.GetChannelPreviewSummary(channel.Id, _currentUserObj?.BlockedUserIds);
+        if (preview != null && preview.SentAt != default)
+        {
+            return preview.SentAt > channel.LastActivityAt ? preview.SentAt : channel.LastActivityAt;
+        }
+        return channel.LastActivityAt != default ? channel.LastActivityAt : (channel.CreatedAt != default ? channel.CreatedAt : DateTime.MinValue);
     }
 
     private string? GetChannelPreview(string channelId)
@@ -1484,19 +1521,36 @@
         if (activeUsers.Any())
         {
             var speakers = ChatState.GetActiveSpeakers(channelId);
+            var mutedUsers = ChatState.GetMutedUsers(channelId);
             <div class="voice-user-list" style="margin-top: 4px;">
                 @foreach (var uid in activeUsers)
                 {
                     var u = Employees.FirstOrDefault(e => e.Id == uid);
                     if (u != null)
                     {
-                        var isSpeaking = speakers.Contains(uid);
+                        var isMuted = (uid == VoiceService.CurrentUserId && VoiceService.IsInVoiceCall && VoiceService.CurrentChannelId == channelId)
+                            ? VoiceService.IsMuted
+                            : mutedUsers.Contains(uid);
+                        var isSpeaking = !isMuted && speakers.Contains(uid);
                         var borderStyle = isSpeaking ? "border: 2px solid var(--mud-palette-success);" : "";
+                        var textColor = isSpeaking ? "var(--mud-palette-success)" : "var(--mud-palette-text-secondary)";
                         <div class="d-flex align-center gap-2" style="padding: 2px 0 2px 8px;">
-                            <EmployeeAvatar Employee="@u" Size="Size.Small" Style="@($"width: 22px; height: 22px; flex-shrink: 0; {borderStyle}")" />
-                            <MudText Typo="Typo.caption" Class="text-truncate" Style="@($"color: {(isSpeaking ? "var(--mud-palette-success)" : "var(--mud-palette-text-secondary)")}; line-height: 1.2;")">
+                            <div style="position: relative; width: 22px; height: 22px; flex-shrink: 0;">
+                                <EmployeeAvatar Employee="@u" Size="Size.Small" Style="@($"width: 22px; height: 22px; flex-shrink: 0; {borderStyle}")" />
+                                @if (isMuted)
+                                {
+                                    <div style="position: absolute; bottom: -2px; right: -2px; background: rgba(0,0,0,0.8); border-radius: 50%; padding: 1px; display: flex; align-items: center; justify-content: center;">
+                                        <MudIcon Icon="@Icons.Material.Filled.MicOff" Color="Color.Error" Style="font-size: 10px;" />
+                                    </div>
+                                }
+                            </div>
+                            <MudText Typo="Typo.caption" Class="text-truncate flex-grow-1" Style="@($"color: {textColor}; line-height: 1.2;")">
                                 @u.FullName
                             </MudText>
+                            @if (isMuted)
+                            {
+                                <MudIcon Icon="@Icons.Material.Filled.MicOff" Size="Size.Small" Color="Color.Error" Style="font-size: 14px; flex-shrink: 0;" />
+                            }
                         </div>
                     }
                 }

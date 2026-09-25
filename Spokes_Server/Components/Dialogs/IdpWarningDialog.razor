@@ -1,5 +1,3 @@
-@using MudBlazor
-
 <MudDialog>
     <TitleContent>
         <div class="d-flex align-center">
@@ -28,13 +26,6 @@
 @code {
     [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
 
-    private void Close()
-    {
-        MudDialog.Cancel();
-    }
-
-    private void Confirm()
-    {
-        MudDialog.Close(DialogResult.Ok(true));
-    }
+    private void Close() => MudDialog.Cancel();
+    private void Confirm() => MudDialog.Close(DialogResult.Ok(true));
 }

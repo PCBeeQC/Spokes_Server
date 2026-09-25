@@ -14,11 +14,11 @@ public class SystemConfig : IDataEntity
     public string Id { get; set; } = "system_config";
 
     
-    public bool IsSetupComplete { get; set; } = false;
-    public bool EulaAccepted { get; set; } = false;
-    public bool IsCasdoorSanitized { get; set; } = false;
+    public bool IsSetupComplete { get; set; }
+    public bool EulaAccepted { get; set; }
+    public bool IsCasdoorSanitized { get; set; }
 
-    public IdpType ProviderType { get; set; } = IdpType.None;
+    public IdpType ProviderType { get; set; }
 
     // Server URLs
     public string ServerPublicUrl { get; set; } = string.Empty;
@@ -35,5 +35,5 @@ public class SystemConfig : IDataEntity
     public string Authority { get; set; } = string.Empty;
     public string ClientId { get; set; } = string.Empty;
     public string ClientSecret { get; set; } = string.Empty;
-    public bool EnableAutoUpdate { get; set; } = false;
+    public bool EnableAutoUpdate { get; set; }
 }

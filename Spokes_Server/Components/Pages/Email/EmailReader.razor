@@ -1,8 +1,3 @@
-@using Spokes_Server.Core.Models.Core
-@using Spokes_Server.Core.Models.Projects
-@using Spokes_Server.Core.Models.Accounting
-@using Spokes_Server.Core.Models.Communication
-@using Spokes_Server.Core.Models.HR
 @using Spokes_Server.Components.Dialogs
 @inject IDialogService DialogService
 
@@ -270,7 +265,7 @@
     [Parameter] public string? TimeZoneId { get; set; }
     [Parameter] public string MessageBody { get; set; } = "";
     [Parameter] public bool IsLoadingBody { get; set; }
-    [Parameter] public List<EmailFolder> Folders { get; set; } = new();
+    [Parameter] public List<EmailFolder> Folders { get; set; } = [];
     [Parameter] public string? CurrentFolderPath { get; set; }
     [Parameter] public string? EmployeeId { get; set; }
 
@@ -296,8 +291,8 @@
     [Parameter] public EventCallback OnNextMessage { get; set; }
     [Parameter] public EventCallback OnPreviousMessage { get; set; }
 
-    private List<TreeItemData<EmailFolder>> _treeItems = new();
-    private bool _subjectExpanded = false;
+    private List<TreeItemData<EmailFolder>> _treeItems = [];
+    private bool _subjectExpanded;
 
     protected override void OnParametersSet()
     {
@@ -314,28 +309,20 @@
     }
 
     // #20 — Attachment preview
-    private string GetAttachmentIcon(EmailAttachmentMeta att)
-    {
-        if (IsImageAttachment(att)) return Icons.Material.Filled.Image;
-        if (IsPdfAttachment(att)) return Icons.Material.Filled.PictureAsPdf;
-        return Icons.Material.Filled.AttachFile;
-    }
+    private string GetAttachmentIcon(EmailAttachmentMeta att) =>
+        IsImageAttachment(att) ? Icons.Material.Filled.Image :
+        IsPdfAttachment(att) ? Icons.Material.Filled.PictureAsPdf :
+        Icons.Material.Filled.AttachFile;
 
-    private bool IsImageAttachment(EmailAttachmentMeta att)
-    {
-        return att.ContentType.StartsWith("image/", StringComparison.OrdinalIgnoreCase);
-    }
+    private bool IsImageAttachment(EmailAttachmentMeta att) =>
+        att.ContentType.StartsWith("image/", StringComparison.OrdinalIgnoreCase);
 
-    private bool IsPdfAttachment(EmailAttachmentMeta att)
-    {
-        return att.ContentType.Equals("application/pdf", StringComparison.OrdinalIgnoreCase);
-    }
+    private bool IsPdfAttachment(EmailAttachmentMeta att) =>
+        att.ContentType.Equals("application/pdf", StringComparison.OrdinalIgnoreCase);
 
-    private bool IsIcsAttachment(EmailAttachmentMeta att)
-    {
-        return att.FileName.EndsWith(".ics", StringComparison.OrdinalIgnoreCase) || 
-               att.ContentType.Equals("text/calendar", StringComparison.OrdinalIgnoreCase);
-    }
+    private bool IsIcsAttachment(EmailAttachmentMeta att) =>
+        att.FileName.EndsWith(".ics", StringComparison.OrdinalIgnoreCase) || 
+        att.ContentType.Equals("text/calendar", StringComparison.OrdinalIgnoreCase);
 
     private async Task HandleAttachmentClick(EmailAttachmentMeta att)
     {
@@ -398,15 +385,13 @@
         public FolderTreeItem(EmailFolder folder) : base(folder) { }
     }
 
-    private string GetFolderIcon(EmailFolder folder)
-    {
-        if (folder.IsInbox) return Icons.Material.Filled.Inbox;
-        if (folder.IsSent) return Icons.Material.Filled.Send;
-        if (folder.IsTrash) return Icons.Material.Filled.Delete;
-        if (folder.IsArchive) return Icons.Material.Filled.Inventory2;
-        if (folder.IsJunk) return Icons.Material.Filled.Report;
-        return Icons.Material.Filled.Folder;
-    }
+    private static string GetFolderIcon(EmailFolder folder) =>
+        folder.IsInbox ? Icons.Material.Filled.Inbox :
+        folder.IsSent ? Icons.Material.Filled.Send :
+        folder.IsTrash ? Icons.Material.Filled.Delete :
+        folder.IsArchive ? Icons.Material.Filled.Inventory2 :
+        folder.IsJunk ? Icons.Material.Filled.Report :
+        Icons.Material.Filled.Folder;
 
     private string FormatSize(long bytes)
     {

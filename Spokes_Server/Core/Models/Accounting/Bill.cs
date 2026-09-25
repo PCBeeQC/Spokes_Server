@@ -1,14 +1,6 @@
 namespace Spokes_Server.Core.Models.Accounting;
 
-using Spokes_Server.Core.Models.Core;
-using Spokes_Server.Core.Models.Projects;
-using Spokes_Server.Core.Models.Communication;
-using Spokes_Server.Core.Models.HR;
-
 using Spokes_Server.Core.Data;
-
-
-
 
 public class Bill : IDataEntity
 {
@@ -17,10 +9,7 @@ public class Bill : IDataEntity
     public override bool Equals(object? obj)
     {
         if (ReferenceEquals(this, obj)) return true;
-        if (obj == null || GetType() != obj.GetType())
-            return false;
-        var other = (Bill)obj;
-        return Id == other.Id;
+        return obj is Bill other && Id == other.Id;
     }
 
     public override int GetHashCode() => Id?.GetHashCode() ?? base.GetHashCode();
@@ -49,13 +38,13 @@ public class Bill : IDataEntity
 
     // Payment Info (optional tracking)
     public string PaymentReference { get; set; } = string.Empty; // Check #, Wire Ref
-    public List<PaymentRecord> Payments { get; set; } = new();
+    public List<PaymentRecord> Payments { get; set; } = [];
 
     public decimal AmountPaid => Payments.Any() ? Payments.Sum(p => p.Amount) : (DatePaid.HasValue || Status == "Paid" ? Amount : 0);
     public decimal BalanceDue => Amount - AmountPaid;
 
     // 3-Way Matching
-    public List<BillLineItem> LineItems { get; set; } = new();
+    public List<BillLineItem> LineItems { get; set; } = [];
 }
 
 public class BillLineItem

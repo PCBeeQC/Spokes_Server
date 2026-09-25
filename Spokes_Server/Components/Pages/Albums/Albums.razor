@@ -1,24 +1,24 @@
 @page "/albums"
 @page "/albums/{Id}"
-@attribute [Microsoft.AspNetCore.Authorization.Authorize(Policy = Spokes_Server.Core.Constants.AppPermissions.Albums.View)]
+@attribute [Authorize(Policy = AppPermissions.Albums.View)]
 @implements IDisposable
 @implements IAsyncDisposable
-@using Spokes_Server.Core.Models.Communication
-@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Constants
+@using Spokes_Server.Core.Services.Security
+@using Spokes_Server.Core.Services.Communication.Chat
 @using Spokes_Server.Components.Dialogs
 @using Spokes_Server.Components.Shared
 @inject Database Db
 @inject NavigationManager NavManager
-@inject Spokes_Server.Core.Services.Core.UserService UserService
+@inject UserService UserService
 @inject ISnackbar Snackbar
 @inject IDialogService DialogService
 @inject IJSRuntime JS
-@inject Spokes_Server.Core.Services.Core.IFileService FileService
-@inject Spokes_Server.Core.Services.Communication.Chat.AlbumService AlbumService
-@inject Spokes_Server.Core.Services.Security.ScopedKeystoreService ScopedKeystoreService
-@inject Spokes_Server.Core.Services.Communication.ShareTargetStateService ShareTargetStateService
-@inject Spokes_Server.Core.Services.Communication.Chat.IChatChannelAccessService ChatAccess
-@using Spokes_Server.Core.Services.Security
+@inject IFileService FileService
+@inject AlbumService AlbumService
+@inject ScopedKeystoreService ScopedKeystoreService
+@inject ShareTargetStateService ShareTargetStateService
+@inject IChatChannelAccessService ChatAccess
 @inject FileTokenService FileTokenService
 
 <PageTitle>Albums</PageTitle>
@@ -82,6 +82,7 @@ else if (_selectedAlbum != null)
                         {
                                     <ApiFileUpload @ref="_fileUpload" Category="albums" ContextId="@_selectedAlbum.Id" MaximumFileCount="50"
                                 UploadUrl="@GetUploadUrl()"
+                                Accept="image/*,video/*"
                                 CompressionMaxDim="3840" CompressionQuality="0.9"
                                 OnUploadStartedWithCount="HandleUploadStarted"
                                 OnDetailedProgressUpdate="HandleDetailedProgressUpdate"
@@ -251,6 +252,7 @@ else if (_selectedAlbum != null)
                 {
                     <ApiFileUpload @ref="_fileUpload" Category="albums" ContextId="@_selectedAlbum.Id" MaximumFileCount="50"
                                 UploadUrl="@GetUploadUrl()"
+                                Accept="image/*,video/*"
                                 CompressionMaxDim="3840" CompressionQuality="0.9"
                         OnUploadStartedWithCount="HandleUploadStarted"
                         OnDetailedProgressUpdate="HandleDetailedProgressUpdate"
@@ -285,7 +287,7 @@ else
                 <MudToggleItem Value="2" Text="Shared" Icon="@Icons.Material.Filled.People" />
             </MudToggleGroup>
 
-            <MudTextField @bind-Value="searchString" Placeholder="Search albums..." Variant="Variant.Outlined" Margin="Margin.Dense" Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search" Class="flex-grow-1" Style="max-width: 420px; background-color: var(--mud-palette-surface); border-radius: 8px;" Clearable="true" Immediate="true" />
+            <MudTextField @bind-Value="searchString" Placeholder="Search albums..." Variant="Variant.Outlined" Margin="Margin.Dense" Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search" Class="flex-grow-1" Style="max-width: 420px; background-color: var(--mud-palette-surface); border-radius: 8px;" Clearable="true" DebounceInterval="500" />
         </div>
 
         <!-- Album Cards Grid -->
@@ -490,24 +492,24 @@ else
     private IJSObjectReference? _jsModule;
     private DotNetObjectReference<Albums>? _objRef;
     private bool _isDraggingFiles;
-    private bool _dropZoneInitialized = false;
+    private bool _dropZoneInitialized;
 
     private Employee? _currentUser;
     private string? _sessionId;
-    private List<Employee> _employees = new();
+    private List<Employee> _employees = [];
     
-    private List<Album> _myAlbums = new();
-    private List<Album> _sharedAlbums = new();
+    private List<Album> _myAlbums = [];
+    private List<Album> _sharedAlbums = [];
     private Album? _selectedAlbum;
     private string? _cachedPlainAlbumKey;
-    private Dictionary<string, string?> _albumKeyCache = new();
-    private int activeTabIndex = 0;
+    private Dictionary<string, string?> _albumKeyCache = [];
+    private int activeTabIndex;
     private string searchString = "";
     
-    private bool _isSelectionMode = false;
-    private HashSet<string> _selectedMediaIds = new();
+    private bool _isSelectionMode;
+    private HashSet<string> _selectedMediaIds = [];
     
-    private bool _accessDenied = false;
+    private bool _accessDenied;
     
     private ApiFileUpload? _fileUpload;
     
@@ -1034,7 +1036,7 @@ else
 
         if (_selectedAlbum == null || _currentUser == null) return;
         
-        var newMedia = new List<AlbumMedia>();
+        List<AlbumMedia> newMedia = [];
         foreach (var r in results)
         {
             if (r.ContextId != _selectedAlbum.Id)

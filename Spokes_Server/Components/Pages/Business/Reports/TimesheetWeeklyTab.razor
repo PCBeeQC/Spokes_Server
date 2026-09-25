@@ -1,0 +1,225 @@
+@using MudBlazor
+@using Spokes_Server.Core.Helpers
+@using Spokes_Server.Core.Models.Reports
+@using Spokes_Server.Core.Services.Reports
+@inject ITimesheetReportService ReportService
+
+<MudPaper Elevation="0" Outlined="true" Class="pa-4 rounded-lg" Style="background: var(--mud-palette-surface);">
+    <!-- Week Navigation Toolbar -->
+    <MudToolBar Class="px-0 mb-4 d-flex flex-wrap gap-4">
+        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+            <MudIconButton Class="d-print-none" Icon="@Icons.Material.Filled.ChevronLeft" OnClick="PreviousWeek" Title="Previous Week" Variant="Variant.Outlined" Size="Size.Small" />
+            <MudText Typo="Typo.h6" Style="font-weight: 600; min-width: 250px; text-align: center;">
+                @_matrix.WeekStartDate.ToString("MMM dd, yyyy") &ndash; @_matrix.WeekEndDate.ToString("MMM dd, yyyy")
+            </MudText>
+            <MudIconButton Class="d-print-none" Icon="@Icons.Material.Filled.ChevronRight" OnClick="NextWeek" Title="Next Week" Variant="Variant.Outlined" Size="Size.Small" />
+            <MudButton Class="d-print-none" Variant="Variant.Text" Color="Color.Primary" OnClick="CurrentWeek" Size="Size.Small">Current Week</MudButton>
+        </MudStack>
+
+        <MudSpacer />
+
+        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Class="d-print-none">
+            <MudText Typo="Typo.body2" Color="Color.Secondary">Group by:</MudText>
+            <MudSelect T="WeeklyGroupBy" @bind-Value="_weeklyGroupBy" @bind-Value:after="RebuildMatrix" Margin="Margin.Dense" Variant="Variant.Outlined" Dense="true" Style="width: 150px;">
+                <MudSelectItem Value="@WeeklyGroupBy.Employee">Employee</MudSelectItem>
+                <MudSelectItem Value="@WeeklyGroupBy.Project">Project</MudSelectItem>
+                <MudSelectItem Value="@WeeklyGroupBy.Client">Client</MudSelectItem>
+            </MudSelect>
+        </MudStack>
+    </MudToolBar>
+
+    @if (!_matrix.Rows.Any())
+    {
+        <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Class="my-6">
+            No timesheet entries recorded for the week of @_matrix.WeekStartDate.ToString("MMM dd, yyyy") to @_matrix.WeekEndDate.ToString("MMM dd, yyyy").
+        </MudAlert>
+    }
+    else
+    {
+        <div style="overflow-x: auto;">
+            <MudSimpleTable Dense="true" Hover="true" Bordered="true" Striped="false" Style="min-width: 900px;">
+                <thead>
+                    <tr style="background: var(--mud-palette-background-grey);">
+                        <th style="min-width: 220px; font-weight: 700;">@_weeklyGroupBy.ToString().ToUpper()</th>
+                        @for (int i = 0; i < 7; i++)
+                        {
+                            var header = _matrix.DayHeaders.Count > i ? _matrix.DayHeaders[i] : $"Day {i+1}";
+                            var isWeekend = i >= 5;
+                            <th style="text-align: center; min-width: 85px; font-weight: 700; @(isWeekend ? "background: rgba(var(--mud-palette-action-disabled-rgb), 0.08);" : "")">
+                                @header
+                            </th>
+                        }
+                        <th style="text-align: right; min-width: 100px; font-weight: 700;">TOTAL</th>
+                        <th style="text-align: right; min-width: 110px; font-weight: 700;">AMOUNT</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var row in _matrix.Rows)
+                    {
+                        <tr>
+                            <td>
+                                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+                                    @if (row.SubRows.Any())
+                                    {
+                                        <MudIconButton Icon="@(row.IsExpanded ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)" OnClick="@(() => row.IsExpanded = !row.IsExpanded)" Size="Size.Small" />
+                                    }
+                                    else
+                                    {
+                                        <div style="width: 28px;"></div>
+                                    }
+
+                                    @if (_weeklyGroupBy == WeeklyGroupBy.Project)
+                                    {
+                                        <div style="width: 8px; height: 8px; border-radius: 50%; background-color: @row.Color; flex-shrink: 0;"></div>
+                                    }
+
+                                    <div>
+                                        <MudText Typo="Typo.body2" Style="font-weight: 600;">@row.EntityName</MudText>
+                                        @if (!string.IsNullOrEmpty(row.Subtitle))
+                                        {
+                                            <MudText Typo="Typo.caption" Color="Color.Secondary">@row.Subtitle</MudText>
+                                        }
+                                    </div>
+
+                                    @if (_weeklyGroupBy == WeeklyGroupBy.Employee)
+                                    {
+                                        <MudSpacer />
+                                        <MudChip T="string" Size="Size.Small" Color="@(row.TotalHours >= row.TargetHours ? Color.Success : row.TotalHours >= row.TargetHours * 0.8m ? Color.Warning : Color.Default)" Variant="Variant.Text" Style="font-size: 0.7rem;">
+                                            @row.TotalHours.ToString("0.0") / @row.TargetHours.ToString("0") h
+                                        </MudChip>
+                                    }
+                                </MudStack>
+                            </td>
+
+                            @for (int i = 0; i < 7; i++)
+                            {
+                                var cell = row.Cells.Count > i ? row.Cells[i] : null;
+                                var isWeekend = i >= 5;
+                                var hours = cell?.Hours ?? 0;
+                                <td style="text-align: center; @(isWeekend ? "background: rgba(var(--mud-palette-action-disabled-rgb), 0.04);" : "")">
+                                    @if (hours > 0)
+                                    {
+                                        <span style="font-weight: 600; color: var(--mud-palette-text-primary);">
+                                            @ReportService.FormatDuration(hours, Format)
+                                        </span>
+                                    }
+                                    else
+                                    {
+                                        <span style="color: var(--mud-palette-text-disabled);">-</span>
+                                    }
+                                </td>
+                            }
+
+                            <td style="text-align: right; font-weight: 700; background: rgba(var(--mud-palette-primary-rgb), 0.05);">
+                                @ReportService.FormatDuration(row.TotalHours, Format)
+                            </td>
+
+                            <td style="text-align: right; font-weight: 600;">
+                                @if (AmountMode == AmountDisplayMode.BillableAmount)
+                                {
+                                    @ReportService.FormatCurrency(row.TotalBillableAmount)
+                                }
+                                else if (AmountMode == AmountDisplayMode.CostAmount)
+                                {
+                                    @ReportService.FormatCurrency(row.Cells.Sum(c => c.Hours * 45m))
+                                }
+                                else
+                                {
+                                    <span style="opacity: 0.5;">-</span>
+                                }
+                            </td>
+                        </tr>
+
+                        @if (row.IsExpanded && row.SubRows.Any())
+                        {
+                            @foreach (var sub in row.SubRows)
+                            {
+                                <tr style="background: rgba(var(--mud-palette-surface-rgb), 0.6); font-size: 0.85rem;">
+                                    <td class="pl-12">
+                                        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+                                            <MudIcon Icon="@Icons.Material.Filled.SubdirectoryArrowRight" Size="Size.Small" Color="Color.Secondary" />
+                                            <MudText Typo="Typo.body2" Color="Color.Secondary">@sub.EntityName</MudText>
+                                        </MudStack>
+                                    </td>
+
+                                    @for (int i = 0; i < 7; i++)
+                                    {
+                                        var subCell = sub.Cells.Count > i ? sub.Cells[i] : null;
+                                        var subHours = subCell?.Hours ?? 0;
+                                        <td style="text-align: center; opacity: 0.85;">
+                                            @(subHours > 0 ? ReportService.FormatDuration(subHours, Format) : "-")
+                                        </td>
+                                    }
+
+                                    <td style="text-align: right; font-weight: 600;">
+                                        @ReportService.FormatDuration(sub.TotalHours, Format)
+                                    </td>
+
+                                    <td style="text-align: right; opacity: 0.85;">
+                                        @ReportService.FormatCurrency(sub.TotalBillableAmount)
+                                    </td>
+                                </tr>
+                            }
+                        }
+                    }
+                </tbody>
+                <tfoot>
+                    <tr style="font-weight: 700; background: var(--mud-palette-background-grey); border-top: 2px solid var(--mud-palette-divider);">
+                        <td>TOTAL</td>
+                        @for (int i = 0; i < 7; i++)
+                        {
+                            var dayTotal = _matrix.DayTotals.Length > i ? _matrix.DayTotals[i] : 0;
+                            <td style="text-align: center; font-weight: 700;">
+                                @(dayTotal > 0 ? ReportService.FormatDuration(dayTotal, Format) : "-")
+                            </td>
+                        }
+                        <td style="text-align: right; font-weight: 800; color: var(--mud-palette-primary);">
+                            @ReportService.FormatDuration(_matrix.GrandTotalHours, Format)
+                        </td>
+                        <td style="text-align: right; font-weight: 800; color: var(--mud-palette-primary);">
+                            @ReportService.FormatCurrency(_matrix.GrandTotalBillableAmount)
+                        </td>
+                    </tr>
+                </tfoot>
+            </MudSimpleTable>
+        </div>
+    }
+</MudPaper>
+
+@code {
+    [Parameter] public List<TimesheetReportEntry> Entries { get; set; } = [];
+    [Parameter] public TimeDisplayFormat Format { get; set; } = TimeDisplayFormat.Duration_HHMM;
+    [Parameter] public AmountDisplayMode AmountMode { get; set; } = AmountDisplayMode.BillableAmount;
+    [Parameter] public DateTime CurrentWeekDate { get; set; } = DateTime.Now;
+
+    private WeeklyGroupBy _weeklyGroupBy = WeeklyGroupBy.Employee;
+    private TimesheetWeeklyMatrix _matrix = new();
+
+    protected override void OnParametersSet()
+    {
+        RebuildMatrix();
+    }
+
+    public void RebuildMatrix()
+    {
+        _matrix = ReportService.BuildWeeklyMatrix(Entries, CurrentWeekDate, _weeklyGroupBy);
+    }
+
+    private void PreviousWeek()
+    {
+        CurrentWeekDate = CurrentWeekDate.AddDays(-7);
+        RebuildMatrix();
+    }
+
+    private void NextWeek()
+    {
+        CurrentWeekDate = CurrentWeekDate.AddDays(7);
+        RebuildMatrix();
+    }
+
+    private void CurrentWeek()
+    {
+        CurrentWeekDate = DateTime.Now;
+        RebuildMatrix();
+    }
+}

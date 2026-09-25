@@ -1,19 +1,12 @@
-@using Microsoft.AspNetCore.Components.Authorization
-@using Spokes_Server.Core.Data
-@using Spokes_Server.Core.Services
 @using Spokes_Server.Core.Constants
-@using Spokes_Server.Core.Models.Core
-@using Spokes_Server.Core.Models.Projects
-@using Spokes_Server.Core.Models.Accounting
-@using Spokes_Server.Core.Models.Communication
-@using Spokes_Server.Core.Models.HR
 @inject Database Db
 @inject UserService UserService
 @inject AuthenticationStateProvider AuthStateProvider
 @inject ChatNotificationService ChatNotifications
 @inject EmailNotificationService EmailNotifications
-@inject Spokes_Server.Core.Services.Core.AppLabelService AppLabels
-@inject Spokes_Server.Core.Services.Core.StartupTimingService StartupTimings
+@inject Spokes_Server.Core.Services.Communication.Notifications.CalendarNotificationService CalendarNotifications
+@inject AppLabelService AppLabels
+@inject StartupTimingService StartupTimings
 @inject IConfiguration Config
 @inject IJSRuntime JS
 @implements IDisposable
@@ -380,9 +373,20 @@
                             }
                         </div>
                     </MudNavLink>
+                    <MudNavLink Href="admin/data-migration" Match="NavLinkMatch.Prefix" Icon="@Icons.Material.Filled.CloudUpload">
+                        <div class="d-flex align-center" style="width: 100%;">
+                            <span style="flex: 1;">Data Migration</span>
+                            @if (_isEditingFavorites)
+                            {
+                                <span @onclick:stopPropagation="true" @onclick:preventDefault="true">
+                                    <MudIconButton Icon='@(_currentUser?.FavoriteLinks.Contains("admin/data-migration") == true ? Icons.Material.Filled.Star : Icons.Material.Outlined.StarBorder)' Color="Color.Default" Size="Size.Small" OnClick='@(() => ToggleFavorite("admin/data-migration"))' />
+                                </span>
+                            }
+                        </div>
+                    </MudNavLink>
                     <MudNavLink Href="admin/settings" Match="NavLinkMatch.Prefix" Icon="@Icons.Material.Filled.Settings">
                         <div class="d-flex align-center" style="width: 100%;">
-                            <span style="flex: 1;">Spokes Settings</span>
+                            <span style="flex: 1;">Settings</span>
                             @if (_isEditingFavorites)
                             {
                                 <span @onclick:stopPropagation="true" @onclick:preventDefault="true">
@@ -457,6 +461,7 @@
         "organization" => ($"{AppLabels.Team} & {AppLabels.Employees}", Icons.Material.Filled.AccountTree),
         "admin/definitions" => ("Task Definitions", Icons.Material.Filled.ListAlt),
         "admin/standard-documents" => ("Standard Documents", Icons.Material.Filled.Description),
+        "admin/data-migration" => ("Data Migration", Icons.Material.Filled.CloudUpload),
         "admin/settings" => ("Spokes Settings", Icons.Material.Filled.Settings),
         "admin/moderation" => ("Moderation", Icons.Material.Filled.Gavel),
         "albums" => ("Albums", Icons.Material.Filled.PhotoAlbum),
@@ -550,6 +555,7 @@
             {
                 await ChatNotifications.InitializeAsync(userId);
                 await EmailNotifications.InitializeAsync(userId);
+                await CalendarNotifications.InitializeAsync(userId);
             });
 
             await InvokeAsync(() =>

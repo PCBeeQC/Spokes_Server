@@ -1,7 +1,3 @@
-@using Spokes_Server.Core.Models.HR
-@using Spokes_Server.Core.Models.Core
-@using Spokes_Server.Aggregate
-@using Spokes_Server.Core.Services.Communication.Chat
 @inject Database Db
 @inject ChatService ChatService
 @inject ChatStateService ChatState
@@ -83,7 +79,7 @@ else
     public string? CurrentUserId { get; set; }
 
     [Parameter, EditorRequired]
-    public List<Employee> Employees { get; set; } = new();
+    public List<Employee> Employees { get; set; } = [];
 
     private CalendarEvent? _event;
 
@@ -137,8 +133,5 @@ else
         }
     }
 
-    public void Dispose()
-    {
-        ChatState.CalendarEventUpdated -= HandleCalendarEventUpdated;
-    }
+    public void Dispose() => ChatState.CalendarEventUpdated -= HandleCalendarEventUpdated;
 }

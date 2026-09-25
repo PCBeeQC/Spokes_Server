@@ -1,21 +1,13 @@
-@using Spokes_Server.Core.Models.Core
-@using Spokes_Server.Core.Models.Projects
-@using Spokes_Server.Core.Models.Accounting
-@using Spokes_Server.Core.Models.Communication
-@using Spokes_Server.Core.Models.HR
-@using Spokes_Server.Core.Data
-@using Microsoft.AspNetCore.DataProtection
 @using Spokes_Server.Core.Services.Security
+@using Spokes_Server.Core.Services.UI
+@using Spokes_Server.Core.Services.Communication.Voice
 @using static Spokes_Server.Core.Helpers.FileHelper
 @inject LinkPreviewService LinkPreviews
 @inject IJSRuntime JS
-@inject Database Db
 @inject ISnackbar Snackbar
-@inject Microsoft.AspNetCore.DataProtection.IDataProtectionProvider DataProtection
-@inject NavigationManager NavManager
 @inject FileTokenService FileTokens
-@inject ScopedKeystoreService ScopedKeystore
-@inject Spokes_Server.Core.Services.UI.ImageRecoveryService ImageRecovery
+@inject ImageRecoveryService ImageRecovery
+@inject GlobalVoiceService VoiceService
 @implements IDisposable
 
 <div style="width: 100%;" class="@(!IsGrouped ? "mt-2" : "")">
@@ -84,20 +76,24 @@
                                 {
                                     <MudText Typo="Typo.body2" Color="Color.Secondary">Call ended.</MudText>
                                 }
+                                else if (VoiceService.IsInVoiceCall && VoiceService.CurrentChannelId == Message.ChannelId)
+                                {
+                                    <MudText Typo="Typo.body2" Color="Color.Success">Call joined.</MudText>
+                                }
                                 else
                                 {
                                     <MudText Typo="Typo.caption" Color="Color.Secondary">Join the conversation!</MudText>
                                 }
                             </div>
                         </div>
-                        @if (Message.CallStatus != "Declined" && Message.CallStatus != "Ended")
+                        @if (Message.CallStatus != "Declined" && Message.CallStatus != "Ended" && !(VoiceService.IsInVoiceCall && VoiceService.CurrentChannelId == Message.ChannelId))
                         {
                             <div class="d-flex justify-end gap-2 mt-2">
                                 @if (CurrentUserId != Message.SenderId)
                                 {
                                     <MudButton Variant="Variant.Text" Color="Color.Error" Size="Size.Small" OnClick="@(() => OnDeclineCall.InvokeAsync(Message))">Decline</MudButton>
                                 }
-                                <MudButton Variant="Variant.Filled" Color="Color.Success" Size="Size.Small" OnClick="@(() => OnJoinCall.InvokeAsync(Message))">Join Call</MudButton>
+                                <MudButton Variant="Variant.Filled" Color="Color.Success" Size="Size.Small" Disabled="@(VoiceService.IsConnecting || (VoiceService.IsInVoiceCall && VoiceService.CurrentChannelId == Message.ChannelId))" OnClick="@(() => OnJoinCall.InvokeAsync(Message))">@(VoiceService.IsConnecting ? "Connecting..." : "Join Call")</MudButton>
                             </div>
                         }
                     </MudCard>
@@ -256,20 +252,24 @@ else
                                 {
                                     <MudText Typo="Typo.body2" Color="Color.Secondary">Call ended.</MudText>
                                 }
+                                else if (VoiceService.IsInVoiceCall && VoiceService.CurrentChannelId == Message.ChannelId)
+                                {
+                                    <MudText Typo="Typo.body2" Color="Color.Success">Call joined.</MudText>
+                                }
                                 else
                                 {
                                     <MudText Typo="Typo.caption" Color="Color.Secondary">Join the conversation!</MudText>
                                 }
                             </div>
                         </div>
-                        @if (Message.CallStatus != "Declined" && Message.CallStatus != "Ended")
+                        @if (Message.CallStatus != "Declined" && Message.CallStatus != "Ended" && !(VoiceService.IsInVoiceCall && VoiceService.CurrentChannelId == Message.ChannelId))
                         {
                             <div class="d-flex justify-end gap-2 mt-2">
                                 @if (CurrentUserId != Message.SenderId)
                                 {
                                     <MudButton Variant="Variant.Text" Color="Color.Error" Size="Size.Small" OnClick="@(() => OnDeclineCall.InvokeAsync(Message))">Decline</MudButton>
                                 }
-                                <MudButton Variant="Variant.Filled" Color="Color.Success" Size="Size.Small" OnClick="@(() => OnJoinCall.InvokeAsync(Message))">Join Call</MudButton>
+                                <MudButton Variant="Variant.Filled" Color="Color.Success" Size="Size.Small" Disabled="@(VoiceService.IsConnecting || (VoiceService.IsInVoiceCall && VoiceService.CurrentChannelId == Message.ChannelId))" OnClick="@(() => OnJoinCall.InvokeAsync(Message))">@(VoiceService.IsConnecting ? "Connecting..." : "Join Call")</MudButton>
                             </div>
                         }
                     </MudCard>
@@ -705,7 +705,7 @@ else
 
 @code {
     [Parameter] public ChatMessage Message { get; set; } = new();
-    [Parameter] public string DataFingerprint { get; set; } = string.Empty;
+    [Parameter] public string DataFingerprint { get; set; } = "";
     [Parameter] public string? DecryptedContent { get; set; }
     [Parameter] public string? DecryptedReplyContent { get; set; }
     [Parameter] public Employee? Sender { get; set; }
@@ -713,8 +713,8 @@ else
     [Parameter] public bool IsGrouped { get; set; }
     [Parameter] public string? CurrentUserId { get; set; }
     [Parameter] public string? SessionId { get; set; }
-    [Parameter] public List<Employee> Employees { get; set; } = new();
-    [Parameter] public List<Team> Teams { get; set; } = new();
+    [Parameter] public List<Employee> Employees { get; set; } = [];
+    [Parameter] public List<Team> Teams { get; set; } = [];
     [Parameter] public bool IsEditing { get; set; }
     [Parameter] public EventCallback<(ChatMessage Message, string Content)> OnSaveEdit { get; set; }
     [Parameter] public EventCallback OnCancelEdit { get; set; }
@@ -731,8 +731,8 @@ else
     [Parameter] public EventCallback<ChatMessage> OnJoinCall { get; set; }
     [Parameter] public EventCallback<ChatMessage> OnDeclineCall { get; set; }
     [Parameter] public EventCallback<Employee?> OnAvatarClicked { get; set; }
-    [Parameter] public List<string> ReadReceiptUserIds { get; set; } = new();
-    [Parameter] public List<string> CumulativeReadReceiptUserIds { get; set; } = new();
+    [Parameter] public List<string> ReadReceiptUserIds { get; set; } = [];
+    [Parameter] public List<string> CumulativeReadReceiptUserIds { get; set; } = [];
     [Parameter] public EventCallback<ChatMessage> OnBlockUser { get; set; }
     [Parameter] public EventCallback<ChatMessage> OnReportMessage { get; set; }
     [Parameter] public EventCallback<ChatMessage> OnDownloadMedia { get; set; }
@@ -740,12 +740,12 @@ else
     [Parameter]
     public string? ChannelKey { get; set; }
 
-    private bool _isExpanded = false;
+    private bool _isExpanded;
     private const int MaxMessageLength = 1000;
 
     private bool _showEmojiPicker;
-    private List<LinkPreview> _linkPreviews = new();
-    private int _skeletonCount = 0;
+    private List<LinkPreview> _linkPreviews = [];
+    private int _skeletonCount;
     private bool _scrollAfterPreview;
     private string? _lastPreviewedFingerprint;
 
@@ -777,7 +777,7 @@ else
 
         // Build a fingerprint of everything that affects the visual output
         var readersKey = ReadReceiptUserIds == null || ReadReceiptUserIds.Count == 0 ? "0" : string.Join(",", ReadReceiptUserIds);
-        var fingerprint = $"{DataFingerprint}|{IsEditing}|{IsGrouped}|{IsOwnMessage}|{DecryptedContent}|{readersKey}|{_linkPreviews.Count}|{_skeletonCount}|{_showEmojiPicker}|{_isExpanded}";
+        var fingerprint = $"{DataFingerprint}|{IsEditing}|{IsGrouped}|{IsOwnMessage}|{DecryptedContent}|{readersKey}|{_linkPreviews.Count}|{_skeletonCount}|{_showEmojiPicker}|{_isExpanded}|{VoiceService.IsInVoiceCall}_{VoiceService.CurrentChannelId}";
 
         if (fingerprint == _lastRenderFingerprint)
             return false;
@@ -823,7 +823,7 @@ else
         if (string.IsNullOrWhiteSpace(contentToPreview)) return;
 
         var urls = LinkPreviews.ExtractUrls(contentToPreview);
-        var urlsToFetch = new List<string>();
+        List<string> urlsToFetch = [];
         foreach (var url in urls)
         {
             var preview = LinkPreviews.GetPreview(url);
@@ -934,9 +934,9 @@ else
     private RenderFragment RenderMessageActions() => __builder =>
     {
         var currentEmployee = Employees.FirstOrDefault(e => e.Id == CurrentUserId);
-        var recentEmojis = currentEmployee?.RecentEmojis?.ToList() ?? new List<string>();
+        var recentEmojis = currentEmployee?.RecentEmojis?.ToList() ?? [];
         
-        var defaultEmojis = new[] { "👍", "❤️", "😂" };
+        string[] defaultEmojis = ["👍", "❤️", "😂"];
         var top3Emojis = recentEmojis.Concat(defaultEmojis).Distinct().Take(3).ToList();
 
         foreach (var emoji in top3Emojis)
@@ -1011,7 +1011,7 @@ else
                     <MudIcon Icon="@Icons.Material.Filled.Block" Size="Size.Small" Class="mr-2" Color="Color.Error" />
                     Block User
                 </MudMenuItem>
-                @if (Message.ChannelType != Spokes_Server.Core.Models.Communication.ChatChannelType.Direct)
+                @if (Message.ChannelType != ChatChannelType.Direct)
                 {
                     <MudMenuItem OnClick="@(() => OnReportMessage.InvokeAsync(Message))">
                         <MudIcon Icon="@Icons.Material.Filled.Flag" Size="Size.Small" Class="mr-2" Color="Color.Warning" />
@@ -1109,15 +1109,20 @@ else
     protected override void OnInitialized()
     {
         ImageRecovery.OnTokensWiped += HandleTokensWiped;
+        VoiceService.OnChange += HandleVoiceChanged;
     }
 
-    private void HandleTokensWiped()
+    private void HandleTokensWiped() => InvokeAsync(StateHasChanged);
+
+    private void HandleVoiceChanged()
     {
+        _forceRender = true;
         InvokeAsync(StateHasChanged);
     }
 
     public void Dispose()
     {
         ImageRecovery.OnTokensWiped -= HandleTokensWiped;
+        VoiceService.OnChange -= HandleVoiceChanged;
     }
 }

@@ -1,17 +1,15 @@
 @page "/chat/{ChannelId?}"
-@using Microsoft.AspNetCore.Components.Authorization
 @using Microsoft.AspNetCore.Http
-@using Spokes_Server.Core.Data
-@using Spokes_Server.Core.Models.Core
-@using Spokes_Server.Core.Models.Projects
-@using Spokes_Server.Core.Models.Accounting
-@using Spokes_Server.Core.Models.Communication
-@using Spokes_Server.Core.Models.HR
-@using Spokes_Server.Core.Services
 @using Spokes_Server.Core.Helpers
+@using Spokes_Server.Core.Services.Security
+@using Spokes_Server.Core.Services.Communication.Notifications
 @using Spokes_Server.Components.Dialogs
+@using Spokes_Server.Core.Services.Communication.Chat
+@using Spokes_Server.Core.Services.Communication.Presence
 @inject Database Db
 @inject ChatService ChatService
+@inject UserCircuitContext CircuitContext
+@inject UserClientStateService UserClientStateService
 @inject NavigationManager Nav
 @inject AuthenticationStateProvider AuthStateProvider
 @inject IJSRuntime JS
@@ -24,8 +22,12 @@
 @inject ICryptoService Crypto
 @inject ScopedKeystoreService ScopedKeystore
 @inject NotificationRoutingService NotificationRoutingService
-@inject Spokes_Server.Core.Services.Communication.ShortcutIconService ShortcutIconService
-@inject Spokes_Server.Core.Services.Core.StartupTimingService StartupTimings
+@inject ShortcutIconService ShortcutIconService
+@inject StartupTimingService StartupTimings
+@inject ChatStateService ChatState
+@inject GlobalKeystoreService GlobalKeystore
+@inject IHttpContextAccessor HttpContextAccessor
+@inject Spokes_Server.Core.Services.UI.ISoundService SoundService
 @implements IAsyncDisposable
 
 <PageTitle>Chat</PageTitle>
@@ -52,9 +54,16 @@
     /* Reverse scroll implementation using scaleY(-1) for cross-browser consistency */
     #chat-messages-container {
         transform: scaleY(-1) translateZ(0);
+        overflow-anchor: none;
+        animation: chat-container-appear 0.12s ease-out;
     }
     #chat-messages-container > * {
         transform: scaleY(-1);
+    }
+
+    @@keyframes chat-container-appear {
+        from { opacity: 0; }
+        to { opacity: 1; }
     }
 
     /* Desktop overrides for native smooth mouse wheel scrolling */
@@ -63,6 +72,7 @@
             transform: none !important;
             display: flex !important;
             flex-direction: column-reverse !important;
+            overflow-anchor: none;
         }
         #chat-messages-container > * {
             transform: none !important;
@@ -208,6 +218,9 @@
                                 }
 
                                 /* Active Speaker Border */
+                                .participant-rect {
+                                    transition: border-color 0.12s ease-in-out, box-shadow 0.12s ease-in-out !important;
+                                }
                                 .participant-rect.is-speaking {
                                     border-color: #4caf50 !important;
                                 }
@@ -236,7 +249,12 @@
                                         {
                                             var emp = GetEmployee(pId);
                                             if (emp == null) continue;
-                                            bool isSpeaking = VoiceService.ActiveSpeakers.Contains(pId);
+                                            bool isSelf = pId == VoiceService.CurrentUserId;
+                                            bool isMuted = isSelf
+                                                ? VoiceService.IsMuted
+                                                : (VoiceService.MutedParticipants.Contains(pId) || (_selectedChannel != null && ChatState.GetMutedUsers(_selectedChannel.Id).Contains(pId)));
+                                            bool isSpeaking = !isMuted && VoiceService.ActiveSpeakers.Contains(pId);
+                                            string speakingClass = isSpeaking ? "is-speaking" : "";
                                             bool isFocused = _focusedParticipantId == pId;
                                             
                                             bool isFaceTimeLayout = VoiceService.CallParticipants.Count == 2 && _focusedParticipantId != null;
@@ -273,18 +291,44 @@
                                                       id="@($"participant-rect-{pId}")"
                                                       @onclick="@(() => ToggleFocusParticipant(pId))"
                                                       Style="@style"
-                                                      Class="participant-rect">
+                                                      Class="@($"participant-rect {speakingClass}")">
                                                 
                                                 <div class="participant-large-avatar" style="z-index: 0; display: flex; flex-direction: column; align-items: center; gap: 8px;">
-                                                     <EmployeeAvatar Employee="@emp" Style="@($"height: {(isFocused ? "96px" : "64px")}; width: {(isFocused ? "96px" : "64px")}; font-size: {(isFocused ? "2.5rem" : "1.5rem")};")" />
-                                                     <MudText Typo="@(isFocused ? Typo.h6 : Typo.subtitle2)" Style="color: white;">@emp.FullName</MudText>
+                                                     <div style="position: relative;">
+                                                         <EmployeeAvatar Employee="@emp" Style="@($"height: {(isFocused ? "96px" : "64px")}; width: {(isFocused ? "96px" : "64px")}; font-size: {(isFocused ? "2.5rem" : "1.5rem")};")" />
+                                                         @if (isMuted)
+                                                         {
+                                                             <div style="position: absolute; bottom: -2px; right: -2px; background: rgba(0,0,0,0.7); border-radius: 50%; padding: 2px; display: flex; align-items: center; justify-content: center;">
+                                                                 <MudIcon Icon="@Icons.Material.Filled.MicOff" Color="Color.Error" Size="@(isFocused ? Size.Medium : Size.Small)" />
+                                                             </div>
+                                                         }
+                                                     </div>
+                                                     <div class="d-flex align-center gap-1">
+                                                         <MudText Typo="@(isFocused ? Typo.h6 : Typo.subtitle2)" Style="color: white;">@emp.FullName</MudText>
+                                                         @if (isMuted)
+                                                         {
+                                                             <MudIcon Icon="@Icons.Material.Filled.MicOff" Color="Color.Error" Size="Size.Small" Style="font-size: 16px;" />
+                                                         }
+                                                     </div>
                                                 </div>
 
                                                 <ParticipantVideoSlot ParticipantId="@pId" />
                                                 
                                                 <div class="participant-small-overlay" style="position: absolute; top: 8px; right: 8px; z-index: 10; display: none; align-items: center; gap: 8px; background: rgba(0,0,0,0.6); padding: 4px 8px; border-radius: 16px;">
-                                                    <EmployeeAvatar Employee="@emp" Style="height: 24px; width: 24px; font-size: 0.8rem;" />
+                                                    <div style="position: relative;">
+                                                        <EmployeeAvatar Employee="@emp" Style="height: 24px; width: 24px; font-size: 0.8rem;" />
+                                                        @if (isMuted)
+                                                        {
+                                                            <div style="position: absolute; bottom: -2px; right: -2px; background: rgba(0,0,0,0.8); border-radius: 50%; padding: 1px; display: flex; align-items: center; justify-content: center;">
+                                                                <MudIcon Icon="@Icons.Material.Filled.MicOff" Color="Color.Error" Style="font-size: 10px;" />
+                                                            </div>
+                                                        }
+                                                    </div>
                                                     <MudText Typo="Typo.caption" Style="color: white; font-weight: bold;">@emp.FullName</MudText>
+                                                    @if (isMuted)
+                                                    {
+                                                        <MudIcon Icon="@Icons.Material.Filled.MicOff" Color="Color.Error" Size="Size.Small" Style="font-size: 14px;" />
+                                                    }
                                                 </div>
 
 
@@ -380,7 +424,7 @@
                         }
                         else
                         {
-                            <div id="chat-messages-container" @key="@("chat-messages-" + _selectedChannel.Id)" @ref="_messagesContainer" class="flex-grow-1 overflow-auto pa-4 d-flex flex-column" style="background: var(--mud-palette-background-grey); will-change: transform; min-height: 0; -webkit-overflow-scrolling: touch;">
+                            <div id="chat-messages-container" @key="@("chat-messages-" + _selectedChannel.Id)" @ref="_messagesContainer" class="flex-grow-1 overflow-auto pa-4 d-flex flex-column" style="background: var(--mud-palette-background-grey); will-change: transform; min-height: 0; overflow-anchor: none; -webkit-overflow-scrolling: touch;">
                         
                         @if (_typingUsers.Any())
                         {
@@ -506,7 +550,7 @@
                                           ReplyToSenderName="@(_replyingTo != null ? GetEmployee(_replyingTo.SenderId)?.FullName : null)"
                                           OnSendMessage="HandleSendMessage"
                                           OnCancelReply="CancelReply"
-                                          Disabled="@((_selectedChannel?.IsEncrypted == true && !ScopedKeystore.IsUnlocked) || _currentUser?.IsSuspended == true)"
+                                          Disabled="@((_selectedChannel?.IsEncrypted == true && (!ScopedKeystore.IsUnlocked || string.IsNullOrEmpty(_decryptedChannelKey))) || _currentUser?.IsSuspended == true)"
                                           OnEditLastMessage="HandleEditLastMessage"
                                           UploadUrl="@GetUploadUrl()" />
                         </div> @* Close flex-column wrapping text chat *@
@@ -712,20 +756,21 @@
 </style>
 
 @code {
-    private bool _channelNotFound = false;
+    private bool _channelNotFound;
 
     [Parameter]
     public string? ChannelId { get; set; }
 
     private Employee? _currentUser;
-    private List<ChatChannel> _channels = new();
-    private List<Employee> _employees = new();
-    private List<Team> _teams = new();
-    private static readonly List<string> _emptyReaders = new();
+    private List<ChatChannel> _channels = [];
+    private List<Employee> _employees = [];
+    private List<Team> _teams = [];
+    private static readonly List<string> _emptyReaders = [];
     private ChatChannel? _selectedChannel;
-    private List<ChatMessage> _messages = new();
-    private bool _isLoadingMessages = false;
-    private Dictionary<string, (string UserName, DateTime LastPing)> _typingUsers = new();
+    private List<ChatMessage> _messages = [];
+    private bool _isLoadingMessages;
+    private bool _hasRendered = false;
+    private Dictionary<string, (string UserName, DateTime LastPing)> _typingUsers = [];
 
     private string GetTypingText()
     {
@@ -744,27 +789,24 @@
     private ChatComposer? _composer;
     private ElementReference _messagesContainer;
     private ElementReference _topSentinel;
-    [Inject] private ChatStateService ChatState { get; set; } = default!;
-    [Inject] private GlobalKeystoreService GlobalKeystore { get; set; } = default!;
-    [Inject] private IHttpContextAccessor HttpContextAccessor { get; set; } = default!;
     
     private string _vaultPassword = "";
-    private Dictionary<string, string> _decryptedContents = new();
+    private Dictionary<string, string> _decryptedContents = [];
     private string? _decryptedChannelKey;
     private bool _isCheckingKeystoreCookie = true;
 
-    private bool _hasMoreMessages = false;
-    private Dictionary<string, List<string>> _latestReadReceipts = new();
-    private Dictionary<string, List<string>> _cumulativeReadReceipts = new();
-    private List<Team> _channelTeams = new();
-    private bool _isLoadingOlder = false;
-    private bool _isScrolledUp = false;
+    private bool _hasMoreMessages;
+    private Dictionary<string, List<string>> _latestReadReceipts = [];
+    private Dictionary<string, List<string>> _cumulativeReadReceipts = [];
+    private List<Team> _channelTeams = [];
+    private bool _isLoadingOlder;
+    private bool _isScrolledUp;
     private System.Timers.Timer? _typingCleanupTimer;
 
     // --- Render batch optimization fields ---
-    private List<ChatMessage> _sortedMessages = new();
-    private List<Employee> _channelEmployees = new();
-    private Dictionary<string, Employee> _employeeLookup = new();
+    private List<ChatMessage> _sortedMessages = [];
+    private List<Employee> _channelEmployees = [];
+    private Dictionary<string, Employee> _employeeLookup = [];
     private CancellationTokenSource? _channelCts;
     private string? _sessionId;
 
@@ -777,22 +819,22 @@
             InvokeAsync(StateHasChanged);
         }
     }
-    private bool _isDraggingFiles = false;
+    private bool _isDraggingFiles;
     private ChatMessage? _replyingTo;
     private string? _editingMessageId;
     
     private string _notificationLevel = "All";
-    private bool _showInfoPanel = false;
-    private bool _showSecondaryChat = false;
+    private bool _showInfoPanel;
+    private bool _showSecondaryChat;
     
     // Voice Call state
-    private string? _focusedParticipantId = null;
+    private string? _focusedParticipantId;
 
 
     // Mobile action sheet state
     private ChatMessage? _actionSheetMessage;
-    private static readonly string[] _quickReactEmojis = { "👍", "❤️", "😂", "😮", "😢", "🔥" };
-    private bool _showMobileEmojiPicker = false;
+    private static readonly string[] _quickReactEmojis = ["👍", "❤️", "😂", "😮", "😢", "🔥"];
+    private bool _showMobileEmojiPicker;
     
     // JS Interop reference
     private IJSObjectReference? _module;
@@ -808,11 +850,24 @@
             StartupTimings.Add("Server: Chat OnInitializedAsync Start");
             var sw = System.Diagnostics.Stopwatch.StartNew();
 
-            _currentUser = await UserService.GetEmployeeAsync();
+            // Synchronous fast-path: resolve identity directly from HttpContext before any async yield
+            if (HttpContextAccessor.HttpContext?.User?.Identity?.IsAuthenticated == true)
+            {
+                _currentUser = UserService.GetEmployee(HttpContextAccessor.HttpContext.User);
+                _sessionId = HttpContextAccessor.HttpContext.User.FindFirst("SessionId")?.Value;
+            }
+
+            if (_currentUser == null)
+            {
+                _currentUser = await UserService.GetEmployeeAsync();
+            }
             StartupTimings.Add($"Server: Chat GetEmployee Done (+{sw.ElapsedMilliseconds}ms)");
             sw.Restart();
 
-            _sessionId = await UserService.GetSessionIdAsync();
+            if (string.IsNullOrEmpty(_sessionId))
+            {
+                _sessionId = await UserService.GetSessionIdAsync();
+            }
             _employees = Db.Employees.GetAll();
             _employeeLookup = _employees.ToDictionary(e => e.Id, e => e);
             _teams = Db.Teams.GetAll();
@@ -833,8 +888,13 @@
                 ScopedKeystore.TryInitializeFromVaultCookie(
                     HttpContextAccessor.HttpContext, _currentUser.Id, _currentUser.EncryptedPrivateKey, Crypto, GlobalKeystore);
             }
+            if (ScopedKeystore.IsUnlocked)
+            {
+                _isCheckingKeystoreCookie = false;
+            }
             
             VoiceService.OnChange += HandleVoiceStateChanged;
+            CircuitContext.OnFocusChanged += HandleFocusChanged;
 
             if (!string.IsNullOrEmpty(ChannelId))
             {
@@ -865,6 +925,30 @@
         catch (Exception ex) when (ex is not NavigationException)
         {
             Console.WriteLine($"[Error] Chat.razor OnInitializedAsync failed: {ex}");
+        }
+    }
+
+    private void HandleFocusChanged()
+    {
+        if (CircuitContext.IsActivelyViewed && !string.IsNullOrEmpty(ChannelId))
+        {
+            _ = ConfirmChannelViewedAndReadAsync(ChannelId);
+            _ = InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private async Task ConfirmChannelViewedAndReadAsync(string? channelId)
+    {
+        if (string.IsNullOrEmpty(channelId) || !CircuitContext.IsActivelyViewed)
+            return;
+
+        try
+        {
+            await ChatNotifications.MarkChannelAsReadAsync(channelId);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[Chat] ConfirmChannelViewedAndRead error: {ex.Message}");
         }
     }
 
@@ -906,6 +990,15 @@
                 }
             }
         }
+    }
+
+    private string? EnsureDecryptedChannelKey()
+    {
+        if (string.IsNullOrEmpty(_decryptedChannelKey))
+        {
+            TryDecryptMessages();
+        }
+        return _decryptedChannelKey;
     }
 
     private bool _hasVaultError = false;
@@ -1037,6 +1130,8 @@
                     await VoiceService.ReattachTracksAsync();
                 }
 
+                _hasRendered = true;
+
                 // Note: We do NOT init scroll observer here yet. We let the block below handle it.
             }
             catch (Exception ex)
@@ -1045,12 +1140,16 @@
             }
             finally
             {
+                bool wasChecking = _isCheckingKeystoreCookie;
                 _isCheckingKeystoreCookie = false;
                 _shouldScrollToBottomAndInitObserver = true;
                 // Since this might have unlocked the keystore in the background on mobile,
                 // we must re-render so that child components (like ChatSidebar) update their
                 // UI (e.g. replacing 'Locked message' with decrypted previews).
-                StateHasChanged();
+                if (wasChecking)
+                {
+                    StateHasChanged();
+                }
             }
         }
 
@@ -1094,6 +1193,8 @@
                     Console.WriteLine($"[Warning] Failed to init read receipt observer: {ex.Message}");
                 }
             }
+
+            await ConfirmChannelViewedAndReadAsync(ChannelId);
         }
     }
 
@@ -1111,6 +1212,8 @@
         ChatState.ChannelCreated += OnChannelCreated;
         ChatState.MessageRead += OnMessageRead;
         ChatState.EmployeeProfileUpdated += OnEmployeeProfileUpdated;
+        ChatState.VoiceUserMutedChanged += OnVoiceUserMutedChanged;
+        ScopedKeystore.OnUnlocked += HandleKeystoreUnlocked;
     }
 
     private void UnsubscribeFromLocalEvents()
@@ -1125,9 +1228,30 @@
         ChatState.ChannelCreated -= OnChannelCreated;
         ChatState.MessageRead -= OnMessageRead;
         ChatState.EmployeeProfileUpdated -= OnEmployeeProfileUpdated;
+        ChatState.VoiceUserMutedChanged -= OnVoiceUserMutedChanged;
+        ScopedKeystore.OnUnlocked -= HandleKeystoreUnlocked;
     }
 
     // --- Local Event Handlers ---
+
+    private async void HandleKeystoreUnlocked()
+    {
+        try
+        {
+            await InvokeAsync(() =>
+            {
+                if (_currentUser == null) return;
+                TryDecryptMessages();
+                StateHasChanged();
+            });
+        }
+        catch (ObjectDisposedException) { }
+    }
+
+    private void OnVoiceUserMutedChanged(string channelId, string userId, bool isMuted)
+    {
+        InvokeAsync(StateHasChanged);
+    }
 
     private void OnEmployeeProfileUpdated(Employee updatedEmployee)
     {
@@ -1185,8 +1309,11 @@
                     
                     if (msg.IsEncrypted) TryDecryptMessages();
                     
-                    // Mark as read so the database knows we've seen this real-time message
-                    await ChatNotifications.MarkChannelAsReadAsync(ChannelId);
+                    // Mark as read so the database knows we've seen this real-time message if actively viewing
+                    if (CircuitContext.IsActivelyViewed)
+                    {
+                        await ChatNotifications.MarkChannelAsReadAsync(ChannelId);
+                    }
                     
                     RecomputeSortedMessages();
                     RecomputeLatestReadReceipts();
@@ -1372,6 +1499,7 @@
             }
 
             await ChatService.MarkMessageAsReadAsync(ChannelId, messageId, _currentUser.Id);
+            await ConfirmChannelViewedAndReadAsync(ChannelId);
         }
     }
 
@@ -1441,12 +1569,10 @@
         // Prune the PREVIOUS channel logic in background - NEVER block UI transition
         if (_previousChannelId != null && _previousChannelId != newChannelId)
         {
-             var prevChan = _previousChannelId;
-             _ = Task.Run(async () =>
+             _ = Task.Run(() =>
              {
                  try
                  {
-                     await ChatNotifications.MarkChannelAsReadAsync(prevChan);
                      Db.ChatMessages.EnforceGlobalCacheSizeLimit();
                  }
                  catch (Exception ex)
@@ -1474,42 +1600,21 @@
         }
         _channelNotFound = false;
 
+        if (_currentUser != null)
+        {
+            UserClientStateService.UpdateActiveChannel(_currentUser.Id, newChannelId);
+        }
+
         _channelTeams = GetChannelTeams();
         _channelEmployees = GetChannelEmployees();
 
-        _messages = Db.ChatMessages.GetByChannel(channelId, 15);
+        _messages = Db.ChatMessages.GetByChannel(channelId, 40);
         var cachedCount = Db.ChatMessages.GetMessageCount(channelId);
         _hasMoreMessages = cachedCount > _messages.Count;
         _typingUsers.Clear();
         _sortedMessages = new();
         _decryptedChannelKey = null;
         _isLoadingMessages = false;
-
-        // Proactively mark unread loaded messages as read for the current user
-        if (_currentUser != null)
-        {
-            var unreadLoaded = _messages
-                .Where(m => m.SenderId != _currentUser.Id && (m.ReadBy == null || !m.ReadBy.Contains(_currentUser.Id)))
-                .ToList();
-
-            if (unreadLoaded.Any())
-            {
-                foreach (var m in unreadLoaded)
-                {
-                    m.ReadBy ??= new List<string>();
-                    m.ReadBy.Add(_currentUser.Id);
-                    Db.ChatMessages.Save(m);
-                }
-
-                _ = Task.Run(() =>
-                {
-                    foreach (var m in unreadLoaded)
-                    {
-                        ChatState.NotifyMessageRead(channelId, m.Id, m.ReadBy);
-                    }
-                });
-            }
-        }
 
         TryDecryptMessages();
         RecomputeSortedMessages();
@@ -1520,31 +1625,20 @@
         // Reset view states
         _showSecondaryChat = false;
 
+        _ = SoundService.StopCallRingtoneAsync();
+
         // Auto-join Voice Channel if applicable
-        if (autoJoinVoice && _selectedChannel.IsVoiceChannel && !VoiceService.IsInVoiceCall)
+        if (autoJoinVoice && !VoiceService.IsInVoiceCall && !VoiceService.IsConnecting && _selectedChannel.IsVoiceChannel)
         {
             _ = JoinVoiceChannelInternal(isInitiator: false);
         }
 
         if (updateUrl)
         {
-            Nav.NavigateTo($"/chat/{channelId}", replace: currentlyInChannel);
+            Nav.NavigateTo(PreserveMobileQuery($"/chat/{channelId}"), replace: currentlyInChannel);
         }
 
         StateHasChanged();
-        
-        // Mark channel as read in background
-        _ = Task.Run(async () =>
-        {
-            try
-            {
-                await ChatNotifications.MarkChannelAsReadAsync(channelId);
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"[Chat] MarkChannelAsRead error: {ex.Message}");
-            }
-        });
 
         // Load notification level preference
         if (_currentUser != null)
@@ -1589,13 +1683,6 @@
                 Console.WriteLine($"[Shortcuts] Failed to push shortcut for {channelId}: {e.Message}");
             }
         });
-
-        // --- Stream the remaining messages to reach an initial 50-message cache ---
-        if (_hasMoreMessages && _messages.Count < 50 && !token.IsCancellationRequested)
-        {
-            int amountToBackfill = 50 - _messages.Count;
-            _ = StreamMessagesAsync(channelId, amountToBackfill, 10, token);
-        }
     }
 
     // --- Message Actions ---
@@ -2296,10 +2383,15 @@
     [JSInvokable]
     public string GetUploadUrl()
     {
-        if (_selectedChannel?.IsEncrypted == true && ScopedKeystore.IsUnlocked && _currentUser != null)
+        if (_selectedChannel?.IsEncrypted == true)
         {
-            var token = FileTokens.GenerateAccessToken("chat", ChannelId, "*", _decryptedChannelKey);
-            return $"/spokesapi/files/chat/{ChannelId}?t={token}";
+            var channelKey = EnsureDecryptedChannelKey();
+            if (!string.IsNullOrEmpty(channelKey) && _currentUser != null)
+            {
+                var token = FileTokens.GenerateAccessToken("chat", ChannelId, "*", channelKey);
+                return $"/spokesapi/files/chat/{ChannelId}?t={token}";
+            }
+            return $"/spokesapi/files/chat/{ChannelId}";
         }
         else if (_selectedChannel != null && _currentUser != null)
         {
@@ -2311,9 +2403,12 @@
 
     private string GetTokenizedFileUrl(string filePath, string fileName)
     {
-        if (_selectedChannel == null || !_selectedChannel.IsEncrypted || string.IsNullOrEmpty(_decryptedChannelKey))
+        if (_selectedChannel == null || !_selectedChannel.IsEncrypted)
             return filePath;
-        var token = FileTokens.GenerateAccessToken("chat", ChannelId, filePath, _decryptedChannelKey);
+        var channelKey = EnsureDecryptedChannelKey();
+        if (string.IsNullOrEmpty(channelKey))
+            return filePath;
+        var token = FileTokens.GenerateAccessToken("chat", ChannelId, filePath, channelKey);
         return filePath.Contains("?") ? $"{filePath}&t={token}" : $"{filePath}?t={token}";
     }
 
@@ -2383,9 +2478,18 @@
         return ChatChannelFormatter.GetDisplayName(channel, _currentUser?.Id, GetEmployee);
     }
 
+    private string PreserveMobileQuery(string url)
+    {
+        if (Nav.Uri.Contains("client=mobile", StringComparison.OrdinalIgnoreCase) && !url.Contains("client=mobile", StringComparison.OrdinalIgnoreCase))
+        {
+            return url.Contains('?') ? $"{url}&client=mobile" : $"{url}?client=mobile";
+        }
+        return url;
+    }
+
     private void GoBack()
     {
-        Nav.NavigateTo("/chat");
+        Nav.NavigateTo(PreserveMobileQuery("/chat"));
     }
 
     private List<Employee> GetChannelEmployees()
@@ -2474,11 +2578,6 @@
     {
         try
         {
-            if (!string.IsNullOrEmpty(ChannelId))
-            {
-                await ChatNotifications.MarkChannelAsReadAsync(ChannelId);
-            }
-
             _typingCleanupTimer?.Stop();
             _typingCleanupTimer?.Dispose();
 
@@ -2516,6 +2615,7 @@
         _channelCts?.Cancel();
         
         VoiceService.OnChange -= HandleVoiceStateChanged;
+        CircuitContext.OnFocusChanged -= HandleFocusChanged;
         UnsubscribeFromLocalEvents();
     }
 

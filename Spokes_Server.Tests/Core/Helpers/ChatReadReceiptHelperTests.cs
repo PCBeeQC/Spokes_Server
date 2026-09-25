@@ -1,9 +1,5 @@
-using System;
-using System.Collections.Generic;
-using System.Linq;
 using Spokes_Server.Core.Helpers;
 using Spokes_Server.Core.Models.Communication;
-using Xunit;
 
 namespace Spokes_Server.Tests.Core.Helpers;
 
@@ -226,5 +222,97 @@ public class ChatReadReceiptHelperTests
 
         Assert.False(latest.ContainsKey("m1"));
         Assert.False(cumulative.ContainsKey("m1"));
+    }
+
+    [Fact]
+    public void CalculateReadReceipts_WhenMessagesIsNull_ReturnsEmptyDictionaries()
+    {
+        var (latest, cumulative) = ChatReadReceiptHelper.CalculateReadReceipts(_dmChannel, null);
+
+        Assert.NotNull(latest);
+        Assert.NotNull(cumulative);
+        Assert.Empty(latest);
+        Assert.Empty(cumulative);
+    }
+
+    [Fact]
+    public void CalculateReadReceipts_WhenMessagesIsEmpty_ReturnsEmptyDictionaries()
+    {
+        var (latest, cumulative) = ChatReadReceiptHelper.CalculateReadReceipts(_dmChannel, Array.Empty<ChatMessage>());
+
+        Assert.NotNull(latest);
+        Assert.NotNull(cumulative);
+        Assert.Empty(latest);
+        Assert.Empty(cumulative);
+    }
+
+    [Fact]
+    public void CalculateReadReceipts_WhenChannelIsNull_InfersParticipantsFromSenders()
+    {
+        var m1 = new ChatMessage
+        {
+            Id = "m1",
+            SenderId = "user-alice",
+            SentAt = DateTime.UtcNow.AddMinutes(-5),
+            ReadBy = new List<string> { "user-alice", "user-bob" }
+        };
+
+        var (latest, cumulative) = ChatReadReceiptHelper.CalculateReadReceipts(null, new[] { m1 });
+
+        Assert.NotNull(latest);
+        Assert.NotNull(cumulative);
+        Assert.True(latest.ContainsKey("m1"));
+        Assert.Contains("user-bob", latest["m1"]);
+        Assert.True(cumulative.ContainsKey("m1"));
+        Assert.Contains("user-bob", cumulative["m1"]);
+    }
+
+    [Fact]
+    public void CalculateReadReceipts_CumulativeReceipts_InGroupChannel_TracksAllPriorMessagesForActiveReaders()
+    {
+        var t0 = DateTime.UtcNow.AddMinutes(-10);
+        var t1 = DateTime.UtcNow.AddMinutes(-5);
+        var t2 = DateTime.UtcNow;
+
+        var m1 = new ChatMessage
+        {
+            Id = "m1",
+            SenderId = "user-alice",
+            SentAt = t0,
+            ReadBy = new List<string> { "user-alice", "user-bob", "user-charlie" }
+        };
+
+        var m2 = new ChatMessage
+        {
+            Id = "m2",
+            SenderId = "user-bob",
+            SentAt = t1,
+            ReadBy = new List<string> { "user-bob", "user-charlie" }
+        };
+
+        var m3 = new ChatMessage
+        {
+            Id = "m3",
+            SenderId = "user-charlie",
+            SentAt = t2,
+            ReadBy = new List<string> { "user-charlie" }
+        };
+
+        var (latest, cumulative) = ChatReadReceiptHelper.CalculateReadReceipts(_groupChannel, new[] { m1, m2, m3 });
+
+        // m1 was read by Bob (whose cursor is at m2) and Charlie (whose cursor is at m3)
+        Assert.True(cumulative.ContainsKey("m1"));
+        Assert.Contains("user-bob", cumulative["m1"]);
+        Assert.Contains("user-charlie", cumulative["m1"]);
+        Assert.DoesNotContain("user-alice", cumulative["m1"]);
+
+        // m2 was sent by Bob, read by Charlie (cursor at m3 >= t1), but Alice's cursor is at m1 (t0 < t1)
+        Assert.True(cumulative.ContainsKey("m2"));
+        Assert.Contains("user-charlie", cumulative["m2"]);
+        Assert.DoesNotContain("user-alice", cumulative["m2"]);
+        Assert.DoesNotContain("user-bob", cumulative["m2"]);
+
+        // m3 has no readers other than the sender Charlie
+        Assert.False(cumulative.ContainsKey("m3"));
     }
 }

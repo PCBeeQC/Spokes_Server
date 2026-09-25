@@ -1,8 +1,4 @@
-using Spokes_Server.Core.Models.Core;
 using Spokes_Server.Core.Models.Projects;
-using Spokes_Server.Core.Models.Accounting;
-using Spokes_Server.Core.Models.Communication;
-using Spokes_Server.Core.Models.HR;
 
 namespace Spokes_Server.Core.Data.Repositories.Projects;
 
@@ -13,11 +9,9 @@ public class WorkTypeRepository : JsonRepository<WorkType>
     {
     }
 
-    protected override string GetFilePath(WorkType item)
-    {
+    protected override string GetFilePath(WorkType item) =>
         // /Data/Settings/WorkTypes/{Id}.json
-        return Path.Combine(_basePath, $"{item.Id}.json");
-    }
+        Path.Combine(_basePath, $"{item.Id}.json");
 
     public override void LoadFromDisk()
     {
@@ -26,7 +20,7 @@ public class WorkTypeRepository : JsonRepository<WorkType>
         // Migration: Ensure every task has at least one sub-task
         foreach (var workType in _cache.Values)
         {
-            if (!workType.SubTasks.Any())
+            if (workType.SubTasks.Count == 0)
             {
                 workType.SubTasks.Add(new SubTask
                 {
@@ -38,5 +32,3 @@ public class WorkTypeRepository : JsonRepository<WorkType>
         }
     }
 }
-
-

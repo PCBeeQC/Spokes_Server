@@ -1,30 +1,20 @@
-using Spokes_Server.Core.Services.Communication;
-using Spokes_Server.Core.Services.Projects;
-using Spokes_Server.Core.Services.Core;
+using System.Net;
+using System.Net.Http;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Moq;
 using Spokes_Server.Core.Data;
 using Spokes_Server.Core.Data.Repositories.Core;
-using Spokes_Server.Core.Data.Repositories.Projects;
-using Spokes_Server.Core.Data.Repositories.Accounting;
-using Spokes_Server.Core.Data.Repositories.Communication;
 using Spokes_Server.Core.Data.Repositories.HR;
 using Spokes_Server.Core.Models.Core;
-using Spokes_Server.Core.Models.Projects;
-using Spokes_Server.Core.Models.Accounting;
-using Spokes_Server.Core.Models.Communication;
 using Spokes_Server.Core.Models.HR;
-using Spokes_Server.Core.Services;
-using System.Collections.Generic;
-using System.IO;
-using System.Linq;
-using System.Threading.Tasks;
+using Spokes_Server.Core.Services.Communication.Notifications;
+using Spokes_Server.Core.Services.Core;
 
-namespace Spokes_Server.Tests.Core.Services.Communication
+namespace Spokes_Server.Tests.Core.Services.Communication;
+
+public class WebPushServiceTests : IDisposable
 {
-    public class WebPushServiceTests : IDisposable
-    {
         private readonly string _testDataDir;
         private readonly IConfiguration _config;
         private readonly DiskPersistenceService _persistence;
@@ -40,7 +30,7 @@ namespace Spokes_Server.Tests.Core.Services.Communication
             _testDataDir = Path.Combine(Path.GetTempPath(), "Spokes_Test_WebPush_" + Guid.NewGuid().ToString());
             Directory.CreateDirectory(_testDataDir);
 
-            var configDict = new Dictionary<string, string> { { "DataPath", _testDataDir } };
+            var configDict = new Dictionary<string, string?> { { "DataPath", _testDataDir } };
             _config = new ConfigurationBuilder().AddInMemoryCollection(configDict).Build();
 
             _persistence = new DiskPersistenceService(new Mock<ILogger<DiskPersistenceService>>().Object);
@@ -49,7 +39,7 @@ namespace Spokes_Server.Tests.Core.Services.Communication
             _employees = new EmployeeRepository(_persistence, _config);
             _companyProfile = new CompanyProfileRepository(_persistence, _config);
             _systemConfigs = new SystemConfigRepository(_persistence, _config);
-            var encService = new Spokes_Server.Core.Services.Core.EncryptionService(_config);
+            var encService = new EncryptionService(_config);
             var serverConfigs = new ServerConfigRepository(_persistence, _config, encService);
             var currentVersion = $"{DateTime.UtcNow.Year}.{DateTime.UtcNow.Month}.1";
             var globalCfg = serverConfigs.GetOrCreateGlobalConfig();
@@ -308,15 +298,11 @@ namespace Spokes_Server.Tests.Core.Services.Communication
             await service.SendNotificationAsync("u3", "title", "body");
         }
 
-        private class MockHttpMessageHandler : System.Net.Http.HttpMessageHandler
+        private class MockHttpMessageHandler : HttpMessageHandler
         {
-            protected override Task<System.Net.Http.HttpResponseMessage> SendAsync(System.Net.Http.HttpRequestMessage request, System.Threading.CancellationToken cancellationToken)
+            protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
             {
-                return Task.FromResult(new System.Net.Http.HttpResponseMessage { StatusCode = System.Net.HttpStatusCode.Gone });
+                return Task.FromResult(new HttpResponseMessage { StatusCode = HttpStatusCode.Gone });
             }
         }
     }
-}
-
-
-

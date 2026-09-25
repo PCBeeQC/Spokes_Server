@@ -1,14 +1,7 @@
-@using Spokes_Server.Core.Models.Core
-@using Spokes_Server.Core.Models.Projects
-@using Spokes_Server.Core.Models.Accounting
-@using Spokes_Server.Core.Models.Communication
-@using Spokes_Server.Core.Models.HR
-@using Spokes_Server.Core.Data
-@using MudBlazor
 @using Spokes_Server.Components.Dialogs
 @inject Database Db
 @inject IDialogService DialogService
-@inject Spokes_Server.Core.Services.Core.AppLabelService AppLabels
+@inject AppLabelService AppLabels
 
 <MudDialog>
     <DialogContent>
@@ -251,23 +244,22 @@
     private Project? _selectedProject;
     [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
 
-    [Parameter] public List<Team> AllTeams { get; set; } = new();
-    [Parameter] public List<Employee> AllEmployees { get; set; } = new();
-    [Parameter] public List<Project> AllProjects { get; set; } = new();
-    [Parameter] public bool CanManageCategories { get; set; } = false;
+    [Parameter] public List<Team> AllTeams { get; set; } = [];
+    [Parameter] public List<Employee> AllEmployees { get; set; } = [];
+    [Parameter] public List<Project> AllProjects { get; set; } = [];
+    [Parameter] public bool CanManageCategories { get; set; }
 
     [Parameter] public ChatChannel? ExistingChannel { get; set; }
     [Parameter] public string? InitialAccessType { get; set; }
     [Parameter] public string? InitialCategoryId { get; set; }
 
-    private List<ChatCategory> AllCategories { get; set; } = new();
+    private List<ChatCategory> AllCategories { get; set; } = [];
 
-    private string ChannelName { get; set; } = string.Empty;
-    private string Description { get; set; } = string.Empty;
+    private string ChannelName { get; set; } = "";
+    private string Description { get; set; } = "";
     private string Icon { get; set; } = "";
     private string? CategoryId { get; set; }
 
-    private bool EncryptionInfo;
     private bool _isVoiceChannel;
     private bool IsVoiceChannel
     {
@@ -310,7 +302,7 @@
     private IEnumerable<string> AllowedPostTeamIds { get; set; } = new HashSet<string>();
     private IEnumerable<string> AllowedPostUserIds { get; set; } = new HashSet<string>();
 
-    private string SelectedProjectId { get; set; } = string.Empty;
+    private string SelectedProjectId { get; set; } = "";
     private bool IsFriendEdition => Db.CompanyProfile.Get()?.Edition == "Family";
 
     protected override void OnInitialized()
@@ -506,8 +498,8 @@
             finalType = ChatChannelType.Direct;
             finalLinkedId = ExistingChannel.LinkedEntityId;
             IsAnnouncementOnly = false;
-            AllowedPostUserIds = Enumerable.Empty<string>();
-            AllowedPostTeamIds = Enumerable.Empty<string>();
+            AllowedPostUserIds = [];
+            AllowedPostTeamIds = [];
         }
         else if (SelectedAccessType == "Project")
         {
@@ -528,8 +520,8 @@
         else // Public
         {
             finalType = ChatChannelType.General;
-            SelectedTeamIds = new List<string>();
-            SelectedUserIds = new List<string>();
+            SelectedTeamIds = [];
+            SelectedUserIds = [];
         }
 
         var result = new ChannelCreationResult
@@ -602,20 +594,20 @@
 
     public class ChannelCreationResult
     {
-        public string Name { get; set; } = string.Empty;
-        public string Description { get; set; } = string.Empty;
-        public string Icon { get; set; } = string.Empty;
+        public string Name { get; set; } = "";
+        public string Description { get; set; } = "";
+        public string Icon { get; set; } = "";
         public string? CategoryId { get; set; }
-        public string Type { get; set; } = string.Empty;
+        public string Type { get; set; } = "";
         public string? LinkedEntityId { get; set; }
-        public List<string> AllowedTeamIds { get; set; } = new();
-        public List<string> ParticipantIds { get; set; } = new();
+        public List<string> AllowedTeamIds { get; set; } = [];
+        public List<string> ParticipantIds { get; set; } = [];
         public bool IsArchived { get; set; }
         public bool IsVoiceChannel { get; set; }
         public bool IsEncrypted { get; set; }
         public int AudioBitrateKbps { get; set; }
         public bool IsAnnouncementOnly { get; set; }
-        public List<string> AllowedPostUserIds { get; set; } = new();
-        public List<string> AllowedPostTeamIds { get; set; } = new();
+        public List<string> AllowedPostUserIds { get; set; } = [];
+        public List<string> AllowedPostTeamIds { get; set; } = [];
     }
 }

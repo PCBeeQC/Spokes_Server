@@ -1,9 +1,10 @@
-using Spokes_Server.Core.Services.Communication;
-using Spokes_Server.Core.Services.Projects;
-using Spokes_Server.Core.Services.Core;
+using System;
+using System.Collections.Concurrent;
+using System.Collections.Generic;
+using System.Linq;
 using Spokes_Server.Aggregate;
 using Spokes_Server.Core.Models.Core;
-using System.Collections.Concurrent;
+using Spokes_Server.Core.Services.Communication.Chat;
 
 namespace Spokes_Server.Core.Services.Communication.Presence;
 
@@ -13,15 +14,15 @@ namespace Spokes_Server.Core.Services.Communication.Presence;
 /// </summary>
 public class PresenceStateService
 {
-    private readonly Spokes_Server.Core.Services.Communication.Chat.ChatStateService _chatStateService;
+    private readonly ChatStateService _chatStateService;
     private readonly Database? _db;
 
-    public PresenceStateService(Spokes_Server.Core.Services.Communication.Chat.ChatStateService chatStateService)
+    public PresenceStateService(ChatStateService chatStateService)
         : this(chatStateService, null)
     {
     }
 
-    public PresenceStateService(Spokes_Server.Core.Services.Communication.Chat.ChatStateService chatStateService, Database? db)
+    public PresenceStateService(ChatStateService chatStateService, Database? db)
     {
         _chatStateService = chatStateService;
         _db = db;
@@ -110,6 +111,18 @@ public class PresenceStateService
     }
 
     /// <summary>
+    /// Gets the user ID associated with an active subscription connection, if any.
+    /// </summary>
+    public string? GetUserIdBySubscription(string? subscriptionId)
+    {
+        if (!string.IsNullOrEmpty(subscriptionId) && _activeConnections.TryGetValue(subscriptionId, out var info))
+        {
+            return info.UserId;
+        }
+        return null;
+    }
+
+    /// <summary>
     /// Update the push enabled state dynamically mid-session if the user accepts a prompt.
     /// </summary>
     public void UpdatePushEnabledState(string? subscriptionId, bool hasPushEnabled)
@@ -131,6 +144,26 @@ public class PresenceStateService
     public bool IsUserFocused(string userId)
     {
         return _activeConnections.Values.Any(c => c.UserId == userId && c.IsFocused);
+    }
+
+    /// <summary>
+    /// Checks whether a specific connection is currently active and focused (user actively looking at the screen).
+    /// Returns false if the connection is severed, missing, or unfocused (e.g. app backgrounded/minimized).
+    /// </summary>
+    public bool IsConnectionActivelyViewed(string? subscriptionId)
+    {
+        if (string.IsNullOrEmpty(subscriptionId)) return false;
+        return _activeConnections.TryGetValue(subscriptionId, out var info) && info.IsFocused;
+    }
+
+    /// <summary>
+    /// Checks whether a specific connection is associated with a mobile device.
+    /// </summary>
+    public bool IsConnectionMobile(string? subscriptionId)
+    {
+        if (string.IsNullOrEmpty(subscriptionId)) return false;
+        return _activeConnections.TryGetValue(subscriptionId, out var info)
+            && string.Equals(info.DeviceType, "Mobile", StringComparison.OrdinalIgnoreCase);
     }
 
     // --- Device-tier queries ---
@@ -483,13 +516,11 @@ public class PresenceStateService
     /// Returns a distinct list of active SessionIds.
     /// </summary>
     public IEnumerable<string> GetOnlineSessions()
-    {
-        return _activeConnections.Values
+        => _activeConnections.Values
             .Where(c => !string.IsNullOrEmpty(c.SessionId))
             .Select(c => c.SessionId!)
             .Distinct()
             .ToList();
-    }
 
     /// <summary>
     /// Triggers a global broadcast to log out all active connections for the specified SessionId.
@@ -497,9 +528,7 @@ public class PresenceStateService
     public void TriggerRemoteLogout(string sessionId)
     {
         if (!string.IsNullOrEmpty(sessionId))
-        {
             OnSessionRevoked?.Invoke(sessionId);
-        }
     }
 
     private class ConnectionInfo

@@ -1,20 +1,18 @@
-using Spokes_Server.Core.Services.Communication;
+namespace Spokes_Server.Tests.Core.Services.Communication;
+
+using System.Collections.Generic;
+using System.Threading;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Moq;
-using Spokes_Server.Core.Data.Repositories.HR;
 using Spokes_Server.Core.Data.Repositories.Communication;
-using Spokes_Server.Core.Models.HR;
+using Spokes_Server.Core.Data.Repositories.HR;
 using Spokes_Server.Core.Models.Communication;
-using System.Threading;
-using System.Threading.Tasks;
-using System.Collections.Generic;
-using System.Linq;
+using Spokes_Server.Core.Models.HR;
+using Spokes_Server.Core.Services.Communication;
 
-namespace Spokes_Server.Tests.Core.Services.Communication
+public class EmailBackgroundServiceTests
 {
-    public class EmailBackgroundServiceTests
-    {
         private class TestableEmailBackgroundService : EmailBackgroundService
         {
             public List<Employee> EmployeesToReturn { get; set; } = new();
@@ -86,15 +84,15 @@ namespace Spokes_Server.Tests.Core.Services.Communication
         {
             var (service, _, _, emailServiceMock, empRepoMock, folderRepoMock, msgRepoMock) = CreateService();
 
-            service.EmployeesToReturn = new List<Employee>
-            {
+            service.EmployeesToReturn =
+            [
                 new Employee { Id = "emp1", Email = "test@test.com", EncryptedEmailPassword = "pass", FirstName = "Test", LastName = "User" }
-            };
+            ];
 
-            var folders = new List<EmailFolder>
-            {
+            List<EmailFolder> folders =
+            [
                 new EmailFolder { EmployeeId = "emp1", Path = "Inbox", IsInbox = true, UnreadCount = 5 }
-            };
+            ];
             folderRepoMock.Setup(r => r.GetByEmployee("emp1")).Returns(folders);
             msgRepoMock.Setup(r => r.GetUnreadCount("emp1", "Inbox")).Returns(5);
 
@@ -141,4 +139,3 @@ namespace Spokes_Server.Tests.Core.Services.Communication
             emailServiceMock.Verify(s => s.SyncSingleFolderAsync("emp3", "Sent"), Times.AtLeastOnce());
         }
     }
-}

@@ -73,63 +73,57 @@ public static class AppPermissions
     /// <summary>
     /// Helper to get all permissions for the UI
     /// </summary>
-    public static Dictionary<string, List<string>> GetAll()
+    public static Dictionary<string, List<string>> GetAll() => new()
     {
-        return new Dictionary<string, List<string>>
-        {
-            { "Admin", new List<string> { Admin.ManageUsers, Admin.ManageSettings } },
-            { "Projects", new List<string> { Projects.View, Projects.Create, Projects.Edit, Projects.Delete } },
-            { "Chat", new List<string> { Chat.Use, Chat.CreateChannels, Chat.ViewArchive, Chat.EditAllPublicChannels, Chat.Moderator } },
-            { "Email", new List<string> { Email.Use } },
-            { "Address Book", new List<string> { AddressBook.View, AddressBook.Manage } },
-            { "Finance", new List<string> { Finance.AccessAccounting, Finance.AccessExpenses, Finance.TeamCapacity } },
-            { "Purchases", new List<string> { Purchases.ViewPOs, Purchases.ManagePOs, Purchases.ViewBills, Purchases.ManageBills, Purchases.ApproveBills } },
-            { "Timesheets", new List<string> { Timesheets.AccessTimesheet, Timesheets.ViewReport } },
-            { "Business Documents", new List<string> { BusinessDocuments.View } },
-            { "Albums", new List<string> { Albums.View } },
-            { "My Week", new List<string> { MyWeek.Edit } },
-            { "Calendar", new List<string> { Calendar.View } }
-        };
-    }
+        ["Admin"] = [Admin.ManageUsers, Admin.ManageSettings],
+        ["Projects"] = [Projects.View, Projects.Create, Projects.Edit, Projects.Delete],
+        ["Chat"] = [Chat.Use, Chat.CreateChannels, Chat.ViewArchive, Chat.EditAllPublicChannels, Chat.Moderator],
+        ["Email"] = [Email.Use],
+        ["Address Book"] = [AddressBook.View, AddressBook.Manage],
+        ["Finance"] = [Finance.AccessAccounting, Finance.AccessExpenses, Finance.TeamCapacity],
+        ["Purchases"] = [Purchases.ViewPOs, Purchases.ManagePOs, Purchases.ViewBills, Purchases.ManageBills, Purchases.ApproveBills],
+        ["Timesheets"] = [Timesheets.AccessTimesheet, Timesheets.ViewReport],
+        ["Business Documents"] = [BusinessDocuments.View],
+        ["Albums"] = [Albums.View],
+        ["My Week"] = [MyWeek.Edit],
+        ["Calendar"] = [Calendar.View]
+    };
 
     /// <summary>
     /// Gets a user-friendly description for the specified permission.
     /// </summary>
-    public static string GetDescription(string permission)
+    public static string GetDescription(string permission) => permission switch
     {
-        return permission switch
-        {
-            Admin.ManageUsers => "Full admin access to create, edit, and modify users.",
-            Admin.ManageSettings => "Access to system-wide settings and configurations.",
-            Projects.View => "Allows viewing projects.",
-            Projects.Create => "Allows creating new projects.",
-            Projects.Edit => "Allows editing existing project details.",
-            Projects.Delete => "Allows deleting projects.",
-            Chat.Use => "Allows using the team chat.",
-            Chat.CreateChannels => "Allows creating new chat channels.",
-            Chat.ViewArchive => "Allows viewing archived chat channels.",
-            Chat.EditAllPublicChannels => "Allows editing all public channels, even if not the creator.",
-            Chat.Moderator => "Allows moderating chat channels (e.g. deleting reported messages).",
-            Email.Use => "Allows sending and receiving emails.",
-            AddressBook.View => "Allows viewing the address book.",
-            AddressBook.Manage => "Allows adding, editing, and deleting contacts in the address book.",
-            Finance.AccessAccounting => "Provides access to the accounting dashboard.",
-            Finance.AccessExpenses => "Allows accessing expense reports.",
-            Finance.TeamCapacity => "Allows viewing team capacity reports.",
-            Purchases.ViewPOs => "Allows viewing purchase orders.",
-            Purchases.ManagePOs => "Allows creating, editing, and deleting purchase orders.",
-            Purchases.ViewBills => "Allows viewing bills.",
-            Purchases.ManageBills => "Allows creating, editing, and deleting bills.",
-            Purchases.ApproveBills => "Allows reviewing and approving bills for payment.",
-            Timesheets.AccessTimesheet => "Allows accessing personal timesheets.",
-            Timesheets.ViewReport => "Allows viewing timesheet reports for the team.",
-            BusinessDocuments.View => "Allows accessing and managing business documents.",
-            Albums.View => "Allows viewing and interacting with albums.",
-            MyWeek.Edit => "Allows editing the My Week view.",
-            Calendar.View => "Allows accessing the calendar.",
-            _ => "Unknown permission."
-        };
-    }
+        Admin.ManageUsers => "Full admin access to create, edit, and modify users.",
+        Admin.ManageSettings => "Access to system-wide settings and configurations.",
+        Projects.View => "Allows viewing projects.",
+        Projects.Create => "Allows creating new projects.",
+        Projects.Edit => "Allows editing existing project details.",
+        Projects.Delete => "Allows deleting projects.",
+        Chat.Use => "Allows using the team chat.",
+        Chat.CreateChannels => "Allows creating new chat channels.",
+        Chat.ViewArchive => "Allows viewing archived chat channels.",
+        Chat.EditAllPublicChannels => "Allows editing all public channels, even if not the creator.",
+        Chat.Moderator => "Allows moderating chat channels (e.g. deleting reported messages).",
+        Email.Use => "Allows sending and receiving emails.",
+        AddressBook.View => "Allows viewing the address book.",
+        AddressBook.Manage => "Allows adding, editing, and deleting contacts in the address book.",
+        Finance.AccessAccounting => "Provides access to the accounting dashboard.",
+        Finance.AccessExpenses => "Allows accessing expense reports.",
+        Finance.TeamCapacity => "Allows viewing team capacity reports.",
+        Purchases.ViewPOs => "Allows viewing purchase orders.",
+        Purchases.ManagePOs => "Allows creating, editing, and deleting purchase orders.",
+        Purchases.ViewBills => "Allows viewing bills.",
+        Purchases.ManageBills => "Allows creating, editing, and deleting bills.",
+        Purchases.ApproveBills => "Allows reviewing and approving bills for payment.",
+        Timesheets.AccessTimesheet => "Allows accessing personal timesheets.",
+        Timesheets.ViewReport => "Allows viewing timesheet reports for the team.",
+        BusinessDocuments.View => "Allows accessing and managing business documents.",
+        Albums.View => "Allows viewing and interacting with albums.",
+        MyWeek.Edit => "Allows editing the My Week view.",
+        Calendar.View => "Allows accessing the calendar.",
+        _ => "Unknown permission."
+    };
 
     public static class MyWeek
     {

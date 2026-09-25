@@ -1,17 +1,13 @@
 @using Spokes_Server.Core.Models.Core
 @using Spokes_Server.Core.Models.Projects
 @using Spokes_Server.Core.Models.Accounting
-@using Spokes_Server.Core.Models.Communication
-@using Spokes_Server.Core.Models.HR
 @using Spokes_Server.Core.Data
 @using Spokes_Server.Components.Dialogs
-@using MudBlazor
+@using Spokes_Server.Components.Shared
 @inject Database Db
 @inject AuthenticationStateProvider AuthStateProvider
 @inject IDialogService DialogService
-@inject ISnackbar Snackbar
 @inject UserService UserService
-@inject Spokes_Server.Core.Services.Accounting.FinancialCalculationEngine CalcEngine
 
 <MudDialog>
     <DialogContent>
@@ -59,7 +55,7 @@
 
             <MudGrid Class="mb-4 align-center">
                 <MudItem xs="12">
-                    <Spokes_Server.Components.Shared.CompanyContactSelector 
+                    <CompanyContactSelector 
                         Label="Select Supplier"
                         ContactLabel="Select Supplier Contact"
                         Icon="@Icons.Material.Filled.Search"
@@ -79,7 +75,7 @@
                 </MudItem>
 
                 <MudItem xs="12">
-                     <Spokes_Server.Components.Shared.CompanyContactSelector 
+                     <CompanyContactSelector 
                          Label="Select Recipient (Ship To)"
                          ContactLabel="Select Recipient Contact"
                          Icon="@Icons.Material.Filled.LocalShipping"
@@ -216,12 +212,10 @@
     [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
     [Parameter] public PurchaseOrder PO { get; set; } = default!;
 
-    private List<Project> Projects = new();
-    private List<Supplier> AllSuppliers = new();
-    private List<DocumentTemplate> Templates = new();
+    private List<Project> Projects = [];
+    private List<DocumentTemplate> Templates = [];
 
     // Track the selected object for the Autocomplete
-    private Supplier? selectedSupplier;
     private Supplier? selectedRecipient;
     private CompanyProfile? mainProfile;
 
@@ -232,7 +226,6 @@
     protected override async Task OnInitializedAsync()
     {
         Projects = Db.Projects.GetAll().Where(p => p.IsActive).OrderBy(p => p.Name).ToList();
-        AllSuppliers = Db.Suppliers.GetAll();
         Templates = Db.DocumentTemplates.GetAll();
 
         // UI Initialization for Supplier/Recipient is handled by InitialCompanyName property on the component
@@ -248,11 +241,8 @@
         }
     }
 
-
-
     private void OnSupplierSelected(Supplier? s)
     {
-        selectedSupplier = s;
         if (s != null)
         {
             // Snapshot the data into the PO
@@ -328,7 +318,7 @@
         var head = chip.Text; PO.CustomHeaders.Remove(head); foreach (var item in PO.Items) item.CustomData.Remove(head);
     }
     private void AddItem() => PO.Items.Add(new PoItem());
-    private string GetCustomVal(PoItem item, string key) => item.CustomData.ContainsKey(key) ? item.CustomData[key] : "";
+    private string GetCustomVal(PoItem item, string key) => item.CustomData.TryGetValue(key, out var val) ? val : "";
     private void SetCustomVal(PoItem item, string key, string val) => item.CustomData[key] = val;
 
     private Task<IEnumerable<string>> SearchProjects(string value, CancellationToken token)

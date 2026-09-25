@@ -1,14 +1,6 @@
 namespace Spokes_Server.Core.Models.Projects;
 
-using Spokes_Server.Core.Models.Core;
-using Spokes_Server.Core.Models.Accounting;
-using Spokes_Server.Core.Models.Communication;
-using Spokes_Server.Core.Models.HR;
-
 using Spokes_Server.Core.Data;
-
-
-
 
 public class Quote : IDataEntity
 {
@@ -17,10 +9,7 @@ public class Quote : IDataEntity
     public override bool Equals(object? obj)
     {
         if (ReferenceEquals(this, obj)) return true;
-        if (obj == null || GetType() != obj.GetType())
-            return false;
-        var other = (Quote)obj;
-        return Id == other.Id;
+        return obj is Quote other && Id == other.Id;
     }
 
     public override int GetHashCode() => Id?.GetHashCode() ?? base.GetHashCode();
@@ -41,18 +30,18 @@ public class Quote : IDataEntity
     public DateOnly? Deadline { get; set; }
 
     // Data
-    public List<QuoteLaborItem> LaborItems { get; set; } = new();
-    public List<QuoteItemRow> ItemRows { get; set; } = new();
-    public List<PaymentTerm> PaymentTerms { get; set; } = new();
+    public List<QuoteLaborItem> LaborItems { get; set; } = [];
+    public List<QuoteItemRow> ItemRows { get; set; } = [];
+    public List<PaymentTerm> PaymentTerms { get; set; } = [];
 
     // Monthly Payment Display
-    public bool ShowMonthlyPayments { get; set; } = false;
+    public bool ShowMonthlyPayments { get; set; }
     public int MonthlyPaymentMonths { get; set; } = 12;
     public string MonthlyPaymentDescription { get; set; } = "Monthly payments over {0} months";
 
     // Financials
     // NEW: Store the tax rate snapshot
-    public decimal TaxRate { get; set; } = 0.0m;
+    public decimal TaxRate { get; set; }
     public bool ShowTax { get; set; } = true;
 
     public decimal TotalLabor => LaborItems.Sum(x => x.Total);
@@ -74,10 +63,10 @@ public class Quote : IDataEntity
     // This gets copied from the Template when created, but can be edited per project
     public string TermsAndConditions { get; set; } = string.Empty;
 
-    public bool IsConfidential { get; set; } = false;
+    public bool IsConfidential { get; set; }
 
-    public bool SignatureRequired { get; set; } = false;
-    public bool ShowIntermediateSignature { get; set; } = false;
+    public bool SignatureRequired { get; set; }
+    public bool ShowIntermediateSignature { get; set; }
 
     // NEW: Signatories
     public string ClientRepresentativeName { get; set; } = string.Empty;
@@ -91,10 +80,7 @@ public class QuoteLaborItem
     public override bool Equals(object? obj)
     {
         if (ReferenceEquals(this, obj)) return true;
-        if (obj == null || GetType() != obj.GetType())
-            return false;
-        var other = (QuoteLaborItem)obj;
-        return Id == other.Id;
+        return obj is QuoteLaborItem other && Id == other.Id;
     }
 
     public override int GetHashCode() => Id?.GetHashCode() ?? base.GetHashCode();
@@ -114,16 +100,13 @@ public class QuoteItemRow
     public override bool Equals(object? obj)
     {
         if (ReferenceEquals(this, obj)) return true;
-        if (obj == null || GetType() != obj.GetType())
-            return false;
-        var other = (QuoteItemRow)obj;
-        return Id == other.Id;
+        return obj is QuoteItemRow other && Id == other.Id;
     }
 
     public override int GetHashCode() => Id?.GetHashCode() ?? base.GetHashCode();
     public string Description { get; set; } = string.Empty;
     public decimal Quantity { get; set; } = 1;
-    public bool IsClientBought { get; set; } = false;
+    public bool IsClientBought { get; set; }
 
     // Cost Management
     public decimal UnitCost { get; set; }
@@ -140,10 +123,7 @@ public class PaymentTerm
     public override bool Equals(object? obj)
     {
         if (ReferenceEquals(this, obj)) return true;
-        if (obj == null || GetType() != obj.GetType())
-            return false;
-        var other = (PaymentTerm)obj;
-        return Id == other.Id;
+        return obj is PaymentTerm other && Id == other.Id;
     }
 
     public override int GetHashCode() => Id?.GetHashCode() ?? base.GetHashCode();

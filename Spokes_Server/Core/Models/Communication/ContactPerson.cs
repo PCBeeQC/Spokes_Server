@@ -1,14 +1,6 @@
 namespace Spokes_Server.Core.Models.Communication;
 
-using Spokes_Server.Core.Models.Core;
-using Spokes_Server.Core.Models.Projects;
-using Spokes_Server.Core.Models.Accounting;
-using Spokes_Server.Core.Models.HR;
-
 using Spokes_Server.Core.Data;
-
-
-
 
 public class ContactPerson : IDataEntity
 {
@@ -17,10 +9,7 @@ public class ContactPerson : IDataEntity
     public override bool Equals(object? obj)
     {
         if (ReferenceEquals(this, obj)) return true;
-        if (obj == null || GetType() != obj.GetType())
-            return false;
-        var other = (ContactPerson)obj;
-        return Id == other.Id;
+        return obj is ContactPerson other && Id == other.Id;
     }
 
     public override int GetHashCode() => Id?.GetHashCode() ?? base.GetHashCode();
@@ -29,7 +18,5 @@ public class ContactPerson : IDataEntity
     public string Title { get; set; } = string.Empty;
     public string Email { get; set; } = string.Empty;
     public string Phone { get; set; } = string.Empty;
-    public bool IsPrimary { get; set; } = false;
+    public bool IsPrimary { get; set; }
 }
-
-

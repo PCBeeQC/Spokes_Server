@@ -8,7 +8,7 @@ window.pushNotifications = {
     getDeviceId: async function () {
         if (window._spokesCachedDeviceId) return window._spokesCachedDeviceId;
 
-        const native = window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform() && window.Capacitor.Plugins;
+        const native = this.isNativePlatform() && window.Capacitor?.Plugins;
 
         if (native) {
             // 0. Fast-path: Check localStorage to avoid bridge overhead on subsequent calls/boots
@@ -107,50 +107,79 @@ window.pushNotifications = {
 
     // Update app icon badge natively via Capacitor Badge plugin
     updateBadge: async function (count) {
-        if (window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) {
+        if (this.isNativePlatform()) {
             const currentOrigin = window.location.origin.replace(/\/$/, '');
             
+            if (typeof window.updateServerSwitcherBadge === 'function') {
+                try {
+                    window.updateServerSwitcherBadge(currentOrigin, count);
+                } catch(e) {}
+            }
+
             if (window.Capacitor.Plugins.NotificationCrypto) {
                 try {
                     await window.Capacitor.Plugins.NotificationCrypto.setServerBadgeCount({ originUrl: currentOrigin, count: count });
                 } catch(e) {}
             }
             
-            if (window.Capacitor.Plugins.Badge) {
+            let totalCount = count;
+            if (window.Capacitor?.Plugins?.Preferences) {
                 try {
-                    let totalCount = count;
+                    const res = await window.Capacitor.Plugins.Preferences.get({ key: 'savedServers' });
+                    let servers = res.value ? JSON.parse(res.value) : [];
                     
-                    if (window.Capacitor.Plugins.Preferences) {
-                        const res = await window.Capacitor.Plugins.Preferences.get({ key: 'savedServers' });
-                        let servers = res.value ? JSON.parse(res.value) : [];
-                        
-                        for (let s of servers) {
-                            let serverUrl = s.url.replace(/\/$/, '');
-                            if (serverUrl !== currentOrigin) {
-                                try {
-                                    let fetchUrl = serverUrl + '/spokesapi/push/unread-count';
-                                    let data = null;
-                                    let targetHost = new URL(serverUrl).hostname;
-                                    let hdrs = window.spokesAuth ? await window.spokesAuth.getHeaders({ 'Content-Type': 'application/json' }, targetHost) : { 'Content-Type': 'application/json' };
-                                    
-                                    // Cross-origin: use explicit CapacitorHttp to bypass CORS on native
-                                    if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.CapacitorHttp) {
-                                        let resp = await window.Capacitor.Plugins.CapacitorHttp.get({ url: fetchUrl, headers: hdrs });
-                                        if (resp.status >= 200 && resp.status < 300 && resp.data) {
-                                            data = typeof resp.data === 'string' ? JSON.parse(resp.data) : resp.data;
-                                        }
-                                    } else {
-                                        let req = await fetch(fetchUrl, { headers: hdrs, credentials: 'include' });
-                                        if (req.ok) data = await req.json();
+                    for (let s of servers) {
+                        let serverUrl = s.url.replace(/\/$/, '');
+                        if (serverUrl !== currentOrigin) {
+                            try {
+                                let fetchUrl = serverUrl + '/spokesapi/push/unread-count';
+                                let data = null;
+                                let targetHost = new URL(serverUrl).hostname;
+                                let hdrs = window.spokesAuth ? await window.spokesAuth.getHeaders({ 'Content-Type': 'application/json' }, targetHost) : { 'Content-Type': 'application/json' };
+                                
+                                // Cross-origin: use explicit CapacitorHttp to bypass CORS on native
+                                if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.CapacitorHttp) {
+                                    let resp = await window.Capacitor.Plugins.CapacitorHttp.get({ url: fetchUrl, headers: hdrs });
+                                    if (resp.status >= 200 && resp.status < 300 && resp.data) {
+                                        data = typeof resp.data === 'string' ? JSON.parse(resp.data) : resp.data;
                                     }
-                                    if (data) {
-                                        totalCount += (data.count || 0);
+                                } else {
+                                    let req = await fetch(fetchUrl, { headers: hdrs, credentials: 'include' });
+                                    if (req.ok) data = await req.json();
+                                }
+                                if (data) {
+                                    const otherCount = data.count || 0;
+                                    totalCount += otherCount;
+                                    if (typeof window.updateServerSwitcherBadge === 'function') {
+                                        try {
+                                            window.updateServerSwitcherBadge(serverUrl, otherCount);
+                                        } catch(e) {}
                                     }
-                                } catch (e) {}
-                            }
+                                }
+                            } catch (e) {}
                         }
                     }
-                    
+                } catch (e) {}
+            }
+            
+            let badgeHandled = false;
+            // On iOS, route badge count updates directly through NotificationCrypto to avoid
+            // the rogue .badge permission request from @capawesome/capacitor-badge
+            if (window.Capacitor?.getPlatform() === 'ios' && window.Capacitor?.Plugins?.NotificationCrypto?.setBadgeCount) {
+                try {
+                    if (totalCount > 0) {
+                        await window.Capacitor.Plugins.NotificationCrypto.setBadgeCount({ count: totalCount });
+                    } else {
+                        await window.Capacitor.Plugins.NotificationCrypto.clearBadge();
+                    }
+                    badgeHandled = true;
+                } catch (e) {
+                    console.error('Error updating native iOS badge via NotificationCrypto:', e);
+                }
+            }
+            
+            if (!badgeHandled && window.Capacitor?.Plugins?.Badge) {
+                try {
                     if (totalCount > 0) {
                         await window.Capacitor.Plugins.Badge.set({ count: totalCount });
                     } else {
@@ -159,7 +188,7 @@ window.pushNotifications = {
                 } catch (e) {
                     console.error('Error updating native app badge:', e);
                 }
-            } else {
+            } else if (!badgeHandled) {
                 console.warn('Badge plugin not found. Did you run cap sync?');
             }
         } else if ('setAppBadge' in navigator) {
@@ -176,12 +205,12 @@ window.pushNotifications = {
 
     // Check if running in native mobile Capacitor shell
     isNativePlatform: function () {
-        return !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
+        return typeof window.isCapacitorNative === 'function' ? window.isCapacitorNative() : Boolean(window.Capacitor?.isNativePlatform?.());
     },
 
     // Check if push notifications are supported
     isSupported: function () {
-        if (window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) return true;
+        if (this.isNativePlatform()) return true;
         return 'serviceWorker' in navigator &&
             'PushManager' in window &&
             'Notification' in window;
@@ -189,7 +218,7 @@ window.pushNotifications = {
 
     // Get the reason why push notifications are not supported
     getSupportReason: function () {
-        if (window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) return 'Supported via Capacitor';
+        if (this.isNativePlatform()) return 'Supported via Capacitor';
         if (!('serviceWorker' in navigator)) return 'No Service Worker (HTTPS required)';
         if (!('PushManager' in window)) return 'No Push API';
         if (!('Notification' in window)) return 'No Notification API';
@@ -199,7 +228,7 @@ window.pushNotifications = {
     // Get current permission status: 'granted', 'denied', or 'default'
     getPermissionStatus: async function () {
         if (!this.isSupported()) return 'unsupported';
-        if (window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) {
+        if (this.isNativePlatform()) {
             try {
                 const status = await Capacitor.Plugins.FirebaseMessaging.checkPermissions();
                 return status.receive;
@@ -210,8 +239,36 @@ window.pushNotifications = {
         return Notification.permission;
     },
 
+    // Retrieve detailed iOS notification settings (authorization status, soundEnabled, alertEnabled, badgeEnabled)
+    getNativeSettings: async function () {
+        if (this.isNativePlatform() && window.Capacitor?.Plugins?.NotificationCrypto?.getNotificationSettings) {
+            try {
+                return await window.Capacitor.Plugins.NotificationCrypto.getNotificationSettings();
+            } catch (e) {
+                console.warn('Failed to get native notification settings', e);
+            }
+        }
+        return null;
+    },
+
+    // Open the Spokes app page in iOS Settings
+    openAppSettings: async function () {
+        if (this.isNativePlatform() && window.Capacitor?.Plugins?.NotificationCrypto?.openAppSettings) {
+            try {
+                const res = await window.Capacitor.Plugins.NotificationCrypto.openAppSettings();
+                return res?.success ?? true;
+            } catch (e) {
+                console.warn('Failed to open app settings', e);
+            }
+        }
+        return false;
+    },
+
     // Auto-detect device type from User-Agent
     detectDeviceType: function () {
+        if (this.isNativePlatform()) {
+            return 'Mobile';
+        }
         var ua = navigator.userAgent || '';
         // Check for mobile/tablet indicators
         if (/Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(ua)) {
@@ -227,7 +284,7 @@ window.pushNotifications = {
     // Auto-detect a descriptive device name from User-Agent
     detectDeviceName: function () {
         var ua = navigator.userAgent || '';
-        var isCapacitor = window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform();
+        var isCapacitor = this.isNativePlatform();
         
         var browser = "Browser";
         if (isCapacitor) browser = "App";
@@ -254,7 +311,7 @@ window.pushNotifications = {
             return { success: false, error: 'Push notifications not supported' };
         }
 
-        if (window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) {
+        if (this.isNativePlatform()) {
             try {
                 log('Native: checking permissions...');
                 let permStatus = await Capacitor.Plugins.FirebaseMessaging.checkPermissions();
@@ -264,7 +321,30 @@ window.pushNotifications = {
                     permStatus = await Capacitor.Plugins.FirebaseMessaging.requestPermissions();
                     log('Native: after prompt, permission is ' + permStatus.receive);
                 }
-                return { success: permStatus.receive === 'granted', permission: permStatus.receive };
+
+                let soundDisabled = false;
+                let alertDisabled = false;
+                if (window.Capacitor?.Plugins?.NotificationCrypto?.getNotificationSettings) {
+                    try {
+                        const settings = await window.Capacitor.Plugins.NotificationCrypto.getNotificationSettings();
+                        if (settings) {
+                            if (settings.authorizationStatus === 'authorized' && !settings.soundEnabled) {
+                                soundDisabled = true;
+                            }
+                            if (settings.authorizationStatus === 'authorized' && !settings.alertEnabled) {
+                                alertDisabled = true;
+                            }
+                            log(`Native iOS Settings: auth=${settings.authorizationStatus}, sound=${settings.soundEnabled}, alert=${settings.alertEnabled}, badge=${settings.badgeEnabled}`);
+                        }
+                    } catch (e) {}
+                }
+
+                return { 
+                    success: permStatus.receive === 'granted', 
+                    permission: permStatus.receive,
+                    soundDisabled: soundDisabled,
+                    alertDisabled: alertDisabled
+                };
             } catch (error) {
                 log('Native permission error: ' + error.message);
                 return { success: false, error: error.message };
@@ -281,7 +361,7 @@ window.pushNotifications = {
 
     // Register the service worker
     registerServiceWorker: async function () {
-        if (window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) {
+        if (this.isNativePlatform()) {
             // Service workers are not required for native push notifications
             return { success: true, scope: 'native' };
         }
@@ -307,7 +387,7 @@ window.pushNotifications = {
             return { success: false, error: 'Push notifications not supported' };
         }
 
-        if (window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) {
+        if (this.isNativePlatform()) {
              log('Native: inside subscribe, initializing FirebaseMessaging...');
              return new Promise(async (resolve) => {
                  const pushPlugin = Capacitor.Plugins.FirebaseMessaging;
@@ -322,6 +402,7 @@ window.pushNotifications = {
                          await pushPlugin.createChannel({ id: 'channel_email', name: 'Emails', description: 'New email notifications', importance: 3, visibility: 1 });
                          await pushPlugin.createChannel({ id: 'channel_chat', name: 'Chat Messages', description: 'Instant messages', importance: 4, visibility: 1, vibration: true });
                          await pushPlugin.createChannel({ id: 'channel_calls', name: 'Incoming Calls', description: 'Voice and video call alerts', importance: 5, visibility: 1, vibration: true });
+                         await pushPlugin.createChannel({ id: 'channel_calendar', name: 'Calendar Reminders', description: 'Calendar event reminders', importance: 4, visibility: 1, vibration: true });
                      }
 
                      // Add a 15-second timeout so the UI doesn't hang forever if APNs fails silently
@@ -495,7 +576,7 @@ window.pushNotifications = {
     // Unsubscribe from push notifications
     unsubscribe: async function () {
         try {
-            if (window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) {
+            if (this.isNativePlatform()) {
                 localStorage.removeItem('spokes_native_push_token');
                 try {
                     const pushPlugin = Capacitor.Plugins.FirebaseMessaging;
@@ -590,7 +671,7 @@ window.pushNotifications = {
     // Get existing subscription (returns null if none)
     getExistingSubscription: async function () {
         try {
-            if (window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) {
+            if (this.isNativePlatform()) {
                 let nativeToken = null;
                 const cachedToken = localStorage.getItem('spokes_native_push_token');
 
@@ -676,6 +757,9 @@ window.pushNotifications = {
     // Send subscription to the server API (with device type and name)
     sendSubscriptionToServer: async function (subscription, deviceType, deviceName, isIdleDetectionEnabled) {
         try {
+            const isCapacitor = this.isNativePlatform();
+            const resolvedDeviceType = isCapacitor ? 'Mobile' : (deviceType || this.detectDeviceType());
+            const resolvedIdleDetection = isCapacitor ? false : isIdleDetectionEnabled;
             const deviceId = await this.getDeviceId();
             
             var hdrs = await window.spokesAuth.getHeaders({ 'Content-Type': 'application/json' });
@@ -689,10 +773,11 @@ window.pushNotifications = {
                     p256dh: subscription.p256dh,
                     auth: subscription.auth,
                     publicKey: subscription.publicKey || subscription.PublicKey || '',
-                    subscriptionType: subscription.subscriptionType || subscription.SubscriptionType || 'WebPush',
-                    deviceType: deviceType || this.detectDeviceType(),
+                    subscriptionType: subscription.subscriptionType || subscription.SubscriptionType || (isCapacitor ? 'NativeRelay' : 'WebPush'),
+                    deviceType: resolvedDeviceType,
                     deviceName: deviceName || '',
-                    isIdleDetectionEnabled: isIdleDetectionEnabled,
+                    isIdleDetectionEnabled: resolvedIdleDetection,
+                    isCapacitor: isCapacitor,
                     deviceId: deviceId
                 })
             });
@@ -753,7 +838,7 @@ window.pushNotifications = {
 
     // Initialize native push listeners (especially notificationActionPerformed)
     initializeNativePushListeners: async function (dotNetRef) {
-        if (!window.Capacitor || !window.Capacitor.isNativePlatform || !window.Capacitor.isNativePlatform()) return;
+        if (!this.isNativePlatform()) return;
         window.spokesDotNetRef = dotNetRef;
         if (window.pendingNotificationRoute) {
              const route = window.pendingNotificationRoute;
@@ -774,6 +859,7 @@ window.pushNotifications = {
     },
 
     isIdleSupported: function () {
+        if (this.isNativePlatform()) return false;
         return 'IdleDetector' in window;
     },
 
@@ -903,7 +989,9 @@ window.pushNotifications = {
                 dotNetRef.invokeMethodAsync('OnTestPushResult', {
                     success: !!event.data.success,
                     fallbackUsed: !!event.data.fallbackUsed,
-                    error: event.data.error || null
+                    error: event.data.error || null,
+                    category: event.data.category || 'chat',
+                    sound: event.data.sound || null
                 });
             }
         });

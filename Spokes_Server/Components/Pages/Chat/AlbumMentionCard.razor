@@ -1,11 +1,10 @@
-@using Spokes_Server.Core.Models.Communication
-@using Spokes_Server.Core.Models.Core
-@inject Spokes_Server.Aggregate.Database Db
-@inject NavigationManager NavManager
 @using Spokes_Server.Core.Services.Security
+@using Spokes_Server.Core.Services.Communication.Chat
+@inject Database Db
+@inject NavigationManager NavManager
 @inject FileTokenService FileTokenService
-@inject Spokes_Server.Core.Services.Security.ScopedKeystoreService ScopedKeystoreService
-@inject Spokes_Server.Core.Services.Communication.Chat.AlbumService AlbumService
+@inject ScopedKeystoreService ScopedKeystoreService
+@inject AlbumService AlbumService
 
 @if (_album == null || !_isAvailableInContext)
 {
@@ -72,7 +71,7 @@ else
     public string? ChannelId { get; set; }
 
     [Parameter, EditorRequired]
-    public List<Employee> Employees { get; set; } = new();
+    public List<Employee> Employees { get; set; } = [];
 
     private Album? _album;
     private bool _isAvailableInContext;

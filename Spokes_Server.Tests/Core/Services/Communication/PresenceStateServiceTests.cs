@@ -1,7 +1,3 @@
-using System;
-using System.Collections.Generic;
-using System.IO;
-using System.Linq;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Moq;
@@ -12,7 +8,6 @@ using Spokes_Server.Core.Data.Repositories.HR;
 using Spokes_Server.Core.Models.Core;
 using Spokes_Server.Core.Services.Communication.Chat;
 using Spokes_Server.Core.Services.Communication.Presence;
-using Xunit;
 
 namespace Spokes_Server.Tests.Core.Services.Communication;
 
@@ -193,8 +188,8 @@ public class PresenceStateServiceTests : IDisposable
         var updated1 = _sessionRepo.GetById("s-active-1");
         var updated2 = _sessionRepo.GetById("s-active-2");
 
-        Assert.True(updated1.LastSeenAt > DateTime.UtcNow.AddMinutes(-1));
-        Assert.True(updated2.LastSeenAt > DateTime.UtcNow.AddMinutes(-1));
+        Assert.True(updated1!.LastSeenAt > DateTime.UtcNow.AddMinutes(-1));
+        Assert.True(updated2!.LastSeenAt > DateTime.UtcNow.AddMinutes(-1));
     }
 
     [Fact]
@@ -256,5 +251,419 @@ public class PresenceStateServiceTests : IDisposable
         // Case 3: When connection is removed -> Not away for push (HasActiveDesktopConnectionForPush is false)
         _service.RemoveConnection("sub-grace-1");
         Assert.False(_service.IsUserAwayFromDesktopForPush("user-grace"));
+    }
+    // RegisterConnection
+    [Fact]
+    public void RegisterConnection_ValidInput_AddsToActiveConnections()
+    {
+        _service.RegisterConnection("user1", "sub1", "Desktop");
+        Assert.True(_service.HasActiveDesktopConnection("user1"));
+    }
+
+    [Fact]
+    public void RegisterConnection_NullSubscription_DoesNothing()
+    {
+        _service.RegisterConnection("user1", null, "Desktop");
+        Assert.False(_service.HasActiveDesktopConnection("user1"));
+    }
+
+    [Fact]
+    public void RegisterConnection_WithPush_UpdatesPushLastSeen()
+    {
+        _service.RegisterConnection("user1", "sub1", "Desktop", true);
+        Assert.NotNull(_service.GetLastSeenOnDesktopForPush("user1"));
+    }
+
+    // SetConnectionFocus
+    [Fact]
+    public void SetConnectionFocus_ExistingSub_UpdatesFocus()
+    {
+        _service.RegisterConnection("user1", "sub1", "Desktop", false, null, false);
+        _service.SetConnectionFocus("user1", "sub1", true);
+        Assert.True(_service.IsUserFocused("user1"));
+    }
+
+    [Fact]
+    public void SetConnectionFocus_NullSub_DoesNothing()
+    {
+        _service.RegisterConnection("user1", "sub1", "Desktop", false, null, false);
+        _service.SetConnectionFocus("user1", null, true);
+        Assert.False(_service.IsUserFocused("user1"));
+    }
+
+    [Fact]
+    public void SetConnectionFocus_NonExistentSub_DoesNothing()
+    {
+        _service.RegisterConnection("user1", "sub1", "Desktop", false, null, false);
+        _service.SetConnectionFocus("user1", "sub2", true);
+        Assert.False(_service.IsUserFocused("user1"));
+    }
+
+    // SetConnectionFocusBySubscription
+    [Fact]
+    public void SetConnectionFocusBySubscription_ValidSub_UpdatesFocus()
+    {
+        _service.RegisterConnection("user1", "sub1", "Desktop", false, null, false);
+        _service.SetConnectionFocusBySubscription("sub1", true);
+        Assert.True(_service.IsUserFocused("user1"));
+    }
+
+    [Fact]
+    public void SetConnectionFocusBySubscription_NullSub_DoesNothing()
+    {
+        _service.RegisterConnection("user1", "sub1", "Desktop", false, null, false);
+        _service.SetConnectionFocusBySubscription(null, true);
+        Assert.False(_service.IsUserFocused("user1"));
+    }
+
+    [Fact]
+    public void SetConnectionFocusBySubscription_NonExistentSub_DoesNothing()
+    {
+        _service.SetConnectionFocusBySubscription("sub2", true);
+        Assert.False(_service.IsUserFocused("user1"));
+    }
+
+    // UpdatePushEnabledState
+    [Fact]
+    public void UpdatePushEnabledState_EnablesPush_UpdatesLastSeen()
+    {
+        _service.RegisterConnection("user1", "sub1", "Desktop", false);
+        _service.UpdatePushEnabledState("sub1", true);
+        Assert.NotNull(_service.GetLastSeenOnDesktopForPush("user1"));
+    }
+
+    [Fact]
+    public void UpdatePushEnabledState_DisablesPush_RemainsFalse()
+    {
+        _service.RegisterConnection("user1", "sub1", "Desktop", true);
+        _service.UpdatePushEnabledState("sub1", false);
+        Assert.False(_service.IsUserFocusedForPush("user1"));
+    }
+
+    [Fact]
+    public void UpdatePushEnabledState_InvalidSub_DoesNothing()
+    {
+        _service.UpdatePushEnabledState("sub1", true);
+        Assert.Null(_service.GetLastSeenOnDesktopForPush("user1"));
+    }
+
+    // IsUserFocused
+    [Fact]
+    public void IsUserFocused_FocusedConnectionExists_ReturnsTrue()
+    {
+        _service.RegisterConnection("user1", "sub1", "Desktop", false, null, true);
+        Assert.True(_service.IsUserFocused("user1"));
+    }
+
+    [Fact]
+    public void IsUserFocused_OnlyUnfocusedConnections_ReturnsFalse()
+    {
+        _service.RegisterConnection("user1", "sub1", "Desktop", false, null, false);
+        Assert.False(_service.IsUserFocused("user1"));
+    }
+
+    [Fact]
+    public void IsUserFocused_NoConnections_ReturnsFalse()
+    {
+        Assert.False(_service.IsUserFocused("user1"));
+    }
+
+    // IsUserAwayFromDesktop
+    [Fact]
+    public void IsUserAwayFromDesktop_NoDesktop_ReturnsFalse()
+    {
+        Assert.False(_service.IsUserAwayFromDesktop("user1"));
+    }
+
+    [Fact]
+    public void IsUserAwayFromDesktop_Focused_ReturnsFalse()
+    {
+        _service.RegisterConnection("user1", "sub1", "Desktop", false, null, true);
+        Assert.False(_service.IsUserAwayFromDesktop("user1"));
+    }
+
+    // IsUserFocusedForPush
+    [Fact]
+    public void IsUserFocusedForPush_FocusedWithPush_ReturnsTrue()
+    {
+        _service.RegisterConnection("user1", "sub1", "Desktop", true, null, true);
+        Assert.True(_service.IsUserFocusedForPush("user1"));
+    }
+
+    [Fact]
+    public void IsUserFocusedForPush_FocusedWithoutPush_ReturnsFalse()
+    {
+        _service.RegisterConnection("user1", "sub1", "Desktop", false, null, true);
+        Assert.False(_service.IsUserFocusedForPush("user1"));
+    }
+
+    [Fact]
+    public void IsUserFocusedForPush_UnfocusedWithPush_ReturnsFalse()
+    {
+        _service.RegisterConnection("user1", "sub1", "Desktop", true, null, false);
+        Assert.False(_service.IsUserFocusedForPush("user1"));
+    }
+
+    // HasActiveDesktopConnectionForPush
+    [Fact]
+    public void HasActiveDesktopConnectionForPush_DesktopWithPush_ReturnsTrue()
+    {
+        _service.RegisterConnection("user1", "sub1", "Desktop", true);
+        Assert.True(_service.HasActiveDesktopConnectionForPush("user1"));
+    }
+
+    [Fact]
+    public void HasActiveDesktopConnectionForPush_DesktopWithoutPush_ReturnsFalse()
+    {
+        _service.RegisterConnection("user1", "sub1", "Desktop", false);
+        Assert.False(_service.HasActiveDesktopConnectionForPush("user1"));
+    }
+
+    [Fact]
+    public void HasActiveDesktopConnectionForPush_MobileWithPush_ReturnsFalse()
+    {
+        _service.RegisterConnection("user1", "sub1", "Mobile", true);
+        Assert.False(_service.HasActiveDesktopConnectionForPush("user1"));
+    }
+
+    // IsGloballyAway
+    [Fact]
+    public void IsGloballyAway_NoConnections_ReturnsFalse()
+    {
+        Assert.False(_service.IsGloballyAway("user1"));
+    }
+
+    [Fact]
+    public void IsGloballyAway_Focused_ReturnsFalse()
+    {
+        _service.RegisterConnection("user1", "sub1", "Desktop", false, null, true);
+        Assert.False(_service.IsGloballyAway("user1"));
+    }
+
+    // HasActiveConnection
+    [Fact]
+    public void HasActiveConnection_Desktop_ReturnsTrue()
+    {
+        _service.RegisterConnection("user1", "sub1", "Desktop", false, null, false);
+        Assert.True(_service.HasActiveConnection("user1"));
+    }
+
+    [Fact]
+    public void HasActiveConnection_FocusedMobile_ReturnsTrue()
+    {
+        _service.RegisterConnection("user1", "sub1", "Mobile", false, null, true);
+        Assert.True(_service.HasActiveConnection("user1"));
+    }
+
+    [Fact]
+    public void HasActiveConnection_UnfocusedMobile_ReturnsFalse()
+    {
+        _service.RegisterConnection("user1", "sub1", "Mobile", false, null, false);
+        Assert.False(_service.HasActiveConnection("user1"));
+    }
+
+    [Fact]
+    public void HasActiveConnection_NoConnections_ReturnsFalse()
+    {
+        Assert.False(_service.HasActiveConnection("user1"));
+    }
+
+    // GetLastSeen
+    [Fact]
+    public void GetLastSeen_MultipleDevices_ReturnsMax()
+    {
+        _service.RegisterConnection("user1", "sub1", "Mobile", false);
+        _service.RegisterConnection("user1", "sub2", "Desktop", false);
+        Assert.NotNull(_service.GetLastSeen("user1"));
+    }
+
+    [Fact]
+    public void GetLastSeen_NoRecords_ReturnsNull()
+    {
+        Assert.Null(_service.GetLastSeen("user1"));
+    }
+
+    [Fact]
+    public void GetLastSeen_SingleDevice_ReturnsValue()
+    {
+        _service.RegisterConnection("user1", "sub1", "Desktop", false);
+        Assert.NotNull(_service.GetLastSeen("user1"));
+    }
+
+    // HasActiveDesktopConnection
+    [Fact]
+    public void HasActiveDesktopConnection_DesktopExists_ReturnsTrue()
+    {
+        _service.RegisterConnection("user1", "sub1", "Desktop", false);
+        Assert.True(_service.HasActiveDesktopConnection("user1"));
+    }
+
+    [Fact]
+    public void HasActiveDesktopConnection_MobileOnly_ReturnsFalse()
+    {
+        _service.RegisterConnection("user1", "sub1", "Mobile", false);
+        Assert.False(_service.HasActiveDesktopConnection("user1"));
+    }
+
+    [Fact]
+    public void HasActiveDesktopConnection_Empty_ReturnsFalse()
+    {
+        Assert.False(_service.HasActiveDesktopConnection("user1"));
+    }
+
+    // GetLastSeenOnDesktop
+    [Fact]
+    public void GetLastSeenOnDesktop_DesktopExists_ReturnsValue()
+    {
+        _service.RegisterConnection("user1", "sub1", "Desktop", false);
+        Assert.NotNull(_service.GetLastSeenOnDesktop("user1"));
+    }
+
+    [Fact]
+    public void GetLastSeenOnDesktop_NoDesktop_ReturnsNull()
+    {
+        _service.RegisterConnection("user1", "sub1", "Mobile", false);
+        Assert.Null(_service.GetLastSeenOnDesktop("user1"));
+    }
+
+    // GetLastSeenOnDesktopForPush
+    [Fact]
+    public void GetLastSeenOnDesktopForPush_PushExists_ReturnsValue()
+    {
+        _service.RegisterConnection("user1", "sub1", "Desktop", true);
+        Assert.NotNull(_service.GetLastSeenOnDesktopForPush("user1"));
+    }
+
+    [Fact]
+    public void GetLastSeenOnDesktopForPush_NoPush_ReturnsNull()
+    {
+        _service.RegisterConnection("user1", "sub1", "Desktop", false);
+        Assert.Null(_service.GetLastSeenOnDesktopForPush("user1"));
+    }
+
+    // WasRecentlySeen
+    [Fact]
+    public void WasRecentlySeen_LessThan15Mins_ReturnsTrue()
+    {
+        _service.RegisterConnection("user1", "sub1", "Desktop", false);
+        Assert.True(_service.WasRecentlySeen("user1"));
+    }
+
+    [Fact]
+    public void WasRecentlySeen_NoRecord_ReturnsFalse()
+    {
+        Assert.False(_service.WasRecentlySeen("user1"));
+    }
+
+    // WasRecentlySeenOnDesktop
+    [Fact]
+    public void WasRecentlySeenOnDesktop_LessThan15Mins_ReturnsTrue()
+    {
+        _service.RegisterConnection("user1", "sub1", "Desktop", false);
+        Assert.True(_service.WasRecentlySeenOnDesktop("user1"));
+    }
+
+    [Fact]
+    public void WasRecentlySeenOnDesktop_NoRecord_ReturnsFalse()
+    {
+        Assert.False(_service.WasRecentlySeenOnDesktop("user1"));
+    }
+
+    // WasRecentlySeenOnDesktopForPush
+    [Fact]
+    public void WasRecentlySeenOnDesktopForPush_LessThan90Secs_ReturnsTrue()
+    {
+        _service.RegisterConnection("user1", "sub1", "Desktop", true);
+        Assert.True(_service.WasRecentlySeenOnDesktopForPush("user1"));
+    }
+
+    [Fact]
+    public void WasRecentlySeenOnDesktopForPush_NoRecord_ReturnsFalse()
+    {
+        Assert.False(_service.WasRecentlySeenOnDesktopForPush("user1"));
+    }
+
+    // PingUserActive
+    [Fact]
+    public void PingUserActive_WithConnections_UpdatesLastSeen()
+    {
+        _service.RegisterConnection("user1", "sub1", "Desktop", false);
+        _service.PingUserActive("user1");
+        Assert.NotNull(_service.GetLastSeen("user1"));
+    }
+
+    [Fact]
+    public void PingUserActive_NoConnections_UpdatesUnknownDevice()
+    {
+        _service.PingUserActive("user1");
+        Assert.NotNull(_service.GetLastSeen("user1"));
+    }
+
+    [Fact]
+    public void PingUserActive_UpdatesSession()
+    {
+        var session = new DeviceSession { Id = "session1", EmployeeId = "user1", LastSeenAt = DateTime.UtcNow.AddMinutes(-10) };
+        _sessionRepo.Save(session);
+        _service.RegisterConnection("user1", "sub1", "Desktop", false, "session1");
+        
+        _service.PingUserActive("user1");
+        
+        var updated = _sessionRepo.GetById("session1");
+        Assert.True(updated!.LastSeenAt > DateTime.UtcNow.AddMinutes(-1));
+    }
+
+    // GetOnlineSessions
+    [Fact]
+    public void GetOnlineSessions_ReturnsDistinctSessionIds()
+    {
+        _service.RegisterConnection("user1", "sub1", "Desktop", false, "session1");
+        _service.RegisterConnection("user1", "sub2", "Mobile", false, "session1");
+        _service.RegisterConnection("user2", "sub3", "Desktop", false, "session2");
+        
+        var sessions = _service.GetOnlineSessions().ToList();
+        Assert.Equal(2, sessions.Count);
+        Assert.Contains("session1", sessions);
+        Assert.Contains("session2", sessions);
+    }
+
+    [Fact]
+    public void GetOnlineSessions_NoSessions_ReturnsEmpty()
+    {
+        Assert.Empty(_service.GetOnlineSessions());
+    }
+
+    [Fact]
+    public void GetOnlineSessions_IgnoresNullSessionIds()
+    {
+        _service.RegisterConnection("user1", "sub1", "Desktop", false, null);
+        Assert.Empty(_service.GetOnlineSessions());
+    }
+
+    // TriggerRemoteLogout
+    [Fact]
+    public void TriggerRemoteLogout_ValidSession_FiresEvent()
+    {
+        bool fired = false;
+        _service.OnSessionRevoked += (s) => { if (s == "session1") fired = true; };
+        _service.TriggerRemoteLogout("session1");
+        Assert.True(fired);
+    }
+
+    [Fact]
+    public void TriggerRemoteLogout_NullSession_DoesNotFireEvent()
+    {
+        bool fired = false;
+        _service.OnSessionRevoked += (s) => { fired = true; };
+        _service.TriggerRemoteLogout(null!);
+        Assert.False(fired);
+    }
+
+    [Fact]
+    public void TriggerRemoteLogout_EmptySession_DoesNotFireEvent()
+    {
+        bool fired = false;
+        _service.OnSessionRevoked += (s) => { fired = true; };
+        _service.TriggerRemoteLogout("");
+        Assert.False(fired);
     }
 }

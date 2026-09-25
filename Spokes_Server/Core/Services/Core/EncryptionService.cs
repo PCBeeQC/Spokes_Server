@@ -1,8 +1,4 @@
-using Spokes_Server.Core.Services.Communication;
-using Spokes_Server.Core.Services.Projects;
-using Spokes_Server.Core.Services.Core;
 using System.Security.Cryptography;
-using System.Text;
 using Microsoft.Extensions.Configuration;
 
 namespace Spokes_Server.Core.Services.Core;
@@ -38,8 +34,7 @@ public class EncryptionService
 
         if (_key != null)
         {
-            using var sha = SHA256.Create();
-            KeyHash = Convert.ToBase64String(sha.ComputeHash(_key));
+            KeyHash = Convert.ToBase64String(SHA256.HashData(_key));
         }
     }
 
@@ -56,7 +51,7 @@ public class EncryptionService
         using var ms = new MemoryStream();
 
         // Prepend IV to the stream
-        ms.Write(aes.IV, 0, aes.IV.Length);
+        ms.Write(aes.IV);
 
         using (var cs = new CryptoStream(ms, encryptor, CryptoStreamMode.Write))
         using (var sw = new StreamWriter(cs))
@@ -97,4 +92,3 @@ public class EncryptionService
         }
     }
 }
-

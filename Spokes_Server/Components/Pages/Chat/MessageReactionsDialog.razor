@@ -1,7 +1,3 @@
-@using Spokes_Server.Core.Models.Communication
-@using Spokes_Server.Core.Models.HR
-@using MudBlazor
-
 <MudDialog>
     <TitleContent>
         <div class="d-flex align-center gap-2">
@@ -73,20 +69,20 @@
 @code {
     [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
     [Parameter] public ChatMessage Message { get; set; } = new();
-    [Parameter] public List<Employee> Employees { get; set; } = new();
+    [Parameter] public List<Employee> Employees { get; set; } = [];
     
     [Parameter] public bool IsReadReceiptMode { get; set; }
-    [Parameter] public List<string> ReadReceiptUserIds { get; set; } = new();
+    [Parameter] public List<string> ReadReceiptUserIds { get; set; } = [];
 
-    private Dictionary<string, List<Employee>> _reactionGroups = new();
+    private Dictionary<string, List<Employee>> _reactionGroups = [];
 
     protected override void OnInitialized()
     {
-        var groups = new Dictionary<string, List<Employee>>();
+        Dictionary<string, List<Employee>> groups = [];
         
         if (IsReadReceiptMode)
         {
-            var readers = new List<Employee>();
+            List<Employee> readers = [];
             foreach (var userId in ReadReceiptUserIds)
             {
                 if (userId == Message.SenderId) continue; // Exclude the sender
@@ -115,11 +111,11 @@
                     var emp = Employees.FirstOrDefault(e => e.Id == userId);
                     if (emp != null)
                     {
-                        if (!groups.ContainsKey(emoji))
+                        if (!groups.TryGetValue(emoji, out var list))
                         {
-                            groups[emoji] = new List<Employee>();
+                            groups[emoji] = list = [];
                         }
-                        groups[emoji].Add(emp);
+                        list.Add(emp);
                     }
                 }
             }

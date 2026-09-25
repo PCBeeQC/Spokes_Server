@@ -1,7 +1,3 @@
-@using MudBlazor
-@using Spokes_Server.Core.Models.Core
-@using Spokes_Server.Core.Services.Core
-
 <MudPaper Elevation="0" Outlined="true" Class="pa-4 mt-4">
     <div class="d-flex justify-space-between align-center mb-4">
         <MudText Typo="Typo.subtitle1" Style="font-weight: bold;">Document Blocks</MudText>
@@ -11,7 +7,7 @@
         </MudButton>
     </div>
 
-    @if (Blocks == null || !Blocks.Any())
+    @if (Blocks is not { Count: > 0 })
     {
         <MudText Typo="Typo.body2" Color="Color.Secondary">No blocks added yet.</MudText>
     }
@@ -228,8 +224,5 @@
         }
     }
 
-    private async Task NotifyChanged()
-    {
-        await BlocksChanged.InvokeAsync(Blocks);
-    }
+    private Task NotifyChanged() => BlocksChanged.InvokeAsync(Blocks);
 }

@@ -1,6 +1,3 @@
-@using MudBlazor
-@using Spokes_Server.Core.Models.Communication
-
 <MudDialog>
     <DialogContent>
         <MudText Typo="Typo.body2" Class="mb-4">Please select a reason for reporting this message.</MudText>
@@ -29,10 +26,7 @@
 
     private string _reason = string.Empty;
 
-    private void Close()
-    {
-        MudDialog.Cancel();
-    }
+    private void Close() => MudDialog.Cancel();
 
     private void Submit()
     {

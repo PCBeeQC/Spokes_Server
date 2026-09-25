@@ -1,12 +1,3 @@
-@using Spokes_Server.Core.Models.Core
-@using Spokes_Server.Core.Models.Projects
-@using Spokes_Server.Core.Models.Accounting
-@using Spokes_Server.Core.Models.Communication
-@using Spokes_Server.Core.Models.HR
-@using Spokes_Server.Core.Data
-@using Spokes_Server.Core.Helpers
-@inject Database Db
-
 <MudPaper Elevation="0" Class="pa-2" Style="border-bottom: 1px solid var(--mud-palette-divider);">
     <div class="d-flex align-center gap-2">
         <MudIconButton Icon="@Icons.Material.Filled.ArrowBack" Size="Size.Small" Class="d-md-none mr-2"
@@ -129,12 +120,12 @@
     [Parameter] public EventCallback OnJoinVoice { get; set; }
     [Parameter] public string NotificationLevel { get; set; } = "All";
     [Parameter] public EventCallback<string> OnNotificationLevelChanged { get; set; }
-    [Parameter] public List<Employee> Employees { get; set; } = new();
+    [Parameter] public List<Employee> Employees { get; set; } = [];
     [Parameter] public EventCallback<string> OnSearchResultSelected { get; set; }
     [Parameter] public EventCallback OnToggleInfo { get; set; }
     [Parameter] public bool ShowInfoPanel { get; set; }
 
-    private bool _showSearch = false;
+    private bool _showSearch;
 
     private void ToggleSearch()
     {

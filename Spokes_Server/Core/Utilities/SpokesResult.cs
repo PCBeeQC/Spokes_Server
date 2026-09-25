@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace Spokes_Server.Core.Utilities;
 
 /// <summary>
@@ -10,7 +12,7 @@ public class SpokesResult<T>
     public T? Value { get; }
     public string? ErrorMessage { get; }
     
-    [System.Text.Json.Serialization.JsonIgnore]
+    [JsonIgnore]
     public Exception? Exception { get; }
 
     private SpokesResult(bool isSuccess, T? value, string? errorMessage, Exception? exception = null)
@@ -31,7 +33,7 @@ public class SpokesResult
     public bool IsSuccess { get; }
     public string? ErrorMessage { get; }
     
-    [System.Text.Json.Serialization.JsonIgnore]
+    [JsonIgnore]
     public Exception? Exception { get; }
 
     private SpokesResult(bool isSuccess, string? errorMessage, Exception? exception = null)

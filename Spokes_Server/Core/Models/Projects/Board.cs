@@ -1,15 +1,7 @@
 namespace Spokes_Server.Core.Models.Projects;
 
-using Spokes_Server.Core.Models.Core;
-using Spokes_Server.Core.Models.Accounting;
-using Spokes_Server.Core.Models.Communication;
-using Spokes_Server.Core.Models.HR;
-
-using Spokes_Server.Core.Data;
 using System.Text.Json.Serialization;
-
-
-
+using Spokes_Server.Core.Data;
 
 public class Board : IDataEntity
 {
@@ -18,10 +10,7 @@ public class Board : IDataEntity
     public override bool Equals(object? obj)
     {
         if (ReferenceEquals(this, obj)) return true;
-        if (obj == null || GetType() != obj.GetType())
-            return false;
-        var other = (Board)obj;
-        return Id == other.Id;
+        return obj is Board other && Id == other.Id;
     }
 
     public override int GetHashCode() => Id?.GetHashCode() ?? base.GetHashCode();
@@ -33,14 +22,14 @@ public class Board : IDataEntity
 
     // --- PERMISSIONS ---
     public string OwnerId { get; set; } = string.Empty; // EmployeeId of creator
-    public List<string> MemberIds { get; set; } = new(); // List of EmployeeIds who have access
-    public bool IsPublic { get; set; } = false; // If true, visible to everyone (read-only or edit? let's assume edit for now or just visibility)
+    public List<string> MemberIds { get; set; } = []; // List of EmployeeIds who have access
+    public bool IsPublic { get; set; } // If true, visible to everyone (read-only or edit? let's assume edit for now or just visibility)
 
     // --- SCHEMA DEFINTION ---
-    public List<BoardProperty> Properties { get; set; } = new();
+    public List<BoardProperty> Properties { get; set; } = [];
 
     // --- VIEW DEFINITIONS ---
-    public List<BoardView> Views { get; set; } = new();
+    public List<BoardView> Views { get; set; } = [];
 }
 
 public class BoardProperty
@@ -50,7 +39,7 @@ public class BoardProperty
     public BoardPropertyType Type { get; set; } = BoardPropertyType.Text;
 
     // For Select/MultiSelect options
-    public List<BoardPropertyOption> Options { get; set; } = new();
+    public List<BoardPropertyOption> Options { get; set; } = [];
 }
 
 public class BoardPropertyOption
@@ -74,14 +63,14 @@ public class BoardView
     public string? DatePropertyId { get; set; }
 
     // Ordered list of visible columns (PropertyIds)
-    public List<string> VisiblePropertyIds { get; set; } = new();
+    public List<string> VisiblePropertyIds { get; set; } = [];
 
     // --- NEW PHASE 2 FEATURES ---
-    public List<BoardViewFilter> Filters { get; set; } = new();
-    public List<BoardViewSortOption> SortOptions { get; set; } = new();
+    public List<BoardViewFilter> Filters { get; set; } = [];
+    public List<BoardViewSortOption> SortOptions { get; set; } = [];
 
     // Key: PropertyId, Value: CalculationType (e.g. "count", "sum", "average")
-    public Dictionary<string, string> ColumnCalculations { get; set; } = new();
+    public Dictionary<string, string> ColumnCalculations { get; set; } = [];
 }
 
 public class BoardViewFilter

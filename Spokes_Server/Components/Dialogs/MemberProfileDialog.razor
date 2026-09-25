@@ -1,13 +1,11 @@
-@using Spokes_Server.Core.Models.HR
-@using MudBlazor
-@using Spokes_Server.Core.Services
+@using Spokes_Server.Core.Constants
 @implements IDisposable
 
 @inject PresenceStateService PresenceState
 @inject ChatService ChatService
 @inject NavigationManager Nav
 @inject UserService UserService
-@inject Spokes_Server.Aggregate.Database Database
+@inject Database Database
 @inject ISnackbar Snackbar
 
 <MudDialog DisableSidePadding="true">
@@ -82,7 +80,7 @@
                      </MudItem>
                  }
 
-                 @if (!string.IsNullOrEmpty(Employee.PhoneNumber) && (IsFriendEdition || _currentUser?.IsAdmin == true || _currentUser?.Id == Employee.Id || _currentUser?.HasPermission(Spokes_Server.Core.Constants.AppPermissions.Admin.ManageUsers) == true))
+                 @if (!string.IsNullOrEmpty(Employee.PhoneNumber) && (IsFriendEdition || _currentUser?.IsAdmin == true || _currentUser?.Id == Employee.Id || _currentUser?.HasPermission(AppPermissions.Admin.ManageUsers) == true))
                  {
                      <MudItem xs="12" sm="12">
                          <div class="d-flex align-center gap-3 mb-2">
@@ -92,7 +90,7 @@
                      </MudItem>
                  }
                  
-                 @if (!string.IsNullOrEmpty(Employee.Address) && (IsFriendEdition || _currentUser?.IsAdmin == true || _currentUser?.Id == Employee.Id || _currentUser?.HasPermission(Spokes_Server.Core.Constants.AppPermissions.Admin.ManageUsers) == true))
+                 @if (!string.IsNullOrEmpty(Employee.Address) && (IsFriendEdition || _currentUser?.IsAdmin == true || _currentUser?.Id == Employee.Id || _currentUser?.HasPermission(AppPermissions.Admin.ManageUsers) == true))
                  {
                      <MudItem xs="12" sm="12">
                          <div class="d-flex align-start gap-3 mb-2">
@@ -118,7 +116,7 @@
                      </MudItem>
                  }
 
-                 @if (_currentUser?.HasPermission(Spokes_Server.Core.Constants.AppPermissions.Chat.Moderator) == true && !(Employee.IsAdmin || Employee.HasPermission(Spokes_Server.Core.Constants.AppPermissions.Chat.Moderator)))
+                 @if (_currentUser?.HasPermission(AppPermissions.Chat.Moderator) == true && !(Employee.IsAdmin || Employee.HasPermission(AppPermissions.Chat.Moderator)))
                  {
                      <MudItem xs="12" Class="mt-4 pt-4" Style="border-top: 1px solid var(--mud-palette-lines-default);">
                          <MudText Typo="Typo.subtitle2" Color="Color.Error" Class="mb-3 d-flex align-center gap-2">
@@ -187,10 +185,7 @@
         }
     }
 
-    private void Close()
-    {
-        MudDialog.Cancel();
-    }
+    private void Close() => MudDialog.Cancel();
 
     private async Task ToggleBlock()
     {

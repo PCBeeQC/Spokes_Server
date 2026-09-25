@@ -1,19 +1,10 @@
 @page "/business/capacity"
+@attribute [Authorize(Policy = AppPermissions.Finance.TeamCapacity)]
 @implements IDisposable
-@using Spokes_Server.Core.Data
-@using Spokes_Server.Core.Models.Core
-@using Spokes_Server.Core.Models.Projects
-@using Spokes_Server.Core.Models.Accounting
-@using Spokes_Server.Core.Models.Communication
-@using Spokes_Server.Core.Models.HR
-@using MudBlazor
 @using System.Globalization
+@using Spokes_Server.Core.Constants
 @inject Database Db
 @inject NavigationManager Nav
-@using Microsoft.AspNetCore.Components.Authorization
-@inject AuthenticationStateProvider AuthStateProvider
-@using Spokes_Server.Core.Constants
-@attribute [Authorize(Policy = AppPermissions.Finance.TeamCapacity)]
 
 <PageTitle>Team Capacity</PageTitle>
 
@@ -213,8 +204,8 @@
 
     // Data Models
     private TeamMetricViewModel? CompanyMetrics;
-    private List<TeamMetricViewModel> TeamMetrics = new();
-    private List<EmployeeUtilizationViewModel> FlatPlanList = new();
+    private List<TeamMetricViewModel> TeamMetrics = [];
+    private List<EmployeeUtilizationViewModel> FlatPlanList = [];
 
     protected override async Task OnInitializedAsync()
     {

@@ -1,43 +1,43 @@
 using Spokes_Server.Core.Models.Communication;
 using Spokes_Server.Core.Models.HR;
 
-namespace Spokes_Server.Tests.Components.Pages.Chat
+namespace Spokes_Server.Tests.Components.Pages.Chat;
+
+public class ChatCategoryOrderingTests
 {
-    public class ChatCategoryOrderingTests
+    private static List<ChatCategory> CreateDefaultCategories()
     {
-        private static List<ChatCategory> CreateDefaultCategories()
+        return
+        [
+            new ChatCategory { Id = "sys_public", Name = "Public", DisplayOrder = 0, IsSystem = true },
+            new ChatCategory { Id = "sys_projects", Name = "Projects", DisplayOrder = 1, IsSystem = true },
+            new ChatCategory { Id = "sys_teams", Name = "Teams", DisplayOrder = 2, IsSystem = true },
+            new ChatCategory { Id = "sys_groups", Name = "Group Chats", DisplayOrder = 3, IsSystem = true },
+            new ChatCategory { Id = "sys_direct", Name = "Direct Messages", DisplayOrder = 4, IsSystem = true },
+            new ChatCategory { Id = "sys_archive", Name = "Archived", DisplayOrder = 10000, IsSystem = true }
+        ];
+    }
+
+    private static List<ChatCategory> Reposition(List<ChatCategory> allCategories, string catId, string targetCatId, bool placeBefore)
+    {
+        var nonArchive = allCategories.Where(c => c.Id != "sys_archive").ToList();
+        var cat = nonArchive.First(c => c.Id == catId);
+        nonArchive.RemoveAll(c => c.Id == catId);
+
+        int targetIdx = nonArchive.FindIndex(c => c.Id == targetCatId);
+        Assert.True(targetIdx >= 0, "Target category must exist in list");
+
+        int insertIdx = placeBefore ? targetIdx : targetIdx + 1;
+        nonArchive.Insert(insertIdx, cat);
+
+        var archive = allCategories.FirstOrDefault(c => c.Id == "sys_archive");
+        if (archive is not null)
         {
-            return new List<ChatCategory>
-            {
-                new ChatCategory { Id = "sys_public", Name = "Public", DisplayOrder = 0, IsSystem = true },
-                new ChatCategory { Id = "sys_projects", Name = "Projects", DisplayOrder = 1, IsSystem = true },
-                new ChatCategory { Id = "sys_teams", Name = "Teams", DisplayOrder = 2, IsSystem = true },
-                new ChatCategory { Id = "sys_groups", Name = "Group Chats", DisplayOrder = 3, IsSystem = true },
-                new ChatCategory { Id = "sys_direct", Name = "Direct Messages", DisplayOrder = 4, IsSystem = true },
-                new ChatCategory { Id = "sys_archive", Name = "Archived", DisplayOrder = 10000, IsSystem = true }
-            };
+            nonArchive.Add(archive);
         }
 
-        private static List<ChatCategory> Reposition(List<ChatCategory> allCategories, string catId, string targetCatId, bool placeBefore)
-        {
-            var nonArchive = allCategories.Where(c => c.Id != "sys_archive").ToList();
-            var cat = nonArchive.First(c => c.Id == catId);
-            nonArchive.RemoveAll(c => c.Id == catId);
-
-            int targetIdx = nonArchive.FindIndex(c => c.Id == targetCatId);
-            Assert.True(targetIdx >= 0, "Target category must exist in list");
-
-            int insertIdx = placeBefore ? targetIdx : targetIdx + 1;
-            nonArchive.Insert(insertIdx, cat);
-
-            var archive = allCategories.FirstOrDefault(c => c.Id == "sys_archive");
-            if (archive != null)
-            {
-                nonArchive.Add(archive);
-            }
-
-            return nonArchive;
-        }
+        return nonArchive;
+    }
 
         [Fact]
         public void Reposition_MoveDirectAbovePublic_MovesDirectToFrontInSingleStep()
@@ -116,6 +116,5 @@ namespace Spokes_Server.Tests.Components.Pages.Chat
             Assert.Equal(3, emp.CustomCategoryOrder["sys_groups"]);
             Assert.Equal(4, emp.CustomCategoryOrder["sys_direct"]);
             Assert.Equal(10000, emp.CustomCategoryOrder["sys_archive"]);
-        }
     }
 }

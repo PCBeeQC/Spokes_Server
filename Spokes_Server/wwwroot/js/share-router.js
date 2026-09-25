@@ -85,7 +85,7 @@ window.spokesShareRouter = {
                     const fallbackSvg = 'data:image/svg+xml;utf8,<svg width="36" height="36" viewBox="0 0 24 24" fill="%2392929f" xmlns="http://www.w3.org/2000/svg"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8z"/></svg>';
                     this.src = fallbackSvg;
                     
-                    if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.Filesystem) {
+                    if (window.Capacitor?.Plugins?.Filesystem) {
                         const fileName = 'spokes_icon_' + btoa(server.url).replace(/=/g, '') + '.txt';
                         window.Capacitor.Plugins.Filesystem.readFile({
                             path: fileName,
@@ -195,7 +195,7 @@ window.spokesShareRouter = {
             const plainTexts = [];
             for (const t of raw.texts) {
                 // Some apps pack "Title\nURL" as a single string — split on newline
-                const lines = t.split('\n').map(l => l.trim()).filter(l => l);
+                const lines = t.split('\n').map(l => l.trim()).filter(Boolean);
                 for (const line of lines) {
                     try { new URL(line); urls.push(line); } catch { plainTexts.push(line); }
                 }

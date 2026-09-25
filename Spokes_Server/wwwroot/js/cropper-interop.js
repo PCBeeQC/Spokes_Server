@@ -1,7 +1,7 @@
 window.spokesCroppers = {};
 
 window.initCropper = (elementId) => {
-    var el = document.getElementById(elementId);
+    const el = document.getElementById(elementId);
     if (!el) return;
 
     if (window.spokesCroppers[elementId]) {
@@ -25,21 +25,21 @@ window.initCropper = (elementId) => {
 };
 
 window.getCroppedImage = (elementId, width) => {
-    var cropper = window.spokesCroppers[elementId];
+    const cropper = window.spokesCroppers[elementId];
     if (!cropper) return null;
 
-    var canvas = cropper.getCroppedCanvas({
+    const canvas = cropper.getCroppedCanvas({
         width: width,
         height: width,
         imageSmoothingEnabled: true,
-        imageSmoothingQuality: 'high',
+        imageSmoothingQuality: 'high'
     });
     
     return canvas ? canvas.toDataURL("image/jpeg", 0.9) : null;
 };
 
 window.destroyCropper = (elementId) => {
-    var cropper = window.spokesCroppers[elementId];
+    const cropper = window.spokesCroppers[elementId];
     if (cropper) {
         cropper.destroy();
         delete window.spokesCroppers[elementId];

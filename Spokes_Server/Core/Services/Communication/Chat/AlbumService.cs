@@ -1,12 +1,7 @@
 using Spokes_Server.Core.Data.Repositories.Communication;
-using Spokes_Server.Core.Data.Repositories.Core;
 using Spokes_Server.Core.Data.Repositories.HR;
 using Spokes_Server.Core.Models.Communication;
 using Spokes_Server.Core.Services.Security;
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Threading.Tasks;
 
 namespace Spokes_Server.Core.Services.Communication.Chat;
 
@@ -29,7 +24,7 @@ public class AlbumService
         _employees = employees;
     }
 
-    public async Task<Album> CreateAlbumAsync(Album album, string ownerId, string? ownerPrivateKey)
+    public Task<Album> CreateAlbumAsync(Album album, string ownerId, string? ownerPrivateKey)
     {
         album.OwnerId = ownerId;
         album.IsEncrypted = true;
@@ -54,7 +49,7 @@ public class AlbumService
         
         _albums.Save(album);
         OnAlbumUpdated?.Invoke(album.Id);
-        return album;
+        return Task.FromResult(album);
     }
 
     public string? GetPlainAlbumKey(Album album, string currentUserId, string? currentPrivateKey)
@@ -149,12 +144,11 @@ public class AlbumService
                 album.EncryptedAlbumKeys.Remove($"Channel_{channelId}");
 
                 var owner = _employees.GetById(album.OwnerId);
-                bool hasUnencryptedChannels = false;
-                foreach (var cId in updatedSharedChannels)
+                bool hasUnencryptedChannels = updatedSharedChannels.Any(cId =>
                 {
                     var c = _channels.GetById(cId);
-                    if (c != null && !c.IsEncrypted) hasUnencryptedChannels = true;
-                }
+                    return c != null && !c.IsEncrypted;
+                });
 
                 if (!hasUnencryptedChannels && owner != null && owner.HasChatPassword)
                 {
@@ -192,7 +186,7 @@ public class AlbumService
 
     public List<AlbumMedia> UpdateContributors(string albumId, string currentUserId, IEnumerable<string> newContributorIds, string? currentPrivateKey)
     {
-        var removedMedia = new List<AlbumMedia>();
+        List<AlbumMedia> removedMedia = [];
         var album = _albums.GetById(albumId);
         if (album == null || album.OwnerId != currentUserId) return removedMedia;
 
@@ -200,7 +194,7 @@ public class AlbumService
         {
             var existingContributors = new HashSet<string>(album.ContributorUserIds);
             var newContributors = new HashSet<string>(newContributorIds);
-            var removedContributors = new List<string>();
+            List<string> removedContributors = [];
 
             foreach (var existing in existingContributors)
             {
@@ -288,7 +282,7 @@ public class AlbumService
 
     public List<AlbumMedia> RemoveMediaBulk(string albumId, string currentUserId, IEnumerable<string> mediaIds)
     {
-        var removedItems = new List<AlbumMedia>();
+        List<AlbumMedia> removedItems = [];
         var album = _albums.GetById(albumId);
         if (album == null) return removedItems;
         

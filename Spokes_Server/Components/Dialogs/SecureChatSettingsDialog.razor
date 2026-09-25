@@ -1,7 +1,4 @@
-@using Spokes_Server.Core.Data
-@using Spokes_Server.Core.Models.HR
-@using Spokes_Server.Core.Services.Communication
-@using MudBlazor
+@using Microsoft.Extensions.Configuration
 @inject Database Db
 @inject ISnackbar Snackbar
 @inject ICryptoService Crypto
@@ -9,7 +6,7 @@
 @inject ScopedKeystoreService ScopedKeystore
 @inject ChatService ChatService
 @inject IJSRuntime JS
-@inject Microsoft.Extensions.Configuration.IConfiguration Config
+@inject IConfiguration Config
 
 <MudDialog>
     <DialogContent>

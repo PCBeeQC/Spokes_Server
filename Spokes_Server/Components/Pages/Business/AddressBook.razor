@@ -1,15 +1,7 @@
 @page "/business/address-book"
-@using Microsoft.AspNetCore.Authorization
-@using Spokes_Server.Core.Constants
-@using Spokes_Server.Core.Data
 @attribute [Authorize(Policy = AppPermissions.AddressBook.View)]
-@using Spokes_Server.Core.Models.Core
-@using Spokes_Server.Core.Models.Projects
-@using Spokes_Server.Core.Models.Accounting
-@using Spokes_Server.Core.Models.Communication
-@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Constants
 @using Spokes_Server.Components.Dialogs
-@using MudBlazor
 @inject Database Db
 @inject IDialogService DialogService
 @inject ISnackbar Snackbar
@@ -55,7 +47,7 @@
     </div>
     <MudTabs @bind-ActivePanelIndex="_activeTabIndex" Elevation="0" Outlined="true" Border="true" ApplyEffectsToContainer="true" Rounded="true" TabPanelsClass="pa-4">
         <MudTabPanel Text="Companies">
-            <MudTable Items="@Suppliers" Dense="true" Striped="true" Outlined="true" Elevation="0" Hover="true" Filter="new Func<Supplier, bool>(FilterSuppliers)">
+            <MudTable Items="@Suppliers" Dense="true" Striped="true" Outlined="true" Elevation="0" Hover="true" Filter="FilterSuppliers">
                 <ToolBarContent>
                     <MudText Typo="Typo.h6">Contacts</MudText>
                     <MudSpacer />
@@ -121,7 +113,7 @@
         </MudTabPanel>
 
         <MudTabPanel Text="Public Contacts">
-            <MudTable Items="@PublicContacts" Dense="true" Striped="true" Outlined="true" Elevation="0" Hover="true" Filter="new Func<ContactPerson, bool>(FilterPublicContacts)">
+            <MudTable Items="@PublicContacts" Dense="true" Striped="true" Outlined="true" Elevation="0" Hover="true" Filter="FilterPublicContacts">
                 <ToolBarContent>
                     <MudText Typo="Typo.h6">Public Contacts</MudText>
                     <MudSpacer />
@@ -159,16 +151,16 @@
 </MudContainer>
 
 @code {
-    private int _activeTabIndex = 0;
+    private int _activeTabIndex;
     
     // Companies Tab
-    private List<Supplier> Suppliers = new();
+    private List<Supplier> Suppliers = [];
     private string searchString = "";
 
     // Public Contacts Tab
-    private List<ContactPerson> PublicContacts = new();
+    private List<ContactPerson> PublicContacts = [];
     private string searchStringPublic = "";
-    private bool CanManage = false;
+    private bool CanManage;
 
     protected override async Task OnInitializedAsync()
     {
@@ -325,7 +317,7 @@
             using var reader = new System.IO.StreamReader(stream);
             var content = await reader.ReadToEndAsync();
             
-            var cards = content.Split(new[] { "BEGIN:VCARD" }, StringSplitOptions.RemoveEmptyEntries);
+            var cards = content.Split(["BEGIN:VCARD"], StringSplitOptions.RemoveEmptyEntries);
             int importedCount = 0;
             int skippedCount = 0;
             
@@ -333,7 +325,7 @@
             {
                 if (!card.Contains("END:VCARD")) continue;
                 
-                var lines = card.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.RemoveEmptyEntries);
+                var lines = card.Split(["\r\n", "\r", "\n"], StringSplitOptions.RemoveEmptyEntries);
                 var contact = new ContactPerson();
                 
                 foreach (var line in lines)

@@ -1,8 +1,5 @@
 using Microsoft.AspNetCore.Mvc;
 using Spokes_Server.Aggregate;
-using Spokes_Server.Core.Data.Repositories.Core;
-using Spokes_Server.Core.Models.Core;
-using System;
 
 namespace Spokes_Server.Controllers
 {
@@ -70,10 +67,7 @@ namespace Spokes_Server.Controllers
         public IActionResult GetLogo(string token)
         {
             if (!ValidateToken(token)) return Unauthorized();
-
-            var profile = _db.CompanyProfile.Get();
-            if (string.IsNullOrEmpty(profile.LogoBase64) || profile.LogoBase64 == "null") return DefaultIcon();
-            return ServeImage(profile.LogoBase64);
+            return ServeImage(_db.CompanyProfile.Get().LogoBase64);
         }
 
         [HttpGet("{token}/icon")]
@@ -82,10 +76,7 @@ namespace Spokes_Server.Controllers
         public IActionResult GetIcon(string token)
         {
             if (!ValidateToken(token)) return Unauthorized();
-
-            var profile = _db.CompanyProfile.Get();
-            if (string.IsNullOrEmpty(profile.IconBase64) || profile.IconBase64 == "null") return DefaultIcon();
-            return ServeImage(profile.IconBase64);
+            return ServeImage(_db.CompanyProfile.Get().IconBase64);
         }
     }
 }

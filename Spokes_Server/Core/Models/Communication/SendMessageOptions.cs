@@ -1,5 +1,3 @@
-using System.Collections.Generic;
-
 namespace Spokes_Server.Core.Models.Communication;
 
 public class SendMessageOptions

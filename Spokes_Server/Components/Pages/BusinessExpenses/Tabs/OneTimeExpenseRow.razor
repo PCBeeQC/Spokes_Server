@@ -1,14 +1,9 @@
-@using Spokes_Server.Core.Models.Core
-@using Spokes_Server.Core.Models.Projects
 @using Spokes_Server.Core.Models.Accounting
-@using Spokes_Server.Core.Models.Communication
-@using Spokes_Server.Core.Models.HR
 @using Spokes_Server.Core.Data
 @using Spokes_Server.Core.Services
 @inject Database Db
 @inject ISnackbar Snackbar
 @inject IDialogService DialogService
-@inject IFileService FileService
 
 <MudTd DataLabel="Name">@Expense.Name</MudTd>
 <MudTd DataLabel="Amount">@Expense.Amount.ToString("C2")</MudTd>

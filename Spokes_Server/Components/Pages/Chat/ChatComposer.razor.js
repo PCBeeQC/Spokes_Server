@@ -97,9 +97,9 @@ export function initComposer(textareaId, preventEnter, autofocus, dotNetHelper) 
         const items = e.clipboardData.items;
         const files = [];
 
-        for (let i = 0; i < items.length; i++) {
-            if (items[i].kind === 'file') {
-                const file = items[i].getAsFile();
+        for (const item of items) {
+            if (item.kind === 'file') {
+                const file = item.getAsFile();
                 if (file) files.push(file);
             }
         }
@@ -129,15 +129,26 @@ export function initComposer(textareaId, preventEnter, autofocus, dotNetHelper) 
 }
 
 async function handleFiles(fileList, dotNetHelper) {
-    const fileInput = document.querySelector('input[data-upload-url]');
-    if (!fileInput) {
-        console.error("Could not find upload input to route pasted file");
+    let uploadUrl = null;
+    if (dotNetHelper && typeof dotNetHelper.invokeMethodAsync === 'function') {
+        try {
+            uploadUrl = await dotNetHelper.invokeMethodAsync('GetUploadUrl');
+        } catch (e) {
+            console.warn("Could not retrieve upload URL from dotNetHelper:", e);
+        }
+    }
+    if (!uploadUrl) {
+        const fileInput = document.querySelector('input[data-upload-url]');
+        if (fileInput) {
+            uploadUrl = fileInput.getAttribute('data-upload-url');
+        }
+    }
+    if (!uploadUrl) {
+        console.error("Could not find upload input or URL to route pasted file");
         return;
     }
-    const uploadUrl = fileInput.getAttribute('data-upload-url');
 
-    for (let i = 0; i < fileList.length; i++) {
-        const file = fileList[i];
+    for (const file of fileList) {
         
         await dotNetHelper.invokeMethodAsync('OnPasteUploadStarted');
         try {
@@ -175,7 +186,7 @@ export function getSelection(textareaId) {
  * Insert text at cursor position or wrap selected text, then update the Blazor binding.
  * Returns the new full text value.
  */
-export function insertFormatting(textareaId, prefix, suffix, dotNetHelper) {
+export function insertFormatting(textareaId, prefix, suffix) {
     const container = document.getElementById(textareaId);
     if (!container) return;
     const textarea = container.querySelector('textarea') || container;
@@ -229,6 +240,81 @@ export function insertLinePrefix(textareaId, prefix) {
 
     textarea.dispatchEvent(new Event('input', { bubbles: true }));
     textarea.dispatchEvent(new Event('change', { bubbles: true }));
+}
+
+function isElementVisible(el) {
+    if (!el) return false;
+    if (typeof el.checkVisibility === 'function') {
+        return el.checkVisibility({ checkVisibilityCSS: true });
+    }
+    return el.offsetParent !== null;
+}
+
+/**
+ * Returns the currently visible/active composer textarea element for the given idSuffix.
+ */
+export function getActiveComposerTextarea(idSuffix) {
+    const desktopContainer = document.getElementById(`chat-message-input-desktop-${idSuffix}`);
+    if (desktopContainer && isElementVisible(desktopContainer)) {
+        return desktopContainer.querySelector('textarea') || desktopContainer;
+    }
+
+    const mobileContainer = document.getElementById(`chat-message-input-${idSuffix}`);
+    if (mobileContainer && isElementVisible(mobileContainer)) {
+        return mobileContainer.querySelector('textarea') || mobileContainer;
+    }
+
+    // Fallback based on viewport width (>= 960px is desktop md breakpoint in MudBlazor)
+    if (window.innerWidth >= 960 && desktopContainer) {
+        return desktopContainer.querySelector('textarea') || desktopContainer;
+    }
+    if (mobileContainer) {
+        return mobileContainer.querySelector('textarea') || mobileContainer;
+    }
+    if (desktopContainer) {
+        return desktopContainer.querySelector('textarea') || desktopContainer;
+    }
+
+    return null;
+}
+
+/**
+ * Insert an emoji at the current cursor position in the active (visible) composer.
+ * Returns true if inserted successfully, false otherwise.
+ */
+export function insertEmojiAtCursor(idSuffix, emoji, focusAfterInsert = false) {
+    const textarea = getActiveComposerTextarea(idSuffix);
+    if (!textarea) return false;
+
+    const start = textarea.selectionStart ?? (textarea.value ? textarea.value.length : 0);
+    const end = textarea.selectionEnd ?? (textarea.value ? textarea.value.length : 0);
+    const text = textarea.value || '';
+
+    const newText = text.substring(0, start) + emoji + text.substring(end);
+    textarea.value = newText;
+
+    const cursorPos = start + emoji.length;
+    textarea.selectionStart = cursorPos;
+    textarea.selectionEnd = cursorPos;
+
+    if (focusAfterInsert) {
+        textarea.focus();
+    }
+
+    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    textarea.dispatchEvent(new Event('change', { bubbles: true }));
+
+    return true;
+}
+
+/**
+ * Focuses the active (visible) composer textarea.
+ */
+export function focusComposer(idSuffix) {
+    const textarea = getActiveComposerTextarea(idSuffix);
+    if (textarea) {
+        textarea.focus();
+    }
 }
 
 /**

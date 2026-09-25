@@ -1,65 +1,64 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
-using Microsoft.Extensions.Logging;
 using System.Reflection;
+using Microsoft.Extensions.Logging;
 using Spokes_Server.Core.Constants;
+using Spokes_Server.Core.Models.Core;
+using Spokes_Server.Core.Services.Core;
 
-namespace Spokes_Server.Core.Services.Licensing
+namespace Spokes_Server.Core.Services.Licensing;
+
+public class SpokesLicenseFile
 {
-    public class SpokesLicenseFile
+    public string Email { get; set; } = string.Empty;
+    public string LicenseId { get; set; } = string.Empty;
+    public DateTime ValidForUpdatesUntil { get; set; }
+    public List<string> AvailableEditions { get; set; } = [];
+    public string Signature { get; set; } = string.Empty;
+}
+
+public enum LicenseStatus
+{
+    Valid,
+    Tolerated,
+    HardLock,
+    Expired
+}
+
+public class LicenseValidationResult
+{
+    public LicenseStatus Status { get; set; }
+    public string Message { get; set; } = string.Empty;
+    public SpokesLicenseFile? ParsedLicense { get; set; }
+    public string? FirstInstalledVersion { get; set; }
+    public string? LockupVersion { get; set; }
+    public string? MaxAllowedVersion { get; set; }
+}
+
+public class LicenseValidationService
+{
+    private readonly ILogger<LicenseValidationService> _logger;
+    private readonly EncryptionService _encryptionService;
+    private readonly VersionMetadata _versionMetadata;
+    private readonly string _publicKeyPem;
+
+    // This is the release version of THIS specific compiled binary. 
+    // Example format: 2026.4.102 (Year.Month.Revision)
+    public static string AppVersion => Assembly.GetExecutingAssembly()
+        .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? "2026.4.102";
+
+
+    // Hardcoded blacklist of leaked licenses
+    private static readonly List<string> BlacklistedKeys = [];
+
+    public LicenseValidationService(ILogger<LicenseValidationService> logger, EncryptionService encryptionService, VersionMetadata versionMetadata, string? publicKeyPem = null)
     {
-        public string Email { get; set; } = string.Empty;
-        public string LicenseId { get; set; } = string.Empty;
-        public DateTime ValidForUpdatesUntil { get; set; }
-        public List<string> AvailableEditions { get; set; } = new();
-        public string Signature { get; set; } = string.Empty;
+        _logger = logger;
+        _encryptionService = encryptionService;
+        _versionMetadata = versionMetadata;
+        _publicKeyPem = publicKeyPem ?? SpokesConstants.LicensePublicKeyPem;
     }
-
-    public enum LicenseStatus
-    {
-        Valid,
-        Tolerated,
-        HardLock,
-        Expired
-    }
-
-    public class LicenseValidationResult
-    {
-        public LicenseStatus Status { get; set; }
-        public string Message { get; set; } = string.Empty;
-        public SpokesLicenseFile? ParsedLicense { get; set; }
-        public string? FirstInstalledVersion { get; set; }
-        public string? LockupVersion { get; set; }
-        public string? MaxAllowedVersion { get; set; }
-    }
-
-    public class LicenseValidationService
-    {
-        private readonly ILogger<LicenseValidationService> _logger;
-        private readonly Spokes_Server.Core.Services.Core.EncryptionService _encryptionService;
-        private readonly VersionMetadata _versionMetadata;
-        private readonly string _publicKeyPem;
-
-        // This is the release version of THIS specific compiled binary. 
-        // Example format: 2026.4.102 (Year.Month.Revision)
-        public static string AppVersion => Assembly.GetExecutingAssembly()
-            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? "2026.4.102";
-
-
-        // Hardcoded blacklist of leaked licenses
-        private static readonly List<string> BlacklistedKeys = new()
-        {
-            // "SPK-12345678",
-        };
-
-        public LicenseValidationService(ILogger<LicenseValidationService> logger, Spokes_Server.Core.Services.Core.EncryptionService encryptionService, VersionMetadata versionMetadata, string? publicKeyPem = null)
-        {
-            _logger = logger;
-            _encryptionService = encryptionService;
-            _versionMetadata = versionMetadata;
-            _publicKeyPem = publicKeyPem ?? SpokesConstants.LicensePublicKeyPem;
-        }
 
         public static string SignDemoVersion(string version, string? securityKeyHash = null)
         {
@@ -74,42 +73,42 @@ namespace Spokes_Server.Core.Services.Licensing
             return SignDemoVersion(version, securityKeyHash) == signature;
         }
 
-        public static List<string> GetAvailableEditions(LicenseValidationResult validationResult)
+    public static List<string> GetAvailableEditions(LicenseValidationResult validationResult)
+    {
+        if (validationResult.ParsedLicense != null && validationResult.ParsedLicense.AvailableEditions.Count > 0)
         {
-            if (validationResult.ParsedLicense != null && validationResult.ParsedLicense.AvailableEditions.Any())
-            {
-                return validationResult.ParsedLicense.AvailableEditions;
-            }
-
-            // Demo Mode fallback (or invalid license format)
-            return new List<string> { "Family" };
+            return validationResult.ParsedLicense.AvailableEditions;
         }
 
-        private static string GetCleanVersion(string version)
+        // Demo Mode fallback (or invalid license format)
+        return ["Family"];
+    }
+
+    private static string GetCleanVersion(string version)
+    {
+        if (string.IsNullOrEmpty(version)) return "0.0.0";
+
+        // Extract substring starting from the first digit to handle prefixes like 'server-v' or 'v'
+        int firstDigitIndex = -1;
+        for (int i = 0; i < version.Length; i++)
         {
-            if (string.IsNullOrEmpty(version)) return "0.0.0";
-
-            // Extract substring starting from the first digit to handle prefixes like 'server-v' or 'v'
-            int firstDigitIndex = -1;
-            for (int i = 0; i < version.Length; i++)
+            if (char.IsDigit(version[i]))
             {
-                if (char.IsDigit(version[i]))
-                {
-                    firstDigitIndex = i;
-                    break;
-                }
+                firstDigitIndex = i;
+                break;
             }
-
-            string cleanVersion = firstDigitIndex >= 0 ? version.Substring(firstDigitIndex) : version.TrimStart('v', 'V');
-
-            int plusIndex = cleanVersion.IndexOf('+');
-            if (plusIndex >= 0) cleanVersion = cleanVersion.Substring(0, plusIndex);
-
-            int minusIndex = cleanVersion.IndexOf('-');
-            if (minusIndex >= 0) cleanVersion = cleanVersion.Substring(0, minusIndex);
-
-            return cleanVersion;
         }
+
+        string cleanVersion = firstDigitIndex >= 0 ? version[firstDigitIndex..] : version.TrimStart('v', 'V');
+
+        int plusIndex = cleanVersion.IndexOf('+');
+        if (plusIndex >= 0) cleanVersion = cleanVersion[..plusIndex];
+
+        int minusIndex = cleanVersion.IndexOf('-');
+        if (minusIndex >= 0) cleanVersion = cleanVersion[..minusIndex];
+
+        return cleanVersion;
+    }
 
         public static string CalculateMaxAllowedVersion(string baseVersion, int monthOffset = 2)
         {
@@ -129,8 +128,8 @@ namespace Spokes_Server.Core.Services.Licensing
             return "vUnknown";
         }
 
-        public LicenseValidationResult ValidateLicense(string? jsonPayload, Models.Core.ServerConfig? config = null)
-        {
+    public LicenseValidationResult ValidateLicense(string? jsonPayload, ServerConfig? config = null)
+    {
             try
             {
                 var cleanAppVersion = GetCleanVersion(AppVersion);
@@ -194,7 +193,7 @@ namespace Spokes_Server.Core.Services.Licensing
                 var license = JsonSerializer.Deserialize<SpokesLicenseFile>(jsonPayload, options);
                 if (license == null) return new LicenseValidationResult { Status = LicenseStatus.HardLock, Message = "Invalid license format." };
 
-                if (license.AvailableEditions == null) license.AvailableEditions = new List<string>();
+                license.AvailableEditions ??= [];
 
                 if (BlacklistedKeys.Contains(license.LicenseId))
                 {
@@ -245,4 +244,4 @@ namespace Spokes_Server.Core.Services.Licensing
             }
         }
     }
-}
+

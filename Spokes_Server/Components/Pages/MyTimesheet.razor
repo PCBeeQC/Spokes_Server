@@ -3,18 +3,9 @@
 <PageTitle>My Timesheet</PageTitle>
 @using System.Globalization
 @using Spokes_Server.Components.Pages.Planning
-@using Spokes_Server.Core.Models.Core
-@using Spokes_Server.Core.Models.Projects
-@using Spokes_Server.Core.Models.Accounting
-@using Spokes_Server.Core.Models.Communication
-@using Spokes_Server.Core.Models.HR
-@using Spokes_Server.Core.Data
 @using Spokes_Server.Core.Constants
 @using Spokes_Server.Components.Dialogs
-@using Microsoft.AspNetCore.Components.Authorization
-@using Spokes_Server.Core.Services
 @using Spokes_Server.Core.Services.HR
-@using Spokes_Server.Core.Helpers
 @inject AuthenticationStateProvider AuthStateProvider
 @inject UserService UserService
 @inject OvertimeService OvertimeService
@@ -282,9 +273,16 @@ else
         <MudGrid>
             <MudItem xs="12" sm="6" md="3">
                 <MudText Typo="Typo.overline">Hour Bank</MudText>
-                <MudText Typo="Typo.h4" Color="@(HourBankResult.HourBank >= 0 ? Color.Success : Color.Error)">
-                    @(HourBankResult.HourBank >= 0 ? "+" : "")@FormatHours(HourBankResult.HourBank)
-                </MudText>
+                <div class="d-flex align-center gap-2">
+                    <MudText Typo="Typo.h4" Color="@(HourBankResult.HourBank >= 0 ? Color.Success : Color.Error)">
+                        @(HourBankResult.HourBank >= 0 ? "+" : "")@FormatHours(HourBankResult.HourBank)
+                    </MudText>
+                    <MudIconButton Icon="@Icons.Material.Filled.History" Size="Size.Small" Color="Color.Secondary" OnClick="OpenHourBankAuditDialog" Title="View Audit Trail" />
+                    @if (CurrentUser != null && TimesheetOwner != null && (CurrentUser.IsAdmin || CurrentUser.HasPermission(AppPermissions.Admin.ManageUsers) || (CurrentUser.Id != TimesheetOwner.Id && CanManage(CurrentUser, TimesheetOwner.Id))))
+                    {
+                        <MudIconButton Icon="@Icons.Material.Filled.Edit" Size="Size.Small" Color="Color.Primary" OnClick="OpenAdjustHourBankDialog" Title="Adjust Hour Bank" />
+                    }
+                </div>
                 <MudText Typo="Typo.caption" Color="Color.Tertiary">Since @HourBankResult.StartDate.ToString("MMM yyyy")</MudText>
             </MudItem>
             <MudItem xs="12" sm="6" md="3">
@@ -875,20 +873,11 @@ else
     [Parameter] public string TargetEmployeeId { get; set; }
     private Employee TimesheetOwner;
 
-    private bool CanManage(Employee manager, string targetId)
-    {
-        return HRService.CanManageEmployee(manager, targetId);
-    }
+    private bool CanManage(Employee manager, string targetId) => HRService.CanManageEmployee(manager, targetId);
 
     // Can view all? Global Permission?
-    private bool CanViewAllTimesheets(Employee user)
-    {
-        if (user.IsAdmin)
-        {
-            return true;
-        }
-        return user.HasPermission(AppPermissions.Timesheets.ViewReport);
-    }
+    private bool CanViewAllTimesheets(Employee user) =>
+        user.IsAdmin || user.HasPermission(AppPermissions.Timesheets.ViewReport);
 
     private void FilterProjects(Employee user)
     {
@@ -918,6 +907,42 @@ else
             }
         }
         ActiveProjects = filtered.OrderBy(p => p.DisplayName).ToList();
+    }
+
+    private async Task OpenAdjustHourBankDialog()
+    {
+        if (TimesheetOwner == null || CurrentUser == null) return;
+
+        var parameters = new DialogParameters
+        {
+            { "EmployeeId", TimesheetOwner.Id },
+            { "CurrentUserId", CurrentUser.Id }
+        };
+
+        var options = new DialogOptions { CloseButton = true, MaxWidth = MaxWidth.Small, FullWidth = true };
+        var dialog = await DialogService.ShowAsync<Spokes_Server.Components.Dialogs.HourBankAdjustmentDialog>("Adjust Hour Bank", parameters, options);
+        var result = await dialog.Result;
+
+        if (!result.Canceled && result.Data is HourBankAdjustment adjustment)
+        {
+            Db.HourBankAdjustments.Save(adjustment);
+            // Refresh calculations
+            HourBankResult = OvertimeService.CalculateHourBank(TimesheetOwner.Id);
+            StateHasChanged();
+        }
+    }
+
+    private async Task OpenHourBankAuditDialog()
+    {
+        if (TimesheetOwner == null) return;
+
+        var parameters = new DialogParameters
+        {
+            { "EmployeeId", TimesheetOwner.Id }
+        };
+
+        var options = new DialogOptions { CloseButton = true, MaxWidth = MaxWidth.ExtraLarge, FullWidth = true };
+        await DialogService.ShowAsync<Spokes_Server.Components.Dialogs.HourBankAuditDialog>("Hour Bank Audit Trail", parameters, options);
     }
 }
 

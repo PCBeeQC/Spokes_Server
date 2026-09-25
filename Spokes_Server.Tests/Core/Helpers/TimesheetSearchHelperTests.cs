@@ -1,8 +1,5 @@
 using Spokes_Server.Core.Helpers;
 using Spokes_Server.Core.Models.Projects;
-using System.Collections.Generic;
-using System.Linq;
-using Xunit;
 
 namespace Spokes_Server.Tests.Core.Helpers
 {
@@ -125,6 +122,99 @@ namespace Spokes_Server.Tests.Core.Helpers
         {
             var parsed = TimesheetSearchHelper.ParseTimeInput(input);
             Assert.Equal((decimal)expected, Math.Round(parsed, 4));
+        }
+
+        [Fact]
+        public void GetTaskName_ExistingId_ReturnsTaskName()
+        {
+            var result = TimesheetSearchHelper.GetTaskName("wt1", _workTypes);
+            Assert.Equal("Development", result);
+        }
+
+        [Fact]
+        public void GetTaskName_NonExistingId_ReturnsEmptyString()
+        {
+            var result = TimesheetSearchHelper.GetTaskName("nonexistent", _workTypes);
+            Assert.Equal("", result);
+        }
+
+        [Fact]
+        public void SearchTasks_WithSearchText_FiltersCaseInsensitive()
+        {
+            var result = TimesheetSearchHelper.SearchTasks("QUAL", "p2", _projects, _workTypes).ToList();
+            Assert.Single(result);
+            Assert.Equal("wt2", result[0]);
+        }
+
+        [Fact]
+        public void SearchTasks_ProjectNotFound_ReturnsEmpty()
+        {
+            var result = TimesheetSearchHelper.SearchTasks(null, "nonexistent", _projects, _workTypes).ToList();
+            Assert.Empty(result);
+        }
+
+        [Fact]
+        public void SearchSubTasks_WorkTypeNotFound_ReturnsEmpty()
+        {
+            var result = TimesheetSearchHelper.SearchSubTasks(null, "nonexistent", _workTypes).ToList();
+            Assert.Empty(result);
+        }
+
+        [Fact]
+        public void SearchSubTasks_SubTasksEmpty_ReturnsEmpty()
+        {
+            var result = TimesheetSearchHelper.SearchSubTasks(null, "wt2", _workTypes).ToList();
+            Assert.Empty(result);
+        }
+
+        [Fact]
+        public void GetSubTaskName_WorkTypeNotFound_ReturnsEmptyString()
+        {
+            var result = TimesheetSearchHelper.GetSubTaskName("st1", "nonexistent", _workTypes);
+            Assert.Equal("", result);
+        }
+
+        [Fact]
+        public void ParseTimeInput_CommaFormat_ReturnsDecimalHours()
+        {
+            var originalCulture = System.Globalization.CultureInfo.CurrentCulture;
+            try
+            {
+                System.Globalization.CultureInfo.CurrentCulture = new System.Globalization.CultureInfo("fr-FR");
+                var result = TimesheetSearchHelper.ParseTimeInput("8,5");
+                Assert.Equal(8.5m, result);
+            }
+            finally
+            {
+                System.Globalization.CultureInfo.CurrentCulture = originalCulture;
+            }
+        }
+
+        [Fact]
+        public void ParseTimeInput_IntegerGreaterThan24_TreatsAsMinutes()
+        {
+            var result = TimesheetSearchHelper.ParseTimeInput("85");
+            Assert.Equal(85m / 60m, result);
+        }
+
+        [Theory]
+        [InlineData("invalid")]
+        [InlineData("abc")]
+        [InlineData("12:34:56")]
+        public void ParseTimeInput_InvalidText_ReturnsZero(string input)
+        {
+            var result = TimesheetSearchHelper.ParseTimeInput(input);
+            Assert.Equal(0, result);
+        }
+
+        [Theory]
+        [InlineData("8", 8)]
+        [InlineData("24", 24)]
+        [InlineData("0", 0)]
+        public void ParseTimeInput_SingleNumberLessOrEqualTo24_ReturnsHours(string input, decimal expected)
+        {
+            var result = TimesheetSearchHelper.ParseTimeInput(input);
+            Assert.Equal(expected, result);
         }
     }
 }

@@ -1,6 +1,5 @@
 using System.Collections.Concurrent;
-using System.Text.Json; // Make sure this is using System.Text.Json
-using Spokes_Server.Core.Extensions;
+using System.Text.Json;
 
 namespace Spokes_Server.Core.Data;
 
@@ -33,10 +32,7 @@ public abstract class JsonRepository<T> where T : class, IDataEntity
 
     public virtual Task<List<T>> GetAllAsync() => Task.FromResult(GetAll());
 
-    public virtual T? GetById(string id)
-    {
-        return _cache.TryGetValue(id, out var item) ? item : null;
-    }
+    public virtual T? GetById(string id) => _cache.TryGetValue(id, out var item) ? item : null;
 
     public virtual Task<T?> GetByIdAsync(string id) => Task.FromResult(GetById(id));
 
@@ -83,7 +79,7 @@ public abstract class JsonRepository<T> where T : class, IDataEntity
     {
         if (!Directory.Exists(_basePath)) return;
 
-        string[] files = Array.Empty<string>();
+        string[] files = [];
         try
         {
             // Use the specific pattern defined in the Constructor
@@ -95,7 +91,7 @@ public abstract class JsonRepository<T> where T : class, IDataEntity
             return;
         }
 
-        var tempItems = new System.Collections.Generic.List<T>();
+        var tempItems = new List<T>();
         foreach (var file in files)
         {
             try
@@ -125,8 +121,5 @@ public abstract class JsonRepository<T> where T : class, IDataEntity
     }
 
     // NEW: Clear the cache (Used for Restore)
-    public virtual void Clear()
-    {
-        _cache.Clear();
-    }
+    public virtual void Clear() => _cache.Clear();
 }

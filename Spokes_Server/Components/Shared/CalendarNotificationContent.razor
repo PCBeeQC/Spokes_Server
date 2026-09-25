@@ -1,0 +1,48 @@
+@* Custom snackbar content for calendar event reminders *@
+<div class="d-flex align-center gap-3" style="cursor: pointer; min-width: 260px; max-width: 320px;">
+    <MudAvatar Size="Size.Medium" Color="Color.Surface" Variant="Variant.Outlined" Style="background-color: var(--mud-palette-background);">
+        @if (!string.IsNullOrEmpty(ServerIconUrl))
+        {
+            <MudImage Src="@ServerIconUrl" Alt="@ServerName" ObjectFit="ObjectFit.Contain" Style="width: 100%; height: 100%; padding: 2px;" />
+        }
+        else
+        {
+            <MudText Typo="Typo.subtitle2" Style="font-weight: 700;">@GetServerInitial()</MudText>
+        }
+    </MudAvatar>
+    <div style="flex: 1; overflow: hidden;">
+        <div class="d-flex align-center gap-1">
+            <MudText Typo="Typo.caption" Style="opacity: 0.85; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">@(string.IsNullOrWhiteSpace(ServerName) ? "Spokes" : ServerName)</MudText>
+            <MudText Typo="Typo.caption" Style="opacity: 0.4;">•</MudText>
+            <MudText Typo="Typo.caption" Color="Color.Primary" Style="font-weight: 600;">Calendar</MudText>
+        </div>
+        <MudText Typo="Typo.subtitle2" Style="font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1.25;" Class="my-0.5">@Title</MudText>
+        <div class="d-flex align-center gap-1">
+            <MudIcon Icon="@Icons.Material.Filled.AccessTime" Size="Size.Small" Style="font-size: 0.85rem; opacity: 0.8;" />
+            <MudText Typo="Typo.caption" Style="font-weight: 500; opacity: 0.95; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">@TimeDescription</MudText>
+        </div>
+        @if (!string.IsNullOrWhiteSpace(Location))
+        {
+            <div class="d-flex align-center gap-1 mt-0.5">
+                <MudIcon Icon="@Icons.Material.Filled.Place" Size="Size.Small" Style="font-size: 0.8rem; opacity: 0.7;" />
+                <MudText Typo="Typo.caption" Style="opacity: 0.8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">@Location</MudText>
+            </div>
+        }
+    </div>
+    <MudIcon Icon="@Icons.Material.Filled.CalendarMonth" Color="Color.Primary" Size="Size.Medium" Style="opacity: 0.85;" />
+</div>
+
+@code {
+    [Parameter] public string Title { get; set; } = "";
+    [Parameter] public string TimeDescription { get; set; } = "";
+    [Parameter] public string Location { get; set; } = "";
+    [Parameter] public string EventId { get; set; } = "";
+    [Parameter] public string ServerName { get; set; } = "Spokes";
+    [Parameter] public string? ServerIconUrl { get; set; }
+
+    private string GetServerInitial()
+    {
+        if (string.IsNullOrWhiteSpace(ServerName)) return "S";
+        return ServerName.Trim()[..1].ToUpperInvariant();
+    }
+}

@@ -2,7 +2,6 @@ using Microsoft.Extensions.Configuration;
 using Spokes_Server.Aggregate;
 using Spokes_Server.Core.Models.HR;
 using Spokes_Server.Core.Services.Communication;
-using System.IO;
 
 namespace Spokes_Server.Core.Services.Core;
 
@@ -19,22 +18,29 @@ public class AccountDeletionService
         _dataPath = config["DataPath"] ?? "Data";
     }
 
+    public const string SystemDeletedUserId = "system-deleted-user";
+
     public async Task DeleteAccountAsync(string employeeId, string? excludeSessionId = null)
     {
-        var systemDeletedUserId = "system-deleted-user";
-
         // 1. Ensure System Deleted User exists
-        var sysUser = _db.Employees.GetById(systemDeletedUserId);
+        var sysUser = _db.Employees.GetById(SystemDeletedUserId);
         if (sysUser == null)
         {
             sysUser = new Employee
             {
-                Id = systemDeletedUserId,
+                Id = SystemDeletedUserId,
                 FirstName = "Deleted",
                 LastName = "User",
                 Email = "deleted@system.local",
-                IsActive = false
+                IsActive = false,
+                IsSystem = true
             };
+            _db.Employees.Save(sysUser);
+        }
+        else if (!sysUser.IsSystem || sysUser.IsActive)
+        {
+            sysUser.IsSystem = true;
+            sysUser.IsActive = false;
             _db.Employees.Save(sysUser);
         }
 
@@ -46,7 +52,7 @@ public class AccountDeletionService
             {
                 // Keep the current session briefly for the final logout redirect, 
                 // but anonymize it and mark it revoked.
-                session.EmployeeId = systemDeletedUserId;
+                session.EmployeeId = SystemDeletedUserId;
                 session.RevokedAt = DateTime.UtcNow;
                 _db.DeviceSessions.Save(session);
             }
@@ -67,7 +73,7 @@ public class AccountDeletionService
         var messages = _db.ChatMessages.GetAll().Where(m => m.SenderId == employeeId).ToList();
         foreach (var msg in messages)
         {
-            msg.SenderId = systemDeletedUserId;
+            msg.SenderId = SystemDeletedUserId;
 
             if (msg.Attachments != null && msg.Attachments.Any())
             {
@@ -90,22 +96,41 @@ public class AccountDeletionService
             _db.ChatMessages.Save(msg);
         }
 
-        // 4. Re-parent Other Shared Data
+        // 4. Clean Channel Permissions & Memberships
+        var channels = _db.ChatChannels.GetAll();
+        foreach (var ch in channels)
+        {
+            var modified = false;
+            if (ch.ParticipantIds != null && ch.ParticipantIds.Remove(employeeId))
+            {
+                modified = true;
+            }
+            if (ch.AllowedPostUserIds != null && ch.AllowedPostUserIds.Remove(employeeId))
+            {
+                modified = true;
+            }
+            if (modified)
+            {
+                _db.ChatChannels.Save(ch);
+            }
+        }
+
+        // 5. Re-parent Other Shared Data
         var notes = _db.ProjectNotes.GetAll().Where(n => n.CreatedBy == employeeId).ToList();
         foreach (var note in notes)
         {
-            note.CreatedBy = systemDeletedUserId;
+            note.CreatedBy = SystemDeletedUserId;
             _db.ProjectNotes.Save(note);
         }
 
         var reports = _db.ReportedMessages.GetAll().Where(r => r.ReporterId == employeeId).ToList();
         foreach (var report in reports)
         {
-            report.ReporterId = systemDeletedUserId;
+            report.ReporterId = SystemDeletedUserId;
             _db.ReportedMessages.Save(report);
         }
 
-        // 5. Hard-delete Private Data
+        // 6. Hard-delete Private Data
         var folders = _db.EmailFolders.GetAll().Where(f => f.EmployeeId == employeeId).ToList();
         foreach (var folder in folders) _db.EmailFolders.Delete(folder.Id);
 
@@ -115,18 +140,16 @@ public class AccountDeletionService
         var contacts = _db.PrivateContacts.GetAllForEmployee(employeeId).ToList();
         foreach (var contact in contacts) _db.PrivateContacts.Delete(employeeId, contact.Id);
 
-        // 6. Delete User Records
-        var employee = _db.Employees.GetById(employeeId);
+        // 7. Delete User Records
         var linkedAccounts = _db.OpenIdAccounts.GetByEmployeeId(employeeId);
         foreach (var account in linkedAccounts)
         {
             _db.OpenIdAccounts.Delete(account.Id);
         }
 
-
         _db.Employees.Delete(employeeId);
 
-        // 7. Physical Directory Wipe
+        // 8. Physical Directory Wipe
         var employeeDir = Path.Combine(_dataPath, "Employees", employeeId);
         if (Directory.Exists(employeeDir))
         {

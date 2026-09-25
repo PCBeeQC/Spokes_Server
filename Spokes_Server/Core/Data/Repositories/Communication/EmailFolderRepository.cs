@@ -1,14 +1,5 @@
-using Spokes_Server.Core.Data;
-using Spokes_Server.Core.Models.Core;
-using Spokes_Server.Core.Models.Projects;
-using Spokes_Server.Core.Models.Accounting;
+using System.Text.Json;
 using Spokes_Server.Core.Models.Communication;
-using Spokes_Server.Core.Models.HR;
-using Microsoft.Extensions.Configuration;
-using System;
-using System.Collections.Generic;
-using System.IO;
-using System.Linq;
 
 namespace Spokes_Server.Core.Data.Repositories.Communication;
 
@@ -19,11 +10,8 @@ public class EmailFolderRepository : JsonRepository<EmailFolder>
     {
     }
 
-    protected override string GetFilePath(EmailFolder item)
-    {
-        // Data/Employees/{EmployeeId}/Email/Folders/{Id}.json
-        return Path.Combine(_basePath, item.EmployeeId, "Email", "Folders", $"{item.Id}.json");
-    }
+    protected override string GetFilePath(EmailFolder item) =>
+        Path.Combine(_basePath, item.EmployeeId, "Email", "Folders", $"{item.Id}.json");
 
     public override void LoadFromDisk()
     {
@@ -42,7 +30,7 @@ public class EmailFolderRepository : JsonRepository<EmailFolder>
                 try
                 {
                     var json = File.ReadAllText(file);
-                    var item = System.Text.Json.JsonSerializer.Deserialize<EmailFolder>(json);
+                    var item = JsonSerializer.Deserialize<EmailFolder>(json);
                     if (item != null) _cache[item.Id] = item;
                 }
                 catch (Exception ex)
@@ -53,10 +41,6 @@ public class EmailFolderRepository : JsonRepository<EmailFolder>
         }
     }
 
-    public virtual List<EmailFolder> GetByEmployee(string employeeId)
-    {
-        return GetAll().Where(f => f.EmployeeId == employeeId).ToList();
-    }
+    public virtual List<EmailFolder> GetByEmployee(string employeeId) =>
+        GetAll().Where(f => f.EmployeeId == employeeId).ToList();
 }
-
-

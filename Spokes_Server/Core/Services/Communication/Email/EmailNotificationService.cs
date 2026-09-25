@@ -1,19 +1,13 @@
-using Spokes_Server.Core.Services.Communication;
-using Spokes_Server.Core.Services.Projects;
-using Spokes_Server.Core.Services.Core;
+using System;
+using System.Collections.Generic;
+using System.Threading.Tasks;
 using Microsoft.AspNetCore.Components;
 using MudBlazor;
-using Spokes_Server.Core.Data.Repositories.Core;
-using Spokes_Server.Core.Data.Repositories.Projects;
-using Spokes_Server.Core.Data.Repositories.Accounting;
-using Spokes_Server.Core.Data.Repositories.Communication;
-using Spokes_Server.Core.Data.Repositories.HR;
-using Spokes_Server.Core.Models.Core;
-using Spokes_Server.Core.Models.Projects;
-using Spokes_Server.Core.Models.Accounting;
-using Spokes_Server.Core.Models.Communication;
-using Spokes_Server.Core.Models.HR;
 using Spokes_Server.Components.Shared;
+using Spokes_Server.Core.Data.Repositories.Communication;
+using Spokes_Server.Core.Models.Communication;
+using Spokes_Server.Core.Services.Communication;
+using Spokes_Server.Core.Services.Communication.Presence;
 
 namespace Spokes_Server.Core.Services.Communication.Email;
 
@@ -28,6 +22,8 @@ public class EmailNotificationService : IUserNotificationService, IAsyncDisposab
     private readonly EmailSyncStateService _syncState;
     private readonly EmailFolderRepository _emailFolders;
     private readonly EmailMessageRepository _emailMessages;
+    private readonly UserCircuitContext? _circuitContext;
+    private readonly PresenceStateService? _presenceState;
     private string? _currentUserId;
 
     public int TotalUnreadCount { get; private set; }
@@ -38,13 +34,23 @@ public class EmailNotificationService : IUserNotificationService, IAsyncDisposab
         NavigationManager nav,
         EmailSyncStateService syncState,
         EmailFolderRepository emailFolders,
-        EmailMessageRepository emailMessages)
+        EmailMessageRepository emailMessages,
+        UserCircuitContext? circuitContext = null,
+        PresenceStateService? presenceState = null)
     {
         _snackbar = snackbar;
         _nav = nav;
         _syncState = syncState;
         _emailFolders = emailFolders;
         _emailMessages = emailMessages;
+        _circuitContext = circuitContext;
+        _presenceState = presenceState;
+    }
+
+    private bool ShouldDisplayInAppNotification()
+    {
+        if (_circuitContext == null) return true;
+        return _circuitContext.ShouldDisplayInAppNotification(_presenceState);
     }
 
     public async Task InitializeAsync(string userId)
@@ -95,9 +101,10 @@ public class EmailNotificationService : IUserNotificationService, IAsyncDisposab
         // Update count
         LoadUnreadCount();
 
-        // Show snackbar notification if they are not already on the email page
+        // Show snackbar notification if they are not already on the email page and actively viewing the app
         var currentUri = _nav.Uri;
         if (currentUri.Contains("/email", StringComparison.OrdinalIgnoreCase)) return;
+        if (!ShouldDisplayInAppNotification()) return;
 
         _snackbar.Add<EmailNotificationContent>(
             new Dictionary<string, object>
@@ -128,6 +135,3 @@ public class EmailNotificationService : IUserNotificationService, IAsyncDisposab
         await Task.CompletedTask;
     }
 }
-
-
-

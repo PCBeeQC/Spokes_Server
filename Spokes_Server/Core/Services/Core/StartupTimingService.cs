@@ -1,11 +1,8 @@
 namespace Spokes_Server.Core.Services.Core;
 
-using System;
-using System.Collections.Generic;
-
 public class StartupTiming
 {
-    public string Name { get; set; } = "";
+    public string Name { get; set; } = string.Empty;
     public long Timestamp { get; set; }
 }
 
@@ -15,7 +12,7 @@ public class StartupTiming
 /// </summary>
 public class StartupTimingService
 {
-    private readonly List<StartupTiming> _timings = new();
+    private readonly List<StartupTiming> _timings = [];
     private readonly object _lock = new();
 
     public void Add(string name)
@@ -31,7 +28,7 @@ public class StartupTimingService
     {
         lock (_lock)
         {
-            return new List<StartupTiming>(_timings);
+            return [.. _timings];
         }
     }
 }

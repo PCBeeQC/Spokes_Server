@@ -1,32 +1,21 @@
-using Spokes_Server.Core.Services.Communication;
-using Spokes_Server.Core.Services.Projects;
-using Spokes_Server.Core.Services.Core;
+using System.IO.Compression;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Moq;
 using Spokes_Server.Aggregate;
 using Spokes_Server.Core.Data;
-using Spokes_Server.Core.Data.Repositories.Core;
-using Spokes_Server.Core.Data.Repositories.Projects;
 using Spokes_Server.Core.Data.Repositories.Accounting;
 using Spokes_Server.Core.Data.Repositories.Communication;
+using Spokes_Server.Core.Data.Repositories.Core;
 using Spokes_Server.Core.Data.Repositories.HR;
-using Spokes_Server.Core.Models.Core;
-using Spokes_Server.Core.Models.Projects;
-using Spokes_Server.Core.Models.Accounting;
-using Spokes_Server.Core.Models.Communication;
-using Spokes_Server.Core.Models.HR;
-using Spokes_Server.Core.Services;
-using System.Collections.Generic;
-using System.IO;
-using System.IO.Compression;
-using System.Linq;
-using System.Threading.Tasks;
+using Spokes_Server.Core.Data.Repositories.Projects;
+using Spokes_Server.Core.Services.Core;
+using Spokes_Server.Core.Services.Logging;
 
-namespace Spokes_Server.Tests.Core.Services.Core
+namespace Spokes_Server.Tests.Core.Services.Core;
+
+public class BackupServiceTests : IDisposable
 {
-    public class BackupServiceTests : IDisposable
-    {
         private readonly string _testDataDir;
         private readonly Mock<ILogger<BackupService>> _mockLogger;
         private readonly Database _db;
@@ -40,7 +29,7 @@ namespace Spokes_Server.Tests.Core.Services.Core
 
             _mockLogger = new Mock<ILogger<BackupService>>();
 
-            var configDict = new Dictionary<string, string> { { "DataPath", _testDataDir } };
+            var configDict = new Dictionary<string, string?> { { "DataPath", _testDataDir } };
             _config = new ConfigurationBuilder().AddInMemoryCollection(configDict).Build();
 
             _persistence = new DiskPersistenceService(new Mock<ILogger<DiskPersistenceService>>().Object);
@@ -94,12 +83,14 @@ namespace Spokes_Server.Tests.Core.Services.Core
             var deviceSessions = new DeviceSessionRepository(_persistence, _config);
             var albums = new AlbumRepository(_persistence, _config);
             var demoConfigs = new DemoConfigRepository(_persistence, _config);
+            var clientStates = new UserClientStateRepository(_persistence, _config);
+            var hourBankAdjustments = new HourBankAdjustmentRepository(_persistence, _config);
 
             _db = new Database(
-                _persistence, projects, projectGroups, employees, timesheets, workTypes, rateCards,
+                _persistence, projects, projectGroups, employees, timesheets, hourBankAdjustments, workTypes, rateCards,
                 quotes, purchases, suppliers, invoices, profile, templates,
                 expenses, bills, notes, plans, teams, channels, categories, messages,
-                readStates, reportedMessages, push, albums, boards, boardCards, boardTemplates, events,
+                readStates, clientStates, reportedMessages, push, albums, boards, boardCards, boardTemplates, events,
                 _config, oidc, contrib, recExpenses, mailFolders, mailMsgs,
                 pubContacts, privContacts, standardDocs, projectDocs, commissionLedgers, systemConfigs, serverConfigs, deviceSessions, demoConfigs);
         }
@@ -164,6 +155,75 @@ namespace Spokes_Server.Tests.Core.Services.Core
         }
 
         [Fact]
+        public async Task RunBackupNow_WhenBackupEmployeeEmailsIsFalse_ExcludesEmailFiles()
+        {
+            var emailDir = Path.Combine(_testDataDir, "Employees", "emp1", "Email");
+            Directory.CreateDirectory(emailDir);
+            File.WriteAllText(Path.Combine(emailDir, "msg.eml"), "Subject: Test employee email");
+
+            var otherDir = Path.Combine(_testDataDir, "Employees", "emp1");
+            File.WriteAllText(Path.Combine(otherDir, "profile.json"), "{\"name\":\"emp1\"}");
+
+            var profile = _db.CompanyProfile.Get();
+            profile.BackupEmployeeEmails = false;
+            _db.CompanyProfile.Save(profile);
+
+            var service = new BackupService(_mockLogger.Object, _db.CompanyProfile, _config);
+
+            var backupPath = await service.RunBackupNow();
+
+            Assert.True(File.Exists(backupPath));
+            using (var zip = ZipFile.OpenRead(backupPath))
+            {
+                Assert.Contains(zip.Entries, e => e.FullName == "Employees/emp1/profile.json");
+                Assert.DoesNotContain(zip.Entries, e => e.FullName.Contains("msg.eml", StringComparison.OrdinalIgnoreCase));
+            }
+        }
+
+        [Fact]
+        public async Task RunBackupNow_WhenBackupEmployeeEmailsIsTrue_IncludesEmailFiles()
+        {
+            var emailDir = Path.Combine(_testDataDir, "Employees", "emp1", "Email");
+            Directory.CreateDirectory(emailDir);
+            File.WriteAllText(Path.Combine(emailDir, "msg.eml"), "Subject: Test employee email");
+
+            var profile = _db.CompanyProfile.Get();
+            profile.BackupEmployeeEmails = true;
+            _db.CompanyProfile.Save(profile);
+
+            var service = new BackupService(_mockLogger.Object, _db.CompanyProfile, _config);
+
+            var backupPath = await service.RunBackupNow();
+
+            Assert.True(File.Exists(backupPath));
+            using (var zip = ZipFile.OpenRead(backupPath))
+            {
+                Assert.Contains(zip.Entries, e => e.FullName == "Employees/emp1/Email/msg.eml");
+            }
+        }
+
+        [Fact]
+        public async Task Properties_InitialAndAfterSuccessfulBackup_HaveExpectedValues()
+        {
+            var service = new BackupService(_mockLogger.Object, _db.CompanyProfile, _config);
+
+            // Initial state assertions
+            Assert.Null(service.LastBackupAt);
+            Assert.Equal("Never run", service.LastBackupStatus);
+            Assert.False(service.IsRunning);
+
+            // Run backup
+            File.WriteAllText(Path.Combine(_testDataDir, "test.json"), "{\"id\":\"1\"}");
+            var backupPath = await service.RunBackupNow();
+
+            // After successful backup assertions
+            Assert.True(File.Exists(backupPath));
+            Assert.NotNull(service.LastBackupAt);
+            Assert.Equal("Success", service.LastBackupStatus);
+            Assert.False(service.IsRunning);
+        }
+
+        [Fact]
         public void GetBackups_ReturnsList()
         {
             var backupDir = Path.Combine(_testDataDir, "Backups");
@@ -175,6 +235,22 @@ namespace Spokes_Server.Tests.Core.Services.Core
             var list = service.GetBackups();
             Assert.Single(list);
             Assert.Equal("Spokes_Backup_2023.zip", list[0].FileName);
+        }
+
+        [Fact]
+        public void GetBackups_WhenDirectoryDoesNotExist_ReturnsEmptyList()
+        {
+            var backupDir = Path.Combine(_testDataDir, "Backups");
+            if (Directory.Exists(backupDir))
+            {
+                Directory.Delete(backupDir, true);
+            }
+
+            var service = new BackupService(_mockLogger.Object, _db.CompanyProfile, _config);
+
+            var backups = service.GetBackups();
+            Assert.NotNull(backups);
+            Assert.Empty(backups);
         }
 
         [Fact]
@@ -191,6 +267,18 @@ namespace Spokes_Server.Tests.Core.Services.Core
             Assert.False(File.Exists(path));
         }
 
+        [Theory]
+        [InlineData(null)]
+        [InlineData("")]
+        [InlineData("   ")]
+        public void DeleteBackup_WhenPathIsNullOrEmpty_DoesNothing(string? path)
+        {
+            var service = new BackupService(_mockLogger.Object, _db.CompanyProfile, _config);
+
+            var ex = Record.Exception(() => service.DeleteBackup(path!));
+            Assert.Null(ex);
+        }
+
         [Fact]
         public async Task GetBackupBytes_ReturnsContent()
         {
@@ -204,6 +292,18 @@ namespace Spokes_Server.Tests.Core.Services.Core
 
             var result = await service.GetBackupBytesAsync(path);
             Assert.Equal(content, result);
+        }
+
+        [Theory]
+        [InlineData(null)]
+        [InlineData("")]
+        [InlineData("   ")]
+        public async Task GetBackupBytesAsync_WhenPathIsNullOrEmpty_ReturnsNull(string? path)
+        {
+            var service = new BackupService(_mockLogger.Object, _db.CompanyProfile, _config);
+
+            var result = await service.GetBackupBytesAsync(path!);
+            Assert.Null(result);
         }
 
         [Fact]
@@ -346,8 +446,76 @@ namespace Spokes_Server.Tests.Core.Services.Core
             var bytes = await service.GetBackupBytesAsync(traversalPath);
             Assert.Null(bytes);
         }
+
+        [Fact]
+        public async Task RunBackupNow_LogsToSystemLogService()
+        {
+            File.WriteAllText(Path.Combine(_testDataDir, "test_log.json"), "{\"id\":\"1\"}");
+
+            var mockSystemLog = new Mock<ISystemLogService>();
+            var service = new BackupService(_mockLogger.Object, _db.CompanyProfile, _config, mockSystemLog.Object);
+
+            var backupPath = await service.RunBackupNow();
+
+            Assert.True(File.Exists(backupPath));
+            mockSystemLog.Verify(l => l.LogInfo(
+                "Backup",
+                It.Is<string>(msg => msg.Contains("Backup created successfully")),
+                It.Is<string?>(details => details != null && details.Contains("Manual"))),
+                Times.Once);
+        }
+
+        [Fact]
+        public async Task PruneBackups_LogsToSystemLogService()
+        {
+            var profile = _db.CompanyProfile.Get();
+            profile.BackupRetentionCount = 1;
+            profile.BackupsEnabled = true;
+            _db.CompanyProfile.Save(profile);
+
+            var backupDir = Path.Combine(_testDataDir, "Backups");
+            Directory.CreateDirectory(backupDir);
+
+            // Create 2 old backups so 1 is pruned
+            for (int i = 0; i < 2; i++)
+            {
+                var path = Path.Combine(backupDir, $"Spokes_Backup_prune_{i}.zip");
+                File.WriteAllText(path, "content");
+                File.SetCreationTimeUtc(path, DateTime.UtcNow.AddMinutes(-20 + i));
+            }
+
+            var mockSystemLog = new Mock<ISystemLogService>();
+            var service = new BackupService(_mockLogger.Object, _db.CompanyProfile, _config, mockSystemLog.Object);
+
+            await service.RunBackupNow();
+
+            mockSystemLog.Verify(l => l.LogInfo(
+                "Backup",
+                It.Is<string>(msg => msg.Contains("Pruned old backup")),
+                It.IsAny<string?>()),
+                Times.AtLeastOnce);
+        }
+
+        [Fact]
+        public void DeleteBackup_LogsToSystemLogService()
+        {
+            var backupDir = Path.Combine(_testDataDir, "Backups");
+            Directory.CreateDirectory(backupDir);
+
+            var backupPath = Path.Combine(backupDir, "Spokes_Backup_to_delete.zip");
+            File.WriteAllText(backupPath, "dummy content");
+
+            var mockSystemLog = new Mock<ISystemLogService>();
+            var service = new BackupService(_mockLogger.Object, _db.CompanyProfile, _config, mockSystemLog.Object);
+
+            service.DeleteBackup(backupPath);
+
+            Assert.False(File.Exists(backupPath));
+            mockSystemLog.Verify(l => l.LogInfo(
+                "Backup",
+                It.Is<string>(msg => msg.Contains("Deleted backup: Spokes_Backup_to_delete.zip")),
+                It.IsAny<string?>()),
+                Times.Once);
+        }
     }
-}
-
-
 

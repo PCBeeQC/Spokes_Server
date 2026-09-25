@@ -1,9 +1,4 @@
 using Spokes_Server.Core.Models.Core;
-using Spokes_Server.Core.Models.Projects;
-using Spokes_Server.Core.Models.Accounting;
-using Spokes_Server.Core.Models.Communication;
-using Spokes_Server.Core.Models.HR;
-using Microsoft.Extensions.Configuration;
 
 namespace Spokes_Server.Core.Data.Repositories.Core;
 
@@ -17,28 +12,22 @@ public class PushSubscriptionRepository : JsonRepository<PushSubscription>
     {
     }
 
-    protected override string GetFilePath(PushSubscription entity)
-    {
-        return Path.Combine(_basePath, $"{entity.Id}.json");
-    }
+    protected override string GetFilePath(PushSubscription entity) =>
+        Path.Combine(_basePath, $"{entity.Id}.json");
 
     /// <summary>
     /// Get all push subscriptions for a specific user.
     /// </summary>
-    public List<PushSubscription> GetByUserId(string userId)
-    {
-        return GetAll().Where(s => s.UserId == userId).ToList();
-    }
+    public List<PushSubscription> GetByUserId(string userId) =>
+        GetAll().Where(s => s.UserId == userId).ToList();
 
     public Task<List<PushSubscription>> GetByUserIdAsync(string userId) => Task.FromResult(GetByUserId(userId));
 
     /// <summary>
     /// Get a subscription by its endpoint URL.
     /// </summary>
-    public PushSubscription? GetByEndpoint(string endpoint)
-    {
-        return GetAll().FirstOrDefault(s => s.Endpoint == endpoint);
-    }
+    public PushSubscription? GetByEndpoint(string endpoint) =>
+        GetAll().FirstOrDefault(s => s.Endpoint == endpoint);
 
     public Task<PushSubscription?> GetByEndpointAsync(string endpoint) => Task.FromResult(GetByEndpoint(endpoint));
 
@@ -91,5 +80,3 @@ public class PushSubscriptionRepository : JsonRepository<PushSubscription>
         return Task.CompletedTask;
     }
 }
-
-

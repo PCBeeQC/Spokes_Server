@@ -1,10 +1,5 @@
 namespace Spokes_Server.Core.Models.Core;
 
-using Spokes_Server.Core.Models.Projects;
-using Spokes_Server.Core.Models.Accounting;
-using Spokes_Server.Core.Models.Communication;
-using Spokes_Server.Core.Models.HR;
-
 using Spokes_Server.Core.Data;
 
 /// <summary>
@@ -18,10 +13,7 @@ public class PushSubscription : IDataEntity
     public override bool Equals(object? obj)
     {
         if (ReferenceEquals(this, obj)) return true;
-        if (obj == null || GetType() != obj.GetType())
-            return false;
-        var other = (PushSubscription)obj;
-        return Id == other.Id;
+        return obj is PushSubscription other && Id == other.Id;
     }
 
     public override int GetHashCode() => Id?.GetHashCode() ?? base.GetHashCode();

@@ -1,13 +1,11 @@
 @using Spokes_Server.Core.Models.Core
 @using Spokes_Server.Core.Models.Projects
-@using Spokes_Server.Core.Models.Accounting
-@using Spokes_Server.Core.Models.Communication
 @using Spokes_Server.Core.Models.HR
 @using Spokes_Server.Core.Data
 @using Spokes_Server.Components.Dialogs
+@using Spokes_Server.Components.Shared
 @using MudBlazor
 @inject Database Db
-@inject IDialogService DialogService
 @inject ISnackbar Snackbar
 
 <MudDialog>
@@ -79,7 +77,7 @@
                 <MudTabPanel Text="Client Info" Disabled="@Project.IsInternal">
                     <MudGrid>
                         <MudItem xs="12">
-                            <Spokes_Server.Components.Shared.CompanyContactSelector 
+                            <CompanyContactSelector 
                                 Label="Select Client"
                                 ContactLabel="Select Contact Person"
                                 Icon="@Icons.Material.Filled.Search"
@@ -316,11 +314,6 @@
 </MudDialog>
 
 @code {
-    private string _nullString = null;
-    [Inject] public Microsoft.AspNetCore.Hosting.IWebHostEnvironment Environment { get; set; }
-
-
-
     [CascadingParameter] IMudDialogInstance MudDialog { get; set; }
     [Parameter] public Project Project { get; set; } = new();
 
@@ -357,26 +350,16 @@
     }
 
     // Data Sources
-    private List<DocumentTemplate> Templates = new();
-    private List<Supplier> AllContacts = new();
-    private List<Employee> Employees = new();
-    private List<WorkType> WorkTypes = new();
-    private List<Team> Teams = new();
-    private List<ProjectStatusConfig> AvailableStatuses = new();
+    private List<DocumentTemplate> Templates = [];
+    private List<Employee> Employees = [];
+    private List<WorkType> WorkTypes = [];
+    private List<Team> Teams = [];
+    private List<ProjectStatusConfig> AvailableStatuses = [];
 
     // Selection State
     private string? newOverrideWorkTypeId;
     private decimal DefaultInternalRate;
     private decimal TotalInternalCommission => Project.Commissions.Where(c => c.Type == "Internal").Sum(c => c.Percentage);
-    private Supplier? selectedClient;
-    private ContactPerson? selectedContact;
-    
-
-
-    // Allocation Helpers
-    private string? newAllocationTaskId;
-    private string? newAllocationTeamId;
-    private decimal newAllocationHours;
 
     // Access Control Helpers
     private IEnumerable<string> selectedAllowedTeamIds = new HashSet<string>();
@@ -385,14 +368,13 @@
     protected override void OnInitialized()
     {
         Templates = Db.DocumentTemplates.GetAll().OrderBy(t => t.Name).ToList();
-        AllContacts = Db.Suppliers.GetAll().OrderBy(s => s.Info.BusinessName).ToList();
         Employees = Db.Employees.GetAll().Where(e => e.IsActive).OrderBy(e => e.FirstName).ToList();
         WorkTypes = Db.WorkTypes.GetAll().Where(w => w.IsActive).OrderBy(w => w.Name).ToList();
         Teams = Db.Teams.GetAll().OrderBy(t => t.Name).ToList();
 
         var profile = Db.CompanyProfile.Get();
         DefaultInternalRate = profile.DefaultInternalCommission;
-        AvailableStatuses = profile.ProjectStatuses ?? new List<ProjectStatusConfig>();
+        AvailableStatuses = profile.ProjectStatuses ?? [];
 
         // 1. Set Default Template for new projects
         if (string.IsNullOrEmpty(Project.Id) || string.IsNullOrEmpty(Project.DefaultTemplateId))
@@ -453,7 +435,6 @@
 
     private void OnClientSelected(Supplier s)
     {
-        selectedClient = s;
         if (s != null)
         {
             // Snapshot the data into the Project (Deep Copy of Business Info)
@@ -472,12 +453,10 @@
             var primary = s.Contacts.FirstOrDefault(c => c.IsPrimary) ?? s.Contacts.FirstOrDefault();
             if (primary != null)
             {
-                selectedContact = primary;
                 UpdateProjectContactInfo(primary);
             }
             else
             {
-                selectedContact = null;
                 // Fallback to legacy info if no contacts list (should be migrated, but just in case)
                 Project.Client.ContactPersonPrefix = s.Info.ContactPersonPrefix;
                 Project.Client.ContactPersonName = s.Info.ContactPersonName;
@@ -490,7 +469,6 @@
 
     private void OnContactSelected(ContactPerson contact)
     {
-        selectedContact = contact;
         if (contact != null)
         {
             UpdateProjectContactInfo(contact);

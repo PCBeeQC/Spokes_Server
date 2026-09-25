@@ -32,19 +32,6 @@ export function initInfiniteScroll(containerId, sentinelId, dotNetHelper) {
     currentObserver.observe(sentinel);
 }
 
-export async function downloadFileFromStream(fileName, contentStreamReference) {
-    const arrayBuffer = await contentStreamReference.arrayBuffer();
-    const blob = new Blob([arrayBuffer]);
-    const url = URL.createObjectURL(blob);
-    const anchorElement = document.createElement('a');
-    anchorElement.href = url;
-    anchorElement.download = fileName ?? '';
-    anchorElement.click();
-    anchorElement.remove();
-    URL.revokeObjectURL(url);
-}
-
-// Robust scroll retention strategies
 
 export function printEmail(subject, from, to, date, htmlContent) {
     const iframe = document.createElement('iframe');

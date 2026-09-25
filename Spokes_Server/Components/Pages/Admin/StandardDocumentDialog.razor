@@ -1,8 +1,3 @@
-@using MudBlazor
-@using Spokes_Server.Core.Models.Core
-@using Spokes_Server.Core.Services.Core
-@using Spokes_Server.Core.Data
-@using Spokes_Server.Components.Shared
 @inject Database Db
 @inject ISnackbar Snackbar
 
@@ -46,10 +41,10 @@
 @code {
     [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
     [Parameter] public StandardDocument Document { get; set; } = new();
-    [Parameter] public bool IsNew { get; set; } = false;
+    [Parameter] public bool IsNew { get; set; }
 
     private MudForm form = default!;
-    private List<ContextTagDefinition> _tags = new();
+    private List<ContextTagDefinition> _tags = [];
 
     protected override void OnInitialized()
     {
@@ -90,17 +85,9 @@
     {
         var oldTag = $"@Block.{rename.OldName}";
         var newTag = $"@Block.{rename.NewName}";
-        Console.WriteLine($"[BlockRename] Old: '{oldTag}' New: '{newTag}'");
-        Console.WriteLine($"[BlockRename] Body contains old tag: {Document.Body.Contains(oldTag)}");
-        Console.WriteLine($"[BlockRename] Body snippet: ...{Document.Body[Math.Max(0, Document.Body.Length - 100)..]}");
         if (Document.Body.Contains(oldTag))
         {
             Document.Body = Document.Body.Replace(oldTag, newTag);
-            Console.WriteLine($"[BlockRename] Replaced successfully");
-        }
-        else
-        {
-            Console.WriteLine($"[BlockRename] WARNING: Old tag not found in body!");
         }
         RefreshTags();
     }

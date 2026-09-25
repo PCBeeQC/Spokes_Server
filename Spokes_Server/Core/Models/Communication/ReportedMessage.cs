@@ -9,10 +9,7 @@ public class ReportedMessage : IDataEntity
     public override bool Equals(object? obj)
     {
         if (ReferenceEquals(this, obj)) return true;
-        if (obj == null || GetType() != obj.GetType())
-            return false;
-        var other = (ReportedMessage)obj;
-        return Id == other.Id;
+        return obj is ReportedMessage other && Id == other.Id;
     }
 
     public override int GetHashCode() => Id?.GetHashCode() ?? base.GetHashCode();
@@ -56,7 +53,7 @@ public class ReportedMessage : IDataEntity
     /// <summary>
     /// Snapshot of attachments at the time of reporting.
     /// </summary>
-    public List<ChatAttachment> Attachments { get; set; } = new();
+    public List<ChatAttachment> Attachments { get; set; } = [];
 
     /// <summary>
     /// Action taken when the report was resolved (e.g., "Dismissed", "Deleted Message").

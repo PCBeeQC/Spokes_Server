@@ -1,12 +1,4 @@
-@using Spokes_Server.Core.Data
-@using Spokes_Server.Core.Models.Core
-@using Spokes_Server.Core.Models.Projects
-@using Spokes_Server.Core.Models.Accounting
-@using Spokes_Server.Core.Models.Communication
-@using Spokes_Server.Core.Models.HR
-@using Spokes_Server.Core.Services
 @using System.Globalization
-@inject Database Db
 @inject BoardService BoardService
 @inject IDialogService DialogService
 
@@ -52,7 +44,7 @@
             var cardsForDay = GetCardsForDate(date);
 
             <div class="d-flex flex-column pa-1"
-                style="background-color: @(isCurrentMonth ? "var(--mud-palette-surface)" : "var(--mud-palette-background-grey)"); min-height: 100px; overflow: hidden;">
+                style="background-color: @(isCurrentMonth ? "var(--mud-palette-surface)" : "var(--mud-palette-background-grey)"); min-height: 100px; overflow: hidden; @(isToday ? "outline: 2px solid var(--mud-palette-primary); outline-offset: -2px; border-radius: 8px; position: relative; z-index: 1;" : "")">
                 <div class="d-flex justify-content-between align-items-center mb-1">
                     <MudText Typo="Typo.body2"
                         Color="@(isToday? Color.Primary: (isCurrentMonth ? Color.Default : Color.Secondary))"

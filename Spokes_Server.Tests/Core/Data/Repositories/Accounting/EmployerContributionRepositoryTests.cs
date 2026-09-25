@@ -1,25 +1,23 @@
-using Spokes_Server.Core.Data;
-using Spokes_Server.Core.Data.Repositories.Accounting;
-using Spokes_Server.Core.Models.Accounting;
+using System.Text.Json;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Moq;
-using System;
-using System.IO;
-using System.Linq;
+using Spokes_Server.Core.Data;
+using Spokes_Server.Core.Data.Repositories.Accounting;
+using Spokes_Server.Core.Models.Accounting;
 using Xunit;
 
-namespace Spokes_Server.Tests.Core.Data.Repositories.Accounting
-{
-    public class EmployerContributionRepositoryTests : IDisposable
-    {
-        private readonly string _testDataDir;
-        private readonly DiskPersistenceService _writer;
-        private readonly EmployerContributionRepository _repo;
+namespace Spokes_Server.Tests.Core.Data.Repositories.Accounting;
 
-        public EmployerContributionRepositoryTests()
-        {
-            _testDataDir = Path.Combine(Path.GetTempPath(), "Spokes_Test_EmpCont_" + Guid.NewGuid().ToString());
+public class EmployerContributionRepositoryTests : IDisposable
+{
+    private readonly string _testDataDir;
+    private readonly DiskPersistenceService _writer;
+    private readonly EmployerContributionRepository _repo;
+
+    public EmployerContributionRepositoryTests()
+    {
+        _testDataDir = Path.Combine(Path.GetTempPath(), $"Spokes_Test_EmpCont_{Guid.NewGuid()}");
 
             var mockConfig = new Mock<IConfiguration>();
             mockConfig.Setup(c => c["DataPath"]).Returns(_testDataDir);
@@ -59,7 +57,7 @@ namespace Spokes_Server.Tests.Core.Data.Repositories.Accounting
             Directory.CreateDirectory(expectedDir);
 
             var item = new EmployerContribution { Id = "ec3", Name = "Pension" };
-            File.WriteAllText(Path.Combine(expectedDir, "contribution.json"), System.Text.Json.JsonSerializer.Serialize(item));
+            File.WriteAllText(Path.Combine(expectedDir, "contribution.json"), JsonSerializer.Serialize(item));
 
             _repo.LoadFromDisk();
 
@@ -78,5 +76,42 @@ namespace Spokes_Server.Tests.Core.Data.Repositories.Accounting
             _repo.Delete("ec2");
             Assert.Empty(_repo.GetAll());
         }
+
+        [Fact]
+        public void Constructor_WithNullDataPath_UsesDefaultDataFolder()
+        {
+            var mockConfig = new Mock<IConfiguration>();
+            mockConfig.Setup(c => c["DataPath"]).Returns((string?)null);
+
+            var repo = new EmployerContributionRepository(_writer, mockConfig.Object);
+
+            Assert.NotNull(repo);
+        }
+
+        [Fact]
+        public void GetFilePath_WritesToNestedFolderPerItem()
+        {
+            var item = new EmployerContribution { Id = "ec-100", Name = "Health Insurance" };
+
+            _repo.Save(item);
+            _writer.FlushAll();
+
+            var expectedPath = Path.Combine(_testDataDir, "EmployerContributions", "ec-100", "contribution.json");
+            Assert.True(File.Exists(expectedPath));
+        }
+
+        [Fact]
+        public void GetById_ReturnsCorrectItem()
+        {
+            var item = new EmployerContribution { Id = "ec-100", Name = "Health Insurance" };
+            _repo.Save(item);
+
+            var retrieved = _repo.GetById("ec-100");
+            Assert.NotNull(retrieved);
+            Assert.Equal("ec-100", retrieved.Id);
+            Assert.Equal("Health Insurance", retrieved.Name);
+
+            var notFound = _repo.GetById("unknown-id");
+            Assert.Null(notFound);
+        }
     }
-}

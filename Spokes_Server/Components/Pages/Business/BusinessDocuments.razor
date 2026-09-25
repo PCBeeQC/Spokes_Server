@@ -1,14 +1,9 @@
 @page "/business/documents"
-@using Spokes_Server.Core.Models.Core
-@using Spokes_Server.Core.Models.Projects
-@using Spokes_Server.Core.Data
 @using Spokes_Server.Core.Constants
-@using Spokes_Server.Components.Shared
 @inject Database Db
 @inject IDialogService DialogService
 @inject ISnackbar Snackbar
 @inject NavigationManager Nav
-@using Microsoft.AspNetCore.Components.Authorization
 @inject UserService UserService
 
 <PageTitle>Business Documents</PageTitle>
@@ -69,8 +64,8 @@
 </MudPaper>
 
 @code {
-    private List<ProjectDocument> _documents = new();
-    private bool CanEdit = false;
+    private List<ProjectDocument> _documents = [];
+    private bool CanEdit;
 
     protected override async Task OnInitializedAsync()
     {

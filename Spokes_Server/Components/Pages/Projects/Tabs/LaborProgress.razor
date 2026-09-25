@@ -1,12 +1,9 @@
 @using Spokes_Server.Core.Models.Core
 @using Spokes_Server.Core.Models.Projects
-@using Spokes_Server.Core.Models.Accounting
-@using Spokes_Server.Core.Models.Communication
 @using Spokes_Server.Core.Models.HR
 @using Spokes_Server.Core.Data
 @using System.Globalization
 @inject Database Db
-@inject Spokes_Server.Core.Services.Accounting.FinancialCalculationEngine CalcEngine
 
 @if (SubTaskGroups.Any())
 {
@@ -69,12 +66,9 @@ else
 @code {
     [Parameter] public string ProjectId { get; set; }
 
-    private List<SubTaskGroupViewModels> SubTaskGroups = new();
+    private List<SubTaskGroupViewModels> SubTaskGroups = [];
 
-    protected override void OnInitialized()
-    {
-        LoadData();
-    }
+    protected override void OnInitialized() => LoadData();
 
     private void LoadData()
     {
@@ -83,7 +77,7 @@ else
         var employees = Db.Employees.GetAll().ToDictionary(x => x.Id, x => x);
 
         // Flatten entries
-        var entries = new List<LaborEntry>();
+        List<LaborEntry> entries = [];
 
         foreach (var ts in allTimesheets)
         {
@@ -94,8 +88,6 @@ else
                     entries.Add(new LaborEntry
                         {
                             EmployeeId = ts.EmployeeId,
-                            EmployeeName = employees.TryGetValue(ts.EmployeeId, out var emp) ? emp.FirstName + " " + emp.LastName[0] + "." :
-                        "Unknown",
                             WorkTypeId = entry.WorkTypeId,
                             SubTaskId = entry.SubTaskId,
                             Year = ts.Year,
@@ -164,7 +156,6 @@ else
     private class LaborEntry
     {
         public string EmployeeId { get; set; }
-        public string EmployeeName { get; set; }
         public string WorkTypeId { get; set; }
         public string? SubTaskId { get; set; }
         public int Year { get; set; }
@@ -174,16 +165,13 @@ else
 
     private class SubTaskGroupViewModels
     {
-        public string Title { get; set; } // Changed property name
+        public string Title { get; set; }
         public string TaskName { get; set; }
         public string SubTaskName { get; set; }
-        public List<EmployeeHeader> Employees { get; set; } = new();
-        public List<RowViewModel> Rows { get; set; } = new();
+        public List<EmployeeHeader> Employees { get; set; } = [];
+        public List<RowViewModel> Rows { get; set; } = [];
 
-        public decimal GetTotalForEmployee(string empId)
-        {
-            return Rows.Sum(r => r.GetHours(empId));
-        }
+        public decimal GetTotalForEmployee(string empId) => Rows.Sum(r => r.GetHours(empId));
 
         public decimal GrandTotal => Rows.Sum(r => r.TotalHours);
     }
@@ -198,7 +186,7 @@ else
     {
         public int Year { get; set; }
         public int Week { get; set; }
-        public Dictionary<string, decimal> EmployeeHours { get; set; } = new();
+        public Dictionary<string, decimal> EmployeeHours { get; set; } = [];
 
         public string WeekLabel
         {
@@ -216,10 +204,8 @@ else
             }
         }
 
-        public decimal GetHours(string empId)
-        {
-            return EmployeeHours.TryGetValue(empId, out var h) ? h : 0;
-        }
+        public decimal GetHours(string empId) =>
+            EmployeeHours.TryGetValue(empId, out var h) ? h : 0;
 
         public decimal TotalHours => EmployeeHours.Values.Sum();
     }

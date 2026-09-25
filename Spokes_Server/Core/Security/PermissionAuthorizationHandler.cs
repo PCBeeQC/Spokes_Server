@@ -1,9 +1,7 @@
-using System.Threading.Tasks;
 using Microsoft.AspNetCore.Authorization;
-using Spokes_Server.Core.Data;
 using Spokes_Server.Aggregate;
-using Spokes_Server.Core.Models.HR;
 using Spokes_Server.Core.Constants;
+using Spokes_Server.Core.Models.HR;
 
 namespace Spokes_Server.Core.Security;
 
@@ -44,19 +42,13 @@ public class PermissionAuthorizationHandler : AuthorizationHandler<PermissionReq
 
         if (employee != null)
         {
-            if (requirement.Permission == AppPermissions.Admin.RoleName)
+            var isAuthorized = requirement.Permission == AppPermissions.Admin.RoleName
+                ? employee.IsAdmin
+                : employee.HasPermission(requirement.Permission);
+
+            if (isAuthorized)
             {
-                if (employee.IsAdmin)
-                {
-                    context.Succeed(requirement);
-                }
-            }
-            else
-            {
-                if (employee.HasPermission(requirement.Permission))
-                {
-                    context.Succeed(requirement);
-                }
+                context.Succeed(requirement);
             }
         }
 

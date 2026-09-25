@@ -1,19 +1,12 @@
-using Spokes_Server.Core.Services.Communication;
-using Spokes_Server.Core.Services.Projects;
-using Spokes_Server.Core.Services.Core;
-using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Authorization;
-using Spokes_Server.Core.Services;
-using Spokes_Server.Core.Data.Repositories.Core;
-using Spokes_Server.Core.Data.Repositories.Projects;
-using Spokes_Server.Core.Data.Repositories.Accounting;
-using Spokes_Server.Core.Data.Repositories.Communication;
-using Spokes_Server.Core.Data.Repositories.HR;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.StaticFiles;
-using Microsoft.AspNetCore.DataProtection;
 using SkiaSharp;
-using Spokes_Server.Aggregate;
-using Microsoft.Extensions.Caching.Memory;
+using Spokes_Server.Core.Data.Repositories.Communication;
+using Spokes_Server.Core.Data.Repositories.Core;
+using Spokes_Server.Core.Data.Repositories.HR;
+using Spokes_Server.Core.Services.Core;
+
 namespace Spokes_Server.Controllers;
 
 [Route("spokesapi/files")]
@@ -35,6 +28,7 @@ public class FileController : SpokesControllerBase
     private readonly UserService _userService;
     private readonly ImageProcessingService _imageService;
     private readonly DeviceSessionRepository _deviceSessions;
+    private readonly Spokes_Server.Core.Services.Core.IStorageHealthService? _storageHealth;
 
     public FileController(
         IFileService fileService,
@@ -50,7 +44,8 @@ public class FileController : SpokesControllerBase
         ServerEscrowService escrowService,
         UserService userService,
         ImageProcessingService imageService,
-        DeviceSessionRepository deviceSessions)
+        DeviceSessionRepository deviceSessions,
+        Spokes_Server.Core.Services.Core.IStorageHealthService? storageHealth = null)
     {
         _fileService = fileService;
         _providers = providers;
@@ -66,6 +61,7 @@ public class FileController : SpokesControllerBase
         _userService = userService;
         _imageService = imageService;
         _deviceSessions = deviceSessions;
+        _storageHealth = storageHealth;
     }
 
     // Extensions that should be forced to download instead of inline display (XSS prevention)
@@ -142,8 +138,8 @@ public class FileController : SpokesControllerBase
             return BadRequest("Invalid path parameters");
         }
 
-        var config = HttpContext.RequestServices.GetRequiredService<IConfiguration>();
-        if (config.GetValue<bool>("Spokes_DemoMode"))
+        var config = HttpContext.RequestServices?.GetService<IConfiguration>();
+        if (config?.GetValue<bool>("Spokes_DemoMode") == true)
         {
             var demoUser = _userService.GetEmployee(User);
             if (demoUser == null || !demoUser.IsAdmin)
@@ -156,6 +152,12 @@ public class FileController : SpokesControllerBase
         {
             return BadRequest("No files uploaded");
         }
+
+        if (_storageHealth != null && !_storageHealth.IsUploadAllowed)
+        {
+            return BadRequest("Server storage is critically full (< 100 MB remaining). Uploads are temporarily paused to protect database integrity. Please free disk space on the server.");
+        }
+
 
         var user = _userService.GetEmployee(User);
         if (user == null || !user.IsActive || user.IsSuspended || user.IsBanned) return Unauthorized("Authentication required.");
@@ -192,11 +194,34 @@ public class FileController : SpokesControllerBase
             var channel = _channels.GetById(contextId);
             if (channel != null && channel.IsEncrypted)
             {
-                encryptionKey = tokenEncryptionKey;
-                
-                if (encryptionKey == null)
+                if (!string.IsNullOrEmpty(tokenEncryptionKey))
                 {
-                    return BadRequest("You do not have the encryption key for this channel (missing token).");
+                    encryptionKey = tokenEncryptionKey;
+                }
+                else
+                {
+                    if (!_keystore.IsUnlocked && HttpContext != null && !string.IsNullOrEmpty(user.EncryptedPrivateKey))
+                    {
+                        _keystore.TryInitializeFromVaultCookie(HttpContext, user.Id, user.EncryptedPrivateKey, _crypto);
+                    }
+
+                    if (_keystore.IsUnlocked)
+                    {
+                        var privateKey = _keystore.GetPrivateKey();
+                        if (privateKey != null && channel.EncryptedChannelKeys.TryGetValue(user.Id, out var cipherKey))
+                        {
+                            try { encryptionKey = _crypto.DecryptRsa(cipherKey, privateKey); }
+                            catch (Exception ex)
+                            {
+                                _logger.LogWarning("Failed to decrypt channel key for user {UserId}: {Message}", user.Id, ex.Message);
+                            }
+                        }
+                    }
+
+                    if (encryptionKey == null)
+                    {
+                        return BadRequest("You do not have the encryption key for this channel (missing token).");
+                    }
                 }
             }
         }
@@ -283,7 +308,7 @@ public class FileController : SpokesControllerBase
                                                 mainHeight = maxMainDim;
                                             }
 
-                                            var resizedBitmap = orientedBitmap.Resize(new SKImageInfo(mainWidth, mainHeight), SKFilterQuality.Medium);
+                                            var resizedBitmap = orientedBitmap.Resize(new SKImageInfo(mainWidth, mainHeight), new SKSamplingOptions(SKFilterMode.Linear));
                                             if (orientedBitmap != bitmap) orientedBitmap.Dispose();
                                             orientedBitmap = resizedBitmap;
                                             modifiedMainImage = true;
@@ -328,7 +353,7 @@ public class FileController : SpokesControllerBase
                                         SKBitmap thumbBitmap = orientedBitmap;
                                         if (thumbWidth != orientedBitmap.Width || thumbHeight != orientedBitmap.Height)
                                         {
-                                            thumbBitmap = orientedBitmap.Resize(new SKImageInfo(thumbWidth, thumbHeight), SKFilterQuality.Medium);
+                                            thumbBitmap = orientedBitmap.Resize(new SKImageInfo(thumbWidth, thumbHeight), new SKSamplingOptions(SKFilterMode.Linear));
                                             didResize = true;
                                         }
 
@@ -423,8 +448,8 @@ public class FileController : SpokesControllerBase
             return BadRequest("Thumbnails are not supported for temporary files.");
         }
 
-        var config = HttpContext.RequestServices.GetRequiredService<IConfiguration>();
-        if (config.GetValue<bool>("Spokes_DemoMode"))
+        var config = HttpContext.RequestServices?.GetService<IConfiguration>();
+        if (config?.GetValue<bool>("Spokes_DemoMode") == true)
         {
             var demoUser = _userService.GetEmployee(User);
             if (demoUser == null || !demoUser.IsAdmin)
@@ -435,6 +460,12 @@ public class FileController : SpokesControllerBase
 
         if (file == null || file.Length == 0) return BadRequest("No file uploaded");
         if (file.Length > 5 * 1024 * 1024) return BadRequest("Thumbnail must be smaller than 5MB");
+
+        if (_storageHealth != null && !_storageHealth.IsUploadAllowed)
+        {
+            return BadRequest("Server storage is critically full (< 100 MB remaining). Uploads are temporarily paused to protect database integrity. Please free disk space on the server.");
+        }
+
 
         var user = _userService.GetEmployee(User);
         
@@ -459,7 +490,7 @@ public class FileController : SpokesControllerBase
             if (category.Equals("albums", StringComparison.OrdinalIgnoreCase))
             {
                 var album = _albums.GetById(contextId);
-                if (album == null)
+                if (album == null || (album.OwnerId != user.Id && !album.ContributorUserIds.Contains(user.Id)))
                 {
                     return Forbid();
                 }
@@ -555,15 +586,11 @@ public class FileController : SpokesControllerBase
 
     [HttpGet("thumb/{category}/{contextId}/{fileName}")]
     public Task<IActionResult> GetFileThumb(string category, string contextId, string fileName, [FromQuery] string? t = null)
-    {
-        return GetFileInternal(category, contextId, fileName, t, thumb: true);
-    }
+        => GetFileInternal(category, contextId, fileName, t, thumb: true);
 
     [HttpGet("{category}/{contextId}/{fileName}")]
     public Task<IActionResult> GetFile(string category, string contextId, string fileName, [FromQuery] string? t = null)
-    {
-        return GetFileInternal(category, contextId, fileName, t, thumb: false);
-    }
+        => GetFileInternal(category, contextId, fileName, t, thumb: false);
 
     [HttpGet("demo-media/{fileName}")]
     public IActionResult GetDemoMedia(string fileName)
@@ -592,10 +619,7 @@ public class FileController : SpokesControllerBase
 
     [HttpGet("thumb/demo-media/{fileName}")]
     public IActionResult GetDemoMediaThumb(string fileName)
-    {
-        // Fall back to returning the full size image for demo media thumbnails
-        return GetDemoMedia(fileName);
-    }
+        => GetDemoMedia(fileName);
 
     /// <summary>
     /// Validates a self-contained DataProtection-encrypted token and extracts the AES encryption key.
@@ -606,7 +630,7 @@ public class FileController : SpokesControllerBase
     {
         if (string.IsNullOrEmpty(t)) return null;
 
-        var fileTokenService = HttpContext.RequestServices.GetRequiredService<Spokes_Server.Core.Services.Security.FileTokenService>();
+        var fileTokenService = HttpContext.RequestServices.GetRequiredService<FileTokenService>();
         var payload = fileTokenService.UnprotectToken(t);
 
         if (payload == null)
@@ -703,7 +727,7 @@ public class FileController : SpokesControllerBase
         // Force download for potentially dangerous content types (prevents XSS)
         if (ForceDownloadExtensions.Contains(extension) || contentType.StartsWith("text/html"))
         {
-            Response.Headers.Append("Content-Disposition", $"attachment; filename=\"{Path.GetFileName(fileName)}\"");
+            Response.Headers.Append("Content-Disposition", $"attachment; filename=\"{fileName}\"");
         }
 
         // Add security headers
@@ -746,7 +770,7 @@ public class FileController : SpokesControllerBase
                         var keyBytes = Convert.FromBase64String(encryptionKey);
 
                         var fileStream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
-                        var seekableStream = new Spokes_Server.Core.Services.Core.SeekableAesStream(fileStream, keyBytes);
+                        var seekableStream = new SeekableAesStream(fileStream, keyBytes);
 
                         // Safely stream the fully seekable file, letting ASP.NET Core handle range processing
                         return File(seekableStream, contentType, enableRangeProcessing: true);
@@ -772,7 +796,7 @@ public class FileController : SpokesControllerBase
                 {
                     var keyBytes = Convert.FromBase64String(encryptionKey);
                     var fileStream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
-                    var seekableStream = new Spokes_Server.Core.Services.Core.SeekableAesStream(fileStream, keyBytes);
+                    var seekableStream = new SeekableAesStream(fileStream, keyBytes);
                     return File(seekableStream, contentType, enableRangeProcessing: true);
                 }
                 else
@@ -831,7 +855,6 @@ public class FileController : SpokesControllerBase
                 canvas.Scale(1, -1);
                 break;
             case SKEncodedOrigin.LeftTop:
-                canvas.Translate(0, 0);
                 canvas.RotateDegrees(90);
                 canvas.Scale(-1, 1);
                 break;

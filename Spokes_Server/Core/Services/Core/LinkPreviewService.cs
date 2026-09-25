@@ -1,14 +1,6 @@
-using Spokes_Server.Core.Services.Communication;
-using Spokes_Server.Core.Services.Projects;
-using Spokes_Server.Core.Services.Core;
 using System.Collections.Concurrent;
-using System.Net.Http;
 using System.Text.RegularExpressions;
 using Spokes_Server.Core.Models.Core;
-using Spokes_Server.Core.Models.Projects;
-using Spokes_Server.Core.Models.Accounting;
-using Spokes_Server.Core.Models.Communication;
-using Spokes_Server.Core.Models.HR;
 using HtmlAgilityPack;
 
 namespace Spokes_Server.Core.Services.Core;
@@ -48,7 +40,7 @@ public class LinkPreviewService : IDisposable
     public List<string> ExtractUrls(string content)
     {
         if (string.IsNullOrWhiteSpace(content))
-            return new List<string>();
+            return [];
 
         // Strip code blocks to avoid extracting URLs from code snippets
         var strippedContent = Regex.Replace(content, @"\[code(?:=([^\]]+))?\].*?\[/code\]", "", RegexOptions.Singleline | RegexOptions.IgnoreCase);
@@ -263,7 +255,8 @@ public class LinkPreviewService : IDisposable
     {
         try
         {
-            return new Uri(url).Host.Replace("www.", "");
+            var host = new Uri(url).Host;
+            return host.StartsWith("www.", StringComparison.OrdinalIgnoreCase) ? host[4..] : host;
         }
         catch
         {
@@ -277,5 +270,3 @@ public class LinkPreviewService : IDisposable
         _fetchLock.Dispose();
     }
 }
-
-

@@ -38,7 +38,7 @@ public class LinkTargetExtension : IMarkdownExtension
     /// <summary>
     /// Custom renderer for LinkInline that injects target="_blank" on non-image links.
     /// </summary>
-    private class ExternalLinkInlineRenderer : LinkInlineRenderer
+    private sealed class ExternalLinkInlineRenderer : LinkInlineRenderer
     {
         protected override void Write(HtmlRenderer renderer, LinkInline link)
         {
@@ -54,7 +54,7 @@ public class LinkTargetExtension : IMarkdownExtension
     /// <summary>
     /// Custom renderer for AutolinkInline that injects target="_blank".
     /// </summary>
-    private class ExternalAutolinkInlineRenderer : AutolinkInlineRenderer
+    private sealed class ExternalAutolinkInlineRenderer : AutolinkInlineRenderer
     {
         protected override void Write(HtmlRenderer renderer, AutolinkInline link)
         {

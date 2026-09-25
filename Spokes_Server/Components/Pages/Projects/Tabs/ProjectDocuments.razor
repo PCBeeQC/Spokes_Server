@@ -8,9 +8,7 @@
 @inject IDialogService DialogService
 @inject ISnackbar Snackbar
 @inject NavigationManager Nav
-@using Microsoft.AspNetCore.Components.Authorization
 @inject UserService UserService
-@inject Spokes_Server.Core.Services.Accounting.FinancialCalculationEngine CalcEngine
 
 <MudGrid Class="mb-4 align-center">
     <MudItem xs="6">
@@ -224,7 +222,7 @@
 @code {
     [Parameter] public string ProjectId { get; set; } = string.Empty;
 
-    private List<ProjectDocument> _documents = new();
+    private List<ProjectDocument> _documents = [];
     private bool CanEdit = false;
     private CompanyProfile Profile;
 
@@ -260,7 +258,7 @@
         public decimal GrandTotal => NetTotal + TaxAmount;
     }
 
-    private List<PurchaseRow> PurchaseRows = new();
+    private List<PurchaseRow> PurchaseRows = [];
     private decimal TotalPurchaseCost => PurchaseRows.Sum(p => p.GrandTotal);
 
     private void LoadPurchases()
@@ -392,10 +390,8 @@
         }
     }
 
-    private void OpenViewer(ProjectDocument doc)
-    {
+    private void OpenViewer(ProjectDocument doc) =>
         Nav.NavigateTo($"/projects/{ProjectId}/documents/{doc.Id}");
-    }
 
     private async Task OnDelete(ProjectDocument doc)
     {
@@ -443,12 +439,7 @@
         AutoSave();
     }
 
-    private void AutoSave()
-    {
-        Db.Projects.Save(Project);
-    }
-
-    [Inject] private IFileService FileService { get; set; } = default!;
+    private void AutoSave() => Db.Projects.Save(Project);
 
     private void HandlePoApiUpload(List<ApiFileUpload.UploadResult> results, ClientPO po)
     {

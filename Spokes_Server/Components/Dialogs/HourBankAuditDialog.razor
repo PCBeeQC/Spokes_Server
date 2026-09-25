@@ -1,0 +1,71 @@
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Services.HR
+@using Spokes_Server.Core.Services.Core
+@inject OvertimeService OvertimeService
+@inject UserService UserService
+@inject Spokes_Server.Aggregate.Database Db
+
+<MudDialog>
+    <DialogContent>
+        <MudTable Items="AuditRecords" Dense="true" Hover="true" FixedHeader="true" Height="400px" Outlined="true" Elevation="0">
+            <HeaderContent>
+                <MudTh>Date</MudTh>
+                <MudTh>Type</MudTh>
+                <MudTh>Hours</MudTh>
+                <MudTh>Description</MudTh>
+            </HeaderContent>
+            <RowTemplate>
+                <MudTd DataLabel="Date">@context.Date.ToShortDateString()</MudTd>
+                <MudTd DataLabel="Type">
+                    @if (context.Type == "System")
+                    {
+                        <MudChip T="string" Color="Color.Info" Size="Size.Small" Variant="Variant.Outlined">System</MudChip>
+                    }
+                    else
+                    {
+                        <MudChip T="string" Color="Color.Warning" Size="Size.Small" Variant="Variant.Outlined">Manual</MudChip>
+                    }
+                </MudTd>
+                <MudTd DataLabel="Hours">
+                    <MudText Color="@(context.Hours >= 0 ? Color.Success : Color.Error)" Typo="Typo.body2">
+                        @(context.Hours > 0 ? "+" : "")@context.Hours.ToString("0.##")
+                    </MudText>
+                </MudTd>
+                <MudTd DataLabel="Description">
+                    @context.Description
+                    @if (context.Type == "Manual" && !string.IsNullOrEmpty(context.CreatedById))
+                    {
+                        var creator = Db.Employees.GetById(context.CreatedById);
+                        <MudText Typo="Typo.caption" Color="Color.Tertiary" Class="d-block mt-1">By: @(creator?.FullName ?? "Unknown")</MudText>
+                    }
+                </MudTd>
+            </RowTemplate>
+            <NoRecordsContent>
+                <MudText Typo="Typo.body2" Color="Color.Tertiary" Class="py-4">No hour bank records found.</MudText>
+            </NoRecordsContent>
+        </MudTable>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Close" Color="Color.Primary">Close</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
+
+    [Parameter]
+    public string EmployeeId { get; set; } = string.Empty;
+
+    private List<HourBankAuditRecord> AuditRecords = new();
+
+    protected override void OnInitialized()
+    {
+        if (!string.IsNullOrEmpty(EmployeeId))
+        {
+            AuditRecords = OvertimeService.GetHourBankAuditTrail(EmployeeId);
+        }
+    }
+
+    private void Close() => MudDialog.Close();
+}
+

@@ -1,14 +1,6 @@
-using Spokes_Server.Core.Models.Core;
-using Spokes_Server.Core.Models.Projects;
-using Spokes_Server.Core.Models.Accounting;
-using Spokes_Server.Core.Models.Communication;
-using Spokes_Server.Core.Models.HR;
+using System.Text.Json;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Configuration;
-using System;
-using System.IO;
-using System.Collections.Generic;
-using System.Linq;
+using Spokes_Server.Core.Models.Communication;
 
 namespace Spokes_Server.Core.Data.Repositories.Communication;
 
@@ -58,7 +50,7 @@ public class PrivateContactRepository
                         try
                         {
                             var json = File.ReadAllText(file);
-                            var item = System.Text.Json.JsonSerializer.Deserialize<ContactPerson>(json);
+                            var item = JsonSerializer.Deserialize<ContactPerson>(json);
                             if (item != null)
                             {
                                 cache[item.Id] = item;
@@ -86,7 +78,7 @@ public class PrivateContactRepository
             {
                 return cache.Values.ToList();
             }
-            return new List<ContactPerson>();
+            return [];
         }
     }
 
@@ -94,14 +86,9 @@ public class PrivateContactRepository
     {
         lock (_lock)
         {
-            if (_employeeCaches.TryGetValue(employeeId, out var cache))
-            {
-                if (cache.TryGetValue(contactId, out var item))
-                {
-                    return item;
-                }
-            }
-            return null;
+            return _employeeCaches.TryGetValue(employeeId, out var cache) && cache.TryGetValue(contactId, out var item)
+                ? item
+                : null;
         }
     }
 
@@ -132,14 +119,10 @@ public class PrivateContactRepository
     {
         lock (_lock)
         {
-            if (_employeeCaches.TryGetValue(employeeId, out var cache))
+            if (_employeeCaches.TryGetValue(employeeId, out var cache) && cache.Remove(contactId))
             {
-                if (cache.ContainsKey(contactId))
-                {
-                    cache.Remove(contactId);
-                    var filePath = Path.Combine(_baseDataPath, "Employees", employeeId, "Contacts", $"{contactId}.json");
-                    _writer.QueueDelete(filePath);
-                }
+                var filePath = Path.Combine(_baseDataPath, "Employees", employeeId, "Contacts", $"{contactId}.json");
+                _writer.QueueDelete(filePath);
             }
         }
     }
@@ -152,5 +135,3 @@ public class PrivateContactRepository
         }
     }
 }
-
-

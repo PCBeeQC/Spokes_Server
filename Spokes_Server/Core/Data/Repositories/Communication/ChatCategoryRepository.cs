@@ -1,19 +1,16 @@
 namespace Spokes_Server.Core.Data.Repositories.Communication;
 
 using Spokes_Server.Core.Models.Communication;
-using Spokes_Server.Core.Data;
 
 public class ChatCategoryRepository : JsonRepository<ChatCategory>
 {
     public ChatCategoryRepository(DiskPersistenceService writer, IConfiguration config)
-        : base(writer, System.IO.Path.Combine(config["DataPath"] ?? System.IO.Path.Combine(AppContext.BaseDirectory, "data"), "chat-categories"), "*.json")
+        : base(writer, Path.Combine(config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data"), "chat-categories"), "*.json")
     {
     }
 
-    protected override string GetFilePath(ChatCategory item)
-    {
-        return System.IO.Path.Combine(_basePath, $"{item.Id}.json");
-    }
+    protected override string GetFilePath(ChatCategory item) =>
+        Path.Combine(_basePath, $"{item.Id}.json");
 
     public void EnsureDefaultCategories()
     {

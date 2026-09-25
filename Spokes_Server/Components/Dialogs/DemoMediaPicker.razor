@@ -1,7 +1,4 @@
-@using System.IO
-@using MudBlazor
 @inject IConfiguration Config
-@inject MudBlazor.ISnackbar Snackbar
 
 <MudDialog>
     <DialogContent>
@@ -42,14 +39,9 @@
     {
         var dataPath = Config["DataPath"] ?? "Data";
         var demoMediaPath = Path.Combine(dataPath, "DemoMedia");
-        if (Directory.Exists(demoMediaPath))
-        {
-            _mediaFiles = Directory.GetFiles(demoMediaPath).ToList();
-        }
-        else
-        {
-            _mediaFiles = new List<string>();
-        }
+        _mediaFiles = Directory.Exists(demoMediaPath)
+            ? Directory.GetFiles(demoMediaPath).ToList()
+            : new List<string>();
     }
 
     private void SelectImage(string fullPath)
@@ -58,8 +50,5 @@
         MudDialog.Close(DialogResult.Ok(Path.GetFileName(fullPath)));
     }
 
-    private void Cancel()
-    {
-        MudDialog.Cancel();
-    }
+    private void Cancel() => MudDialog.Cancel();
 }

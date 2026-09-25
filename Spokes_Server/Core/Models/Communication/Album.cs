@@ -1,9 +1,7 @@
 namespace Spokes_Server.Core.Models.Communication;
 
-using Spokes_Server.Core.Models.Core;
+using System.Text.Json.Serialization;
 using Spokes_Server.Core.Data;
-using System;
-using System.Collections.Generic;
 
 public class Album : IDataEntity
 {
@@ -12,22 +10,19 @@ public class Album : IDataEntity
     public override bool Equals(object? obj)
     {
         if (ReferenceEquals(this, obj)) return true;
-        if (obj == null || GetType() != obj.GetType())
-            return false;
-        var other = (Album)obj;
-        return Id == other.Id;
+        return obj is Album other && Id == other.Id;
     }
 
     public override int GetHashCode() => Id?.GetHashCode() ?? base.GetHashCode();
     public string Title { get; set; } = string.Empty;
     public string Description { get; set; } = string.Empty;
     public string OwnerId { get; set; } = string.Empty;
-    public List<string> SharedWithChannelIds { get; set; } = new();
-    public List<string> ContributorUserIds { get; set; } = new();
+    public List<string> SharedWithChannelIds { get; set; } = [];
+    public List<string> ContributorUserIds { get; set; } = [];
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public bool IsEncrypted { get; set; } = true;
-    public Dictionary<string, string> EncryptedAlbumKeys { get; set; } = new();
-    public List<AlbumMedia> Media { get; set; } = new();
+    public Dictionary<string, string> EncryptedAlbumKeys { get; set; } = [];
+    public List<AlbumMedia> Media { get; set; } = [];
 }
 
 public class AlbumMedia
@@ -39,11 +34,11 @@ public class AlbumMedia
     public long FileSizeBytes { get; set; }
     public DateTime AddedAt { get; set; } = DateTime.UtcNow;
     public string AddedByUserId { get; set; } = string.Empty;
-    public bool HasServerThumbnail { get; set; } = false;
+    public bool HasServerThumbnail { get; set; }
     public int? ImageWidth { get; set; }
     public int? ImageHeight { get; set; }
 
-    [System.Text.Json.Serialization.JsonIgnore]
+    [JsonIgnore]
     public string ThumbnailUrl
     {
         get

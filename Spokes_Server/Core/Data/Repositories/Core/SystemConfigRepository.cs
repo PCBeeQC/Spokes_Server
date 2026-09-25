@@ -9,10 +9,8 @@ public class SystemConfigRepository : JsonRepository<SystemConfig>
     {
     }
 
-    protected override string GetFilePath(SystemConfig item)
-    {
-        return Path.Combine(_basePath, "system_config.json");
-    }
+    protected override string GetFilePath(SystemConfig item) =>
+        Path.Combine(_basePath, "system_config.json");
 
     // Helper to get the ONE system config (creates default if missing)
     public SystemConfig Get()

@@ -1,8 +1,3 @@
-@using Spokes_Server.Core.Models.Projects
-@using Spokes_Server.Core.Models.Accounting
-@using Spokes_Server.Core.Models.Communication
-@using Spokes_Server.Core.Models.HR
-
 <MudDialog>
     <TitleContent>
         <MudText Typo="Typo.h6">
@@ -48,13 +43,13 @@
 @code {
     [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
 
-    [Parameter] public List<Team> Teams { get; set; } = new();
-    [Parameter] public List<Employee> Employees { get; set; } = new();
+    [Parameter] public List<Team> Teams { get; set; } = [];
+    [Parameter] public List<Employee> Employees { get; set; } = [];
     [Parameter] public string? CurrentUserId { get; set; }
     [Parameter] public string Label { get; set; } = "Team";
 
-    private List<Team> _selectedTeams = new();
-    private bool _isEncrypted = false;
+    private List<Team> _selectedTeams = [];
+    private bool _isEncrypted;
 
     private void AddTeam(Team? team)
     {
@@ -64,10 +59,7 @@
         }
     }
 
-    private void RemoveTeam(Team team)
-    {
-        _selectedTeams.RemoveAll(t => t.Id == team.Id);
-    }
+    private void RemoveTeam(Team team) => _selectedTeams.RemoveAll(t => t.Id == team.Id);
 
     private string GetMemberSummary()
     {

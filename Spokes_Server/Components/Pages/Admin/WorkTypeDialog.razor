@@ -1,10 +1,3 @@
-@using Spokes_Server.Core.Models.Core
-@using Spokes_Server.Core.Models.Projects
-@using Spokes_Server.Core.Models.Accounting
-@using Spokes_Server.Core.Models.Communication
-@using Spokes_Server.Core.Models.HR
-@using MudBlazor
-@using Spokes_Server.Core.Data
 @inject Database Db
 @inject IDialogService DialogService
 
@@ -121,11 +114,11 @@
 
     private string newSubTaskName = "";
     private string newLanguageName = "";
-    private IReadOnlyCollection<string> selectedTeams = new HashSet<string>();
-    private List<Team> AllTeams = new();
-    private List<string> TaskLanguages = new();
+    private IReadOnlyCollection<string> selectedTeams = [];
+    private List<Team> AllTeams = [];
+    private List<string> TaskLanguages = [];
     private CompanyProfile profile;
-    private int tabsKey = 0;
+    private int tabsKey;
 
     protected override void OnInitialized()
     {
@@ -133,7 +126,7 @@
         selectedTeams = WorkType.AssignedTeamIds;
 
         profile = Db.CompanyProfile.Get();
-        TaskLanguages = profile?.TaskTranslationLanguages ?? new List<string>();
+        TaskLanguages = profile?.TaskTranslationLanguages ?? [];
 
         // Ensure at least one subtask exists if empty (though Repo handles this too)
         if (!WorkType.SubTasks.Any())
@@ -142,10 +135,10 @@
         }
     }
 
-    private string GetTranslatedTaskName(string lang) => WorkType.NameTranslations.ContainsKey(lang) ? WorkType.NameTranslations[lang] : "";
+    private string GetTranslatedTaskName(string lang) => WorkType.NameTranslations.GetValueOrDefault(lang, "");
     private void SetTranslatedTaskName(string lang, string val) => WorkType.NameTranslations[lang] = val;
 
-    private string GetTranslatedSubTaskName(SubTask subTask, string lang) => subTask.NameTranslations.ContainsKey(lang) ? subTask.NameTranslations[lang] : "";
+    private string GetTranslatedSubTaskName(SubTask subTask, string lang) => subTask.NameTranslations.GetValueOrDefault(lang, "");
     private void SetTranslatedSubTaskName(SubTask subTask, string lang, string val) => subTask.NameTranslations[lang] = val;
 
     private async Task ConfirmDeleteLanguage(string lang)
@@ -162,10 +155,10 @@
             Db.CompanyProfile.Save(profile);
             
             // Clean up current task translations (optional, but good)
-            if (WorkType.NameTranslations.ContainsKey(lang)) WorkType.NameTranslations.Remove(lang);
+            WorkType.NameTranslations.Remove(lang);
             foreach (var st in WorkType.SubTasks)
             {
-                if (st.NameTranslations.ContainsKey(lang)) st.NameTranslations.Remove(lang);
+                st.NameTranslations.Remove(lang);
             }
             tabsKey++;
         }

@@ -1,0 +1,85 @@
+@* Reusable reminder row for calendar events *@
+<MudPaper Elevation="0" Outlined="true" Class="px-2 px-sm-3 py-2 rounded-lg w-100" Style="background-color: var(--mud-palette-background-grey);">
+    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Class="w-100" Justify="Justify.FlexStart" StretchItems="StretchItems.None"> 
+        <MudIcon Icon="@Icon" Size="Size.Small" Color="@IconColor" Class="flex-shrink-0" />
+        <MudNumericField Value="@Reminder.Value"
+                         ValueChanged="@HandleValueChanged"
+                         T="int"
+                         Min="0"
+                         Max="999"
+                         HideSpinButtons="true"
+                         Style="width: 68px; flex-shrink: 0;"
+                         Margin="Margin.Dense"
+                         Variant="Variant.Outlined"
+                         Disabled="@Disabled"
+                         aria-label="Reminder amount" />
+        <MudSelect T="CalendarReminderUnit"
+                   Value="@Reminder.Unit"
+                   ValueChanged="@HandleUnitChanged"
+                   ToStringFunc="@FormatUnit"
+                   Margin="Margin.Dense"
+                   Variant="Variant.Outlined"
+                   Dense="true"
+                   Class="flex-grow-1 min-w-0"
+                   Disabled="@Disabled"
+                   aria-label="Reminder timing">
+            <MudSelectItem Value="CalendarReminderUnit.Minutes">Minutes before</MudSelectItem>
+            <MudSelectItem Value="CalendarReminderUnit.Hours">Hours before</MudSelectItem>
+            <MudSelectItem Value="CalendarReminderUnit.Days">Days before</MudSelectItem>
+            <MudSelectItem Value="CalendarReminderUnit.Weeks">Weeks before</MudSelectItem>
+        </MudSelect>
+        <MudIconButton Icon="@Icons.Material.Filled.Close"
+                       Size="Size.Small"
+                       Color="Color.Default"
+                       OnClick="@OnRemove"
+                       Disabled="@Disabled"
+                       Class="flex-shrink-0"
+                       Title="Remove reminder"
+                       aria-label="Remove reminder" />
+    </MudStack>
+</MudPaper>
+
+@code {
+    [Parameter, EditorRequired]
+    public CalendarReminder Reminder { get; set; } = null!;
+
+    [Parameter]
+    public string Icon { get; set; } = Icons.Material.Filled.NotificationsActive;
+
+    [Parameter]
+    public Color IconColor { get; set; } = Color.Primary;
+
+    [Parameter]
+    public bool Disabled { get; set; }
+
+    [Parameter]
+    public EventCallback OnRemove { get; set; }
+
+    [Parameter]
+    public EventCallback<CalendarReminder> ReminderChanged { get; set; }
+
+    private string FormatUnit(CalendarReminderUnit unit)
+    {
+        return CalendarReminder.FormatUnitDisplay(unit, Reminder?.Value ?? 0, includeBefore: true, capitalize: true);
+    }
+
+    private async Task HandleValueChanged(int val)
+    {
+        Reminder.Value = Math.Max(0, val);
+        if (ReminderChanged.HasDelegate)
+        {
+            await ReminderChanged.InvokeAsync(Reminder);
+        }
+        StateHasChanged();
+    }
+
+    private async Task HandleUnitChanged(CalendarReminderUnit unit)
+    {
+        Reminder.Unit = unit;
+        if (ReminderChanged.HasDelegate)
+        {
+            await ReminderChanged.InvokeAsync(Reminder);
+        }
+        StateHasChanged();
+    }
+}

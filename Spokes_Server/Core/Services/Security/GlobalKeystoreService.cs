@@ -3,12 +3,6 @@ using System.Collections.Concurrent;
 namespace Spokes_Server.Core.Services.Security;
 
 /// <summary>
-/// A Singleton service that securely holds decrypted private keys in memory 
-/// for the duration of the server process. This allows background services
-/// (like NotificationRoutingService) to decrypt messages if the user has 
-/// authenticated their vault at least once since the last server restart.
-/// </summary>
-/// <summary>
 /// A global singleton storing decrypted private keys in RAM strictly for pushing 
 /// background notifications.
 /// 
@@ -29,10 +23,7 @@ public class GlobalKeystoreService
     /// Checks if the user's private key is currently unlocked in memory.
     /// </summary>
     public bool IsUserUnlocked(string employeeId)
-    {
-        if (string.IsNullOrEmpty(employeeId)) return false;
-        return _unlockedPrivateKeys.ContainsKey(employeeId);
-    }
+        => !string.IsNullOrEmpty(employeeId) && _unlockedPrivateKeys.ContainsKey(employeeId);
 
     /// <summary>
     /// Retrieves the plaintext Private Key for an employee, if it has been unlocked.
@@ -41,8 +32,7 @@ public class GlobalKeystoreService
     public string? GetPrivateKey(string employeeId)
     {
         if (string.IsNullOrEmpty(employeeId)) return null;
-        _unlockedPrivateKeys.TryGetValue(employeeId, out var key);
-        return key;
+        return _unlockedPrivateKeys.TryGetValue(employeeId, out var key) ? key : null;
     }
 
     /// <summary>
@@ -76,7 +66,5 @@ public class GlobalKeystoreService
     /// Forgets the user's private key from memory.
     /// </summary>
     public void LockVault(string employeeId)
-    {
-        _unlockedPrivateKeys.TryRemove(employeeId, out _);
-    }
+        => _unlockedPrivateKeys.TryRemove(employeeId, out _);
 }

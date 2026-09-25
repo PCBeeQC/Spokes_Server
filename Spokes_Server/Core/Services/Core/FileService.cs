@@ -1,6 +1,3 @@
-using Spokes_Server.Core.Services.Communication;
-using Spokes_Server.Core.Services.Projects;
-using Spokes_Server.Core.Services.Core;
 using Microsoft.AspNetCore.Components.Forms;
 
 namespace Spokes_Server.Core.Services.Core;
@@ -60,7 +57,7 @@ public class FileService : IFileService
     {
         var sanitizedFileName = Path.GetFileName(originalFileName);
         var extension = Path.GetExtension(sanitizedFileName);
-        return $"{DateTime.Now.Ticks}_{Guid.NewGuid().ToString().Substring(0, 8)}{extension}";
+        return $"{DateTime.Now.Ticks}_{Guid.NewGuid().ToString()[..8]}{extension}";
     }
 
     public async Task<string> UploadStreamAsync(string category, string contextId, Stream stream, string fileName, string? encryptionKey = null, string? predefinedSafeName = null)
@@ -123,7 +120,7 @@ public class FileService : IFileService
         try
         {
             // Extract parts
-            var parts = relativeUrl.Substring("/spokesapi/files/".Length).Split('/');
+            var parts = relativeUrl["/spokesapi/files/".Length..].Split('/');
             if (parts.Length != 3) return;
 
             var category = parts[0];
@@ -209,4 +206,3 @@ public class FileService : IFileService
         }
     }
 }
-

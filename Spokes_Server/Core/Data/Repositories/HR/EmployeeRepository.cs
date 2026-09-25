@@ -1,7 +1,3 @@
-using Spokes_Server.Core.Models.Core;
-using Spokes_Server.Core.Models.Projects;
-using Spokes_Server.Core.Models.Accounting;
-using Spokes_Server.Core.Models.Communication;
 using Spokes_Server.Core.Models.HR;
 
 namespace Spokes_Server.Core.Data.Repositories.HR;
@@ -14,10 +10,13 @@ public class EmployeeRepository : JsonRepository<Employee>
     {
     }
 
-    protected override string GetFilePath(Employee item)
-    {
-        return Path.Combine(_basePath, item.Id, "profile.json");
-    }
+    protected override string GetFilePath(Employee item) =>
+        Path.Combine(_basePath, item.Id, "profile.json");
+
+    /// <summary>
+    /// Gets all active, non-system, non-suspended, non-banned employees eligible for assignment and selection.
+    /// </summary>
+    public List<Employee> GetActiveEmployees() => GetAll().Where(e => e.IsSelectable).ToList();
 
     public override void LoadFromDisk()
     {
@@ -30,9 +29,9 @@ public class EmployeeRepository : JsonRepository<Employee>
                 try
                 {
                     var base64Data = emp.AvatarBase64;
-                    if (base64Data.Contains(","))
+                    if (base64Data.Contains(','))
                     {
-                        base64Data = base64Data.Substring(base64Data.IndexOf(",") + 1);
+                        base64Data = base64Data[(base64Data.IndexOf(',') + 1)..];
                     }
                     var bytes = Convert.FromBase64String(base64Data);
                     var filePath = Path.Combine(_basePath, emp.Id, "avatar.png");
@@ -49,5 +48,3 @@ public class EmployeeRepository : JsonRepository<Employee>
         }
     }
 }
-
-

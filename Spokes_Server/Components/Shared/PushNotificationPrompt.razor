@@ -1,13 +1,9 @@
-@using Spokes_Server.Core.Services
-@using Spokes_Server.Core.Data
-@using Microsoft.AspNetCore.Components.Authorization
-@using System.Security.Claims
+@using Microsoft.Extensions.Configuration
 @inject IJSRuntime JS
 @inject ISnackbar Snackbar
 @inject Database Db
-@inject AuthenticationStateProvider AuthStateProvider
 @inject UserService UserService
-@inject Microsoft.Extensions.Configuration.IConfiguration Config
+@inject IConfiguration Config
 
 @if (ShowPrompt && IsSupported && IsConfigured && !IsSubscribed && !IsSuspended)
 {
@@ -38,7 +34,6 @@
     private bool IsSubscribed = false;
     private bool IsLoading = false;
     private bool IsSuspended = false;
-    private string? CurrentUserId;
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
@@ -63,7 +58,6 @@
             var employee = await UserService.GetEmployeeAsync();
             if (employee != null)
             {
-                CurrentUserId = employee.Id;
                 IsSuspended = employee.IsSuspended;
             }
 
@@ -167,10 +161,7 @@
         }
     }
 
-    private void DismissPrompt()
-    {
-        ShowPrompt = false;
-    }
+    private void DismissPrompt() => ShowPrompt = false;
 
     /// <summary>
     /// Public method to show the subscription dialog/prompt.

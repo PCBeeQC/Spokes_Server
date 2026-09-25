@@ -1,14 +1,7 @@
 namespace Spokes_Server.Core.Models.Accounting;
 
-using Spokes_Server.Core.Models.Core;
-using Spokes_Server.Core.Models.Projects;
-using Spokes_Server.Core.Models.Communication;
-using Spokes_Server.Core.Models.HR;
-
+using System.Text.Json.Serialization;
 using Spokes_Server.Core.Data;
-
-
-
 
 public class Invoice : IDataEntity
 {
@@ -17,10 +10,7 @@ public class Invoice : IDataEntity
     public override bool Equals(object? obj)
     {
         if (ReferenceEquals(this, obj)) return true;
-        if (obj == null || GetType() != obj.GetType())
-            return false;
-        var other = (Invoice)obj;
-        return Id == other.Id;
+        return obj is Invoice other && Id == other.Id;
     }
 
     public override int GetHashCode() => Id?.GetHashCode() ?? base.GetHashCode();
@@ -35,17 +25,17 @@ public class Invoice : IDataEntity
 
     // NEW: Template Override
     public string? TemplateId { get; set; }
-    public bool HideCostAndMarkup { get; set; } = false;
+    public bool HideCostAndMarkup { get; set; }
     public string Note { get; set; } = string.Empty; // Description/Memo
 
     // The Line Items
-    public List<InvoiceLine> Lines { get; set; } = new();
+    public List<InvoiceLine> Lines { get; set; } = [];
 
     // TRACKING: Which original source items does this invoice cover?
     // We use this to calculate "Unbilled" items later.
-    public List<string> BilledTimeEntryIds { get; set; } = new();
-    public List<string> BilledPoItemIds { get; set; } = new();
-    public List<string> BilledExpenseItemIds { get; set; } = new();
+    public List<string> BilledTimeEntryIds { get; set; } = [];
+    public List<string> BilledPoItemIds { get; set; } = [];
+    public List<string> BilledExpenseItemIds { get; set; } = [];
 
     // Financials
     public decimal TaxRate { get; set; } = 0.14975m;
@@ -56,12 +46,12 @@ public class Invoice : IDataEntity
     public decimal GrandTotal => SubTotal + TaxAmount;
 
     // Payment Tracking
-    [System.Text.Json.Serialization.JsonPropertyName("AmountPaid")]
+    [JsonPropertyName("AmountPaid")]
     public decimal LegacyAmountPaid { get; set; }
     
-    public List<PaymentRecord> Payments { get; set; } = new();
+    public List<PaymentRecord> Payments { get; set; } = [];
     
-    [System.Text.Json.Serialization.JsonIgnore]
+    [JsonIgnore]
     public decimal AmountPaid => Payments.Any() ? Payments.Sum(p => p.Amount) : LegacyAmountPaid;
     
     public decimal BalanceDue => GrandTotal - AmountPaid;
@@ -75,10 +65,7 @@ public class InvoiceLine
     public override bool Equals(object? obj)
     {
         if (ReferenceEquals(this, obj)) return true;
-        if (obj == null || GetType() != obj.GetType())
-            return false;
-        var other = (InvoiceLine)obj;
-        return Id == other.Id;
+        return obj is InvoiceLine other && Id == other.Id;
     }
 
     public override int GetHashCode() => Id?.GetHashCode() ?? base.GetHashCode();
@@ -90,8 +77,8 @@ public class InvoiceLine
     public decimal Total => Quantity * UnitPrice;
 
     // NEW FIELDS FOR CREDIT LOGIC
-    public bool IsPrepayment { get; set; } = false; // Adds to credit balance when paid
-    public bool IsCreditUsed { get; set; } = false; // Reduces credit balance immediately
+    public bool IsPrepayment { get; set; } // Adds to credit balance when paid
+    public bool IsCreditUsed { get; set; } // Reduces credit balance immediately
 
     public string Type { get; set; } = "General"; // General, Labor, Material
 
@@ -102,6 +89,3 @@ public class InvoiceLine
     public decimal OriginalUnitCost { get; set; } = 0;
     public decimal MarkupPercentage { get; set; } = 0; // e.g. 0.15 for 15%
 }
-
-
-

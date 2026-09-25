@@ -1,4 +1,4 @@
-using System.Linq;
+using System.Collections.Concurrent;
 using System.Text;
 using Markdig;
 using Markdig.Syntax;
@@ -31,8 +31,8 @@ public class MarkdownSanitizerService
         _sanitizer.AllowedAttributes.Add("rel");
     }
 
-    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, string> _htmlCache = new();
-    private static readonly System.Collections.Concurrent.ConcurrentQueue<string> _cacheKeys = new();
+    private static readonly ConcurrentDictionary<string, string> _htmlCache = new();
+    private static readonly ConcurrentQueue<string> _cacheKeys = new();
     private const int MaxCacheSize = 5000;
 
     /// <summary>
@@ -80,17 +80,14 @@ public class MarkdownSanitizerService
         // Parse the document to get block spans
         var document = Markdig.Markdown.Parse(text, _pipeline);
         
-        var protectedSpans = new System.Collections.Generic.List<SourceSpan>();
+        List<SourceSpan> protectedSpans = [];
         
-        var blocksToProcess = new System.Collections.Generic.Stack<Block>(document);
+        Stack<Block> blocksToProcess = new(document);
         while (blocksToProcess.Count > 0)
         {
             var block = blocksToProcess.Pop();
             
-            if (block is CodeBlock || 
-                block is FencedCodeBlock || 
-                block is HtmlBlock ||
-                block is ThematicBreakBlock)
+            if (block is CodeBlock or FencedCodeBlock or HtmlBlock or ThematicBreakBlock)
             {
                 protectedSpans.Add(block.Span);
             }
@@ -133,7 +130,7 @@ public class MarkdownSanitizerService
             
             if (isBlank && !isProtected)
             {
-                bool hasCarriageReturn = line.EndsWith("\r");
+                bool hasCarriageReturn = line.EndsWith('\r');
                 sb.Append("&nbsp;");
                 if (hasCarriageReturn) sb.Append('\r');
             }

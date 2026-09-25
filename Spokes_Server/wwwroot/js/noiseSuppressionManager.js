@@ -21,10 +21,7 @@ export class NoiseSuppressionManager {
     }
 
     async getProcessor(type) {
-        if (!this.processors.has(type)) {
-            return null;
-        }
         const factory = this.processors.get(type);
-        return await factory();
+        return factory ? await factory() : null;
     }
 }

@@ -1,20 +1,13 @@
-@using Spokes_Server.Core.Models.Core
-@using Spokes_Server.Core.Models.Projects
-@using Spokes_Server.Core.Models.Accounting
-@using Spokes_Server.Core.Models.Communication
-@using Spokes_Server.Core.Models.HR
-@using Spokes_Server.Core.Services
-@using Spokes_Server.Core.Services.Core
-@using Spokes_Server.Core.Data
 @using Spokes_Server.Core.Constants
+@using Spokes_Server.Core.Services.Communication.Chat
 @using static Spokes_Server.Core.Helpers.FileHelper
 @inject ChatService ChatService
+@inject UserClientStateService UserClientStateService
 @inject IFileService FileService
-@inject IConfiguration Configuration
 @inject ISnackbar Snackbar
 @inject IJSRuntime JS
 @inject Database Db
-@inject Spokes_Server.Core.Services.Communication.ShareTargetStateService ShareTargetStateService
+@inject ShareTargetStateService ShareTargetStateService
 @inject NavigationManager NavigationManager
 @implements IAsyncDisposable
 
@@ -86,8 +79,7 @@ else
         }
 
         @* Mention Autocomplete Popover (shared) *@
-        <div style="position: relative;">
-            <MudPaper id="@($"mention-popover-container-{IdSuffix}")" Elevation="4" Class="pa-1" 
+        <MudPaper id="@($"mention-popover-container-{IdSuffix}")" Elevation="4" Class="pa-1" 
                       Style="@($"position: absolute; bottom: 100%; left: 0; right: 0; max-height: 200px; overflow-y: auto; z-index: 100; margin-bottom: 4px; display: {(_showMentionPopover && _filteredMentions.Any() ? "block" : "none")};")">
                 @if (_showMentionPopover && _filteredMentions.Any())
                 {
@@ -228,9 +220,9 @@ else
 
             @* ═══════════════════════════════════════════════════════════════
                MOBILE COMPOSER — compact single-row layout (Discord/Element style)
-               Visible only on xs breakpoint (<960px)
+               Visible on mobile layout (<960px, below md breakpoint)
                ═══════════════════════════════════════════════════════════════ *@
-            <div class="mobile-composer d-flex flex-row flex-grow-1 d-sm-none align-center gap-1">
+            <div class="mobile-composer d-flex flex-row flex-grow-1 d-md-none align-center gap-1">
                 <div class="@(_isRecordingVoice && !_isDesktopRecording ? "d-flex" : "d-none") align-center flex-grow-1 px-2 rounded-pill" style="background: var(--mud-palette-error-hover); animation: pulse-bg 2s infinite;">
                     <MudIcon Icon="@Icons.Material.Filled.Mic" Color="Color.Error" Class="mr-2" Style="animation: pulse 1s infinite;" />
                     <MudText Typo="Typo.body2" Color="Color.Error" Style="font-weight: 600;">@_recordingDurationText</MudText>
@@ -285,44 +277,46 @@ else
                 </div>
             </div>
             
-            <ApiFileUpload @ref="_mobilePictureUpload" Id="chat-mobile-pic-upload" Category="chat" ContextId="@ChannelId" MaximumFileCount="5"
-                UploadUrl="@UploadUrl"
-                Accept="image/*,video/*"
-                Style="display:none;"
-                OnUploadStarted="HandleApiUploadStarted"
-                OnUploadCompleted="HandleApiUploadCompleted"
-                OnUploadError="HandleApiUploadError"
-                OnDetailedProgressUpdate="OnDetailedProgressUpdateHandler" />
+            <div style="display:none;">
+                <ApiFileUpload @ref="_mobilePictureUpload" Id="chat-mobile-pic-upload" Category="chat" ContextId="@ChannelId" MaximumFileCount="5"
+                    UploadUrl="@UploadUrl"
+                    Accept="image/*,video/*"
+                    Style="display:none;"
+                    OnUploadStarted="HandleApiUploadStarted"
+                    OnUploadCompleted="HandleApiUploadCompleted"
+                    OnUploadError="HandleApiUploadError"
+                    OnDetailedProgressUpdate="OnDetailedProgressUpdateHandler" />
 
-            <ApiFileUpload @ref="_mobileFileUpload" Id="chat-mobile-file-upload" Category="chat" ContextId="@ChannelId" MaximumFileCount="5"
-                UploadUrl="@UploadUrl"
-                Style="display:none;"
-                OnUploadStarted="HandleApiUploadStarted"
-                OnUploadCompleted="HandleApiUploadCompleted"
-                OnUploadError="HandleApiUploadError"
-                OnDetailedProgressUpdate="OnDetailedProgressUpdateHandler" />
+                <ApiFileUpload @ref="_mobileFileUpload" Id="chat-mobile-file-upload" Category="chat" ContextId="@ChannelId" MaximumFileCount="5"
+                    UploadUrl="@UploadUrl"
+                    Style="display:none;"
+                    OnUploadStarted="HandleApiUploadStarted"
+                    OnUploadCompleted="HandleApiUploadCompleted"
+                    OnUploadError="HandleApiUploadError"
+                    OnDetailedProgressUpdate="OnDetailedProgressUpdateHandler" />
 
-            <ApiFileUpload @ref="_mobileVoiceUpload" Id="chat-mobile-voice-upload" Category="chat" ContextId="@ChannelId" MaximumFileCount="1"
-                UploadUrl="@UploadUrl"
-                Style="display:none;"
-                OnUploadStarted="HandleApiUploadStarted"
-                OnUploadCompleted="HandleVoiceUploadCompleted"
-                OnUploadError="HandleApiUploadError"
-                OnDetailedProgressUpdate="OnDetailedProgressUpdateHandler" />
+                <ApiFileUpload @ref="_mobileVoiceUpload" Id="chat-mobile-voice-upload" Category="chat" ContextId="@ChannelId" MaximumFileCount="1"
+                    UploadUrl="@UploadUrl"
+                    Style="display:none;"
+                    OnUploadStarted="HandleApiUploadStarted"
+                    OnUploadCompleted="HandleVoiceUploadCompleted"
+                    OnUploadError="HandleApiUploadError"
+                    OnDetailedProgressUpdate="OnDetailedProgressUpdateHandler" />
 
-            <ApiFileUpload @ref="_desktopVoiceUpload" Id="chat-desktop-voice-upload" Category="chat" ContextId="@ChannelId" MaximumFileCount="1"
-                UploadUrl="@UploadUrl"
-                Style="display:none;"
-                OnUploadStarted="HandleApiUploadStarted"
-                OnUploadCompleted="HandleVoiceUploadCompleted"
-                OnUploadError="HandleApiUploadError"
-                OnDetailedProgressUpdate="OnDetailedProgressUpdateHandler" />
+                <ApiFileUpload @ref="_desktopVoiceUpload" Id="chat-desktop-voice-upload" Category="chat" ContextId="@ChannelId" MaximumFileCount="1"
+                    UploadUrl="@UploadUrl"
+                    Style="display:none;"
+                    OnUploadStarted="HandleApiUploadStarted"
+                    OnUploadCompleted="HandleVoiceUploadCompleted"
+                    OnUploadError="HandleApiUploadError"
+                    OnDetailedProgressUpdate="OnDetailedProgressUpdateHandler" />
+            </div>
 
             @* ═══════════════════════════════════════════════════════════════
                DESKTOP COMPOSER — full layout with formatting toolbar
-               Hidden on mobile (d-none d-sm-block)
+               Hidden on mobile layout (d-none d-md-block)
                ═══════════════════════════════════════════════════════════════ *@
-            <div class="d-none d-sm-block">
+            <div class="d-none d-md-block">
                 <div class="composer-box">
                     <div class="@(_isRecordingVoice && _isDesktopRecording ? "d-none" : "d-block")">
                         @* Text input area *@
@@ -330,8 +324,9 @@ else
                             <MudTextField @ref="_messageFieldDesktop" id="@($"chat-message-input-desktop-{IdSuffix}")" @bind-Value="_messageText"
                                 Placeholder="@(IsEditMode ? "Edit message..." : "Type a message...")" Variant="Variant.Text" FullWidth="true"
                                 Lines="2" MaxLines="10" Sizing="InputSizing.Auto"
-                                OnKeyDown="HandleKeyPress" Immediate="true"
-                                Class="custom-text-padding"
+                                OnKeyDown="HandleKeyPress"
+                                Immediate="true"
+                                Underline="false" Class="px-2 py-1"
                                 TextChanged="HandleTextChanged" />
                         </div>
 
@@ -410,9 +405,8 @@ else
                     </div>
                 </div>
             </div>
-        </div>
         @* Hide helper text on mobile *@
-        <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mt-1 d-none d-sm-block">
+        <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mt-1 d-none d-md-block">
             Enter to send • Shift+Enter for new line • @@ to mention • # for events and Albums
         </MudText>
     </MudPaper>
@@ -459,10 +453,6 @@ else
         background: var(--mud-palette-background-grey);
     }
 
-    .custom-text-padding .mud-input-slot {
-        padding: 4px 12px 0 12px !important;
-    }
-
     /* ─── Mobile Composer ─── */
     .mobile-composer {
         padding: 4px 4px;
@@ -475,8 +465,8 @@ else
     [Parameter] public bool IsArchived { get; set; }
     [Parameter] public bool IsAnnouncementOnly { get; set; }
     [Parameter] public bool CanPost { get; set; } = true;
-    [Parameter] public List<Employee> Employees { get; set; } = new();
-    [Parameter] public List<Team> Teams { get; set; } = new();
+    [Parameter] public List<Employee> Employees { get; set; } = [];
+    [Parameter] public List<Team> Teams { get; set; } = [];
     [Parameter] public ChatMessage? ReplyingTo { get; set; }
     [Parameter] public string? DecryptedReplyContent { get; set; }
     [Parameter] public string? ReplyToSenderName { get; set; }
@@ -503,7 +493,7 @@ else
         bool isTextEmpty = string.IsNullOrWhiteSpace(_messageText);
         int pendingCount = _pendingFiles.Count;
         bool isUploading = _pendingFiles.Any(f => f.IsUploading);
-        var fingerprint = $"{ChannelId}|{IsArchived}|{Disabled}|{ReplyingTo?.Id}|{IsEditMode}|{InitialText}|{isTextEmpty}|{pendingCount}|{isUploading}|{_showMentionPopover}|{_mentionSearchText}|{_mentionSelectedIndex}|{_showEventPopover}|{_eventSearchText}|{_eventSelectedIndex}|{_showEmojiAutocompletePopover}|{_emojiSearchText}|{_emojiSelectedIndex}|{_showSnippetPopover}|{_snippetSearchText}|{_snippetSelectedIndex}|{_showEmojiPicker}|{_isRecordingVoice}|{_isDesktopRecording}|{_recordingDurationText}";
+        var fingerprint = $"{ChannelId}|{UploadUrl}|{IsArchived}|{Disabled}|{ReplyingTo?.Id}|{IsEditMode}|{InitialText}|{isTextEmpty}|{pendingCount}|{isUploading}|{_showMentionPopover}|{_mentionSearchText}|{_mentionSelectedIndex}|{_showEventPopover}|{_eventSearchText}|{_eventSelectedIndex}|{_showEmojiAutocompletePopover}|{_emojiSearchText}|{_emojiSelectedIndex}|{_showSnippetPopover}|{_snippetSearchText}|{_snippetSelectedIndex}|{_showEmojiPicker}|{_isRecordingVoice}|{_isDesktopRecording}|{_recordingDurationText}";
         if (fingerprint == _lastComposerFingerprint) return false;
         _lastComposerFingerprint = fingerprint;
         return true;
@@ -521,6 +511,21 @@ else
                 _typingTimer.Stop();
                 _ = ChatService.StopTypingAsync(CurrentUserId, _previousChannelId);
             }
+
+            // Restore draft for new channel if not in edit mode
+            if (!IsEditMode && CurrentUserId != null && ChannelId != null)
+            {
+                var savedDraft = UserClientStateService.GetDraft(CurrentUserId, ChannelId);
+                if (!string.IsNullOrEmpty(savedDraft))
+                {
+                    _messageText = savedDraft;
+                }
+                else if (_previousChannelId != null)
+                {
+                    _messageText = string.Empty;
+                }
+            }
+
             _previousChannelId = ChannelId;
         }
     }
@@ -530,6 +535,14 @@ else
         if (IsEditMode && !string.IsNullOrEmpty(InitialText))
         {
             _messageText = InitialText;
+        }
+        else if (!IsEditMode && string.IsNullOrEmpty(_messageText) && CurrentUserId != null && ChannelId != null)
+        {
+            var savedDraft = UserClientStateService.GetDraft(CurrentUserId, ChannelId);
+            if (!string.IsNullOrEmpty(savedDraft))
+            {
+                _messageText = savedDraft;
+            }
         }
         ShareTargetStateService.OnPayloadReceived += HandlePayloadReceived;
     }
@@ -584,7 +597,7 @@ else
         }
     }
 
-    private string _messageText = string.Empty;
+    private string _messageText = "";
     private MudTextField<string>? _messageField;          // mobile
     private MudTextField<string>? _messageFieldDesktop;   // desktop
     private ApiFileUpload? _mobilePictureUpload;
@@ -592,7 +605,7 @@ else
     private ApiFileUpload? _mobileVoiceUpload;
     private ApiFileUpload? _desktopVoiceUpload;
     private ApiFileUpload? _desktopUpload;
-    private List<PendingFile> _pendingFiles = new();
+    private List<PendingFile> _pendingFiles = [];
     private System.Timers.Timer? _typingTimer;
     private IJSObjectReference? _jsModule;
     private DotNetObjectReference<ChatComposer>? _objRef;
@@ -601,25 +614,25 @@ else
     private bool _showMentionPopover;
     private string _mentionSearchText = "";
     private int _mentionSelectedIndex;
-    private List<MentionCandidate> _filteredMentions = new();
+    private List<MentionCandidate> _filteredMentions = [];
 
     // Event/Album autocomplete state
     private bool _showEventPopover;
     private string _eventSearchText = "";
     private int _eventSelectedIndex;
-    private List<HashTagCandidate> _filteredHashTags = new();
+    private List<HashTagCandidate> _filteredHashTags = [];
 
     // Emoji autocomplete state
     private bool _showEmojiAutocompletePopover;
     private string _emojiSearchText = "";
     private int _emojiSelectedIndex;
-    private List<string> _filteredEmojis = new();
+    private List<string> _filteredEmojis = [];
 
     // Snippet autocomplete state
     private bool _showSnippetPopover;
     private string _snippetSearchText = "";
     private int _snippetSelectedIndex;
-    private List<string> _filteredSnippets = new();
+    private List<string> _filteredSnippets = [];
 
     private bool _showEmojiPicker;
     private bool _autoFocusEmojiSearch = true;
@@ -661,8 +674,8 @@ else
         try { await _messageField!.FocusAsync(); } catch { }
     }
 
-    private bool _isRecordingVoice = false;
-    private bool _isDesktopRecording = false;
+    private bool _isRecordingVoice;
+    private bool _isDesktopRecording;
     private string _recordingDurationText = "0:00";
     private DateTime _recordingStartTime;
     private System.Timers.Timer? _recordingTimer;
@@ -780,6 +793,11 @@ else
         _showEmojiPicker = false;
         StateHasChanged();
 
+        if (!IsEditMode)
+        {
+            UserClientStateService.ClearDraft(CurrentUserId, ChannelId);
+        }
+
         try
         {
             await OnSendMessage.InvokeAsync((contentToSend, attachmentsToSend));
@@ -788,6 +806,10 @@ else
         {
             _messageText = contentToSend;
             _pendingFiles = pendingBackup;
+            if (!IsEditMode)
+            {
+                UserClientStateService.UpdateDraftInMemory(CurrentUserId, ChannelId, contentToSend);
+            }
             StateHasChanged();
             Snackbar.Add($"Error sending message: {ex.Message}", Severity.Error);
         }
@@ -797,6 +819,10 @@ else
         {
             _typingTimer.Stop();
             await ChatService.StopTypingAsync(CurrentUserId, ChannelId);
+        }
+        if (!IsEditMode)
+        {
+            UserClientStateService.SetTyping(CurrentUserId, ChannelId, false);
         }
     }
 
@@ -941,7 +967,44 @@ else
         UpdateEmojiAutocompletePopover(newText);
         UpdateSnippetPopover(newText);
 
-        if (ChannelId != null && CurrentUserId != null && !string.IsNullOrEmpty(newText))
+        if (!IsEditMode && ChannelId != null && CurrentUserId != null)
+        {
+            if (string.IsNullOrWhiteSpace(newText))
+            {
+                UserClientStateService.ClearDraft(CurrentUserId, ChannelId);
+                UserClientStateService.SetTyping(CurrentUserId, ChannelId, false);
+                if (_typingTimer != null && _typingTimer.Enabled)
+                {
+                    _typingTimer.Stop();
+                    _ = ChatService.StopTypingAsync(CurrentUserId, ChannelId);
+                }
+            }
+            else
+            {
+                UserClientStateService.UpdateDraftInMemory(CurrentUserId, ChannelId, newText);
+                UserClientStateService.SetTyping(CurrentUserId, ChannelId, true);
+
+                if (_typingTimer == null || !_typingTimer.Enabled)
+                {
+                    _ = ChatService.StartTypingAsync(CurrentUserId, ChannelId);
+                }
+
+                var capturedChannelId = ChannelId;
+                _typingTimer?.Stop();
+                _typingTimer = new System.Timers.Timer(3000);
+                _typingTimer.Elapsed += async (s, ev) =>
+                {
+                    if (capturedChannelId != null && CurrentUserId != null)
+                    {
+                        UserClientStateService.SetTyping(CurrentUserId, capturedChannelId, false);
+                        await ChatService.StopTypingAsync(CurrentUserId, capturedChannelId);
+                    }
+                };
+                _typingTimer.AutoReset = false;
+                _typingTimer.Start();
+            }
+        }
+        else if (ChannelId != null && CurrentUserId != null && !string.IsNullOrEmpty(newText))
         {
             if (_typingTimer == null || !_typingTimer.Enabled)
             {
@@ -1004,10 +1067,10 @@ else
 
     private List<MentionCandidate> GetAllMentionCandidates()
     {
-        var candidates = new List<MentionCandidate>
-        {
+        List<MentionCandidate> candidates =
+        [
             new() { DisplayName = "everyone", IsSpecial = false, IsEveryone = true }
-        };
+        ];
 
         foreach (var team in Teams.OrderBy(t => t.Name))
         {
@@ -1049,6 +1112,11 @@ else
             {
                 _messageText = before + $"@[{mention.DisplayName}] ";
             }
+        }
+
+        if (!IsEditMode && CurrentUserId != null && ChannelId != null)
+        {
+            UserClientStateService.UpdateDraftInMemory(CurrentUserId, ChannelId, _messageText);
         }
 
         _showMentionPopover = false;
@@ -1106,9 +1174,9 @@ else
 
     private List<HashTagCandidate> GetAllHashTagCandidates()
     {
-        if (CurrentUserId == null) return new List<HashTagCandidate>();
+        if (CurrentUserId == null) return [];
         
-        var candidates = new List<HashTagCandidate>();
+        List<HashTagCandidate> candidates = [];
 
         // 1. Events
         var now = DateTime.UtcNow.Date;
@@ -1168,6 +1236,11 @@ else
             _messageText = before + $"#[{tag.Title}]({type}:{tag.Id}) ";
         }
 
+        if (!IsEditMode && CurrentUserId != null && ChannelId != null)
+        {
+            UserClientStateService.UpdateDraftInMemory(CurrentUserId, ChannelId, _messageText);
+        }
+
         _showEventPopover = false;
         StateHasChanged();
     }
@@ -1218,7 +1291,7 @@ else
             return;
         }
 
-        _filteredEmojis = new List<string>();
+        _filteredEmojis = [];
         foreach (var cat in EmojiData.Categories)
         {
             var matched = cat.Value.Where(e =>
@@ -1285,7 +1358,7 @@ else
 
         _snippetSearchText = afterBracket.ToLowerInvariant();
 
-        var availableSnippets = new List<string> { 
+        List<string> availableSnippets = [ 
             "code=xml",
             "code=python", 
             "code=sql", 
@@ -1296,7 +1369,7 @@ else
             "code=js", 
             "code=csharp", 
             "code"
-        };
+        ];
         _filteredSnippets = availableSnippets.Where(s => s.StartsWith(_snippetSearchText)).ToList();
         
         _showSnippetPopover = _filteredSnippets.Any();
@@ -1350,16 +1423,22 @@ else
 
     private async Task InsertEmoji(string emoji)
     {
+        bool inserted = false;
         if (_jsModule != null)
         {
-            // Try mobile field first, then desktop
-            // We pass false for focusAfterInsert to avoid stealing focus from EmojiPicker/showing keyboard on mobile
-            try { await _jsModule.InvokeVoidAsync("insertAtCursor", $"chat-message-input-{IdSuffix}", emoji, false); return; } catch { }
-            try { await _jsModule.InvokeVoidAsync("insertAtCursor", $"chat-message-input-desktop-{IdSuffix}", emoji, false); return; } catch { }
+            try
+            {
+                inserted = await _jsModule.InvokeAsync<bool>("insertEmojiAtCursor", IdSuffix, emoji, false);
+            }
+            catch { }
         }
-        _messageText += emoji;
-        _forceComposerRender = true;
-        StateHasChanged();
+
+        if (!inserted)
+        {
+            _messageText += emoji;
+            _forceComposerRender = true;
+            StateHasChanged();
+        }
     }
 
     private async Task InsertGif(string gifUrl)
@@ -1443,7 +1522,7 @@ else
         var placeholder = _pendingFiles.FirstOrDefault(f => f.IsUploading);
         if (placeholder != null) _pendingFiles.Remove(placeholder);
         
-        var voiceAttachments = new List<ChatAttachment>();
+        List<ChatAttachment> voiceAttachments = [];
 
         foreach (var r in results)
         {
@@ -1487,6 +1566,9 @@ else
         Snackbar.Add($"Upload failed: {error}", Severity.Error);
         StateHasChanged();
     }
+
+    [JSInvokable]
+    public string GetUploadUrl() => UploadUrl ?? "";
 
     [JSInvokable]
     public async Task OnPasteUploadStarted()
@@ -1601,6 +1683,16 @@ else
 
     public async Task FocusInputAsync()
     {
+        if (_jsModule != null)
+        {
+            try
+            {
+                await _jsModule.InvokeVoidAsync("focusComposer", IdSuffix);
+                return;
+            }
+            catch { }
+        }
+
         if (_messageFieldDesktop != null)
         {
             await _messageFieldDesktop.FocusAsync();
@@ -1618,6 +1710,10 @@ else
         {
             _typingTimer.Stop();
             _ = ChatService.StopTypingAsync(CurrentUserId, ChannelId);
+        }
+        if (CurrentUserId != null)
+        {
+            UserClientStateService.FlushToDiskIfUnsent(CurrentUserId);
         }
         _typingTimer?.Dispose();
         _objRef?.Dispose();

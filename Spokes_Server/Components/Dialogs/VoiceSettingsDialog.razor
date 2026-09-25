@@ -1,0 +1,513 @@
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Services.Communication.Voice
+@using Spokes_Server.Core.Services.Core
+@using Spokes_Server.Aggregate
+@using Spokes_Server.Components.Shared
+@implements IAsyncDisposable
+@inject GlobalVoiceService VoiceService
+@inject Database Db
+@inject UserService UserService
+@inject IJSRuntime JS
+@inject ISnackbar Snackbar
+
+<MudDialog>
+    <TitleContent>
+        <div class="d-flex align-center gap-2">
+            <MudIcon Icon="@Icons.Material.Filled.Tune" Color="Color.Primary" />
+            <MudText Typo="Typo.h6">Voice Settings</MudText>
+        </div>
+    </TitleContent>
+    <DialogContent>
+        @if (!_isLoaded)
+        {
+            <MudProgressLinear Indeterminate="true" Class="mb-4" />
+        }
+        else
+        {
+            <div class="d-flex flex-column gap-4 pb-2" style="max-height: 75vh; overflow-y: auto;">
+                
+                @* ── Card 1: Volume Controls ── *@
+                <MudPaper Elevation="0" Outlined="true" Class="rounded-lg overflow-hidden flex-shrink-0">
+                    <div class="d-flex align-center px-4 py-3">
+                        <MudIcon Icon="@Icons.Material.Filled.VolumeUp" Size="Size.Small" Class="mr-2 flex-shrink-0 text-secondary" />
+                        <MudText Typo="Typo.subtitle2" Style="font-weight: 600;">Volume Controls</MudText>
+                    </div>
+                    <MudDivider />
+                    <div class="px-4 py-4 d-flex flex-column gap-4">
+                        @* Master Volume *@
+                        <div>
+                            <div class="d-flex justify-space-between align-center mb-1">
+                                <MudText Typo="Typo.body2" Style="font-weight: 500;">Master Volume</MudText>
+                                <div class="d-flex align-center gap-2">
+                                    <MudText Typo="Typo.caption" Color="Color.Secondary" Style="font-weight: 600; min-width: 40px; text-align: right;">
+                                        @($"{Math.Round(_voiceSettings.MasterVolume)}%")
+                                    </MudText>
+                                    @if (Math.Abs(_voiceSettings.MasterVolume - 100) > 0.1)
+                                    {
+                                        <MudButton Variant="Variant.Text" Size="Size.Small" Color="Color.Primary" Class="pa-0 text-caption" OnClick="ResetMasterVolume">
+                                            Reset
+                                        </MudButton>
+                                    }
+                                </div>
+                            </div>
+                            <MudSlider T="double" Value="@_voiceSettings.MasterVolume" ValueChanged="OnMasterVolumeChanged"
+                                       Min="0" Max="200" Step="1" Color="Color.Primary" Class="ma-0" />
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                Adjusts the incoming volume for all voice participants (0% to 200%).
+                            </MudText>
+                        </div>
+
+                        <MudDivider />
+
+                        @* Participant Volumes *@
+                        <div>
+                            <MudText Typo="Typo.body2" Style="font-weight: 500;" Class="mb-2">Participant Volumes</MudText>
+                            
+                            @if (VoiceService.IsInVoiceCall)
+                            {
+                                var otherParticipants = VoiceService.CallParticipants
+                                    .Where(id => id != _currentUser?.Id && !string.IsNullOrEmpty(id))
+                                    .ToList();
+
+                                @if (otherParticipants.Count > 0)
+                                {
+                                    <div class="d-flex flex-column gap-3">
+                                        @foreach (var pId in otherParticipants)
+                                        {
+                                            var employee = Db.Employees.GetById(pId);
+                                            var name = employee?.FullName ?? "Unknown Participant";
+                                            var isSpeaking = VoiceService.ActiveSpeakers.Contains(pId);
+                                            var vol = GetParticipantVolume(pId);
+
+                                            <div class="d-flex flex-column pa-3 rounded-lg" style="background: var(--mud-palette-background-grey); border: 1px solid var(--mud-palette-lines-default);">
+                                                <div class="d-flex align-center justify-space-between mb-2">
+                                                    <div class="d-flex align-center gap-2">
+                                                        <MudBadge Visible="@isSpeaking" Color="Color.Success" Dot="true" Overlap="true">
+                                                            @if (employee != null && employee.HasCustomAvatar && !string.IsNullOrEmpty(employee.AvatarFile))
+                                                            {
+                                                                <MudAvatar Size="Size.Small" Image="@($"/avatars/{employee.AvatarFile}?v={employee.AvatarVersion}")" />
+                                                            }
+                                                            else
+                                                            {
+                                                                <MudAvatar Size="Size.Small" Color="Color.Primary">
+                                                                    @(employee?.Initials ?? "?")
+                                                                </MudAvatar>
+                                                            }
+                                                        </MudBadge>
+                                                        <MudText Typo="Typo.body2" Style="font-weight: 500;">@name</MudText>
+                                                        @if (isSpeaking)
+                                                        {
+                                                            <MudIcon Icon="@Icons.Material.Filled.VolumeUp" Color="Color.Success" Size="Size.Small" />
+                                                        }
+                                                    </div>
+                                                    <div class="d-flex align-center gap-2">
+                                                        <MudText Typo="Typo.caption" Color="Color.Secondary" Style="font-weight: 600; min-width: 40px; text-align: right;">
+                                                            @(vol == 0 ? "Muted" : $"{Math.Round(vol)}%")
+                                                        </MudText>
+                                                        @if (vol > 0)
+                                                        {
+                                                            <MudTooltip Text="Mute for me">
+                                                                <MudIconButton Icon="@Icons.Material.Filled.VolumeOff" Size="Size.Small" Color="Color.Default" OnClick="@(() => OnParticipantVolumeChanged(pId, 0))" />
+                                                            </MudTooltip>
+                                                        }
+                                                        else
+                                                        {
+                                                            <MudTooltip Text="Unmute">
+                                                                <MudIconButton Icon="@Icons.Material.Filled.VolumeMute" Size="Size.Small" Color="Color.Error" OnClick="@(() => OnParticipantVolumeChanged(pId, 100))" />
+                                                            </MudTooltip>
+                                                        }
+                                                        @if (Math.Abs(vol - 100) > 0.1)
+                                                        {
+                                                            <MudTooltip Text="Reset to 100%">
+                                                                <MudIconButton Icon="@Icons.Material.Filled.Replay" Size="Size.Small" Color="Color.Primary" OnClick="@(() => OnParticipantVolumeChanged(pId, 100))" />
+                                                            </MudTooltip>
+                                                        }
+                                                    </div>
+                                                </div>
+                                                <MudSlider T="double" Value="@vol" ValueChanged="@(v => OnParticipantVolumeChanged(pId, v))"
+                                                           Min="0" Max="200" Step="1" Color="Color.Secondary" Class="ma-0" />
+                                            </div>
+                                        }
+                                    </div>
+                                }
+                                else
+                                {
+                                    <MudText Typo="Typo.caption" Color="Color.Secondary" Class="font-italic">
+                                        No other participants currently in voice channel. Any volume adjustments you make will be remembered automatically across calls.
+                                    </MudText>
+                                }
+                            }
+                            else
+                            {
+                                <MudText Typo="Typo.caption" Color="Color.Secondary" Class="font-italic">
+                                    Join a voice call to adjust individual participant volumes. Custom settings are remembered automatically across calls.
+                                </MudText>
+                            }
+
+                            @* Saved Overrides Section (Collapsible) *@
+                            @if (_savedOverrides.Count > 0)
+                            {
+                                <div class="mt-3">
+                                    <MudButton Variant="Variant.Text" Size="Size.Small" Color="Color.Primary" 
+                                               StartIcon="@(_showSavedOverrides ? Icons.Material.Filled.KeyboardArrowUp : Icons.Material.Filled.KeyboardArrowDown)"
+                                               OnClick="() => _showSavedOverrides = !_showSavedOverrides">
+                                        Saved Volume Overrides (@_savedOverrides.Count)
+                                    </MudButton>
+
+                                    <MudCollapse Expanded="_showSavedOverrides">
+                                        <div class="d-flex flex-column gap-2 mt-2 pt-2" style="border-top: 1px dashed var(--mud-palette-divider);">
+                                            @foreach (var item in _savedOverrides)
+                                            {
+                                                var emp = Db.Employees.GetById(item.Key);
+                                                var name = emp?.FullName ?? "User";
+                                                <div class="d-flex align-center justify-space-between px-2 py-1 rounded" style="background: var(--mud-palette-background-grey);">
+                                                    <div class="d-flex align-center gap-2">
+                                                        <MudAvatar Size="Size.Small" Color="Color.Default">@(emp?.Initials ?? "?")</MudAvatar>
+                                                        <MudText Typo="Typo.body2">@name</MudText>
+                                                    </div>
+                                                    <div class="d-flex align-center gap-2">
+                                                        <MudText Typo="Typo.caption" Style="font-weight: 600;">@($"{Math.Round(item.Value)}%")</MudText>
+                                                        <MudIconButton Icon="@Icons.Material.Filled.DeleteOutline" Size="Size.Small" Color="Color.Error"
+                                                                       Title="Reset to default"
+                                                                       OnClick="@(() => OnRemoveSavedOverride(item.Key))" />
+                                                    </div>
+                                                </div>
+                                            }
+                                        </div>
+                                    </MudCollapse>
+                                </div>
+                            }
+                        </div>
+                    </div>
+                </MudPaper>
+
+                @* ── Card 2: Microphone Diagnostic & Sound Wave ── *@
+                <MudPaper Elevation="0" Outlined="true" Class="rounded-lg overflow-hidden flex-shrink-0">
+                    <div class="d-flex align-center px-4 py-3">
+                        <MudIcon Icon="@Icons.Material.Filled.GraphicEq" Size="Size.Small" Class="mr-2 flex-shrink-0 text-secondary" />
+                        <MudText Typo="Typo.subtitle2" Style="font-weight: 600;">Microphone Diagnostic</MudText>
+                    </div>
+                    <MudDivider />
+                    <div class="px-4 py-4 d-flex flex-column gap-3">
+                        <MudText Typo="Typo.body2" Color="Color.Secondary">
+                            Test your microphone and sound wave responsiveness before talking to others. Speak to verify input levels.
+                        </MudText>
+
+                        @* Sound Wave Canvas *@
+                        <div class="pa-2 rounded-lg d-flex align-center justify-center" style="background: var(--mud-palette-background-grey); border: 1px solid var(--mud-palette-lines-default); min-height: 56px;">
+                            <canvas id="voice-test-soundwave" width="300" height="40" style="width: 100%; height: 40px; display: block;"></canvas>
+                        </div>
+
+                        <div class="d-flex align-center justify-space-between flex-wrap gap-2">
+                            <div>
+                                @if (!_isTestingMic)
+                                {
+                                    <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                                               StartIcon="@Icons.Material.Filled.Mic" OnClick="StartMicTest">
+                                        Test Microphone
+                                    </MudButton>
+                                }
+                                else
+                                {
+                                    <div class="d-flex align-center gap-3">
+                                        <MudButton Variant="Variant.Filled" Color="Color.Error" Size="Size.Small"
+                                                   StartIcon="@Icons.Material.Filled.Stop" OnClick="StopMicTest">
+                                            Stop Testing
+                                        </MudButton>
+                                        <div class="d-flex align-center gap-1">
+                                            <MudIcon Icon="@Icons.Material.Filled.FiberManualRecord" Color="Color.Error" Size="Size.Small" Style="animation: pulse 1s infinite;" />
+                                            <MudText Typo="Typo.body2" Color="Color.Error" Style="font-weight: 600;">@_testDurationText</MudText>
+                                        </div>
+                                    </div>
+                                }
+                            </div>
+
+                            @if (!string.IsNullOrEmpty(_testAudioUrl) && !_isTestingMic)
+                            {
+                                <MudText Typo="Typo.caption" Color="Color.Success" Style="font-weight: 500;">
+                                    Recording ready! Play below to hear yourself.
+                                </MudText>
+                            }
+                        </div>
+
+                        @* Audio Replay *@
+                        @if (!string.IsNullOrEmpty(_testAudioUrl) && !_isTestingMic)
+                        {
+                            <div class="mt-1">
+                                <VoiceMessagePlayer AudioUrl="@_testAudioUrl" />
+                            </div>
+                        }
+                    </div>
+                </MudPaper>
+
+                @* ── Card 2: Audio Devices & Filters ── *@
+                <MudPaper Elevation="0" Outlined="true" Class="rounded-lg overflow-hidden flex-shrink-0">
+                    <div class="d-flex align-center px-4 py-3">
+                        <MudIcon Icon="@Icons.Material.Filled.SettingsVoice" Size="Size.Small" Class="mr-2 flex-shrink-0 text-secondary" />
+                        <MudText Typo="Typo.subtitle2" Style="font-weight: 600;">Audio Devices & Noise Filters</MudText>
+                    </div>
+                    <MudDivider />
+                    <div class="px-4 py-4 d-flex flex-column gap-3">
+                        @* Microphone Input *@
+                        @if (VoiceService.AvailableMicrophones.Count > 0 && !VoiceService.IsAndroid)
+                        {
+                            <MudSelect T="string" Label="Input Device (Microphone)" Value="@VoiceService.ActiveMicrophoneDeviceId"
+                                       ValueChanged="OnMicrophoneSelected" Margin="Margin.Dense" Variant="Variant.Outlined">
+                                @foreach (var mic in VoiceService.AvailableMicrophones)
+                                {
+                                    <MudSelectItem Value="@mic.DeviceId">@mic.Label</MudSelectItem>
+                                }
+                            </MudSelect>
+                        }
+
+                        @* Speaker Output *@
+                        @if (VoiceService.AvailableSpeakers.Count > 0 && !VoiceService.IsIOS)
+                        {
+                            <div class="d-flex align-center gap-2">
+                                <MudSelect T="string" Label="Output Device (Speaker)" Value="@VoiceService.ActiveSpeakerDeviceId"
+                                           ValueChanged="OnSpeakerSelected" Margin="Margin.Dense" Variant="Variant.Outlined" Class="flex-grow-1">
+                                    @foreach (var spk in VoiceService.AvailableSpeakers)
+                                    {
+                                        <MudSelectItem Value="@spk.DeviceId">@spk.Label</MudSelectItem>
+                                    }
+                                </MudSelect>
+                                <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small" Style="height: 40px;"
+                                           StartIcon="@Icons.Material.Filled.VolumeUp" OnClick="TestSpeaker">
+                                    Test
+                                </MudButton>
+                            </div>
+                        }
+
+                        @* Noise Suppression *@
+                        @if (!VoiceService.IsIOS)
+                        {
+                            <MudSelect T="string" Label="Noise Filter" Value="@VoiceService.CurrentNoiseSuppression"
+                                       ValueChanged="OnNoiseSuppressionChanged" Margin="Margin.Dense" Variant="Variant.Outlined">
+                                <MudSelectItem Value="@("deepfilternet")">DeepFilterNet (High Quality AI)</MudSelectItem>
+                                <MudSelectItem Value="@("rnnoise")">RNNoise (Lightweight AI)</MudSelectItem>
+                                <MudSelectItem Value="@("webrtc")">Basic (Standard WebRTC)</MudSelectItem>
+                                <MudSelectItem Value="@("none")">None (Raw, high-fidelity)</MudSelectItem>
+                            </MudSelect>
+                        }
+
+                        <MudDivider Class="my-1" />
+
+                        @* Voice Detection Sensitivity *@
+                        <div>
+                            <div class="d-flex justify-space-between align-center mb-1">
+                                <MudText Typo="Typo.body2" Style="font-weight: 500;">Voice Detection Sensitivity</MudText>
+                                <div class="d-flex align-center gap-2">
+                                    <MudText Typo="Typo.caption" Color="Color.Secondary" Style="font-weight: 600; min-width: 40px; text-align: right;">
+                                        @($"{Math.Round(_voiceSettings.VoiceSensitivity)}%")
+                                    </MudText>
+                                    @if (Math.Abs(_voiceSettings.VoiceSensitivity - 50.0) > 0.1)
+                                    {
+                                        <MudButton Variant="Variant.Text" Size="Size.Small" Color="Color.Primary" Class="pa-0 text-caption" OnClick="ResetVoiceSensitivity">
+                                            Reset
+                                        </MudButton>
+                                    }
+                                </div>
+                            </div>
+                            <MudSlider T="double" Value="@_voiceSettings.VoiceSensitivity" ValueChanged="OnVoiceSensitivityChanged"
+                                       Min="0" Max="100" Step="1" Color="Color.Primary" Class="ma-0" />
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                Adjusts background noise rejection. Lower values filter out quiet background noise, while higher values capture softer speech.
+                            </MudText>
+                        </div>
+                    </div>
+                </MudPaper>
+
+            </div>
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="Close">Done</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
+
+    private bool _isLoaded = false;
+    private Employee? _currentUser;
+    private VoiceUserSettings _voiceSettings = new();
+    private Dictionary<string, double> _savedOverrides = [];
+    private bool _showSavedOverrides = false;
+
+    // Mic Diagnostic state
+    private bool _isTestingMic = false;
+    private string? _testAudioUrl;
+    private System.Timers.Timer? _testTimer;
+    private DateTime _testStartTime;
+    private string _testDurationText = "0:00";
+
+    protected override async Task OnInitializedAsync()
+    {
+        _currentUser = await UserService.GetEmployeeAsync();
+        try
+        {
+            var json = await JS.InvokeAsync<string?>("localStorage.getItem", "spokes_voice_settings_v1");
+            if (!string.IsNullOrEmpty(json))
+            {
+                _voiceSettings = System.Text.Json.JsonSerializer.Deserialize<VoiceUserSettings>(json) ?? new();
+            }
+            else
+            {
+                _voiceSettings = new();
+            }
+        }
+        catch
+        {
+            _voiceSettings = new();
+        }
+
+        RefreshSavedOverrides();
+        await VoiceService.UpdateVoiceSettingsAsync(_voiceSettings);
+        await VoiceService.RefreshAudioDevicesAsync();
+        _isLoaded = true;
+    }
+
+    private void RefreshSavedOverrides()
+    {
+        _savedOverrides = _voiceSettings.ParticipantVolumes
+            .Where(kvp => Math.Abs(kvp.Value - 100) > 0.1)
+            .ToDictionary(k => k.Key, v => v.Value);
+    }
+
+    private double GetParticipantVolume(string participantId)
+    {
+        if (_voiceSettings.ParticipantVolumes.TryGetValue(participantId, out var vol))
+        {
+            return vol;
+        }
+        return 100.0;
+    }
+
+    private async Task OnMasterVolumeChanged(double value)
+    {
+        _voiceSettings.MasterVolume = value;
+        await VoiceService.SetMasterVolumeAsync(value);
+        await PersistSettingsAsync();
+    }
+
+    private async Task ResetMasterVolume()
+    {
+        await OnMasterVolumeChanged(100.0);
+    }
+
+    private async Task OnParticipantVolumeChanged(string participantId, double value)
+    {
+        _voiceSettings.ParticipantVolumes[participantId] = value;
+        RefreshSavedOverrides();
+        await VoiceService.SetParticipantVolumeAsync(participantId, value);
+        await PersistSettingsAsync();
+    }
+
+    private async Task OnRemoveSavedOverride(string participantId)
+    {
+        _voiceSettings.ParticipantVolumes.Remove(participantId);
+        RefreshSavedOverrides();
+        await VoiceService.SetParticipantVolumeAsync(participantId, 100.0);
+        await PersistSettingsAsync();
+    }
+
+    private async Task StartMicTest()
+    {
+        _isTestingMic = true;
+        _testAudioUrl = null;
+        _testStartTime = DateTime.Now;
+        _testDurationText = "0:00";
+
+        _testTimer = new System.Timers.Timer(1000);
+        _testTimer.Elapsed += (s, e) =>
+        {
+            var diff = DateTime.Now - _testStartTime;
+            _testDurationText = $"{(int)diff.TotalMinutes}:{diff.Seconds:D2}";
+            InvokeAsync(StateHasChanged);
+        };
+        _testTimer.Start();
+
+        var micId = VoiceService.ActiveMicrophoneDeviceId;
+        var started = await JS.InvokeAsync<bool>("spokesMicDiagnostic.start", "voice-test-soundwave", micId);
+        if (!started)
+        {
+            await StopMicTest();
+            Snackbar.Add("Could not access microphone for testing.", Severity.Warning);
+        }
+    }
+
+    private async Task StopMicTest()
+    {
+        _isTestingMic = false;
+        if (_testTimer != null)
+        {
+            _testTimer.Stop();
+            _testTimer.Dispose();
+            _testTimer = null;
+        }
+
+        try
+        {
+            var url = await JS.InvokeAsync<string?>("spokesMicDiagnostic.stop");
+            _testAudioUrl = url;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[VoiceSettings] StopMicTest error: {ex.Message}");
+        }
+
+        StateHasChanged();
+    }
+
+    private Task OnMicrophoneSelected(string deviceId) => VoiceService.SwitchMicrophoneAsync(deviceId);
+
+    private Task OnSpeakerSelected(string deviceId) => VoiceService.SwitchSpeakerAsync(deviceId);
+
+    private async Task OnNoiseSuppressionChanged(string type)
+    {
+        await VoiceService.SetNoiseSuppressionAsync(type);
+        await JS.InvokeVoidAsync("localStorage.setItem", "spokes_noise_filter", type);
+    }
+
+    private async Task OnVoiceSensitivityChanged(double value)
+    {
+        _voiceSettings.VoiceSensitivity = value;
+        await VoiceService.SetVoiceSensitivityAsync(value);
+        await PersistSettingsAsync();
+    }
+
+    private async Task ResetVoiceSensitivity()
+    {
+        await OnVoiceSensitivityChanged(50.0);
+    }
+
+    private Task TestSpeaker() => VoiceService.PlayTestSpeakerSoundAsync(VoiceService.ActiveSpeakerDeviceId);
+
+    private async Task PersistSettingsAsync()
+    {
+        try
+        {
+            var json = System.Text.Json.JsonSerializer.Serialize(_voiceSettings);
+            await JS.InvokeVoidAsync("localStorage.setItem", "spokes_voice_settings_v1", json);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[VoiceSettings] PersistSettingsAsync error: {ex.Message}");
+        }
+    }
+
+    private void Close()
+    {
+        MudDialog.Close(DialogResult.Ok(true));
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_isTestingMic)
+        {
+            try { await JS.InvokeAsync<string?>("spokesMicDiagnostic.stop"); } catch { }
+        }
+        try { await JS.InvokeVoidAsync("spokesMicDiagnostic.cleanup"); } catch { }
+        _testTimer?.Dispose();
+    }
+}

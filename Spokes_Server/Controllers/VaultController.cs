@@ -1,8 +1,8 @@
-using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.DataProtection;
-using System;
-using System.Linq;
+using Microsoft.AspNetCore.Mvc;
+using Spokes_Server.Aggregate;
+using Spokes_Server.Core.Security;
 
 namespace Spokes_Server.Controllers;
 
@@ -11,6 +11,7 @@ namespace Spokes_Server.Controllers;
 [Authorize]
 public class VaultController : SpokesControllerBase
 {
+    private const string VaultCookieName = "chat_vault_key";
     /// <summary>
     /// Determines if the request originates from a native mobile client.
     /// Checks for X-Spokes-Client header (preferred) with fallback to User-Agent.
@@ -28,7 +29,7 @@ public class VaultController : SpokesControllerBase
     }
 
     [HttpPost("login")]
-    public IActionResult Login([FromBody] VaultLoginRequest request, [FromServices] Microsoft.AspNetCore.DataProtection.IDataProtectionProvider dataProtection, [FromServices] Spokes_Server.Aggregate.Database db)
+    public IActionResult Login([FromBody] VaultLoginRequest request, [FromServices] IDataProtectionProvider dataProtection, [FromServices] Database db)
     {
         if (string.IsNullOrEmpty(request.Password))
         {
@@ -50,10 +51,10 @@ public class VaultController : SpokesControllerBase
                 Path = "/",
                 Expires = DateTimeOffset.UtcNow.AddDays(30)
             };
-            Response.Cookies.Append("chat_vault_key", encryptedPassword, cookieOptions);
+            Response.Cookies.Append(VaultCookieName, encryptedPassword, cookieOptions);
         }
 
-        var session = Spokes_Server.Core.Security.SessionHelper.GetActiveSession(HttpContext, db);
+        var session = SessionHelper.GetActiveSession(HttpContext, db);
         if (session != null)
         {
             session.HasVaultCookie = true;
@@ -64,9 +65,9 @@ public class VaultController : SpokesControllerBase
     }
 
     [HttpPost("logout")]
-    public IActionResult Logout([FromServices] Spokes_Server.Aggregate.Database db)
+    public IActionResult Logout([FromServices] Database db)
     {
-        Response.Cookies.Delete("chat_vault_key", new CookieOptions
+        Response.Cookies.Delete(VaultCookieName, new CookieOptions
         {
             Path = "/",
             HttpOnly = true,
@@ -74,7 +75,7 @@ public class VaultController : SpokesControllerBase
             SameSite = SameSiteMode.Lax
         });
 
-        var session = Spokes_Server.Core.Security.SessionHelper.GetActiveSession(HttpContext, db);
+        var session = SessionHelper.GetActiveSession(HttpContext, db);
         if (session != null)
         {
             session.HasVaultCookie = false;
@@ -85,19 +86,19 @@ public class VaultController : SpokesControllerBase
     }
 
     [HttpGet("status")]
-    public IActionResult Status([FromServices] Spokes_Server.Aggregate.Database db)
+    public IActionResult Status([FromServices] Database db)
     {
         // On mobile, the vault key lives in Capacitor Preferences (not a cookie).
         // Check the DeviceSession's HasVaultCookie flag as a server-side source of truth.
         if (IsMobileClient())
         {
-            var session = Spokes_Server.Core.Security.SessionHelper.GetActiveSession(HttpContext, db);
+            var session = SessionHelper.GetActiveSession(HttpContext, db);
             bool hasVault = session?.HasVaultCookie == true;
             return Ok(new { hasCookie = hasVault });
         }
 
         // Web: check the actual cookie
-        bool hasCookie = Request.Cookies.ContainsKey("chat_vault_key");
+        bool hasCookie = Request.Cookies.ContainsKey(VaultCookieName);
         return Ok(new { hasCookie });
     }
 }

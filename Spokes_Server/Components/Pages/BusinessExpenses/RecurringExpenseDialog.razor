@@ -1,14 +1,4 @@
-@using Spokes_Server.Core.Models.Core
-@using Spokes_Server.Core.Models.Projects
-@using Spokes_Server.Core.Models.Accounting
-@using Spokes_Server.Core.Models.Communication
-@using Spokes_Server.Core.Models.HR
-@using Spokes_Server.Core.Services
-@using Spokes_Server.Core.Data
-@using MudBlazor
 @inject ISnackbar Snackbar
-@inject IJSRuntime JS
-@inject IFileService FileService
 @inject Database Db
 
 <MudDialog>
@@ -82,7 +72,7 @@
                                         Variant="Variant.Outlined" />
                                 </MudItem>
                                 <MudItem xs="12" sm="6">
-                                        <MudNumericField @bind-Value="_newBillAmount" Margin="Margin.Dense" DebounceInterval="500" Label="Amount"
+                                        <MudNumericField @bind-Value="_newBillAmount" Margin="Margin.Dense" Immediate="true" Label="Amount"
                                         Variant="Variant.Outlined" Adornment="Adornment.Start" AdornmentText="$"
                                         Min="0" />
                                 </MudItem>
@@ -275,7 +265,7 @@
     [Parameter] public RecurringExpense Expense { get; set; } = new();
     [Parameter] public bool IsNew { get; set; } = true;
     [Parameter] public bool ShowBillHistory { get; set; } = true;
-    [Parameter] public int ActiveTabIndex { get; set; } = 0;
+    [Parameter] public int ActiveTabIndex { get; set; }
 
     private DateTime? _createdDate;
 
@@ -320,7 +310,7 @@
 
     private List<BillingPeriod> GetBillingPeriods()
     {
-        var periods = new List<BillingPeriod>();
+        List<BillingPeriod> periods = [];
         if (IsNew || Expense.Frequency == RecurringExpenseFrequency.OneTime
             || Expense.Frequency == RecurringExpenseFrequency.AsNeeded)
         {

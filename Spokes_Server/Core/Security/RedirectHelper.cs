@@ -1,6 +1,5 @@
 namespace Spokes_Server.Core.Security;
 
-using System;
 using Microsoft.AspNetCore.Http;
 
 public static class RedirectHelper
@@ -19,7 +18,7 @@ public static class RedirectHelper
         var trimmed = returnUrl.Trim();
 
         // Reject control characters (CRLF, null bytes) that could cause header splitting or Kestrel header exceptions
-        if (trimmed.IndexOfAny(new[] { '\r', '\n', '\0' }) >= 0)
+        if (trimmed.IndexOfAny(['\r', '\n', '\0']) >= 0)
         {
             return fallbackUrl;
         }
@@ -97,4 +96,3 @@ public static class RedirectHelper
         return safe;
     }
 }
-

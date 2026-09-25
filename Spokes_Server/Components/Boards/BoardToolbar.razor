@@ -1,16 +1,10 @@
-@using Spokes_Server.Core.Models.Core
-@using Spokes_Server.Core.Models.Projects
-@using Spokes_Server.Core.Models.Accounting
-@using Spokes_Server.Core.Models.Communication
-@using Spokes_Server.Core.Models.HR
-
 <MudPaper Elevation="0" Class="pa-2 px-4 d-flex align-center gap-2 border-b"
     Style="background-color: var(--mud-palette-background);">
 
     <!-- FILTER -->
     <MudMenu AnchorOrigin="Origin.BottomLeft" TransformOrigin="Origin.TopLeft" LockScroll="true">
         <ActivatorContent>
-            <MudButton Variant="@(View.Filters.Any() ? Variant.Text : Variant.Text)"
+            <MudButton Variant="Variant.Text"
                 Color="@(View.Filters.Any() ? Color.Primary : Color.Default)"
                 StartIcon="@Icons.Material.Filled.FilterList" Size="Size.Small">
                 Filter @(View.Filters.Any() ? $"({View.Filters.Count})" : "")
@@ -39,7 +33,8 @@
     <MudSpacer />
 
     <MudTextField @bind-Value="SearchText" Placeholder="Search" Variant="Variant.Outlined" Margin="Margin.Dense"
-        Dense="true" Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search" Immediate="true"
+        Dense="true" Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search"
+        DebounceInterval="500"
         TextChanged="OnSearchChanged" Style="max-width: 200px;" Class="mr-2" />
 
     <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Add"
@@ -55,7 +50,6 @@
     [Parameter] public EventCallback OnNewCard { get; set; }
     [Parameter] public EventCallback OnChange { get; set; }
 
-    [Inject] IDialogService DialogService { get; set; } = default!;
     [Parameter] public string SearchText { get; set; } = "";
     [Parameter] public EventCallback<string> SearchTextChanged { get; set; }
 

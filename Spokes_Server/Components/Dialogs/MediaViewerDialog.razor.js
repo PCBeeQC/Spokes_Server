@@ -39,10 +39,11 @@ export function cleanupLightboxState(goBack) {
 }
 
 class LightboxGestureHandler {
-    constructor(containerId, dotNetRef) {
+    constructor(containerId, dotNetRef, canSwipeHorizontal = true) {
         this.containerId = containerId;
         this.container = document.getElementById(containerId);
         this.dotNetRef = dotNetRef;
+        this.canSwipeHorizontal = canSwipeHorizontal;
         this.imgEl = null;
 
         this.currentScale = 1;
@@ -61,6 +62,7 @@ class LightboxGestureHandler {
         this.initialScale = 1;
         this.initialPinchCenterX = 0;
         this.initialPinchCenterY = 0;
+        this.initialScale = 1;
 
         // Timers
         this.longPressTimer = null;
@@ -70,9 +72,19 @@ class LightboxGestureHandler {
         this.bindEvents();
     }
 
+    setCanSwipeHorizontal(canSwipe) {
+        this.canSwipeHorizontal = Boolean(canSwipe);
+    }
+
     animateSwipe(direction) {
         if (!this.imgEl || !this.dotNetRef) return;
         
+        // Disallow horizontal slide-out if only a single image exists
+        if ((direction === 'left' || direction === 'right') && !this.canSwipeHorizontal) {
+            this.resetZoom();
+            return;
+        }
+
         // Slide out
         if (direction === 'left') {
             this.currentX = -window.innerWidth;
@@ -303,7 +315,12 @@ class LightboxGestureHandler {
 
                 if (this.gestureState === 'SWIPING_X') {
                     e.preventDefault();
-                    this.currentX = this.startTx + dx;
+                    if (this.canSwipeHorizontal) {
+                        this.currentX = this.startTx + dx;
+                    } else {
+                        // Dampen horizontal movement with elastic resistance when only 1 image exists
+                        this.currentX = this.startTx + (dx * 0.25);
+                    }
                     this.updateTransform(false);
                 } else if (this.gestureState === 'SWIPING_Y') {
                     e.preventDefault();
@@ -338,14 +355,14 @@ class LightboxGestureHandler {
                 if (this.gestureState === 'SWIPING_Y' && this.currentY > 100 && this.dotNetRef) {
                     this.animateSwipe('down');
                     actionTriggered = true;
-                } else if (this.gestureState === 'SWIPING_X' && this.currentX > 100 && this.dotNetRef) {
+                } else if (this.canSwipeHorizontal && this.gestureState === 'SWIPING_X' && this.currentX > 100 && this.dotNetRef) {
                     this.animateSwipe('right');
                     actionTriggered = true;
-                } else if (this.gestureState === 'SWIPING_X' && this.currentX < -100 && this.dotNetRef) {
+                } else if (this.canSwipeHorizontal && this.gestureState === 'SWIPING_X' && this.currentX < -100 && this.dotNetRef) {
                     this.animateSwipe('left');
                     actionTriggered = true;
                 } else if (this.gestureState !== 'IDLE' && this.gestureState !== 'IGNORE') {
-                    // Didn't cross threshold, snap back
+                    // Didn't cross threshold or cannot swipe horizontally, snap back
                     this.resetZoom();
                 }
 
@@ -384,15 +401,18 @@ class LightboxGestureHandler {
 // Global instances for Blazor to interface with
 let activeGestureHandler = null;
 
-export function initGestureHandler(containerId, dotNetRef) {
+export function initGestureHandler(containerId, dotNetRef, canSwipeHorizontal = true) {
     if (activeGestureHandler) {
         activeGestureHandler.destroy();
     }
-    activeGestureHandler = new LightboxGestureHandler(containerId, dotNetRef);
+    activeGestureHandler = new LightboxGestureHandler(containerId, dotNetRef, canSwipeHorizontal);
 }
 
-export function updateImage(imageId) {
+export function updateImage(imageId, canSwipeHorizontal) {
     if (activeGestureHandler) {
+        if (canSwipeHorizontal !== undefined) {
+            activeGestureHandler.setCanSwipeHorizontal(canSwipeHorizontal);
+        }
         activeGestureHandler.updateImage(imageId);
     }
 }

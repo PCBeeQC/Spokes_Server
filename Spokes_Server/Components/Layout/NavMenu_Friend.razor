@@ -1,16 +1,14 @@
-@using Microsoft.AspNetCore.Components.Authorization
-@using Spokes_Server.Core.Data
-@using Spokes_Server.Core.Services
 @using Spokes_Server.Core.Constants
-@using Spokes_Server.Core.Models.Core
+@using Microsoft.Extensions.Configuration
 @inject Database Db
-@inject Microsoft.Extensions.Configuration.IConfiguration Config
+@inject IConfiguration Config
 @inject UserService UserService
 @inject AuthenticationStateProvider AuthStateProvider
 @inject ChatNotificationService ChatNotifications
 @inject EmailNotificationService EmailNotifications
-@inject Spokes_Server.Core.Services.Core.AppLabelService AppLabels
-@inject Spokes_Server.Core.Services.Core.StartupTimingService StartupTimings
+@inject Spokes_Server.Core.Services.Communication.Notifications.CalendarNotificationService CalendarNotifications
+@inject AppLabelService AppLabels
+@inject StartupTimingService StartupTimings
 @inject IJSRuntime JS
 @implements IDisposable
 
@@ -145,6 +143,7 @@
             // Initialize chat and email notifications
             await ChatNotifications.InitializeAsync(_currentUser.Id);
             await EmailNotifications.InitializeAsync(_currentUser.Id);
+            await CalendarNotifications.InitializeAsync(_currentUser.Id);
 
             ChatNotifications.OnUnreadCountChanged += UpdateUnreadCount;
             EmailNotifications.OnUnreadCountChanged += UpdateUnreadEmailCount;

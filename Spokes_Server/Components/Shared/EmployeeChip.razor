@@ -1,6 +1,4 @@
-@using Spokes_Server.Core.Models.HR
-@using MudBlazor
-@inject Spokes_Server.Aggregate.Database Db
+@inject Database Db
 
 @{
     var emp = Employee ?? (!string.IsNullOrEmpty(UserId) ? Db.Employees.GetById(UserId) : null);
@@ -81,11 +79,6 @@ else
     [Parameter] public string Class { get; set; } = "";
     [Parameter] public string Style { get; set; } = "";
 
-    private async Task HandleClose(MudChip<string> chip)
-    {
-        if (OnClose.HasDelegate)
-        {
-            await OnClose.InvokeAsync();
-        }
-    }
+    private Task HandleClose(MudChip<string> chip) =>
+        OnClose.HasDelegate ? OnClose.InvokeAsync() : Task.CompletedTask;
 }

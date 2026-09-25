@@ -1,0 +1,237 @@
+@using Spokes_Server.Core.Helpers
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Models.Reports
+
+<MudPaper Elevation="0" Outlined="true" Class="pa-4 mb-4 rounded-lg d-print-none" Style="background: var(--mud-palette-surface);">
+    <!-- Top Filter Controls: Date Range, Presets, Prev/Next -->
+    <MudGrid Class="align-center mb-3">
+        <MudItem xs="12" md="6" lg="5">
+            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+                <MudIconButton Icon="@Icons.Material.Filled.ChevronLeft" OnClick="@(() => OnShiftDate.InvokeAsync(-1))" Title="Previous Period" Size="Size.Small" Variant="Variant.Outlined" />
+                <MudDateRangePicker @bind-DateRange="DateRange" @bind-DateRange:after="OnDateRangeChanged" Label="Date Range" PickerVariant="PickerVariant.Dialog" Color="Color.Primary" DateFormat="dd MMM yyyy" Clearable="true" Style="min-width: 240px;" />
+                <MudIconButton Icon="@Icons.Material.Filled.ChevronRight" OnClick="@(() => OnShiftDate.InvokeAsync(1))" Title="Next Period" Size="Size.Small" Variant="Variant.Outlined" />
+                <MudMenu Label="Presets" Variant="Variant.Outlined" Size="Size.Small" EndIcon="@Icons.Material.Filled.ArrowDropDown">
+                    <MudMenuItem OnClick="@(() => OnPresetSelected.InvokeAsync("Today"))">Today</MudMenuItem>
+                    <MudMenuItem OnClick="@(() => OnPresetSelected.InvokeAsync("Yesterday"))">Yesterday</MudMenuItem>
+                    <MudDivider />
+                    <MudMenuItem OnClick="@(() => OnPresetSelected.InvokeAsync("This Week"))">This Week</MudMenuItem>
+                    <MudMenuItem OnClick="@(() => OnPresetSelected.InvokeAsync("Last Week"))">Last Week</MudMenuItem>
+                    <MudDivider />
+                    <MudMenuItem OnClick="@(() => OnPresetSelected.InvokeAsync("This Month"))">This Month</MudMenuItem>
+                    <MudMenuItem OnClick="@(() => OnPresetSelected.InvokeAsync("Last Month"))">Last Month</MudMenuItem>
+                    <MudDivider />
+                    <MudMenuItem OnClick="@(() => OnPresetSelected.InvokeAsync("This Year"))">This Year</MudMenuItem>
+                    <MudMenuItem OnClick="@(() => OnPresetSelected.InvokeAsync("Last Year"))">Last Year</MudMenuItem>
+                </MudMenu>
+            </MudStack>
+        </MudItem>
+
+        <MudItem xs="12" md="6" lg="4">
+            <MudTextField @bind-Value="Criteria.DescriptionSearch" @bind-Value:after="HandleFilterChanged" DebounceInterval="500" Placeholder="Search description, employee, project..." Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search" IconSize="Size.Medium" Clearable="true" Variant="Variant.Outlined" Margin="Margin.Dense" />
+        </MudItem>
+
+        <MudItem xs="12" md="12" lg="3" Class="d-flex justify-end align-center">
+            <MudButton StartIcon="@Icons.Material.Filled.FilterAltOff" Variant="Variant.Outlined" Color="Color.Default" OnClick="ResetFilters" Size="Size.Small">Reset Filters</MudButton>
+        </MudItem>
+    </MudGrid>
+
+    <MudDivider Class="my-2" />
+
+    <!-- Multi-select Filters Bar -->
+    <MudGrid Spacing="2">
+        <MudItem xs="12" sm="6" md="3" lg="2">
+            <MudSelect T="string" Label="Employee" MultiSelection="true" SelectAll="true" SelectAllText="Select All" MultiSelectionTextFunc="@GetEmployeeSelectionText" SelectedValues="_selectedEmployees" SelectedValuesChanged="OnEmployeesChanged" Clearable="true" Margin="Margin.Dense" Variant="Variant.Outlined">
+                @foreach (var emp in AllEmployees)
+                {
+                    <MudSelectItem Value="@emp.Id">@emp.FullName</MudSelectItem>
+                }
+            </MudSelect>
+        </MudItem>
+
+        <MudItem xs="12" sm="6" md="3" lg="2">
+            <MudSelect T="string" Label="Team" MultiSelection="true" SelectAll="true" SelectAllText="Select All" MultiSelectionTextFunc="@GetTeamSelectionText" SelectedValues="_selectedTeams" SelectedValuesChanged="OnTeamsChanged" Clearable="true" Margin="Margin.Dense" Variant="Variant.Outlined">
+                @foreach (var team in AllTeams)
+                {
+                    <MudSelectItem Value="@team.Id">@team.Name</MudSelectItem>
+                }
+            </MudSelect>
+        </MudItem>
+
+        <MudItem xs="12" sm="6" md="3" lg="2">
+            <MudSelect T="string" Label="Client" MultiSelection="true" SelectAll="true" SelectAllText="Select All" MultiSelectionTextFunc="@GetClientSelectionText" SelectedValues="_selectedClients" SelectedValuesChanged="OnClientsChanged" Clearable="true" Margin="Margin.Dense" Variant="Variant.Outlined">
+                @foreach (var client in AllClients)
+                {
+                    <MudSelectItem Value="@client">@client</MudSelectItem>
+                }
+            </MudSelect>
+        </MudItem>
+
+        <MudItem xs="12" sm="6" md="3" lg="2">
+            <MudSelect T="string" Label="Project" MultiSelection="true" SelectAll="true" SelectAllText="Select All" MultiSelectionTextFunc="@GetProjectSelectionText" SelectedValues="_selectedProjects" SelectedValuesChanged="OnProjectsChanged" Clearable="true" Margin="Margin.Dense" Variant="Variant.Outlined">
+                @foreach (var proj in AllProjects)
+                {
+                    <MudSelectItem Value="@proj.Id">@proj.DisplayName</MudSelectItem>
+                }
+            </MudSelect>
+        </MudItem>
+
+        <MudItem xs="12" sm="6" md="3" lg="2">
+            <MudSelect T="string" Label="Task" MultiSelection="true" SelectAll="true" SelectAllText="Select All" MultiSelectionTextFunc="@GetTaskSelectionText" SelectedValues="_selectedTasks" SelectedValuesChanged="OnTasksChanged" Clearable="true" Margin="Margin.Dense" Variant="Variant.Outlined">
+                @foreach (var task in AllTasks)
+                {
+                    <MudSelectItem Value="@task.Id">@task.Name</MudSelectItem>
+                }
+            </MudSelect>
+        </MudItem>
+
+        <MudItem xs="12" sm="6" md="3" lg="2">
+            <MudSelect T="BillableFilterStatus" Label="Billability" @bind-Value="Criteria.BillableStatus" @bind-Value:after="HandleFilterChanged" Margin="Margin.Dense" Variant="Variant.Outlined">
+                <MudSelectItem Value="@BillableFilterStatus.All">All Entries</MudSelectItem>
+                <MudSelectItem Value="@BillableFilterStatus.BillableOnly">Billable Only ($)</MudSelectItem>
+                <MudSelectItem Value="@BillableFilterStatus.NonBillableOnly">Non-Billable Only</MudSelectItem>
+            </MudSelect>
+        </MudItem>
+    </MudGrid>
+</MudPaper>
+
+@code {
+    [Parameter] public TimesheetReportFilterCriteria Criteria { get; set; } = new();
+    [Parameter] public DateRange DateRange { get; set; } = new();
+    [Parameter] public EventCallback<DateRange> DateRangeChanged { get; set; }
+    [Parameter] public EventCallback OnFiltersApplied { get; set; }
+    [Parameter] public EventCallback<string> OnPresetSelected { get; set; }
+    [Parameter] public EventCallback<int> OnShiftDate { get; set; }
+
+    private async Task HandleFilterChanged() => await OnFiltersApplied.InvokeAsync();
+
+    [Parameter] public List<Employee> AllEmployees { get; set; } = [];
+    [Parameter] public List<Team> AllTeams { get; set; } = [];
+    [Parameter] public List<Project> AllProjects { get; set; } = [];
+    [Parameter] public List<ProjectGroup> AllProjectGroups { get; set; } = [];
+    [Parameter] public List<string> AllClients { get; set; } = [];
+    [Parameter] public List<WorkType> AllTasks { get; set; } = [];
+
+    private IReadOnlyCollection<string> _selectedEmployees = [];
+    private IReadOnlyCollection<string> _selectedTeams = [];
+    private IReadOnlyCollection<string> _selectedProjects = [];
+    private IReadOnlyCollection<string> _selectedClients = [];
+    private IReadOnlyCollection<string> _selectedTasks = [];
+
+    protected override void OnParametersSet()
+    {
+        if (Criteria.SelectedEmployees != null) _selectedEmployees = Criteria.SelectedEmployees.ToList();
+        if (Criteria.SelectedTeams != null) _selectedTeams = Criteria.SelectedTeams.ToList();
+        if (Criteria.SelectedProjects != null) _selectedProjects = Criteria.SelectedProjects.ToList();
+        if (Criteria.SelectedClients != null) _selectedClients = Criteria.SelectedClients.ToList();
+        if (Criteria.SelectedTasks != null) _selectedTasks = Criteria.SelectedTasks.ToList();
+    }
+
+    private async Task OnDateRangeChanged()
+    {
+        Criteria.StartDate = DateRange.Start;
+        Criteria.EndDate = DateRange.End;
+        await DateRangeChanged.InvokeAsync(DateRange);
+        await OnFiltersApplied.InvokeAsync();
+    }
+
+    private async Task OnEmployeesChanged(IReadOnlyCollection<string> values)
+    {
+        _selectedEmployees = values;
+        Criteria.SelectedEmployees = values;
+        Criteria.TotalEmployeesCount = AllEmployees.Count;
+        await OnFiltersApplied.InvokeAsync();
+    }
+
+    private async Task OnTeamsChanged(IReadOnlyCollection<string> values)
+    {
+        _selectedTeams = values;
+        Criteria.SelectedTeams = values;
+        Criteria.TotalTeamsCount = AllTeams.Count;
+        await OnFiltersApplied.InvokeAsync();
+    }
+
+    private async Task OnClientsChanged(IReadOnlyCollection<string> values)
+    {
+        _selectedClients = values;
+        Criteria.SelectedClients = values;
+        Criteria.TotalClientsCount = AllClients.Count;
+        await OnFiltersApplied.InvokeAsync();
+    }
+
+    private async Task OnProjectsChanged(IReadOnlyCollection<string> values)
+    {
+        _selectedProjects = values;
+        Criteria.SelectedProjects = values;
+        Criteria.TotalProjectsCount = AllProjects.Count;
+        await OnFiltersApplied.InvokeAsync();
+    }
+
+    private async Task OnTasksChanged(IReadOnlyCollection<string> values)
+    {
+        _selectedTasks = values;
+        Criteria.SelectedTasks = values;
+        Criteria.TotalTasksCount = AllTasks.Count;
+        await OnFiltersApplied.InvokeAsync();
+    }
+
+    private async Task ResetFilters()
+    {
+        _selectedEmployees = AllEmployees.Select(e => e.Id).ToList();
+        _selectedTeams = AllTeams.Select(t => t.Id).ToList();
+        _selectedProjects = AllProjects.Select(p => p.Id).ToList();
+        _selectedClients = AllClients.ToList();
+        _selectedTasks = AllTasks.Select(t => t.Id).ToList();
+
+        Criteria.SelectedEmployees = _selectedEmployees;
+        Criteria.TotalEmployeesCount = AllEmployees.Count;
+        Criteria.SelectedTeams = _selectedTeams;
+        Criteria.TotalTeamsCount = AllTeams.Count;
+        Criteria.SelectedProjects = _selectedProjects;
+        Criteria.TotalProjectsCount = AllProjects.Count;
+        Criteria.SelectedClients = _selectedClients;
+        Criteria.TotalClientsCount = AllClients.Count;
+        Criteria.SelectedTasks = _selectedTasks;
+        Criteria.TotalTasksCount = AllTasks.Count;
+        Criteria.BillableStatus = BillableFilterStatus.All;
+        Criteria.TimesheetStatus = "All";
+        Criteria.DescriptionSearch = "";
+
+        await OnFiltersApplied.InvokeAsync();
+    }
+
+    private string GetEmployeeSelectionText(IReadOnlyList<string> selectedIds)
+    {
+        if (selectedIds == null || selectedIds.Count == 0) return "None selected";
+        if (AllEmployees.Count > 0 && selectedIds.Count >= AllEmployees.Count) return "All Employees";
+        return string.Join(", ", AllEmployees.Where(x => selectedIds.Contains(x.Id)).Select(x => x.FullName));
+    }
+
+    private string GetTeamSelectionText(IReadOnlyList<string> selectedIds)
+    {
+        if (selectedIds == null || selectedIds.Count == 0) return "None selected";
+        if (AllTeams.Count > 0 && selectedIds.Count >= AllTeams.Count) return "All Teams";
+        return string.Join(", ", AllTeams.Where(x => selectedIds.Contains(x.Id)).Select(x => x.Name));
+    }
+
+    private string GetClientSelectionText(IReadOnlyList<string> selectedIds)
+    {
+        if (selectedIds == null || selectedIds.Count == 0) return "None selected";
+        if (AllClients.Count > 0 && selectedIds.Count >= AllClients.Count) return "All Clients";
+        return string.Join(", ", selectedIds);
+    }
+
+    private string GetProjectSelectionText(IReadOnlyList<string> selectedIds)
+    {
+        if (selectedIds == null || selectedIds.Count == 0) return "None selected";
+        if (AllProjects.Count > 0 && selectedIds.Count >= AllProjects.Count) return "All Projects";
+        return string.Join(", ", AllProjects.Where(x => selectedIds.Contains(x.Id)).Select(x => x.DisplayName));
+    }
+
+    private string GetTaskSelectionText(IReadOnlyList<string> selectedIds)
+    {
+        if (selectedIds == null || selectedIds.Count == 0) return "None selected";
+        if (AllTasks.Count > 0 && selectedIds.Count >= AllTasks.Count) return "All Tasks";
+        return string.Join(", ", AllTasks.Where(x => selectedIds.Contains(x.Id)).Select(x => x.Name));
+    }
+}

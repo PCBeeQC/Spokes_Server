@@ -1,19 +1,17 @@
-using Spokes_Server.Core.Services.Communication;
-using Spokes_Server.Core.Services.Projects;
-using Spokes_Server.Core.Services.Core;
 using Microsoft.AspNetCore.Components;
 using MudBlazor;
 using Spokes_Server.Components.Shared;
-using Spokes_Server.Core.Data.Repositories.Core;
-using Spokes_Server.Core.Data.Repositories.Projects;
-using Spokes_Server.Core.Data.Repositories.Accounting;
 using Spokes_Server.Core.Data.Repositories.Communication;
 using Spokes_Server.Core.Data.Repositories.HR;
-using Spokes_Server.Core.Models.Core;
-using Spokes_Server.Core.Models.Projects;
-using Spokes_Server.Core.Models.Accounting;
+using Spokes_Server.Core.Data.Repositories.Projects;
 using Spokes_Server.Core.Models.Communication;
-using Spokes_Server.Core.Models.HR;
+using Spokes_Server.Core.Services.Communication;
+using Spokes_Server.Core.Services.Core;
+using Spokes_Server.Core.Services.Security;
+
+using Spokes_Server.Core.Models.Communication.Notifications;
+using Spokes_Server.Core.Services.Communication.Presence;
+using Spokes_Server.Core.Services.UI;
 
 namespace Spokes_Server.Core.Services.Communication.Chat;
 
@@ -37,6 +35,9 @@ public class ChatNotificationService : IUserNotificationService, IAsyncDisposabl
     private readonly ICryptoService _crypto;
     private readonly IWebPushService _webPush;
     private readonly ChatService _chatService;
+    private readonly ISoundService _soundService;
+    private readonly UserCircuitContext? _circuitContext;
+    private readonly PresenceStateService? _presenceState;
     private string? _currentUserId;
     private HashSet<string> _subscribedChannels = new();
 
@@ -66,7 +67,10 @@ public class ChatNotificationService : IUserNotificationService, IAsyncDisposabl
         GlobalKeystoreService keystore,
         ICryptoService crypto,
         IWebPushService webPush,
-        ChatService chatService)
+        ChatService chatService,
+        ISoundService soundService,
+        UserCircuitContext? circuitContext = null,
+        PresenceStateService? presenceState = null)
     {
         _snackbar = snackbar;
         _nav = nav;
@@ -81,23 +85,32 @@ public class ChatNotificationService : IUserNotificationService, IAsyncDisposabl
         _crypto = crypto;
         _webPush = webPush;
         _chatService = chatService;
+        _soundService = soundService;
+        _circuitContext = circuitContext;
+        _presenceState = presenceState;
+    }
+
+    /// <summary>
+    /// Checks whether in-app notifications (snackbars/audio) should be shown for this circuit.
+    /// On mobile devices, notifications are strictly suppressed when the user is not actively viewing the app.
+    /// </summary>
+    private bool ShouldDisplayInAppNotification()
+    {
+        if (_circuitContext == null) return true;
+        return _circuitContext.ShouldDisplayInAppNotification(_presenceState);
     }
 
     /// <summary>
     /// Get sidebar unread count for a channel (ALL messages, including muted).
     /// </summary>
-    public int GetUnreadCount(string channelId)
-    {
-        return _unreadByChannel.TryGetValue(channelId, out var count) ? count : 0;
-    }
+    public int GetUnreadCount(string channelId) =>
+        _unreadByChannel.TryGetValue(channelId, out var count) ? count : 0;
 
     /// <summary>
     /// Get notified unread count for a channel (only messages that triggered notifications).
     /// </summary>
-    public int GetNotifiedUnreadCount(string channelId)
-    {
-        return _notifiedByChannel.TryGetValue(channelId, out var count) ? count : 0;
-    }
+    public int GetNotifiedUnreadCount(string channelId) =>
+        _notifiedByChannel.TryGetValue(channelId, out var count) ? count : 0;
 
     public Task InitializeAsync(string userId) => InitializeAsync(userId, null);
 
@@ -136,6 +149,7 @@ public class ChatNotificationService : IUserNotificationService, IAsyncDisposabl
 
         // Subscribe to local events
         _chatState.MessageReceived += OnMessageReceived;
+        _chatState.MessageEdited += OnMessageEdited;
         _chatState.ModerationAlertReceived += OnModerationAlertReceived;
 
         await Task.CompletedTask;
@@ -220,10 +234,11 @@ public class ChatNotificationService : IUserNotificationService, IAsyncDisposabl
             }
         }
 
-        // Don't count if user is on the chat page for this channel
+        // Don't count if user is on the chat page for this channel AND actively viewing
         var currentUri = _nav.Uri;
         var isOnThisChannel = currentUri.Contains($"/chat/{msg.ChannelId}");
-        if (isOnThisChannel) return;
+        bool isActivelyViewing = _circuitContext?.IsActivelyViewed == true;
+        if (isOnThisChannel && isActivelyViewing) return;
 
         // Always increment sidebar unread count (even muted channels)
         if (!_unreadByChannel.ContainsKey(msg.ChannelId))
@@ -240,8 +255,33 @@ public class ChatNotificationService : IUserNotificationService, IAsyncDisposabl
                 _notifiedByChannel[msg.ChannelId] = 0;
             _notifiedByChannel[msg.ChannelId]++;
 
-            // Show snackbar notification
-            ShowSnackbarNotification(msg);
+            // Determine if notification sound is suppressed by consecutive sound limit
+            var employee = _currentUserId != null ? _employees.GetById(_currentUserId) : null;
+            bool isSoundSilent = false;
+            if (employee != null && employee.LimitConsecutiveNotificationSounds)
+            {
+                var streakCount = _notifiedByChannel[msg.ChannelId];
+                isSoundSilent = streakCount > employee.ConsecutiveNotificationSoundLimit;
+            }
+
+            // Only play in-app sound and display in-app snackbar if the user is actively viewing the app
+            if (ShouldDisplayInAppNotification())
+            {
+                if (!isSoundSilent)
+                {
+                    if (msg.MessageType == "CallInvite")
+                    {
+                        _ = _soundService.PlayNotificationSoundAsync(NotificationCategories.Call);
+                    }
+                    else
+                    {
+                        _ = _soundService.PlayNotificationSoundAsync(NotificationCategories.Chat);
+                    }
+                }
+
+                // Show snackbar notification
+                ShowSnackbarNotification(msg);
+            }
         }
 
         OnUnreadCountChanged?.Invoke();
@@ -320,7 +360,7 @@ public class ChatNotificationService : IUserNotificationService, IAsyncDisposabl
             ? "[Attachment]"
             : messageContent;
         truncatedContent = System.Text.RegularExpressions.Regex.Replace(truncatedContent, @"!\[gif\]\([^)]+\)|\[gif\]", "Sent a GIF", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-        truncatedContent = truncatedContent.Length > 40 ? truncatedContent.Substring(0, 37) + "..." : truncatedContent;
+        truncatedContent = truncatedContent.Length > 40 ? truncatedContent[..37] + "..." : truncatedContent;
 
         _snackbar.Add<ChatNotificationContent>(
             new Dictionary<string, object>
@@ -338,8 +378,9 @@ public class ChatNotificationService : IUserNotificationService, IAsyncDisposabl
                 config.ShowCloseIcon = true;
                 config.SnackbarVariant = Variant.Filled;
                 config.HideIcon = true;
-                config.OnClick = _ =>
+                config.OnClick = snackbar =>
                 {
+                    _soundService.StopCallRingtoneAsync();
                     _nav.NavigateTo($"/chat/{msg.ChannelId}");
                     return Task.CompletedTask;
                 };
@@ -355,6 +396,7 @@ public class ChatNotificationService : IUserNotificationService, IAsyncDisposabl
         {
             // Only show snackbar if they didn't report it themselves
             if (report.ReporterId == _currentUserId) return;
+            if (!ShouldDisplayInAppNotification()) return;
 
             var reporter = _employees.GetById(report.ReporterId);
             var reporterName = reporter?.FullName ?? "Someone";
@@ -386,7 +428,7 @@ public class ChatNotificationService : IUserNotificationService, IAsyncDisposabl
         {
             return $"{parts[0][0]}{parts[1][0]}".ToUpper();
         }
-        return name.Length >= 2 ? name.Substring(0, 2).ToUpper() : name.ToUpper();
+        return name.Length >= 2 ? name[..2].ToUpper() : name.ToUpper();
     }
 
     public async Task SubscribeToChannel(string channelId)
@@ -487,13 +529,19 @@ public class ChatNotificationService : IUserNotificationService, IAsyncDisposabl
         if (hadUnread) OnUnreadCountChanged?.Invoke();
     }
 
+    private void OnMessageEdited(ChatMessage msg)
+    {
+        if (msg.MessageType == "CallInvite" && msg.CallStatus != "Active")
+        {
+            _ = _soundService.StopCallRingtoneAsync();
+        }
+    }
+
     public async ValueTask DisposeAsync()
     {
         _chatState.MessageReceived -= OnMessageReceived;
+        _chatState.MessageEdited -= OnMessageEdited;
         _chatState.ModerationAlertReceived -= OnModerationAlertReceived;
         await Task.CompletedTask;
     }
 }
-
-
-

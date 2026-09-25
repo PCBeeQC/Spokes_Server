@@ -11,17 +11,28 @@ let _iosAdaptiveEnabled = false;
 let _iosCurrentTier = null;         // 'low' (360p) | 'mid' (720p) | 'high' (1080p)
 let _iosAdaptiveDebounce = null;    // debounce timer to prevent rapid resolution flapping
 let _iosTargetCeiling = null;       // user's selected quality as the max tier ('low' | 'mid' | 'high')
+// --- Native Platform Helpers ---
+const isNativePlatform = () => typeof window.isCapacitorNative === 'function' ? window.isCapacitorNative() : Boolean(window.Capacitor?.isNativePlatform?.());
+const getNativePlatform = () => window.Capacitor?.getPlatform?.() || '';
+
 // --- Initialize local iOS native plugin lazily ---
 let _spokesAudioSessionPlugin = null;
 function getAudioSessionPlugin() {
-    if (!_spokesAudioSessionPlugin && window.Capacitor && window.Capacitor.registerPlugin) {
+    if (!_spokesAudioSessionPlugin && window.Capacitor?.registerPlugin) {
         _spokesAudioSessionPlugin = window.Capacitor.registerPlugin('SpokesAudioSessionPlugin');
     }
-    return _spokesAudioSessionPlugin || (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.SpokesAudioSessionPlugin);
+    return _spokesAudioSessionPlugin || window.Capacitor?.Plugins?.SpokesAudioSessionPlugin;
 }
 
 export function setNoiseSuppressionType(type) {
     currentNoiseSuppression = type;
+}
+
+export function setVoiceSensitivity(val) {
+    if (typeof val === 'number') {
+        _voiceSensitivity = Math.max(0, Math.min(100, val));
+        _savedVoiceSettings.voiceSensitivity = _voiceSensitivity;
+    }
 }
 
 function safeRemove(el) {
@@ -53,7 +64,7 @@ function safeRemove(el) {
 const ENABLE_TELEMETRY = false;
 
 export function isAppleMobileDevice() {
-    if (window.Capacitor && window.Capacitor.isNativePlatform() && window.Capacitor.getPlatform() === 'ios') return true;
+    if (isNativePlatform() && getNativePlatform() === 'ios') return true;
     return Boolean(/iPhone|iPad|iPod/i.test(navigator.userAgent) || (navigator.userAgent.includes("Mac") && "ontouchend" in document));
 }
 
@@ -62,45 +73,183 @@ let _androidInitialRouteSet = false;
 let _globalAudioContext = null;
 let _activeGainNodes = new Map();
 
-function applyMobileVolumeBoost(element, trackSid, mediaStreamTrack) {
-    if (!window.Capacitor || !window.Capacitor.isNativePlatform()) return;
-    let platform = window.Capacitor.getPlatform();
-    if (platform !== 'android' && platform !== 'ios') return;
-    if (!window.AudioContext && !window.webkitAudioContext) return;
-    
+function getVoiceAudioContext() {
     if (!_globalAudioContext) {
-        _globalAudioContext = new (window.AudioContext || window.webkitAudioContext)();
+        const AudioCtx = window.AudioContext || window.webkitAudioContext;
+        if (AudioCtx) {
+            _globalAudioContext = new AudioCtx();
+        }
     }
-    
-    if (_globalAudioContext.state === 'suspended') {
-        _globalAudioContext.resume();
+    if (_globalAudioContext && _globalAudioContext.state === 'suspended') {
+        _globalAudioContext.resume().catch(() => {});
     }
+    return _globalAudioContext;
+}
+
+// --- Web Audio Volume Pipeline (0% to 200% Master & Per-Participant) ---
+let _masterVolume = 1.0; // 0.0 to 2.0
+let _masterGainNode = null;
+const _participantGainNodes = new Map(); // identity -> { source, gainNode, element, trackSid }
+let _savedVoiceSettings = {
+    masterVolume: 100,
+    participantVolumes: {},
+    voiceSensitivity: 50
+};
+
+function getMasterGainNode() {
+    const ctx = getVoiceAudioContext();
+    if (!ctx) return null;
+    if (!_masterGainNode) {
+        _masterGainNode = ctx.createGain();
+        _masterGainNode.gain.value = _masterVolume;
+        _masterGainNode.connect(ctx.destination);
+    }
+    return _masterGainNode;
+}
+
+function attachParticipantAudio(track, participant, element) {
+    if (!participant || !participant.identity || !track.mediaStreamTrack) return;
     
+    // Never route local audio back through speakers
+    if (participant === currentRoom?.localParticipant) return;
+
+    const ctx = getVoiceAudioContext();
+    const masterGain = getMasterGainNode();
+    if (!ctx || !masterGain) return;
+
+    const identity = participant.identity;
+    detachParticipantAudio(identity);
+
     try {
-        const stream = new MediaStream([mediaStreamTrack]);
-        const source = _globalAudioContext.createMediaStreamSource(stream);
-        const gainNode = _globalAudioContext.createGain();
-        gainNode.gain.value = 3.0; // Boost by approx 9.5 dB
-        
+        const stream = new MediaStream([track.mediaStreamTrack]);
+        const source = ctx.createMediaStreamSource(stream);
+        const gainNode = ctx.createGain();
+
+        // Native mobile boost multiplier (approx 9.5 dB)
+        const isMobile = isNativePlatform() && (getNativePlatform() === 'android' || getNativePlatform() === 'ios');
+        const mobileBoost = isMobile ? 3.0 : 1.0;
+
+        let userVolume = 1.0;
+        if (_savedVoiceSettings?.participantVolumes && typeof _savedVoiceSettings.participantVolumes[identity] === 'number') {
+            userVolume = Math.max(0, Math.min(200, _savedVoiceSettings.participantVolumes[identity])) / 100.0;
+        }
+
+        gainNode.gain.value = userVolume * mobileBoost;
+
         source.connect(gainNode);
-        gainNode.connect(_globalAudioContext.destination);
-        
-        element.volume = 0; // Prevent duplicate audio from the original element
-        
-        _activeGainNodes.set(trackSid, { source, gainNode });
-    } catch(e) {
-        console.warn("[Voice] Failed to apply volume boost", e);
+        gainNode.connect(masterGain);
+
+        // Mute raw HTML audio element to prevent double playback
+        element.volume = 0;
+        element.muted = true;
+
+        _participantGainNodes.set(identity, {
+            source,
+            gainNode,
+            element,
+            trackSid: track.sid
+        });
+    } catch (e) {
+        console.warn("[Voice] Web Audio routing fallback for", identity, e);
+        element.muted = false;
+        element.volume = Math.min(1.0, _masterVolume);
     }
 }
 
-function removeMobileVolumeBoost(trackSid) {
-    if (_activeGainNodes.has(trackSid)) {
-        const nodes = _activeGainNodes.get(trackSid);
+function detachParticipantAudio(identity) {
+    const item = _participantGainNodes.get(identity);
+    if (item) {
         try {
-            nodes.source.disconnect();
-            nodes.gainNode.disconnect();
-        } catch(e) {}
-        _activeGainNodes.delete(trackSid);
+            item.source.disconnect();
+            item.gainNode.disconnect();
+        } catch (e) {}
+        _participantGainNodes.delete(identity);
+    }
+}
+
+function clearAllParticipantAudio() {
+    _participantGainNodes.forEach((item) => {
+        try {
+            item.source.disconnect();
+            item.gainNode.disconnect();
+        } catch (e) {}
+    });
+    _participantGainNodes.clear();
+}
+
+export function setMasterVolume(volumePercent) {
+    _masterVolume = Math.max(0, Math.min(200, volumePercent)) / 100.0;
+    if (_masterGainNode) {
+        _masterGainNode.gain.value = _masterVolume;
+    }
+}
+
+export function setParticipantVolume(participantId, volumePercent) {
+    if (!participantId) return;
+    if (!_savedVoiceSettings.participantVolumes) {
+        _savedVoiceSettings.participantVolumes = {};
+    }
+    _savedVoiceSettings.participantVolumes[participantId] = volumePercent;
+
+    const item = _participantGainNodes.get(participantId);
+    if (item && item.gainNode) {
+        const isMobile = isNativePlatform() && (getNativePlatform() === 'android' || getNativePlatform() === 'ios');
+        const mobileBoost = isMobile ? 3.0 : 1.0;
+        item.gainNode.gain.value = (Math.max(0, Math.min(200, volumePercent)) / 100.0) * mobileBoost;
+    }
+}
+
+export function initVoiceSettings(settingsJson) {
+    try {
+        const settings = typeof settingsJson === 'string' ? JSON.parse(settingsJson) : settingsJson;
+        if (settings) {
+            _savedVoiceSettings = settings;
+            if (typeof settings.masterVolume === 'number') {
+                setMasterVolume(settings.masterVolume);
+            }
+            if (typeof settings.voiceSensitivity === 'number') {
+                setVoiceSensitivity(settings.voiceSensitivity);
+            }
+            if (settings.participantVolumes) {
+                Object.keys(settings.participantVolumes).forEach(id => {
+                    const vol = settings.participantVolumes[id];
+                    const item = _participantGainNodes.get(id);
+                    if (item && item.gainNode) {
+                        const isMobile = isNativePlatform() && (getNativePlatform() === 'android' || getNativePlatform() === 'ios');
+                        const mobileBoost = isMobile ? 3.0 : 1.0;
+                        item.gainNode.gain.value = (Math.max(0, Math.min(200, vol)) / 100.0) * mobileBoost;
+                    }
+                });
+            }
+        }
+    } catch (e) {
+        console.warn('[Voice] initVoiceSettings error:', e);
+    }
+}
+
+function setLocalAudioMuted(muted) {
+    if (!currentRoom || !currentRoom.localParticipant) return;
+    _isLocalMicMuted = muted;
+    const localId = currentRoom.localParticipant.identity;
+    if (muted && localId) {
+        updateParticipantSpeakingDOM(localId, false);
+        const item = _trackedAudioStreams.get(localId);
+        if (item) item.isSpeaking = false;
+        notifyActiveSpeakersToDotnet(null, true);
+    }
+    const tracks = currentRoom.localParticipant.audioTrackPublications;
+    if (tracks) {
+        const pubArr = typeof tracks.values === 'function' ? Array.from(tracks.values()) : Object.values(tracks);
+        pubArr.forEach(p => {
+            if (p.track && p.track.mediaStreamTrack) {
+                p.track.mediaStreamTrack.enabled = !muted;
+            }
+            if (muted) {
+                if (typeof p.mute === 'function') p.mute().catch(() => {});
+            } else {
+                if (typeof p.unmute === 'function') p.unmute().catch(() => {});
+            }
+        });
     }
 }
 
@@ -150,6 +299,17 @@ export async function connectToVoice(token, url, helper, audioBitrateKbps = 64, 
 
 
     try {
+        getVoiceAudioContext();
+        if (currentRoom) {
+            try {
+                console.warn('[Voice] Existing room found in connectToVoice, disconnecting first...');
+                await currentRoom.disconnect();
+            } catch (e) {
+                console.warn('[Voice] Error disconnecting previous room:', e);
+            }
+            currentRoom = null;
+        }
+
         currentRoom = new window.LivekitClient.Room({
             adaptiveStream: true,
             dynacast: true,
@@ -176,14 +336,14 @@ export async function connectToVoice(token, url, helper, audioBitrateKbps = 64, 
         console.log('[Voice] Connected to room:', currentRoom.name);
 
         // --- Capacitor Native Mobile Fixes ---
-        if (window.Capacitor && window.Capacitor.isNativePlatform()) {
+        if (isNativePlatform()) {
             try {
                 // Prevent screen lock (fixes background audio dropping)
-                if (window.Capacitor.Plugins.KeepAwake) {
+                if (window.Capacitor?.Plugins?.KeepAwake) {
                     await window.Capacitor.Plugins.KeepAwake.keepAwake();
                 }
                 
-                let platform = window.Capacitor.getPlatform();
+                let platform = getNativePlatform();
                 let audioPlugin = getAudioSessionPlugin();
                 if (platform === 'ios' && audioPlugin) {
                     let res = await audioPlugin.configureVoiceChat({ enabled: true });
@@ -203,9 +363,10 @@ export async function connectToVoice(token, url, helper, audioBitrateKbps = 64, 
                                 // First callback signals the telecom session is ready.
                                 // Apply the desired default route (speaker) now.
                                 _androidInitialRouteSet = true;
-                                window.Capacitor.Plugins.TelecomConnectionPlugin.setAudioRoute({ route: 'speaker' })
+                                let desiredRoute = _androidHasBluetooth ? 'bluetooth' : 'speaker';
+                                window.Capacitor.Plugins.TelecomConnectionPlugin.setAudioRoute({ route: desiredRoute })
                                     .then(() => {
-                                        _activeNativeSpeakerId = 'speaker';
+                                        _activeNativeSpeakerId = desiredRoute;
                                         updateAudioDevices().catch(()=>{});
                                     })
                                     .catch(() => {
@@ -261,21 +422,21 @@ export async function disconnectFromVoice() {
         currentRoom = null;
         
         // --- Capacitor Native Release ---
-        if (window.Capacitor && window.Capacitor.isNativePlatform()) {
+        if (isNativePlatform()) {
             _activeNativeSpeakerId = 'default';
             try {
-                if (window.Capacitor.Plugins.KeepAwake) {
+                if (window.Capacitor?.Plugins?.KeepAwake) {
                     await window.Capacitor.Plugins.KeepAwake.allowSleep();
                 }
                 
-                let platform = window.Capacitor.getPlatform();
+                let platform = getNativePlatform();
                 let audioPlugin = getAudioSessionPlugin();
                 if (platform === 'ios' && audioPlugin) {
                     let res = await audioPlugin.configureVoiceChat({ enabled: false });
                     console.info(`[Voice] iOS Native Session Released: Category=${res.category}, Mode=${res.mode}, Output=${res.activeOutput}`);
                 }
                 
-                if (platform === 'android' && window.Capacitor.Plugins.TelecomConnectionPlugin) {
+                if (platform === 'android' && window.Capacitor?.Plugins?.TelecomConnectionPlugin) {
                     _androidInitialRouteSet = false;
                     window.Capacitor.Plugins.TelecomConnectionPlugin.removeAllListeners();
                     await window.Capacitor.Plugins.TelecomConnectionPlugin.endCall();
@@ -290,8 +451,17 @@ export async function disconnectFromVoice() {
 export async function setMicrophoneEnabled(enabled) {
     if (!currentRoom || !currentRoom.localParticipant) return;
 
+    _isLocalMicMuted = !enabled;
+    const localId = currentRoom.localParticipant.identity;
+
     try {
         if (!enabled) {
+            if (localId) {
+                updateParticipantSpeakingDOM(localId, false);
+                unregisterVoiceTrack(localId);
+            }
+            notifyActiveSpeakersToDotnet(null, true);
+
             // Unpublish existing tracks (and destroy processors implicitly via LiveKit)
             let tracks = currentRoom.localParticipant.audioTrackPublications;
             if (tracks) {
@@ -305,7 +475,7 @@ export async function setMicrophoneEnabled(enabled) {
             return;
         }
 
-        let isIOS = window.Capacitor && window.Capacitor.isNativePlatform() && window.Capacitor.getPlatform() === 'ios';
+        let isIOS = isNativePlatform() && getNativePlatform() === 'ios';
 
         if (currentNoiseSuppression === 'webrtc') {
             if (isIOS) {
@@ -351,7 +521,7 @@ export async function setMicrophoneEnabled(enabled) {
         // This follows the same platform branching pattern used above for 'webrtc' and 'none' modes.
         if (isIOS) {
             let trackOptions = {
-                echoCancellation: true,
+                echoCancellation: true, 
                 noiseSuppression: false,
                 autoGainControl: false
             };
@@ -364,9 +534,7 @@ export async function setMicrophoneEnabled(enabled) {
         let processor = null;
         try {
             processor = await noiseManager.getProcessor(currentNoiseSuppression);
-            if (processor && currentNoiseSuppression !== 'none' && dotnetHelper) {
-                dotnetHelper.invokeMethodAsync('OnVoiceLog', `AI Filter (${currentNoiseSuppression}) successfully initialized.`, "success").catch(()=>{});
-            }
+            // Removed snackbar message for AI Filter success initialization
         } catch (err) {
             console.error('[Voice] Failed to load AI processor:', err);
             if (dotnetHelper) {
@@ -430,7 +598,9 @@ export async function setMicrophoneEnabled(enabled) {
             dotnetHelper.invokeMethodAsync('OnVoiceLog', `Microphone Error: ${e.message}`, "error").catch(()=>{});
         }
         // Safest fallback to avoid getting stuck without mic
-        await currentRoom.localParticipant.setMicrophoneEnabled(true).catch(()=>{});
+        if (currentRoom && currentRoom.localParticipant) {
+            await currentRoom.localParticipant.setMicrophoneEnabled(true).catch(()=>{});
+        }
     }
 }
 
@@ -733,7 +903,36 @@ export async function switchActiveCamera(deviceId) {
     }
 }
 
+let _deviceChangeListenerInitialized = false;
+function ensureDeviceChangeListener() {
+    if (_deviceChangeListenerInitialized) return;
+    if (typeof navigator !== 'undefined' && navigator.mediaDevices?.addEventListener) {
+        navigator.mediaDevices.addEventListener('devicechange', async () => {
+            console.info('[Voice] Hardware device change detected');
+            try {
+                const speakers = await getAvailableSpeakers();
+                const savedSpeaker = localStorage.getItem('spokes_active_speaker_id');
+                if (savedSpeaker && savedSpeaker !== 'default' && !speakers.some(s => s.deviceId === savedSpeaker)) {
+                    console.warn('[Voice] Pinned speaker was disconnected, falling back to System Default');
+                    await switchActiveSpeaker('default');
+                }
+                const mics = await getAvailableMicrophones();
+                const savedMic = localStorage.getItem('spokes_active_mic_id');
+                if (savedMic && savedMic !== 'default' && !mics.some(m => m.deviceId === savedMic)) {
+                    console.warn('[Voice] Pinned microphone was disconnected, falling back to System Default');
+                    await switchActiveMicrophone('default');
+                }
+            } catch (e) {
+                console.warn('[Voice] Error handling devicechange fallback:', e);
+            }
+            await updateAudioDevices();
+        });
+        _deviceChangeListenerInitialized = true;
+    }
+}
+
 export async function updateAudioDevices() {
+    ensureDeviceChangeListener();
     if (!dotnetHelper) return;
     try {
         const mics = await getAvailableMicrophones();
@@ -747,77 +946,110 @@ export async function updateAudioDevices() {
 }
 
 export async function getAvailableMicrophones() {
-    if (window.Capacitor && window.Capacitor.isNativePlatform()) {
-        let platform = window.Capacitor.getPlatform();
+    if (isNativePlatform()) {
+        let platform = getNativePlatform();
         if (platform === 'ios' || platform === 'android') {
             return [];
         }
     }
     
-    if (!window.LivekitClient || !currentRoom) return [];
-    try {
-        let devices = await window.LivekitClient.Room.getLocalDevices('audioinput');
-        let distinct = [];
-        for (let d of devices) {
-            if (d.deviceId === 'default' || d.deviceId === 'communications') continue;
-            let exists = distinct.find(x => (d.groupId && x.groupId === d.groupId) || (d.label && x.label === d.label));
-            if (!exists) distinct.push({ deviceId: d.deviceId, label: d.label });
-        }
-        return distinct;
-    } catch(e) {
-        return [];
+    let devices = [];
+    if (window.LivekitClient?.Room?.getLocalDevices) {
+        try {
+            devices = await window.LivekitClient.Room.getLocalDevices('audioinput');
+        } catch(e) {}
     }
+    if ((!devices || devices.length === 0) && navigator?.mediaDevices?.enumerateDevices) {
+        try {
+            const all = await navigator.mediaDevices.enumerateDevices();
+            devices = all.filter(d => d.kind === 'audioinput');
+        } catch(e) {}
+    }
+
+    const result = [
+        { deviceId: 'default', label: 'System Default' }
+    ];
+
+    if (devices && devices.length > 0) {
+        for (const d of devices) {
+            if (d.deviceId === 'default' || d.deviceId === 'communications') continue;
+            if (!d.deviceId && !d.label) continue;
+            
+            const label = d.label || `Microphone (${d.deviceId.substring(0, 5)})`;
+            if (!result.some(x => x.deviceId === d.deviceId || x.label === label)) {
+                result.push({
+                    deviceId: d.deviceId,
+                    groupId: d.groupId,
+                    label: label
+                });
+            }
+        }
+    }
+
+    return result;
 }
 
 export async function getActiveMicrophoneId() {
-    if (!currentRoom) return "";
+    if (isNativePlatform()) return "";
+    
+    const mics = await getAvailableMicrophones();
+    if (mics.length === 0) return "default";
+
     try {
-        let activeId = "";
-        if (typeof currentRoom.getActiveDevice === 'function') {
-            activeId = await currentRoom.getActiveDevice('audioinput');
+        const saved = localStorage.getItem('spokes_active_mic_id');
+        if (saved && mics.some(m => m.deviceId === saved)) {
+            return saved;
         }
-        if (!activeId && currentRoom.localParticipant && window.LivekitClient && window.LivekitClient.Track) {
-            let tracks = currentRoom.localParticipant.audioTrackPublications;
-            if (tracks) {
-                let pubArr = typeof tracks.values === 'function' ? Array.from(tracks.values()) : Object.values(tracks);
-                let micPub = pubArr.find(p => p.source === window.LivekitClient.Track.Source.Microphone);
-                if (micPub && micPub.track && micPub.track.mediaStreamTrack) {
-                    activeId = micPub.track.mediaStreamTrack.getSettings().deviceId || "";
+    } catch(e) {}
+
+    if (currentRoom) {
+        try {
+            let activeId = "";
+            if (typeof currentRoom.getActiveDevice === 'function') {
+                activeId = await currentRoom.getActiveDevice('audioinput');
+            }
+            if (!activeId && currentRoom.localParticipant && window.LivekitClient?.Track) {
+                let tracks = currentRoom.localParticipant.audioTrackPublications;
+                if (tracks) {
+                    let pubArr = typeof tracks.values === 'function' ? Array.from(tracks.values()) : Object.values(tracks);
+                    let micPub = pubArr.find(p => p.source === window.LivekitClient.Track.Source.Microphone);
+                    if (micPub?.track?.mediaStreamTrack) {
+                        activeId = micPub.track.mediaStreamTrack.getSettings().deviceId || "";
+                    }
                 }
             }
-        }
-
-        if (activeId === 'default' || activeId === 'communications') {
-            let devices = await window.LivekitClient.Room.getLocalDevices('audioinput');
-            let defaultDevice = devices.find(d => d.deviceId === activeId);
-            if (defaultDevice && defaultDevice.groupId) {
-                let physicalDevice = devices.find(d => d.groupId === defaultDevice.groupId && d.deviceId !== 'default' && d.deviceId !== 'communications');
-                if (physicalDevice) return physicalDevice.deviceId;
+            if (activeId && activeId !== 'default' && activeId !== 'communications') {
+                if (mics.some(m => m.deviceId === activeId)) return activeId;
             }
-        } else if (activeId) {
-            return activeId;
-        }
-    } catch (e) {}
-    return "";
+        } catch (e) {}
+    }
+
+    return "default";
 }
 
 export async function switchActiveMicrophone(deviceId) {
-    if (!currentRoom) return;
+    const targetMic = (!deviceId || deviceId === 'default') ? 'default' : deviceId;
     try {
-        await currentRoom.switchActiveDevice('audioinput', deviceId);
-        await updateAudioDevices();
-    } catch(e) {
-        console.error('[Voice] Failed to switch microphone:', e);
+        localStorage.setItem('spokes_active_mic_id', targetMic);
+    } catch(e) {}
+
+    if (currentRoom) {
+        try {
+            await currentRoom.switchActiveDevice('audioinput', targetMic === 'default' ? '' : targetMic);
+        } catch(e) {
+            console.error('[Voice] Failed to switch microphone:', e);
+        }
     }
+    await updateAudioDevices();
 }
 
 export async function isAndroidDevice() {
-    return !!(window.Capacitor && window.Capacitor.isNativePlatform() && window.Capacitor.getPlatform() === 'android');
+    return isNativePlatform() && getNativePlatform() === 'android';
 }
 
 export async function getAvailableSpeakers() {
-    if (window.Capacitor && window.Capacitor.isNativePlatform()) {
-        let platform = window.Capacitor.getPlatform();
+    if (isNativePlatform()) {
+        let platform = getNativePlatform();
         if (platform === 'ios') {
             return [];
         } else if (platform === 'android') {
@@ -828,97 +1060,149 @@ export async function getAvailableSpeakers() {
             try {
                 if (window.Capacitor.Plugins.TelecomConnectionPlugin) {
                     let res = await window.Capacitor.Plugins.TelecomConnectionPlugin.getAvailableRoutes();
-                    if (res && typeof res.hasBluetooth === 'boolean') {
-                        _androidHasBluetooth = res.hasBluetooth;
+                    if (res && typeof res.hasBluetooth === 'boolean' && res.hasBluetooth) {
+                        devices.push({ deviceId: 'bluetooth', label: 'Bluetooth' });
                     }
                 }
             } catch(e) {}
-            
-            if (_androidHasBluetooth) {
-                devices.push({ deviceId: 'bluetooth', label: 'Bluetooth' });
-            }
             return devices;
         }
     }
     
-    if (!window.LivekitClient || !currentRoom) return [];
+    let devices = [];
+    if (window.LivekitClient?.Room?.getLocalDevices) {
         try {
-            let devices = await window.LivekitClient.Room.getLocalDevices('audiooutput');
-            let distinct = [];
-            for (let d of devices) {
-                if (d.deviceId === 'default' || d.deviceId === 'communications') continue;
-                let exists = distinct.find(x => (d.groupId && x.groupId === d.groupId) || (d.label && x.label === d.label));
-                if (!exists) distinct.push({ deviceId: d.deviceId, label: d.label });
+            devices = await window.LivekitClient.Room.getLocalDevices('audiooutput');
+        } catch(e) {}
+    }
+    if ((!devices || devices.length === 0) && navigator?.mediaDevices?.enumerateDevices) {
+        try {
+            const all = await navigator.mediaDevices.enumerateDevices();
+            devices = all.filter(d => d.kind === 'audiooutput');
+        } catch(e) {}
+    }
+
+    const result = [
+        { deviceId: 'default', label: 'System Default' }
+    ];
+
+    if (devices && devices.length > 0) {
+        for (const d of devices) {
+            if (d.deviceId === 'default' || d.deviceId === 'communications') continue;
+            if (!d.deviceId && !d.label) continue;
+            
+            const label = d.label || `Speaker (${d.deviceId.substring(0, 5)})`;
+            if (!result.some(x => x.deviceId === d.deviceId || x.label === label)) {
+                result.push({
+                    deviceId: d.deviceId,
+                    groupId: d.groupId,
+                    label: label
+                });
             }
-            return distinct;
-        } catch(e) {
-            return [];
         }
+    }
+
+    return result;
 }
 
 let _activeNativeSpeakerId = 'default';
 
 export async function getActiveSpeakerId() {
-    if (window.Capacitor && window.Capacitor.isNativePlatform()) {
-        let platform = window.Capacitor.getPlatform();
+    if (isNativePlatform()) {
+        let platform = getNativePlatform();
         if (platform === 'ios' || platform === 'android') {
             return _activeNativeSpeakerId;
         }
     }
+
+    const speakers = await getAvailableSpeakers();
+    if (speakers.length === 0) return "default";
+
+    try {
+        const saved = localStorage.getItem('spokes_active_speaker_id');
+        if (saved && speakers.some(s => s.deviceId === saved)) {
+            return saved;
+        }
+    } catch(e) {}
     
-    if (!currentRoom) return "";
-        try {
-            let activeId = "";
-            if (typeof currentRoom.getActiveDevice === 'function') {
-                activeId = await currentRoom.getActiveDevice('audiooutput');
-            }
-            if (activeId === 'default' || activeId === 'communications') {
-                let devices = await window.LivekitClient.Room.getLocalDevices('audiooutput');
-                let defaultDevice = devices.find(d => d.deviceId === activeId);
-                if (defaultDevice && defaultDevice.groupId) {
-                    let physicalDevice = devices.find(d => d.groupId === defaultDevice.groupId && d.deviceId !== 'default' && d.deviceId !== 'communications');
-                    if (physicalDevice) return physicalDevice.deviceId;
-                }
-            } else if (activeId) {
-                return activeId;
-            }
-        } catch (e) {}
-        return "";
+    try {
+        let activeId = "";
+        if (currentRoom && typeof currentRoom.getActiveDevice === 'function') {
+            activeId = await currentRoom.getActiveDevice('audiooutput');
+        }
+        if (activeId && activeId !== 'default' && activeId !== 'communications') {
+            if (speakers.some(s => s.deviceId === activeId)) return activeId;
+        }
+    } catch (e) {}
+
+    return "default";
 }
 
 export async function switchActiveSpeaker(deviceId) {
-    if (window.Capacitor && window.Capacitor.isNativePlatform()) {
-        let platform = window.Capacitor.getPlatform();
+    const targetSink = (!deviceId || deviceId === 'default') ? 'default' : deviceId;
+    try {
+        localStorage.setItem('spokes_active_speaker_id', targetSink);
+    } catch(e) {}
+
+    if (window.SoundManager?.setSinkId) {
+        try {
+            await window.SoundManager.setSinkId(targetSink);
+        } catch(e) {}
+    }
+
+    if (isNativePlatform()) {
+        let platform = getNativePlatform();
         try {
             if (platform === 'ios') {
                 let audioPlugin = getAudioSessionPlugin();
                 if (audioPlugin) {
-                    let targetRoute = deviceId === 'speakerphone' || deviceId === 'speaker' ? 'speaker' : 'earpiece';
+                    let targetRoute = targetSink === 'speakerphone' || targetSink === 'speaker' ? 'speaker' : 'earpiece';
                     let res = await audioPlugin.setAudioRoute({ route: targetRoute });
                     console.info(`[Voice] iOS Native Route Set (${targetRoute}): Category=${res.category}, Mode=${res.mode}, Output=${res.activeOutput}`);
-                } else {
-                    console.warn(`[Voice] iOS Native Route Set failed: plugin not found`);
                 }
             } else if (platform === 'android') {
                 if (window.Capacitor.Plugins.TelecomConnectionPlugin) {
-                    await window.Capacitor.Plugins.TelecomConnectionPlugin.setAudioRoute({ route: deviceId });
+                    await window.Capacitor.Plugins.TelecomConnectionPlugin.setAudioRoute({ route: targetSink });
                 }
             }
-            _activeNativeSpeakerId = deviceId;
+            _activeNativeSpeakerId = targetSink;
             await updateAudioDevices();
         } catch (e) {
             console.error('[Voice] Failed to switch native speaker:', e);
         }
     } else {
-        if (!currentRoom) return;
-        try {
-            await currentRoom.switchActiveDevice('audiooutput', deviceId);
-            await updateAudioDevices();
-        } catch(e) {
-            console.error('[Voice] Failed to switch speaker:', e);
+        if (currentRoom) {
+            try {
+                await currentRoom.switchActiveDevice('audiooutput', targetSink === 'default' ? '' : targetSink);
+            } catch(e) {
+                console.error('[Voice] Failed to switch speaker:', e);
+            }
+        }
+        await updateAudioDevices();
+    }
+}
+
+export async function playTestSpeakerSound(deviceId) {
+    try {
+        const audio = new Audio('/sounds/spokesnotif1.wav');
+        const sink = (!deviceId || deviceId === 'default') ? '' : deviceId;
+        if (typeof audio.setSinkId === 'function') {
+            try {
+                await audio.setSinkId(sink);
+            } catch(e) {
+                console.warn('[Voice] Failed to set sinkId on test audio:', e);
+            }
+        }
+        audio.volume = 1.0;
+        await audio.play();
+    } catch(e) {
+        console.warn('[Voice] playTestSpeakerSound failed, falling back to SoundManager:', e);
+        if (window.SoundManager) {
+            window.SoundManager.play('spokesnotif1', true);
         }
     }
 }
+
 
 export async function setScreenShareEnabled(enabled, resolutionStr = '1080p', targetFps = 30) {
     if (currentRoom && currentRoom.localParticipant) {
@@ -1036,6 +1320,10 @@ function attachTrack(track, participant) {
         
         console.log(`[Voice:Diag] attachTrack called | kind=${track.kind} source=${track.source} sid=${track.sid} participant=${participant.identity} targetId=${targetId}`);
         
+        if (dotnetHelper && participant && participant.identity) {
+            dotnetHelper.invokeMethodAsync('EnsureParticipantSlot', participant.identity).catch(() => {});
+        }
+
         waitForElement(targetId).then((targetEl) => {
             if (!currentRoom) {
                 console.warn(`[Voice:Diag] Aborted: no currentRoom`);
@@ -1054,7 +1342,10 @@ function attachTrack(track, participant) {
                     element = track.attach();
                     targetEl.appendChild(element);
                 }
-                applyMobileVolumeBoost(element, track.sid, track.mediaStreamTrack);
+                attachParticipantAudio(track, participant, element);
+                if (participant && participant.identity && track.mediaStreamTrack) {
+                    registerVoiceTrack(participant.identity, track.mediaStreamTrack, participant === currentRoom?.localParticipant);
+                }
             } else if (isVideo) {
                 // For video, targetEl is the native <video> tag strictly managed by Blazor.
                 // We instruct LiveKit to attach the media stream directly to this stable DOM node.
@@ -1150,7 +1441,10 @@ function handleTrackUnsubscribed(track, publication, participant) {
     if (sid) {
         const orphaned = document.getElementById(`media-${sid}`);
         if (orphaned) safeRemove(orphaned);
-        removeMobileVolumeBoost(sid);
+    }
+    if (participant && participant.identity && (track?.kind === window.LivekitClient.Track.Kind.Audio || publication?.kind === window.LivekitClient.Track.Kind.Audio)) {
+        unregisterVoiceTrack(participant.identity);
+        detachParticipantAudio(participant.identity);
     }
     
     // Explicit fallback to clear the Blazor-managed video tag, since LiveKit detaches tracks before firing this event
@@ -1172,7 +1466,13 @@ function handleLocalTrackPublished(publication, participant) {
     if (publication.track) {
         // Only attach local VIDEO tracks (camera preview). Never attach local AUDIO —
         // playing your own mic back through speakers causes echo/feedback.
-        if (publication.track.kind === window.LivekitClient.Track.Kind.Audio) return;
+        if (publication.track.kind === window.LivekitClient.Track.Kind.Audio) {
+            const mediaStreamTrack = publication.track.processor?.processedTrack || publication.track.mediaStreamTrack;
+            if (participant && participant.identity && mediaStreamTrack) {
+                registerVoiceTrack(participant.identity, mediaStreamTrack, true);
+            }
+            return;
+        }
         attachTrack(publication.track, participant);
         
         if (dotnetHelper) {
@@ -1211,42 +1511,310 @@ function handleLocalTrackPublished(publication, participant) {
     }
 }
 
-let lastSpeakerSids = "";
+// --- Real-time Voice Activity Detection (VAD) Engine (Discord-Grade Responsiveness) ---
+const _trackedAudioStreams = new Map(); // identity -> { source, analyser, dataArray, lastSpokeTime, isSpeaking, isLocal, track, noiseFloor, consecutiveActiveFrames }
+let _vadIntervalId = null;
+let _isLocalMicMuted = false;
+const VAD_HANGOVER_MS = 280; // Release time to bridge syllables without lingering or clipping word endings
+const VAD_ATTACK_FRAMES = 2; // ~60ms attack buffer to reject single-frame transients (clicks, taps, breath pops)
+let _voiceSensitivity = 50.0; // 0 (strict gate, higher threshold) to 100 (sensitive gate, lower threshold)
+let _lastNotifiedSpeakers = "";
+let _speakerSyncDebounce = null;
 
-function handleActiveSpeakers(speakers) {
-    if (!dotnetHelper) return;
-    
-    const activeSidsList = speakers.map(s => s.identity);
-    
-    // Instantly update the DOM locally for zero latency
-    document.querySelectorAll('.participant-rect.is-speaking').forEach(el => {
-        if (el.id && el.id.startsWith('participant-rect-')) {
-            const sid = el.id.substring(17);
-            if (!activeSidsList.includes(sid)) {
-                el.classList.remove('is-speaking');
-            }
-        }
+function registerVoiceTrack(identity, mediaStreamTrack, isLocal = false) {
+    if (!identity || !mediaStreamTrack) return;
+    unregisterVoiceTrack(identity);
+
+    if (isLocal) {
+        _isLocalMicMuted = false;
+    }
+
+    try {
+        const ctx = getVoiceAudioContext();
+        if (!ctx) return;
+
+        const stream = new MediaStream([mediaStreamTrack]);
+        const source = ctx.createMediaStreamSource(stream);
+        const analyser = ctx.createAnalyser();
+        analyser.fftSize = 256;
+        analyser.smoothingTimeConstant = 0.2; // Smooth out micro-jitter
+        source.connect(analyser);
+
+        const dataArray = new Uint8Array(analyser.frequencyBinCount);
+
+        _trackedAudioStreams.set(identity, {
+            source,
+            analyser,
+            dataArray,
+            lastSpokeTime: 0,
+            isSpeaking: false,
+            isLocal,
+            track: mediaStreamTrack,
+            noiseFloor: 14.0,
+            consecutiveActiveFrames: 0
+        });
+
+        startVADLoop();
+    } catch (err) {
+        console.warn('[Voice:VAD] Failed to register track for', identity, err);
+    }
+}
+
+function unregisterVoiceTrack(identity) {
+    const item = _trackedAudioStreams.get(identity);
+    if (item) {
+        try {
+            item.source.disconnect();
+        } catch(e) {}
+        _trackedAudioStreams.delete(identity);
+        updateParticipantSpeakingDOM(identity, false);
+    }
+    const localId = currentRoom?.localParticipant?.identity;
+    if (identity && identity === localId) {
+        _isLocalMicMuted = true;
+    }
+    if (_trackedAudioStreams.size === 0) {
+        stopVADLoop();
+    }
+    notifyActiveSpeakersToDotnet(null, true);
+}
+
+function clearAllVoiceTracks() {
+    _trackedAudioStreams.forEach((item, id) => {
+        try { item.source.disconnect(); } catch(e) {}
+        updateParticipantSpeakingDOM(id, false);
     });
+    _trackedAudioStreams.clear();
+    stopVADLoop();
+    _lastNotifiedSpeakers = "";
+    if (_speakerSyncDebounce) {
+        clearTimeout(_speakerSyncDebounce);
+        _speakerSyncDebounce = null;
+    }
+}
 
-    activeSidsList.forEach(identity => {
-        const el = document.getElementById(`participant-rect-${identity}`);
-        if (el && !el.classList.contains('is-speaking')) {
+function updateParticipantSpeakingDOM(identity, isSpeaking) {
+    const el = document.getElementById(`participant-rect-${identity}`);
+    if (el) {
+        if (isSpeaking && !el.classList.contains('is-speaking')) {
             el.classList.add('is-speaking');
-        }
-    });
-
-    const activeSids = activeSidsList.sort().join(',');
-    if (activeSids !== lastSpeakerSids) {
-        lastSpeakerSids = activeSids;
-        if (dotnetHelper) {
-            try { dotnetHelper.invokeMethodAsync('OnActiveSpeakersChanged', activeSidsList); } catch(e) {}
+        } else if (!isSpeaking && el.classList.contains('is-speaking')) {
+            el.classList.remove('is-speaking');
         }
     }
 }
 
+function startVADLoop() {
+    if (_vadIntervalId) return;
+    _vadIntervalId = setInterval(vadLoopTick, 30); // ~33 Hz evaluation
+}
+
+function stopVADLoop() {
+    if (_vadIntervalId) {
+        clearInterval(_vadIntervalId);
+        _vadIntervalId = null;
+    }
+}
+
+function vadLoopTick() {
+    const now = Date.now();
+    let stateChanged = false;
+
+    // Sensitivity multiplier: at 50 -> 1.0; at 0 -> 1.5 (stricter); at 100 -> 0.5 (more sensitive)
+    const sensMult = 1.0 + (50 - _voiceSensitivity) * 0.01;
+
+    _trackedAudioStreams.forEach((item, identity) => {
+        // Local mute check for local participant:
+        const isMutedLocally = _isLocalMicMuted;
+        if (item.isLocal && (isMutedLocally || !item.track?.enabled || item.track?.readyState === 'ended' || item.track?.muted)) {
+            if (item.isSpeaking) {
+                item.isSpeaking = false;
+                item.consecutiveActiveFrames = 0;
+                stateChanged = true;
+                updateParticipantSpeakingDOM(identity, false);
+            }
+            return;
+        }
+
+        // If track is disabled, muted, or ended, silence it
+        if (item.track && (!item.track.enabled || item.track.readyState === 'ended' || item.track.muted)) {
+            if (item.isSpeaking) {
+                item.isSpeaking = false;
+                item.consecutiveActiveFrames = 0;
+                stateChanged = true;
+                updateParticipantSpeakingDOM(identity, false);
+            }
+            return;
+        }
+
+        item.analyser.getByteFrequencyData(item.dataArray);
+
+        // Speech formant band analysis:
+        // Exclude bin 0 (0 - 187.5 Hz) which contains DC bias, 50/60Hz AC hum, desk thumps, and fan rumble.
+        // Focus on bins 1 to 21 (~187.5 Hz to ~4,125 Hz) where human vocal energy and formants concentrate.
+        const minBin = 1;
+        const maxBin = Math.min(21, item.dataArray.length - 1);
+        let voiceSum = 0;
+        let voicePeak = 0;
+        for (let i = minBin; i <= maxBin; i++) {
+            const val = item.dataArray[i];
+            voiceSum += val;
+            if (val > voicePeak) voicePeak = val;
+        }
+        const voiceAvg = voiceSum / (maxBin - minBin + 1);
+
+        // Adaptive noise floor tracking during non-speech periods:
+        if (item.noiseFloor === undefined) item.noiseFloor = 14.0;
+        if (!item.isSpeaking) {
+            if (voiceAvg < item.noiseFloor) {
+                // Decay down relatively fast (~1s) when room is quieter than current baseline
+                item.noiseFloor = item.noiseFloor * 0.92 + voiceAvg * 0.08;
+            } else if (voiceAvg < item.noiseFloor + 15) {
+                // Adapt up very slowly (~10s) to gradual ambient room drift without locking onto speech
+                item.noiseFloor = item.noiseFloor * 0.995 + voiceAvg * 0.005;
+            }
+            item.noiseFloor = Math.max(5.0, Math.min(55.0, item.noiseFloor));
+        }
+
+        // Gate thresholds anchored above ambient noise floor and scaled by user sensitivity:
+        const thresholdAvg = Math.max(16.0, item.noiseFloor + 12.0) * sensMult;
+        const thresholdPeak = Math.max(60.0, item.noiseFloor * 2.2 + 25.0) * sensMult;
+
+        // Active speech requires both vocal band energy AND a speech formant peak,
+        // or an exceptionally strong vocal peak (loud exclamation / sharp consonant above 105 * sensMult).
+        const isActive = (voiceAvg > thresholdAvg && voicePeak > thresholdPeak) || 
+                         (voicePeak > Math.max(105.0, thresholdPeak * 1.4));
+
+        if (isActive) {
+            item.consecutiveActiveFrames = (item.consecutiveActiveFrames || 0) + 1;
+            // Require sustained energy across at least VAD_ATTACK_FRAMES (~60ms) to filter out transient clicks/pops
+            if (item.consecutiveActiveFrames >= VAD_ATTACK_FRAMES) {
+                item.lastSpokeTime = now;
+                if (!item.isSpeaking) {
+                    item.isSpeaking = true;
+                    stateChanged = true;
+                    updateParticipantSpeakingDOM(identity, true);
+                }
+            }
+        } else {
+            item.consecutiveActiveFrames = 0;
+            if (item.isSpeaking) {
+                if (now - item.lastSpokeTime >= VAD_HANGOVER_MS) {
+                    item.isSpeaking = false;
+                    stateChanged = true;
+                    updateParticipantSpeakingDOM(identity, false);
+                }
+            }
+        }
+    });
+
+    if (stateChanged) {
+        notifyActiveSpeakersToDotnet();
+    }
+}
+
+function getCurrentlySpeakingIdentities(sfuSpeakers = []) {
+    const localIdentity = currentRoom?.localParticipant?.identity;
+    const isLocalMuted = _isLocalMicMuted || !currentRoom?.localParticipant || !_trackedAudioStreams.has(localIdentity);
+
+    // SFU speakers should NEVER drive the local participant's speaking state
+    const remoteSfu = sfuSpeakers.filter(id => id !== localIdentity);
+    const activeSet = new Set(remoteSfu);
+
+    _trackedAudioStreams.forEach((item, id) => {
+        if (id === localIdentity && isLocalMuted) {
+            item.isSpeaking = false;
+            activeSet.delete(id);
+            return;
+        }
+
+        if (item.isSpeaking) {
+            activeSet.add(id);
+        } else {
+            activeSet.delete(id);
+        }
+    });
+
+    if (localIdentity && isLocalMuted) {
+        activeSet.delete(localIdentity);
+    }
+    return Array.from(activeSet);
+}
+
+function notifyActiveSpeakersToDotnet(explicitList = null, forceImmediate = false) {
+    if (!dotnetHelper) return;
+
+    const sendUpdate = (list) => {
+        const currentActive = list || getCurrentlySpeakingIdentities();
+        const currentSorted = [...currentActive].sort().join(',');
+        if (currentSorted !== _lastNotifiedSpeakers) {
+            _lastNotifiedSpeakers = currentSorted;
+            try {
+                dotnetHelper.invokeMethodAsync('OnActiveSpeakersChanged', currentActive);
+            } catch(e) {}
+        }
+    };
+
+    if (forceImmediate) {
+        if (_speakerSyncDebounce) {
+            clearTimeout(_speakerSyncDebounce);
+            _speakerSyncDebounce = null;
+        }
+        sendUpdate(explicitList);
+        return;
+    }
+
+    if (_speakerSyncDebounce) return;
+
+    _speakerSyncDebounce = setTimeout(() => {
+        _speakerSyncDebounce = null;
+        sendUpdate(explicitList);
+    }, 80);
+}
+
+function handleActiveSpeakers(speakers) {
+    if (!dotnetHelper) return;
+    
+    const localIdentity = currentRoom?.localParticipant?.identity;
+    const isLocalMuted = _isLocalMicMuted;
+
+    // SFU speakers should NEVER drive the local participant's speaking state
+    const remoteSpeakers = speakers.filter(s => s.identity !== localIdentity);
+    const activeSidsList = remoteSpeakers.map(s => s.identity);
+
+    if (localIdentity && isLocalMuted) {
+        updateParticipantSpeakingDOM(localIdentity, false);
+    }
+
+    // For remote participants not tracked by local VAD, update DOM from SFU
+    activeSidsList.forEach(identity => {
+        if (!_trackedAudioStreams.has(identity)) {
+            updateParticipantSpeakingDOM(identity, true);
+        }
+    });
+
+    document.querySelectorAll('.participant-rect.is-speaking').forEach(el => {
+        if (el.id && el.id.startsWith('participant-rect-')) {
+            const sid = el.id.substring(17);
+            if (sid === localIdentity) {
+                if (isLocalMuted || !_trackedAudioStreams.get(sid)?.isSpeaking) {
+                    updateParticipantSpeakingDOM(sid, false);
+                }
+            } else if (!_trackedAudioStreams.has(sid) && !activeSidsList.includes(sid)) {
+                updateParticipantSpeakingDOM(sid, false);
+            }
+        }
+    });
+
+    notifyActiveSpeakersToDotnet(getCurrentlySpeakingIdentities(activeSidsList));
+}
+
 function handleDisconnect() {
     console.log('[Voice] Disconnected');
+    _isLocalMicMuted = false;
     _stopIosAdaptive();
+    clearAllVoiceTracks();
+    clearAllParticipantAudio();
     
     // Only detach LiveKit-created media elements (tracks we attached via JS).
     // Do NOT clear container.innerHTML — those parent containers are owned by Blazor's
@@ -1313,6 +1881,10 @@ function handleLocalUnpublished(publication, participant) {
         }
     }
 
+    if (participant && participant.identity && (publication.kind === window.LivekitClient.Track.Kind.Audio || publication.track?.kind === window.LivekitClient.Track.Kind.Audio)) {
+        unregisterVoiceTrack(participant.identity);
+    }
+
     // Fired when the user mutes themselves or stops video
     if (dotnetHelper) {
         try {
@@ -1332,6 +1904,18 @@ function handleTrackMuted(publication, participant) {
         const orphaned = document.getElementById(`media-${sid}`);
         if (orphaned) safeRemove(orphaned);
     }
+    if (participant && participant.identity && (publication.kind === window.LivekitClient.Track.Kind.Audio || publication.track?.kind === window.LivekitClient.Track.Kind.Audio)) {
+        const item = _trackedAudioStreams.get(participant.identity);
+        if (item) {
+            item.isSpeaking = false;
+            updateParticipantSpeakingDOM(participant.identity, false);
+        }
+        if (dotnetHelper) {
+            try {
+                dotnetHelper.invokeMethodAsync('OnParticipantMuteChanged', participant.identity, true);
+            } catch(e) {}
+        }
+    }
     // Fallback: forcefully clear local video if it's the participant muting
     if (publication.kind === window.LivekitClient.Track.Kind.Video || (publication.track && publication.track.kind === window.LivekitClient.Track.Kind.Video)) {
         if (participant && participant.identity) {
@@ -1345,8 +1929,21 @@ function handleTrackMuted(publication, participant) {
 
 function handleTrackUnmuted(publication, participant) {
     if (publication.track) {
-        // Never attach local AUDIO
-        if (participant === currentRoom?.localParticipant && publication.track.kind === window.LivekitClient.Track.Kind.Audio) return;
+        if (participant && participant.identity && (publication.kind === window.LivekitClient.Track.Kind.Audio || publication.track?.kind === window.LivekitClient.Track.Kind.Audio)) {
+            if (dotnetHelper) {
+                try {
+                    dotnetHelper.invokeMethodAsync('OnParticipantMuteChanged', participant.identity, false);
+                } catch(e) {}
+            }
+        }
+        // Never attach local AUDIO to speakers
+        if (participant === currentRoom?.localParticipant && publication.track.kind === window.LivekitClient.Track.Kind.Audio) {
+            const mediaStreamTrack = publication.track.processor?.processedTrack || publication.track.mediaStreamTrack;
+            if (participant && participant.identity && mediaStreamTrack) {
+                registerVoiceTrack(participant.identity, mediaStreamTrack, true);
+            }
+            return;
+        }
         attachTrack(publication.track, participant);
     }
 }
@@ -1362,6 +1959,10 @@ function handleParticipantConnected(participant) {
 }
 
 function handleParticipantDisconnected(participant) {
+    if (participant && participant.identity) {
+        unregisterVoiceTrack(participant.identity);
+        detachParticipantAudio(participant.identity);
+    }
     if (dotnetHelper) {
         try {
              dotnetHelper.invokeMethodAsync('OnParticipantDisconnected', participant.identity);
@@ -1478,7 +2079,7 @@ export function refreshVideoLayouts() {
 
 // Release Wake Lock on sudden page exit
 function releaseWakeLock() {
-    if (window.Capacitor && window.Capacitor.isNativePlatform() && window.Capacitor.Plugins.KeepAwake) {
+    if (isNativePlatform() && window.Capacitor?.Plugins?.KeepAwake) {
         window.Capacitor.Plugins.KeepAwake.allowSleep().catch(()=>{});
     }
 }
@@ -1486,8 +2087,8 @@ window.addEventListener('beforeunload', releaseWakeLock);
 window.addEventListener('pagehide', releaseWakeLock);
 
 export async function isIOSDevice() {
-    if (window.Capacitor && window.Capacitor.isNativePlatform()) {
-        return window.Capacitor.getPlatform() === 'ios';
+    if (isNativePlatform()) {
+        return getNativePlatform() === 'ios';
     }
     return false;
 }

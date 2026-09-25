@@ -1,19 +1,9 @@
 @page "/planning/calendar"
-@using Spokes_Server.Core.Data
-@using Spokes_Server.Core.Models.Core
-@using Spokes_Server.Core.Models.Projects
-@using Spokes_Server.Core.Models.Accounting
-@using Spokes_Server.Core.Models.Communication
-@using Spokes_Server.Core.Models.HR
 @using Spokes_Server.Components.Dialogs
-@using MudBlazor
 @inject Database Db
-@using Spokes_Server.Core.Services
-@inject AuthenticationStateProvider AuthStateProvider
 @inject UserService UserService
 @inject IDialogService DialogService
 @inject ISnackbar Snackbar
-@attribute [Authorize]
 
 <PageTitle>My Calendar</PageTitle>
 
@@ -27,30 +17,35 @@
             <div class="d-flex justify-space-between align-center mb-4">
                 <div class="d-flex align-center gap-2">
                     <MudIconButton Icon="@Icons.Material.Filled.ChevronLeft" OnClick="PrevMonth" />
-                    <MudText Typo="Typo.h5"><b>@CurrentMonth.ToString("MMMM yyyy")</b></MudText>
+                    <MudText Typo="Typo.h5" Align="Align.Center" Style="width: 220px;"><b>@CurrentMonth.ToString("MMMM yyyy")</b></MudText>
                     <MudIconButton Icon="@Icons.Material.Filled.ChevronRight" OnClick="NextMonth" />
                     <MudButton Variant="Variant.Outlined" OnClick="GoToToday" Size="Size.Small" Class="ml-4">Today
                     </MudButton>
                 </div>
 
-                <MudButton StartIcon="@Icons.Material.Filled.Add" Variant="Variant.Outlined" Color="Color.Primary"
-                    OnClick="AddEvent">Add Event</MudButton>
+                <div class="d-flex align-center gap-2">
+                    <MudButton StartIcon="@Icons.Material.Filled.Palette" Variant="Variant.Outlined" Color="Color.Default"
+                        OnClick="OpenCategoryManager">Categories</MudButton>
+                    <MudButton StartIcon="@Icons.Material.Filled.Add" Variant="Variant.Outlined" Color="Color.Primary"
+                        OnClick="AddEvent">Add Event</MudButton>
+                </div>
             </div>
 
             <!-- Category Filters -->
-            <div class="d-flex flex-wrap gap-2 mb-4">
-                @foreach (var cat in Categories)
-                {
-                    bool isSelected = SelectedCategories.Contains(cat.Id);
-                    Color catColor = Color.Default;
-                    Enum.TryParse(cat.Color, out catColor);
+            @if (DynamicCategories.Any())
+            {
+                <div class="d-flex flex-wrap gap-2 mb-4">
+                    @foreach (var cat in DynamicCategories)
+                    {
+                        bool isSelected = SelectedCategoryKeys.Contains(cat.FilterKey);
 
-                    <MudChip T="string" Color="@catColor" Variant="@(isSelected ? Variant.Filled : Variant.Outlined)"
-                        OnClick="@(() => ToggleCategoryFilter(cat.Id))" Size="Size.Small">
-                        @cat.Name
-                    </MudChip>
-                }
-            </div>
+                        <MudChip T="string" Color="@cat.Color" Variant="@(isSelected ? Variant.Filled : Variant.Outlined)"
+                            OnClick="@(() => ToggleCategoryFilter(cat.FilterKey))" Size="Size.Small">
+                            @cat.DisplayName
+                        </MudChip>
+                    }
+                </div>
+            }
 
             @if (Loading)
             {
@@ -69,17 +64,16 @@
                     <!-- Cells -->
                     @foreach (var day in CalendarDays)
                     {
-                        <div class="@GetCellClass(day)" @onclick="@(() => OnDayClick(day))">
+                        <div class="@GetCellClass(day)" @onclick="@(() => OnDayClick(day))" @ondblclick="@(() => OnDayDoubleClick(day))">
                             <div class="day-number">@day.Date.Day</div>
 
                             <div class="day-content">
-                                @foreach (var evt in FilteredEvents.Where(e => e.Date == day.Date && (SelectedCategories.Count
-                               == 0 || SelectedCategories.Contains(e.SourceEvent.Category))))
+                                @foreach (var evt in FilteredEvents.Where(e => e.Date == day.Date && (SelectedCategoryKeys.Count == 0 || SelectedCategoryKeys.Contains(e.EffectiveCategory.FilterKey))))
                                 {
                                     <div class="calendar-event @evt.TypeClass @(evt.IsContinuation ? "evt-cont" : "")"
                                         style="background-color: var(--mud-palette-@(evt.Color.ToString().ToLower()));"
                                     @onclick="@((e) => OnEventClick(evt, e))" @onclick:stopPropagation="true"
-                                        title="@evt.Title (@evt.OwnerName) @(string.IsNullOrEmpty(evt.SourceEvent.Location) ? "" : " - " + evt.SourceEvent.Location)">
+                                        title="@evt.Title (@evt.EffectiveCategory.DisplayName) @(string.IsNullOrEmpty(evt.SourceEvent.Location) ? "" : " - " + evt.SourceEvent.Location)">
                                         @if (!evt.IsContinuation)
                                         {
                                             <span class="evt-time">@(evt.IsAllDay ? "" : evt.TimeStr)</span>
@@ -96,6 +90,124 @@
                     }
                 </div>
             </div>
+
+            <!-- Desktop Daily Agenda View -->
+            <MudDivider Class="my-6" />
+
+            <div class="desktop-agenda">
+                <!-- Agenda Header -->
+                <div class="d-flex justify-space-between align-center mb-4">
+                    <div class="d-flex align-center gap-3">
+                        <MudIcon Icon="@Icons.Material.Filled.CalendarToday" Color="Color.Primary" Size="Size.Medium" />
+                        <div>
+                            <MudText Typo="Typo.h6" Class="font-weight-bold" Style="line-height: 1.2;">
+                                @SelectedDate.ToString("dddd, MMMM d, yyyy")
+                            </MudText>
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                @(SelectedDayEvents.Count == 0 
+                                    ? "No events scheduled" 
+                                    : SelectedDayEvents.Count == 1 
+                                        ? "1 event scheduled" 
+                                        : $"{SelectedDayEvents.Count} events scheduled")
+                            </MudText>
+                        </div>
+                    </div>
+                    <MudButton StartIcon="@Icons.Material.Filled.Add"
+                               Variant="Variant.Outlined"
+                               Color="Color.Primary"
+                               Size="Size.Small"
+                               OnClick="AddEvent">
+                        Add Event
+                    </MudButton>
+                </div>
+
+                <!-- Agenda Events -->
+                @if (SelectedDayEvents.Count == 0)
+                {
+                    <div class="d-flex flex-column align-center justify-center py-6 text-center" style="background-color: var(--mud-palette-background-grey); border-radius: 8px;">
+                        <MudIcon Icon="@Icons.Material.Outlined.EventAvailable" Size="Size.Large" Color="Color.Secondary" Style="opacity: 0.5;" />
+                        <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mt-2">No events scheduled for this day.</MudText>
+                        <MudButton StartIcon="@Icons.Material.Filled.Add"
+                                   Variant="Variant.Text"
+                                   Color="Color.Primary"
+                                   Size="Size.Small"
+                                   OnClick="AddEvent"
+                                   Class="mt-1">
+                            Schedule an event
+                        </MudButton>
+                    </div>
+                }
+                else
+                {
+                    <div class="d-flex flex-column gap-2">
+                        @foreach (var evt in SelectedDayEvents)
+                        {
+                            var startDt = evt.SourceEvent.Start;
+                            var endDt = evt.SourceEvent.End;
+                            var colorKey = evt.Color.ToString().ToLower();
+
+                            <div class="agenda-row d-flex align-center" style="cursor: pointer;" @onclick="@((e) => OnEventClick(evt, e))">
+                                <!-- Time column -->
+                                <div class="agenda-time pr-4 d-flex flex-column justify-center" style="min-width: 90px; color: var(--mud-palette-text-secondary); font-size: 0.85rem; font-weight: 500;">
+                                    @if (evt.IsAllDay)
+                                    {
+                                        <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Default" Class="ma-0 px-2" Style="height: 22px; font-size: 0.75rem;">
+                                            All Day
+                                        </MudChip>
+                                    }
+                                    else
+                                    {
+                                        <span class="font-weight-bold">@startDt.ToString("HH:mm")</span>
+                                        <span style="opacity: 0.6; font-size: 0.75rem;">@endDt.ToString("HH:mm")</span>
+                                    }
+                                </div>
+
+                                <!-- Event block -->
+                                <div class="agenda-block flex-grow-1 pa-3 rounded d-flex justify-space-between align-center"
+                                     style="background-color: rgba(var(--mud-palette-@(colorKey)-rgb), 0.12); border-left: 4px solid var(--mud-palette-@(colorKey));">
+                                    <div class="d-flex flex-column">
+                                        <div class="d-flex align-center gap-2">
+                                            <MudText Typo="Typo.subtitle1" Class="font-weight-bold" Style="line-height: 1.2; color: var(--mud-palette-text-primary);">
+                                                @evt.Title
+                                            </MudText>
+                                            @if (!string.IsNullOrEmpty(evt.EffectiveCategory.DisplayName))
+                                            {
+                                                <MudChip T="string" Color="@evt.Color" Size="Size.Small" Variant="Variant.Filled" Style="height: 20px; font-size: 0.7rem;">
+                                                    @evt.EffectiveCategory.DisplayName
+                                                </MudChip>
+                                            }
+                                            @if (!string.IsNullOrEmpty(evt.OwnerName))
+                                            {
+                                                <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                                    by @evt.OwnerName
+                                                </MudText>
+                                            }
+                                        </div>
+
+                                        @if (!string.IsNullOrEmpty(evt.SourceEvent.Location))
+                                        {
+                                            <div class="d-flex align-center mt-1" style="color: var(--mud-palette-text-secondary); font-size: 0.8rem;">
+                                                <MudIcon Icon="@Icons.Material.Filled.LocationOn" Size="Size.Small" Class="mr-1" Style="font-size: 0.95rem;" />
+                                                @evt.SourceEvent.Location
+                                            </div>
+                                        }
+                                        @if (!string.IsNullOrEmpty(evt.SourceEvent.Description))
+                                        {
+                                            <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mt-1" Style="font-size: 0.85rem;">
+                                                @evt.SourceEvent.Description
+                                            </MudText>
+                                        }
+                                    </div>
+
+                                    <div class="d-flex align-center ml-4">
+                                        <MudIcon Icon="@Icons.Material.Filled.ChevronRight" Size="Size.Small" Color="Color.Secondary" Style="opacity: 0.5;" />
+                                    </div>
+                                </div>
+                            </div>
+                        }
+                    </div>
+                }
+            </div>
         </MudPaper>
 
     </MudContainer>
@@ -103,12 +215,34 @@
 
 <MudHidden Breakpoint="Breakpoint.SmAndDown" Invert="true">
     <div class="mobile-calendar-container">
-        <!-- Mobile Header -->
-        <div class="d-flex justify-space-between align-center px-2 py-4">
+        <!-- Mobile Header Row 1: Action Controls -->
+        <div class="d-flex justify-space-between align-center px-2 pt-2">
+            <MudButton StartIcon="@Icons.Material.Filled.Today" OnClick="GoToToday">Today</MudButton>
+            <MudButton EndIcon="@Icons.Material.Filled.Palette" OnClick="OpenCategoryManager">Categories</MudButton>
+        </div>
+
+        <!-- Mobile Header Row 2: Month Navigation -->
+        <div class="d-flex justify-space-between align-center px-2 py-2">
             <MudIconButton Icon="@Icons.Material.Filled.ChevronLeft" OnClick="PrevMonth" />
-            <MudText Typo="Typo.h5" Class="font-weight-bold" Style="letter-spacing: 1px;">@CurrentMonth.ToString("MMM").ToUpper()</MudText>
+            <MudText Typo="Typo.h5" Class="font-weight-bold" Style="letter-spacing: 1px;">@CurrentMonth.ToString("MMM yyyy").ToUpper()</MudText>
             <MudIconButton Icon="@Icons.Material.Filled.ChevronRight" OnClick="NextMonth" />
         </div>
+
+        <!-- Mobile Category Filters -->
+        @if (DynamicCategories.Any())
+        {
+            <div class="d-flex align-center gap-1 px-3 pb-2 overflow-x-auto" style="scrollbar-width: none; -webkit-overflow-scrolling: touch;">
+                @foreach (var cat in DynamicCategories)
+                {
+                    bool isSelected = SelectedCategoryKeys.Contains(cat.FilterKey);
+
+                    <MudChip T="string" Color="@cat.Color" Variant="@(isSelected ? Variant.Filled : Variant.Outlined)"
+                        OnClick="@(() => ToggleCategoryFilter(cat.FilterKey))" Size="Size.Small" Class="flex-shrink-0">
+                        @cat.DisplayName
+                    </MudChip>
+                }
+            </div>
+        }
 
         <!-- Weekly Header -->
         <div class="mobile-calendar-header mobile-calendar-grid pb-2 px-2 border-b">
@@ -133,7 +267,7 @@
                 <div class="@GetMobileCellClass(day)" @onclick="@(() => OnMobileDayClick(day))">
                     <div class="m-day-number">@day.Date.Day</div>
                     <div class="m-day-events">
-                        @foreach (var evt in FilteredEvents.Where(e => e.Date == day.Date && (SelectedCategories.Count == 0 || SelectedCategories.Contains(e.SourceEvent.Category))))
+                        @foreach (var evt in FilteredEvents.Where(e => e.Date == day.Date && (SelectedCategoryKeys.Count == 0 || SelectedCategoryKeys.Contains(e.EffectiveCategory.FilterKey))))
                         {
                             if (!evt.IsContinuation || evt.Date.DayOfWeek == DayOfWeek.Monday) {
                               <div class="m-evt" style="border-left-color: var(--mud-palette-@(evt.Color.ToString().ToLower()));">
@@ -151,7 +285,7 @@
             <MudText Typo="Typo.h6" Class="font-weight-bold mb-4">@SelectedDate.ToString("dddd, MMM d")</MudText>
             
             @{
-                var selectedEvents = FilteredEvents.Where(e => e.Date == SelectedDate && (SelectedCategories.Count == 0 || SelectedCategories.Contains(e.SourceEvent.Category))).OrderBy(e => e.IsAllDay ? 0 : 1).ThenBy(e => e.SourceEvent.Start).ToList();
+                var selectedEvents = SelectedDayEvents;
             }
 
             @if (selectedEvents.Count == 0)
@@ -191,10 +325,10 @@
                                         @evt.SourceEvent.Location
                                     </div>
                                 }
-                                @if (!string.IsNullOrEmpty(evt.OwnerName))
+                                @if (!string.IsNullOrEmpty(evt.EffectiveCategory.DisplayName))
                                 {
                                      <div class="mt-1" style="color: var(--mud-palette-text-secondary); font-size: 0.75rem;">
-                                        Owner: @evt.OwnerName
+                                        @evt.EffectiveCategory.DisplayName
                                     </div>
                                 }
                             </div>
@@ -206,7 +340,7 @@
 
         <!-- FAB Add Event -->
         <div class="mobile-fab-wrapper d-flex justify-end align-center">
-            <MudFab Color="Color.Surface" StartIcon="@Icons.Material.Filled.Add" OnClick="AddEvent" DisableElevation="true" Class="m-fab" />
+            <MudFab Color="Color.Primary" StartIcon="@Icons.Material.Filled.Add" OnClick="AddEvent" DisableElevation="true" Class="m-fab" />
         </div>
     </div>
 </MudHidden>
@@ -248,6 +382,51 @@
 
     .calendar-cell.today {
         background-color: rgba(var(--mud-palette-primary-rgb), 0.05);
+        border-radius: 8px;
+        outline: 2px solid var(--mud-palette-primary);
+        outline-offset: -2px;
+        position: relative;
+        z-index: 1;
+    }
+
+    .calendar-cell.selected {
+        outline: 1.5px solid var(--mud-palette-secondary);
+        outline-offset: -2px;
+        border-radius: 8px;
+        background-color: rgba(var(--mud-palette-secondary-rgb), 0.04);
+        position: relative;
+        z-index: 2;
+    }
+
+    .calendar-cell.today.selected {
+        outline: 2px solid var(--mud-palette-primary);
+        box-shadow: inset 0 0 0 1.5px var(--mud-palette-secondary);
+        background-color: rgba(var(--mud-palette-primary-rgb), 0.08);
+    }
+
+    .calendar-cell.selected .day-number {
+        font-weight: bold;
+        color: var(--mud-palette-secondary);
+    }
+
+    .calendar-cell.today.selected .day-number {
+        color: var(--mud-palette-primary);
+    }
+
+    .agenda-row {
+        transition: transform 0.15s ease;
+    }
+
+    .agenda-row:hover {
+        transform: translateX(4px);
+    }
+
+    .agenda-block {
+        transition: background-color 0.2s ease, box-shadow 0.2s ease;
+    }
+
+    .agenda-row:hover .agenda-block {
+        box-shadow: 0 2px 8px rgba(0,0,0,0.08);
     }
 
     .day-number {
@@ -347,6 +526,13 @@
 
     .m-today {
         background-color: rgba(var(--mud-palette-primary-rgb), 0.05);
+        border-radius: 8px;
+        outline: 2px solid var(--mud-palette-primary);
+        outline-offset: -2px;
+    }
+
+    .m-today.m-selected {
+        outline: none;
     }
 
     .m-selected {
@@ -427,26 +613,25 @@
 
 @code {
     private DateOnly CurrentMonth = DateOnly.FromDateTime(DateTime.Today);
-    private List<CalendarDay> CalendarDays = new();
+    private List<CalendarDay> CalendarDays = [];
 
-    private List<CalendarCategory> Categories = new();
-    private HashSet<string> SelectedCategories = new();
+    private List<CalendarCategory> Categories = [];
+    private List<CalendarEffectiveCategory> DynamicCategories = [];
+    private HashSet<string> SelectedCategoryKeys = [];
+    private HashSet<string> CurrentUserTeamIds = [];
 
     // View Model for rendering
-    private List<CalendarEventViewModel> AllEvents = new();
+    private List<CalendarEventViewModel> AllEvents = [];
     private IEnumerable<CalendarEventViewModel> FilteredEvents => AllEvents; // Can add filters later
 
-    private bool Loading = false;
-    private string CurrentUserId = string.Empty;
-    private string CurrentUserTeamId = string.Empty;
+    private bool Loading;
+    private string CurrentUserId = "";
+    private string CurrentUserTeamId = "";
 
     // Mobile View Variables
     private DateOnly SelectedDate = DateOnly.FromDateTime(DateTime.Today);
 
-    private void OnMobileDayClick(CalendarDay day)
-    {
-        SelectedDate = day.Date;
-    }
+    private void OnMobileDayClick(CalendarDay day) => SelectedDate = day.Date;
 
     private string GetMobileCellClass(CalendarDay day)
     {
@@ -465,21 +650,44 @@
         {
             CurrentUserId = emp.Id;
             CurrentUserTeamId = emp.TeamId;
+            CurrentUserTeamIds.Clear();
+            if (!string.IsNullOrEmpty(emp.TeamId))
+                CurrentUserTeamIds.Add(emp.TeamId);
+            foreach (var t in Db.Teams.GetAll().Where(t => t.LeaderId == emp.Id))
+                CurrentUserTeamIds.Add(t.Id);
+
+            var serverProfile = Db.CompanyProfile.Get();
+            Categories = emp.EnsureCalendarCategories(serverProfile);
         }
 
         // Go to first of month
         CurrentMonth = new DateOnly(CurrentMonth.Year, CurrentMonth.Month, 1);
-        Categories = Db.CompanyProfile.Get().CalendarCategories;
         await LoadData();
     }
 
-    private void ToggleCategoryFilter(string categoryId)
+    private void ToggleCategoryFilter(string filterKey)
     {
-        if (SelectedCategories.Contains(categoryId))
-            SelectedCategories.Remove(categoryId);
+        if (SelectedCategoryKeys.Contains(filterKey))
+            SelectedCategoryKeys.Remove(filterKey);
         else
-            SelectedCategories.Add(categoryId);
+            SelectedCategoryKeys.Add(filterKey);
         StateHasChanged();
+    }
+
+    private async Task OpenCategoryManager()
+    {
+        var options = new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true, CloseButton = true };
+        var dialog = await DialogService.ShowAsync<CalendarCategoryManagerDialog>("", options);
+        var result = await dialog.Result;
+        if (result != null && !result.Canceled)
+        {
+            var emp = await UserService.GetEmployeeAsync();
+            if (emp != null)
+            {
+                Categories = emp.EnsureCalendarCategories(Db.CompanyProfile.Get());
+            }
+            await LoadData();
+        }
     }
 
     private async Task PrevMonth()
@@ -498,6 +706,7 @@
     {
         var today = DateOnly.FromDateTime(DateTime.Today);
         CurrentMonth = new DateOnly(today.Year, today.Month, 1);
+        SelectedDate = today;
         await LoadData();
     }
 
@@ -515,14 +724,14 @@
         // Fetch all employees once for mapping
         var employees = Db.Employees.GetAll().ToDictionary(e => e.Id, e => e.FullName);
         var teamsDict = Db.Teams.GetAll().ToDictionary(t => t.Id, t => t.Name);
+        var userCategoriesDict = Categories.ToDictionary(c => c.Id, c => c);
 
         // Load Events from DB
         var dbEvents = Db.CalendarEvents.GetAll()
         .Where(e => e.IsCompanyWide
         || e.EmployeeId == CurrentUserId
         || (e.Attendees != null && e.Attendees.Contains(CurrentUserId))
-        || (!string.IsNullOrEmpty(CurrentUserTeamId) && e.InvitedTeamIds != null &&
-        e.InvitedTeamIds.Contains(CurrentUserTeamId)))
+        || (e.InvitedTeamIds != null && e.InvitedTeamIds.Any(tId => CurrentUserTeamIds.Contains(tId))))
         .ToList();
 
         foreach (var evt in dbEvents)
@@ -540,9 +749,13 @@
                 var last = end > endEx ? endEx : end;
 
                 var ownerName = evt.EmployeeId == CurrentUserId ? "" : employees.GetValueOrDefault(evt.EmployeeId, "Unknown");
-                var cat = Categories.FirstOrDefault(c => string.Equals(c.Id, evt.Category, StringComparison.OrdinalIgnoreCase) || string.Equals(c.Name, evt.Category, StringComparison.OrdinalIgnoreCase));
-                Color catColor = Color.Info; // Default fallback
-                if (cat != null) Enum.TryParse(cat.Color, out catColor);
+                var effCat = CalendarEffectiveCategory.Resolve(
+                    evt,
+                    CurrentUserId,
+                    CurrentUserTeamIds,
+                    employees,
+                    teamsDict,
+                    userCategoriesDict);
 
                 while (current <= last)
                 {
@@ -554,7 +767,8 @@
                             Date = current,
                             Title = evt.Title,
                             OwnerName = ownerName,
-                            Color = catColor,
+                            Color = effCat.Color,
+                            EffectiveCategory = effCat,
                             SourceEvent = evt,
                             IsAllDay = evt.IsAllDay,
                             TimeStr = evt.Start.ToString("HH:mm"),
@@ -577,6 +791,31 @@
 
         // Sort: Earliest time first
         AllEvents = AllEvents.OrderBy(e => e.IsAllDay ? 0 : 1).ThenBy(e => e.TimeStr).ToList();
+
+        // Dynamically compute active month categories for filtering
+        DynamicCategories = AllEvents
+            .Where(e => !e.IsContinuation)
+            .GroupBy(e => e.EffectiveCategory.FilterKey)
+            .Select(g =>
+            {
+                var first = g.First().EffectiveCategory;
+                return new CalendarEffectiveCategory
+                {
+                    FilterKey = first.FilterKey,
+                    DisplayName = first.DisplayName,
+                    CategoryName = first.CategoryName,
+                    Color = first.Color,
+                    IsShared = first.IsShared,
+                    Attribution = first.Attribution,
+                    EventCount = g.Count()
+                };
+            })
+            .OrderBy(c => c.IsShared ? 1 : 0)
+            .ThenBy(c => c.DisplayName)
+            .ToList();
+
+        var validKeys = DynamicCategories.Select(c => c.FilterKey).ToHashSet();
+        SelectedCategoryKeys.RemoveWhere(k => !validKeys.Contains(k));
 
         Loading = false;
     }
@@ -602,8 +841,15 @@
         var cls = "calendar-cell";
         if (!day.IsCurrentMonth) cls += " other-month";
         if (day.Date == DateOnly.FromDateTime(DateTime.Today)) cls += " today";
+        if (day.Date == SelectedDate) cls += " selected";
         return cls;
     }
+
+    private List<CalendarEventViewModel> SelectedDayEvents => FilteredEvents
+        .Where(e => e.Date == SelectedDate && (SelectedCategoryKeys.Count == 0 || SelectedCategoryKeys.Contains(e.EffectiveCategory.FilterKey)))
+        .OrderBy(e => e.IsAllDay ? 0 : 1)
+        .ThenBy(e => e.SourceEvent.Start)
+        .ToList();
 
     private async Task AddEvent()
     {
@@ -616,8 +862,14 @@
         await OpenDialog(newEvent, true);
     }
 
-    private async Task OnDayClick(CalendarDay day)
+    private void OnDayClick(CalendarDay day)
     {
+        SelectedDate = day.Date;
+    }
+
+    private async Task OnDayDoubleClick(CalendarDay day)
+    {
+        SelectedDate = day.Date;
         var newEvent = new CalendarEvent
             {
                 EmployeeId = CurrentUserId,
@@ -627,22 +879,27 @@
         await OpenDialog(newEvent, true);
     }
 
-    private async Task OnEventClick(CalendarEventViewModel vm, MouseEventArgs e)
-    {
-        await OpenDialog(vm.SourceEvent, false);
-    }
+    private Task OnEventClick(CalendarEventViewModel vm, MouseEventArgs e) => OpenDialog(vm.SourceEvent, false);
 
     private async Task OpenDialog(CalendarEvent evt, bool isNew)
     {
         var parameters = new DialogParameters { ["Event"] = evt, ["IsNew"] = isNew };
-        var dialog = await DialogService.ShowAsync<CalendarEventDialog>(isNew ? "New Event" : "Event Details", parameters);
+        var options = new DialogOptions
+        {
+            MaxWidth = MaxWidth.Small,
+            FullWidth = true,
+            CloseButton = true,
+            CloseOnEscapeKey = true
+        };
+
+        var dialog = await DialogService.ShowAsync<CalendarEventDialog>(isNew ? "New Event" : "Event Details", parameters, options);
         var result = await dialog.Result;
 
         if (result != null && !result.Canceled)
         {
             var resultEvent = result.Data as CalendarEvent;
 
-            if (resultEvent == null) // Deleted
+            if (resultEvent is null) // Deleted
             {
                 if (!isNew)
                 {
@@ -668,13 +925,14 @@
     public class CalendarEventViewModel
     {
         public DateOnly Date { get; set; }
-        public string Title { get; set; } = string.Empty;
-        public string OwnerName { get; set; } = string.Empty;
+        public string Title { get; set; } = "";
+        public string OwnerName { get; set; } = "";
         public Color Color { get; set; }
+        public CalendarEffectiveCategory EffectiveCategory { get; set; } = default!;
         public CalendarEvent SourceEvent { get; set; } = default!;
         public bool IsAllDay { get; set; }
-        public string TimeStr { get; set; } = string.Empty;
-        public string TypeClass { get; set; } = string.Empty;
+        public string TimeStr { get; set; } = "";
+        public string TypeClass { get; set; } = "";
         public bool IsContinuation { get; set; }
     }
 }

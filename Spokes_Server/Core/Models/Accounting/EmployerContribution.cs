@@ -1,14 +1,6 @@
 namespace Spokes_Server.Core.Models.Accounting;
 
-using Spokes_Server.Core.Models.Core;
-using Spokes_Server.Core.Models.Projects;
-using Spokes_Server.Core.Models.Communication;
-using Spokes_Server.Core.Models.HR;
-
 using Spokes_Server.Core.Data;
-
-
-
 
 public class EmployerContribution : IDataEntity
 {
@@ -17,10 +9,7 @@ public class EmployerContribution : IDataEntity
     public override bool Equals(object? obj)
     {
         if (ReferenceEquals(this, obj)) return true;
-        if (obj == null || GetType() != obj.GetType())
-            return false;
-        var other = (EmployerContribution)obj;
-        return Id == other.Id;
+        return obj is EmployerContribution other && Id == other.Id;
     }
 
     public override int GetHashCode() => Id?.GetHashCode() ?? base.GetHashCode();
@@ -32,7 +21,7 @@ public class EmployerContribution : IDataEntity
 
     // Scope
     public string Scope { get; set; } = EmployerContributionScope.Global; // Global, Team, or Employee
-    public List<string> TargetIds { get; set; } = new(); // IDs of Teams or Employees depending on Scope
+    public List<string> TargetIds { get; set; } = []; // IDs of Teams or Employees depending on Scope
 
     public bool IsActive { get; set; } = true;
 }

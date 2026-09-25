@@ -2,26 +2,27 @@ using System.Net.Http.Headers;
 using System.Text.Json;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Spokes_Server.Aggregate;
 using Spokes_Server.Core.Services.Licensing;
 
-namespace Spokes_Server.Core.Services.Core
+namespace Spokes_Server.Core.Services.Core;
+
+public class ServerUpdateService : BackgroundService
 {
-    public class ServerUpdateService : BackgroundService
-    {
-        private readonly ILogger<ServerUpdateService> _logger;
-        private readonly HttpClient _httpClient;
-        private readonly Spokes_Server.Aggregate.Database _db;
-        private readonly LicenseValidationService _licenseService;
-        private readonly VersionMetadata _versionMetadata;
-        
-        public string? LatestVersion { get; private set; }
-        public string CurrentVersion { get; private set; }
-        public bool IsUpdateAvailable { get; private set; }
-        public string Channel { get; private set; } = "unknown";
+    private readonly ILogger<ServerUpdateService> _logger;
+    private readonly HttpClient _httpClient;
+    private readonly Database _db;
+    private readonly LicenseValidationService _licenseService;
+    private readonly VersionMetadata _versionMetadata;
+    
+    public string? LatestVersion { get; private set; }
+    public string CurrentVersion { get; private set; }
+    public bool IsUpdateAvailable { get; private set; }
+    public string Channel { get; private set; } = "unknown";
 
-        public event Action? OnUpdateAvailable;
+    public event Action? OnUpdateAvailable;
 
-        public ServerUpdateService(ILogger<ServerUpdateService> logger, Spokes_Server.Aggregate.Database db, LicenseValidationService licenseService, VersionMetadata versionMetadata)
+    public ServerUpdateService(ILogger<ServerUpdateService> logger, Database db, LicenseValidationService licenseService, VersionMetadata versionMetadata)
         {
             _logger = logger;
             _db = db;
@@ -119,12 +120,12 @@ namespace Spokes_Server.Core.Services.Core
                 string tagStr = tag.GetString() ?? "";
                 if (tagStr.StartsWith(expectedPrefix))
                 {
-                    string versionStr = tagStr.Substring(expectedPrefix.Length);
+                    string versionStr = tagStr[expectedPrefix.Length..];
                     // Extract version (ignore any pre-release or build metadata after dash or plus)
                     int plusIndex = versionStr.IndexOf('+');
-                    if (plusIndex >= 0) versionStr = versionStr.Substring(0, plusIndex);
+                    if (plusIndex >= 0) versionStr = versionStr[..plusIndex];
                     int minusIndex = versionStr.IndexOf('-');
-                    if (minusIndex >= 0) versionStr = versionStr.Substring(0, minusIndex);
+                    if (minusIndex >= 0) versionStr = versionStr[..minusIndex];
 
                     if (Version.TryParse(versionStr, out Version? parsedVersion))
                     {
@@ -143,9 +144,9 @@ namespace Spokes_Server.Core.Services.Core
                 
                 string currentCleanStr = CurrentVersion.Replace(expectedPrefix, "");
                 int currentPlusIndex = currentCleanStr.IndexOf('+');
-                if (currentPlusIndex >= 0) currentCleanStr = currentCleanStr.Substring(0, currentPlusIndex);
+                if (currentPlusIndex >= 0) currentCleanStr = currentCleanStr[..currentPlusIndex];
                 int currentMinusIndex = currentCleanStr.IndexOf('-');
-                if (currentMinusIndex >= 0) currentCleanStr = currentCleanStr.Substring(0, currentMinusIndex);
+                if (currentMinusIndex >= 0) currentCleanStr = currentCleanStr[..currentMinusIndex];
 
                 if (Version.TryParse(currentCleanStr, out Version? currentParsed))
                 {
@@ -203,23 +204,23 @@ namespace Spokes_Server.Core.Services.Core
                 }
             }
         }
-        public async Task TriggerWatchtowerUpdateAsync()
+    public Task TriggerWatchtowerUpdateAsync()
+    {
+        var token = Environment.GetEnvironmentVariable("WATCHTOWER_HTTP_API_TOKEN");
+        if (!string.IsNullOrEmpty(token))
         {
-            var token = Environment.GetEnvironmentVariable("WATCHTOWER_HTTP_API_TOKEN");
-            if (!string.IsNullOrEmpty(token))
+            _logger.LogInformation("Manually triggering Watchtower auto-update for DigitalOcean deployment...");
+            try
             {
-                _logger.LogInformation("Manually triggering Watchtower auto-update for DigitalOcean deployment...");
-                try
-                {
-                    var req = new HttpRequestMessage(HttpMethod.Get, "http://watchtower:8080/v1/update");
-                    req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
-                    _ = _httpClient.SendAsync(req); // Fire and forget since container will be killed
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex, "Failed to trigger Watchtower update.");
-                }
+                var req = new HttpRequestMessage(HttpMethod.Get, "http://watchtower:8080/v1/update");
+                req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+                _ = _httpClient.SendAsync(req); // Fire and forget since container will be killed
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to trigger Watchtower update.");
             }
         }
+        return Task.CompletedTask;
     }
 }

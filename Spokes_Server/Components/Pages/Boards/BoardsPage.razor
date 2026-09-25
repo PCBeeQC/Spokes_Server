@@ -1,12 +1,5 @@
 @page "/boards"
 @page "/boards/{BoardId}"
-@using Spokes_Server.Core.Data
-@using Spokes_Server.Core.Models.Core
-@using Spokes_Server.Core.Models.Projects
-@using Spokes_Server.Core.Models.Accounting
-@using Spokes_Server.Core.Models.Communication
-@using Spokes_Server.Core.Models.HR
-@using Spokes_Server.Core.Services
 @using Spokes_Server.Components.Boards
 @inject Database Db
 @inject BoardService BoardService
@@ -81,8 +74,8 @@
     private BoardView? _activeView;
     private Employee? _currentUser;
 
-    private List<BoardCard> _allCards = new();
-    private List<BoardCard> _filteredCards = new();
+    private List<BoardCard> _allCards = [];
+    private List<BoardCard> _filteredCards = [];
     private string _searchText = "";
 
     protected override async Task OnParametersSetAsync()
@@ -167,8 +160,7 @@
                     if (sort.PropertyId == "createdAt") return c.CreatedAt;
                     if (sort.PropertyId == "updatedAt") return c.UpdatedAt;
 
-                    if (c.PropertyValues.TryGetValue(sort.PropertyId, out var val)) return val;
-                    return "";
+                    return c.PropertyValues.GetValueOrDefault(sort.PropertyId, "");
                 }
 
                 if (i == 0)
@@ -195,8 +187,7 @@
 
     bool MatchesFilter(BoardCard card, BoardViewFilter filter)
     {
-        string val = "";
-        if (card.PropertyValues.TryGetValue(filter.PropertyId, out var v)) val = v;
+        string val = card.PropertyValues.GetValueOrDefault(filter.PropertyId, "");
 
         return filter.Operator switch
         {

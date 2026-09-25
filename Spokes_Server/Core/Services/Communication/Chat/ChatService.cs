@@ -1,25 +1,20 @@
-using Spokes_Server.Core.Services.Communication;
-using Spokes_Server.Core.Services.Projects;
-using Spokes_Server.Core.Services.Core;
-using Microsoft.AspNetCore.SignalR;
-using Spokes_Server.Core.Data.Repositories.Core;
-using Spokes_Server.Core.Data.Repositories.Projects;
-using Spokes_Server.Core.Data.Repositories.Accounting;
 using System.Collections.Concurrent;
 using System.Text.RegularExpressions;
-using Spokes_Server.Core.Data.Repositories.Communication;
-using Spokes_Server.Core.Data.Repositories.HR;
-using Spokes_Server.Core.Hubs;
-using Spokes_Server.Core.Models.Core;
-using Spokes_Server.Core.Models.Projects;
-using Spokes_Server.Core.Models.Accounting;
-using Spokes_Server.Core.Models.Communication;
-using Spokes_Server.Core.Models.HR;
-
-using Spokes_Server.Aggregate;
-using Microsoft.Extensions.Logging;
 using Livekit.Server;
+using Microsoft.AspNetCore.SignalR;
+using Microsoft.Extensions.Logging;
+using Spokes_Server.Core.Data.Repositories.Communication;
+using Spokes_Server.Core.Data.Repositories.Core;
+using Spokes_Server.Core.Data.Repositories.HR;
+using Spokes_Server.Core.Data.Repositories.Projects;
 using Spokes_Server.Core.Helpers;
+using Spokes_Server.Core.Hubs;
+using Spokes_Server.Core.Models.Communication;
+using Spokes_Server.Core.Models.Core;
+using Spokes_Server.Core.Models.HR;
+using Spokes_Server.Core.Models.Projects;
+using Spokes_Server.Core.Services.Communication;
+using Spokes_Server.Core.Services.Core;
 
 namespace Spokes_Server.Core.Services.Communication.Chat;
 
@@ -54,6 +49,7 @@ public class ChatService : IChatChannelAccessService
     private readonly AlbumService _albumService;
     private readonly MarkdownSanitizerService _markdownSanitizer;
     private readonly CalendarEventRepository? _calendarEvents;
+    private readonly IChatAuthorizationService _chatAuth;
 
     public ChatService(
         EmployeeRepository employees,
@@ -78,6 +74,57 @@ public class ChatService : IChatChannelAccessService
         AlbumService albumService,
         MarkdownSanitizerService markdownSanitizer,
         CalendarEventRepository? calendarEvents = null)
+        : this(
+            employees,
+            channels,
+            messages,
+            teams,
+            readStates,
+            projects,
+            hubContext,
+            chatState,
+            notificationRouting,
+            presenceState,
+            logger,
+            configuration,
+            fileService,
+            crypto,
+            keystore,
+            escrowService,
+            moderationService,
+            systemConfigs,
+            companyProfiles,
+            albumService,
+            markdownSanitizer,
+            calendarEvents,
+            new ChatAuthorizationService(channels, projects, teams, employees))
+    {
+    }
+
+    public ChatService(
+        EmployeeRepository employees,
+        ChatChannelRepository channels,
+        ChatMessageRepository messages,
+        TeamRepository teams,
+        ChatReadStateRepository readStates,
+        ProjectRepository projects,
+        IHubContext<ChatHub> hubContext,
+        ChatStateService chatState,
+        NotificationRoutingService notificationRouting,
+        PresenceStateService presenceState,
+        ILogger<ChatService> logger,
+        IConfiguration configuration,
+        IFileService fileService,
+        ICryptoService crypto,
+        GlobalKeystoreService keystore,
+        ServerEscrowService escrowService,
+        IContentModerationService moderationService,
+        SystemConfigRepository systemConfigs,
+        CompanyProfileRepository companyProfiles,
+        AlbumService albumService,
+        MarkdownSanitizerService markdownSanitizer,
+        CalendarEventRepository? calendarEvents,
+        IChatAuthorizationService? chatAuth)
     {
         _employees = employees;
         _channels = channels;
@@ -101,6 +148,7 @@ public class ChatService : IChatChannelAccessService
         _albumService = albumService;
         _markdownSanitizer = markdownSanitizer;
         _calendarEvents = calendarEvents;
+        _chatAuth = chatAuth ?? new ChatAuthorizationService(channels, projects, teams, employees);
     }
 
     public async Task<bool> RsvpToEventAsync(string eventId, string userId)
@@ -146,13 +194,7 @@ public class ChatService : IChatChannelAccessService
 
     public bool CanUserPostToChannel(ChatChannel channel, Employee employee)
     {
-        if (!channel.IsAnnouncementOnly) return true;
-
-        var userTeamIds = new System.Collections.Generic.List<string>();
-        if (employee.TeamId != null) userTeamIds.Add(employee.TeamId);
-        userTeamIds.AddRange(_teams.GetAll().Where(t => t.LeaderId == employee.Id).Select(t => t.Id));
-
-        return _channels.EvaluateChannelPostAccessRule(channel, employee.Id, userTeamIds, employee.IsAdmin);
+        return _chatAuth.CanUserPostToChannel(channel, employee);
     }
 
     public virtual List<ChatChannel> GetChannelsForUser(string userId)
@@ -160,32 +202,10 @@ public class ChatService : IChatChannelAccessService
         var employee = _employees.GetById(userId);
         if (employee == null) return new List<ChatChannel>();
 
-        var allProjects = _projects.GetAll();
-        var userProjectIds = new List<string>();
-        bool isAdmin = employee.IsAdmin;
+        var userProjectIds = _chatAuth.GetUserProjectIds(employee);
+        var userTeamIds = _chatAuth.GetUserTeamIds(employee);
 
-        foreach (var p in allProjects)
-        {
-            if (isAdmin || p.AccessPolicy == "Public")
-            {
-                userProjectIds.Add(p.Id);
-            }
-            else
-            {
-                bool isAllowed = p.AllowedUserIds.Contains(userId);
-                if (!isAllowed && employee.TeamId != null && p.AllowedTeamIds.Contains(employee.TeamId))
-                {
-                    isAllowed = true;
-                }
-                if (isAllowed) userProjectIds.Add(p.Id);
-            }
-        }
-
-        var userTeamIds = new List<string>();
-        if (employee.TeamId != null) userTeamIds.Add(employee.TeamId);
-        userTeamIds.AddRange(_teams.GetAll().Where(t => t.LeaderId == userId).Select(t => t.Id));
-
-        var channels = _channels.GetChannelsForUser(userId, userProjectIds, userTeamIds, isAdmin);
+        var channels = _channels.GetChannelsForUser(userId, userProjectIds, userTeamIds, employee.IsAdmin);
         
         if (!employee.HasPermission(Spokes_Server.Core.Constants.AppPermissions.Chat.ViewArchive))
         {
@@ -202,39 +222,10 @@ public class ChatService : IChatChannelAccessService
 
         var validUserIds = new List<string>();
         var allActiveEmployees = _employees.GetAll().Where(e => e.IsActive).ToList();
-        
-        // Pre-compute team leaders to avoid repeated lookups
-        var teamLeaderIds = _teams.GetAll().Select(t => t.LeaderId).ToHashSet();
-        
-        Project? project = null;
-        if (channel.ChannelType == ChatChannelType.Project && channel.LinkedEntityId != null)
-        {
-            project = _projects.GetById(channel.LinkedEntityId);
-        }
 
         foreach (var emp in allActiveEmployees)
         {
-            var userTeamIds = new List<string>();
-            if (emp.TeamId != null) userTeamIds.Add(emp.TeamId);
-            if (teamLeaderIds.Contains(emp.Id))
-            {
-                userTeamIds.AddRange(_teams.GetAll().Where(t => t.LeaderId == emp.Id).Select(t => t.Id));
-            }
-            
-            // To evaluate Project channel logic identically to GetChannelsForUser, 
-            // we must check if the user has access to the project.
-            var userProjectIds = new List<string>();
-            if (project != null)
-            {
-                if (emp.IsAdmin || project.AccessPolicy == "Public" ||
-                    project.AllowedUserIds.Contains(emp.Id) ||
-                    (emp.TeamId != null && project.AllowedTeamIds.Contains(emp.TeamId)))
-                {
-                    userProjectIds.Add(project.Id);
-                }
-            }
-
-            if (_channels.EvaluateChannelAccessRule(channel, emp.Id, userProjectIds, userTeamIds, emp.IsAdmin))
+            if (_chatAuth.CanUserAccessChannel(channel, emp))
             {
                 validUserIds.Add(emp.Id);
             }
@@ -270,9 +261,9 @@ public class ChatService : IChatChannelAccessService
         var channel = _channels.GetById(channelId);
         if (employee == null || channel == null) return null;
 
-        if (!CanUserPostToChannel(channel, employee))
+        if (!_chatAuth.CanUserAccessChannel(channel, employee) || !_chatAuth.CanUserPostToChannel(channel, employee))
         {
-            _logger.LogWarning("SendCallInvite failed: User {UserId} denied post access to Announcement Channel {ChannelId}", employee.Id, channelId);
+            _logger.LogWarning("SendCallInvite failed: User {UserId} denied access to Channel {ChannelId}", employee.Id, channelId);
             return null;
         }
 
@@ -329,6 +320,11 @@ public class ChatService : IChatChannelAccessService
             message.EditedAt,
             message.CallStatus
         });
+
+        if (status == "Ended" || status == "Declined")
+        {
+            _ = _notificationRouting.ClearChannelNotificationsAsync(message.ChannelId);
+        }
     }
 
     [Obsolete("Use SendMessageWithAttachmentsAsync(SendMessageOptions options) instead.")]
@@ -368,10 +364,10 @@ public class ChatService : IChatChannelAccessService
             return null;
         }
 
-        // Validate Post Access
-        if (!CanUserPostToChannel(channel, employee))
+        // Validate Channel Access and Post Access
+        if (!_chatAuth.CanUserAccessChannel(channel, employee) || !_chatAuth.CanUserPostToChannel(channel, employee))
         {
-            _logger.LogWarning("SendMessage failed: User {UserId} denied post access to Announcement Channel {ChannelId}", employee.Id, channelId);
+            _logger.LogWarning("SendMessage failed: User {UserId} denied access to Channel {ChannelId}", employee.Id, channelId);
             return null;
         }
 
@@ -609,15 +605,29 @@ public class ChatService : IChatChannelAccessService
     public async Task EditMessageAsync(string userId, string messageId, string newContent, string? requestingUserPrivateKey = null)
     {
         var message = _messages.GetById(messageId);
-        if (message == null || message.SenderId != userId) return;
+        if (message == null) return;
 
         var channel = _channels.GetById(message.ChannelId);
         var employee = _employees.GetById(userId);
-        if (channel != null && employee != null && !CanUserPostToChannel(channel, employee))
+        if (!_chatAuth.CanUserModifyMessage(message, channel, employee))
         {
-            _logger.LogWarning("EditMessage failed: User {UserId} denied post access to Announcement Channel {ChannelId}", employee.Id, channel.Id);
+            _logger.LogWarning("EditMessage failed: User {UserId} denied edit access to Message {MessageId}", userId, messageId);
             return;
         }
+        var modResult = await _moderationService.EvaluateTextAsync(newContent ?? "");
+        if (modResult.HasViolation)
+        {
+            if (modResult.Action == TextModerationAction.Block)
+            {
+                _logger.LogWarning("EditMessage blocked due to moderation policy for User {UserId}", userId);
+                return;
+            }
+            else if (modResult.Action == TextModerationAction.Sanitize)
+            {
+                newContent = modResult.SanitizedText;
+            }
+        }
+
         message.EditedAt = DateTime.UtcNow;
 
         if (channel != null)
@@ -848,7 +858,16 @@ public class ChatService : IChatChannelAccessService
     public async Task DeleteMessageAsync(string userId, string messageId)
     {
         var message = _messages.GetById(messageId);
-        if (message == null || message.SenderId != userId) return;
+        if (message == null) return;
+
+        var channel = _channels.GetById(message.ChannelId);
+        var employee = _employees.GetById(userId);
+
+        if (!_chatAuth.CanUserDeleteMessage(message, channel, employee))
+        {
+            _logger.LogWarning("DeleteMessage failed: User {UserId} denied delete access to Message {MessageId}", userId, messageId);
+            return;
+        }
 
         message.IsDeleted = true;
         _messages.Save(message);
@@ -873,9 +892,9 @@ public class ChatService : IChatChannelAccessService
         if (message == null) return;
 
         var channel = _channels.GetById(message.ChannelId);
-        if (channel != null && !CanUserPostToChannel(channel, employee))
+        if (channel == null || !_chatAuth.CanUserAccessChannel(channel, employee) || !_chatAuth.CanUserPostToChannel(channel, employee))
         {
-            _logger.LogWarning("ToggleReaction failed: User {UserId} denied post access to Announcement Channel {ChannelId}", employee.Id, channel.Id);
+            _logger.LogWarning("ToggleReaction failed: User {UserId} denied access to Channel {ChannelId}", employee.Id, message.ChannelId);
             return;
         }
 
@@ -1089,7 +1108,7 @@ public class ChatService : IChatChannelAccessService
         if (participants.Count == 0)
         {
             var activeInvite = _messages.GetByChannel(channelId, 50)
-                .FirstOrDefault(m => m.MessageType == "CallInvite" && m.CallStatus == "Active");
+                .FirstOrDefault(m => m.MessageType == "CallInvite" && (m.CallStatus == "Active" || m.CallStatus == "Joined"));
             if (activeInvite != null)
             {
                 await UpdateCallInviteStatusAsync(activeInvite.Id, "Ended");
@@ -1126,6 +1145,19 @@ public class ChatService : IChatChannelAccessService
     {
         _chatState.NotifyVoiceActiveSpeakersChanged(channelId, speakerIds);
         await _hubContext.Clients.Group($"channel_{channelId}").SendAsync("VoiceActiveSpeakersChanged", channelId, speakerIds);
+    }
+
+    public async Task SetUserSpeakingAsync(string channelId, string userId, bool isSpeaking)
+    {
+        _chatState.SetUserSpeaking(channelId, userId, isSpeaking);
+        var currentSpeakers = _chatState.GetActiveSpeakers(channelId);
+        await _hubContext.Clients.Group($"channel_{channelId}").SendAsync("VoiceActiveSpeakersChanged", channelId, currentSpeakers);
+    }
+
+    public async Task SetUserMutedAsync(string channelId, string userId, bool isMuted)
+    {
+        _chatState.SetUserMuted(channelId, userId, isMuted);
+        await _hubContext.Clients.Group($"channel_{channelId}").SendAsync("VoiceUserMutedChanged", channelId, userId, isMuted);
     }
 
     public async Task UpdateChannelOrdersAsync(Dictionary<string, int> channelOrders)

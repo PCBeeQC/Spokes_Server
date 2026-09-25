@@ -1,12 +1,4 @@
-using Spokes_Server.Core.Services.Communication;
-using Spokes_Server.Core.Services.Projects;
-using Spokes_Server.Core.Services.Core;
-using Spokes_Server.Core.Models.Core;
-using Spokes_Server.Core.Models.Projects;
 using Spokes_Server.Core.Models.Accounting;
-using Spokes_Server.Core.Models.Communication;
-using Spokes_Server.Core.Models.HR;
-using System.Linq;
 
 namespace Spokes_Server.Tests.Core.Models
 {
@@ -34,6 +26,8 @@ namespace Spokes_Server.Tests.Core.Models
             Assert.Equal(0, po.SubTotal);
             Assert.Equal(0, po.TaxAmount);
             Assert.Equal(0, po.GrandTotal);
+            Assert.Equal(0, po.TotalBilled);
+            Assert.Equal(0, po.RemainingBalance);
         }
 
         [Fact]
@@ -84,7 +78,87 @@ namespace Spokes_Server.Tests.Core.Models
             var item = new PoItem { Quantity = 1.5m, UnitPrice = 200m };
             Assert.Equal(300m, item.Total);
         }
+
+        [Fact]
+        public void RemainingBalance_WhenUnbilled_ReturnsGrandTotal()
+        {
+            var po = new PurchaseOrder { ApplyTax = false };
+            po.Items.Add(new PoItem { Quantity = 2, UnitPrice = 250m });
+            po.TotalBilled = 0m;
+
+            Assert.Equal(500m, po.RemainingBalance);
+        }
+
+        [Fact]
+        public void RemainingBalance_WhenPartiallyBilled_ReturnsRemainingAmount()
+        {
+            var po = new PurchaseOrder { ApplyTax = false };
+            po.Items.Add(new PoItem { Quantity = 2, UnitPrice = 250m });
+            po.TotalBilled = 150m;
+
+            Assert.Equal(350m, po.RemainingBalance);
+        }
+
+        [Fact]
+        public void RemainingBalance_WhenFullyBilled_ReturnsZero()
+        {
+            var po = new PurchaseOrder { ApplyTax = false };
+            po.Items.Add(new PoItem { Quantity = 2, UnitPrice = 250m });
+            po.TotalBilled = 500m;
+
+            Assert.Equal(0m, po.RemainingBalance);
+        }
+
+        [Fact]
+        public void PurchaseOrder_Equals_And_GetHashCode()
+        {
+            var id = Guid.NewGuid().ToString();
+            var po1 = new PurchaseOrder { Id = id, PoNumber = "PO-2401-001" };
+            var po2 = new PurchaseOrder { Id = id, PoNumber = "PO-2401-002" };
+            var po3 = new PurchaseOrder { Id = Guid.NewGuid().ToString(), PoNumber = "PO-2401-003" };
+
+            // Reference equality
+            Assert.True(po1.Equals(po1));
+
+            // Id-based equality
+            Assert.True(po1.Equals(po2));
+            Assert.True(po2.Equals(po1));
+            Assert.Equal(po1.GetHashCode(), po2.GetHashCode());
+
+            // Unequal IDs
+            Assert.False(po1.Equals(po3));
+            Assert.False(po3.Equals(po1));
+
+            // Null and different type inequality
+            Assert.False(po1.Equals(null));
+            Assert.False(po1.Equals("some string"));
+            Assert.False(po1.Equals(new object()));
+        }
+
+        [Fact]
+        public void PoItem_Equals_And_GetHashCode()
+        {
+            var id = Guid.NewGuid().ToString();
+            var item1 = new PoItem { Id = id, Description = "Part A" };
+            var item2 = new PoItem { Id = id, Description = "Part B" };
+            var item3 = new PoItem { Id = Guid.NewGuid().ToString(), Description = "Part C" };
+
+            // Reference equality
+            Assert.True(item1.Equals(item1));
+
+            // Id-based equality
+            Assert.True(item1.Equals(item2));
+            Assert.True(item2.Equals(item1));
+            Assert.Equal(item1.GetHashCode(), item2.GetHashCode());
+
+            // Unequal IDs
+            Assert.False(item1.Equals(item3));
+            Assert.False(item3.Equals(item1));
+
+            // Null and different type inequality
+            Assert.False(item1.Equals(null));
+            Assert.False(item1.Equals("some string"));
+            Assert.False(item1.Equals(new object()));
+        }
     }
 }
-
-

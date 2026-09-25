@@ -1,13 +1,10 @@
 @page "/admin/moderation"
-@attribute [Microsoft.AspNetCore.Authorization.Authorize(Policy = Spokes_Server.Core.Constants.AppPermissions.Chat.Moderator)]
-@using MudBlazor
-@using Spokes_Server.Core.Models.Communication
-@using Spokes_Server.Aggregate
-@using Spokes_Server.Core.Services.Communication
+@using Spokes_Server.Core.Constants
+@attribute [Authorize(Policy = AppPermissions.Chat.Moderator)]
 @inject Database Db
 @inject ChatService ChatService
 @inject ISnackbar Snackbar
-@inject Spokes_Server.Core.Services.Core.UserService UserService
+@inject UserService UserService
 
 <PageTitle>Moderation Dashboard</PageTitle>
 
@@ -102,7 +99,7 @@
                                 <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Error" StartIcon="@Icons.Material.Filled.Delete" DisableElevation="true" Style="font-weight: 600;" OnClick="@(() => DeleteMessage(report))">Delete Message</MudButton>
                                 
                                 var reportedUser = Db.Employees.GetById(report.ReportedUserId);
-                                if (reportedUser != null && !(reportedUser.IsAdmin || reportedUser.HasPermission(Spokes_Server.Core.Constants.AppPermissions.Chat.Moderator)))
+                                if (reportedUser != null && !(reportedUser.IsAdmin || reportedUser.HasPermission(AppPermissions.Chat.Moderator)))
                                 {
                                     <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="@(reportedUser.IsSuspended ? Color.Success : Color.Warning)" OnClick="@(() => ToggleSuspend(report.ReportedUserId))">
                                         @(reportedUser.IsSuspended ? "Unsuspend User" : "Suspend User")
@@ -133,7 +130,7 @@
 </style>
 
 @code {
-    private List<ReportedMessage> _reports = new();
+    private List<ReportedMessage> _reports = [];
     private bool _loading = true;
     private string searchString = "";
     private Employee? _currentUser;
@@ -196,7 +193,7 @@
         var emp = Db.Employees.GetById(employeeId);
         if (emp != null)
         {
-            if (emp.IsAdmin || emp.HasPermission(Spokes_Server.Core.Constants.AppPermissions.Chat.Moderator))
+            if (emp.IsAdmin || emp.HasPermission(AppPermissions.Chat.Moderator))
             {
                 Snackbar.Add("Cannot suspend another moderator or admin.", Severity.Error);
                 return;
@@ -213,7 +210,7 @@
         var emp = Db.Employees.GetById(employeeId);
         if (emp != null)
         {
-            if (emp.IsAdmin || emp.HasPermission(Spokes_Server.Core.Constants.AppPermissions.Chat.Moderator))
+            if (emp.IsAdmin || emp.HasPermission(AppPermissions.Chat.Moderator))
             {
                 Snackbar.Add("Cannot ban another moderator or admin.", Severity.Error);
                 return;

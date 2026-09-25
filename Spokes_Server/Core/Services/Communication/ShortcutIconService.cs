@@ -1,23 +1,21 @@
-using System;
-using System.IO;
 using SkiaSharp;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Caching.Memory;
 using Spokes_Server.Core.Models.HR;
+using Spokes_Server.Core.Models.Core;
 
 namespace Spokes_Server.Core.Services.Communication;
 
 public class ShortcutIconService
 {
-    private readonly IWebHostEnvironment _env;
     private readonly IConfiguration _config;
     private readonly AvatarGeneratorService _avatarGenerator;
     private readonly IMemoryCache _cache;
 
     public ShortcutIconService(IWebHostEnvironment env, IConfiguration config, AvatarGeneratorService avatarGenerator, IMemoryCache cache)
     {
-        _env = env;
+        _ = env;
         _config = config;
         _avatarGenerator = avatarGenerator;
         _cache = cache;
@@ -71,7 +69,8 @@ public class ShortcutIconService
 
             try
             {
-                var base64Data = logoBase64.Contains(",") ? logoBase64.Substring(logoBase64.IndexOf(",") + 1) : logoBase64;
+                var commaIndex = logoBase64.IndexOf(',');
+                var base64Data = commaIndex >= 0 ? logoBase64[(commaIndex + 1)..] : logoBase64;
                 var originalBytes = Convert.FromBase64String(base64Data);
                 return ResizeAndEncodeBase64(originalBytes, size);
             }
@@ -87,7 +86,7 @@ public class ShortcutIconService
             if (originalBitmap == null) return string.Empty;
 
             var imageInfo = new SKImageInfo(size, size);
-            using var resizedBitmap = originalBitmap.Resize(imageInfo, SKFilterQuality.Medium);
+            using var resizedBitmap = originalBitmap.Resize(imageInfo, new SKSamplingOptions(SKFilterMode.Linear));
             if (resizedBitmap == null) return string.Empty;
 
             using var image = SKImage.FromBitmap(resizedBitmap);

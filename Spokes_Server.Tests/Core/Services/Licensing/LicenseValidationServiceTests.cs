@@ -1,6 +1,3 @@
-using System;
-using System.Collections.Generic;
-using System.IO;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -11,28 +8,27 @@ using Spokes_Server.Core.Constants;
 using Spokes_Server.Core.Models.Core;
 using Spokes_Server.Core.Services.Core;
 using Spokes_Server.Core.Services.Licensing;
-using Xunit;
 
-namespace Spokes_Server.Tests.Core.Services.Licensing
+namespace Spokes_Server.Tests.Core.Services.Licensing;
+
+public class LicenseValidationServiceTests : IDisposable
 {
-    public class LicenseValidationServiceTests : IDisposable
+    private readonly string _testDataDir;
+    private readonly EncryptionService _encryptionService;
+    private readonly LicenseValidationService _licenseService;
+    private readonly RSA _testRsa;
+    private readonly string _testPublicKeyPem;
+    private readonly LicenseValidationService _testKeyLicenseService;
+
+    public LicenseValidationServiceTests()
     {
-        private readonly string _testDataDir;
-        private readonly EncryptionService _encryptionService;
-        private readonly LicenseValidationService _licenseService;
-        private readonly RSA _testRsa;
-        private readonly string _testPublicKeyPem;
-        private readonly LicenseValidationService _testKeyLicenseService;
+        _testDataDir = Path.Combine(Path.GetTempPath(), $"Spokes_Test_Licensing_{Guid.NewGuid()}");
+        Directory.CreateDirectory(_testDataDir);
 
-        public LicenseValidationServiceTests()
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         {
-            _testDataDir = Path.Combine(Path.GetTempPath(), "Spokes_Test_Licensing_" + Guid.NewGuid().ToString());
-            Directory.CreateDirectory(_testDataDir);
-
-            var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string>
-            {
-                { "DataPath", _testDataDir }
-            }).Build();
+            { "DataPath", _testDataDir }
+        }).Build();
             _encryptionService = new EncryptionService(config);
             var mockLogger = new Mock<ILogger<LicenseValidationService>>();
             _licenseService = new LicenseValidationService(mockLogger.Object, _encryptionService, new VersionMetadata("2026.8.102"));
@@ -180,5 +176,129 @@ namespace Spokes_Server.Tests.Core.Services.Licensing
             Assert.NotNull(result.ParsedLicense);
             Assert.Equal("active@example.com", result.ParsedLicense.Email);
         }
+
+        [Theory]
+        [InlineData(null, "some-signature")]
+        [InlineData("", "some-signature")]
+        [InlineData("2026.4.1", null)]
+        [InlineData("2026.4.1", "")]
+        public void VerifyDemoVersion_NullOrEmptyArguments_ReturnsFalse(string? version, string? signature)
+        {
+            var result = LicenseValidationService.VerifyDemoVersion(version!, signature!);
+            Assert.False(result);
+        }
+
+        [Fact]
+        public void GetAvailableEditions_WhenLicenseHasEditions_ReturnsLicenseEditions()
+        {
+            var validationResult = new LicenseValidationResult
+            {
+                ParsedLicense = new SpokesLicenseFile
+                {
+                    AvailableEditions = new List<string> { "Pro", "Enterprise" }
+                }
+            };
+
+            var editions = LicenseValidationService.GetAvailableEditions(validationResult);
+
+            Assert.Equal(new List<string> { "Pro", "Enterprise" }, editions);
+        }
+
+        [Fact]
+        public void GetAvailableEditions_WhenLicenseNullOrEmptyEditions_ReturnsFamilyFallback()
+        {
+            var nullLicenseResult = new LicenseValidationResult
+            {
+                ParsedLicense = null
+            };
+            var emptyEditionsResult = new LicenseValidationResult
+            {
+                ParsedLicense = new SpokesLicenseFile
+                {
+                    AvailableEditions = new List<string>()
+                }
+            };
+
+            var fallbackNull = LicenseValidationService.GetAvailableEditions(nullLicenseResult);
+            var fallbackEmpty = LicenseValidationService.GetAvailableEditions(emptyEditionsResult);
+
+            Assert.Equal(new List<string> { "Family" }, fallbackNull);
+            Assert.Equal(new List<string> { "Family" }, fallbackEmpty);
+        }
+
+        [Fact]
+        public void CalculateMaxAllowedVersion_HandlesOffsetsAndYearRollOver()
+        {
+            Assert.Equal("vUnknown", LicenseValidationService.CalculateMaxAllowedVersion(null!));
+            Assert.Equal("vUnknown", LicenseValidationService.CalculateMaxAllowedVersion(""));
+            Assert.Equal("vUnknown", LicenseValidationService.CalculateMaxAllowedVersion("invalid"));
+            Assert.Equal("v2026.6.0", LicenseValidationService.CalculateMaxAllowedVersion("2026.4.1"));
+            Assert.Equal("v2027.1.0", LicenseValidationService.CalculateMaxAllowedVersion("2026.11.1"));
+            Assert.Equal("v2026.12.0", LicenseValidationService.CalculateMaxAllowedVersion("server-v2026.10.15"));
+        }
+
+        [Fact]
+        public void ValidateLicense_InvalidJsonPayload_ReturnsHardLock()
+        {
+            var result = _licenseService.ValidateLicense("{ invalid json }", new ServerConfig());
+
+            Assert.Equal(LicenseStatus.HardLock, result.Status);
+            Assert.Contains("Failed to parse license payload", result.Message);
+        }
+
+        [Fact]
+        public void ValidateLicense_NullConfigInDemoMode_ReturnsExpiredWithUnknownMaxAllowed()
+        {
+            var result = _licenseService.ValidateLicense(null, null);
+
+            Assert.Equal(LicenseStatus.Expired, result.Status);
+            Assert.Equal("vUnknown", result.MaxAllowedVersion);
+            Assert.Null(result.FirstInstalledVersion);
+        }
+
+        [Fact]
+        public void AppVersion_ReturnsNonEmptyVersionString()
+        {
+            var version = LicenseValidationService.AppVersion;
+
+            Assert.False(string.IsNullOrWhiteSpace(version));
+        }
+
+        [Fact]
+        public void SpokesLicenseFile_And_LicenseValidationResult_PropertyCoverage()
+        {
+            var testDate = new DateTime(2026, 12, 31, 23, 59, 59, DateTimeKind.Utc);
+            List<string> editions = ["Enterprise", "Custom"];
+            var license = new SpokesLicenseFile
+            {
+                Email = "admin@spokes.local",
+                LicenseId = "SPK-PROPERTY-TEST",
+                ValidForUpdatesUntil = testDate,
+                AvailableEditions = editions,
+                Signature = "base64-signature"
+            };
+
+            Assert.Equal("admin@spokes.local", license.Email);
+            Assert.Equal("SPK-PROPERTY-TEST", license.LicenseId);
+            Assert.Equal(testDate, license.ValidForUpdatesUntil);
+            Assert.Equal(editions, license.AvailableEditions);
+            Assert.Equal("base64-signature", license.Signature);
+
+            var result = new LicenseValidationResult
+            {
+                Status = LicenseStatus.Tolerated,
+                Message = "Test message",
+                ParsedLicense = license,
+                FirstInstalledVersion = "2026.1.0",
+                LockupVersion = "2026.5.0",
+                MaxAllowedVersion = "v2026.7.0"
+            };
+
+            Assert.Equal(LicenseStatus.Tolerated, result.Status);
+            Assert.Equal("Test message", result.Message);
+            Assert.Same(license, result.ParsedLicense);
+            Assert.Equal("2026.1.0", result.FirstInstalledVersion);
+            Assert.Equal("2026.5.0", result.LockupVersion);
+            Assert.Equal("v2026.7.0", result.MaxAllowedVersion);
+        }
     }
-}

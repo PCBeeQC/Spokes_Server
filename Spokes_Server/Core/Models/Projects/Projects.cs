@@ -1,14 +1,7 @@
 namespace Spokes_Server.Core.Models.Projects;
 
-using Spokes_Server.Core.Models.Core;
 using Spokes_Server.Core.Models.Accounting;
-using Spokes_Server.Core.Models.Communication;
-using Spokes_Server.Core.Models.HR;
-
 using Spokes_Server.Core.Data;
-
-
-
 
 public class Project : IDataEntity
 {
@@ -17,10 +10,7 @@ public class Project : IDataEntity
     public override bool Equals(object? obj)
     {
         if (ReferenceEquals(this, obj)) return true;
-        if (obj == null || GetType() != obj.GetType())
-            return false;
-        var other = (Project)obj;
-        return Id == other.Id;
+        return obj is Project other && Id == other.Id;
     }
 
     public override int GetHashCode() => Id?.GetHashCode() ?? base.GetHashCode();
@@ -28,7 +18,7 @@ public class Project : IDataEntity
     public string Name { get; set; } = string.Empty;
 
     public string DisplayName => string.IsNullOrEmpty(ProjectNumber) ? Name : $"{ProjectNumber} - {Name}";
-    public ClientInfo Client { get; set; } = new ClientInfo();
+    public ClientInfo Client { get; set; } = new();
     public string Description { get; set; } = string.Empty;
 
     public string Status { get; set; } = ProjectStatus.Draft;
@@ -36,9 +26,9 @@ public class Project : IDataEntity
     public string? RateCardId { get; set; }
 
     // Key = WorkTypeId, Value = The Custom Rate
-    public Dictionary<string, decimal> CustomRates { get; set; } = new();
+    public Dictionary<string, decimal> CustomRates { get; set; } = [];
 
-    public bool IsInternal { get; set; } = false;
+    public bool IsInternal { get; set; }
     public bool IsActive { get; set; } = true;
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime LastEdited { get; set; } = DateTime.UtcNow;
@@ -48,26 +38,26 @@ public class Project : IDataEntity
     public string? ProjectManagerId { get; set; }
 
     // Commissions
-    public List<CommissionBeneficiary> Commissions { get; set; } = new();
+    public List<CommissionBeneficiary> Commissions { get; set; } = [];
 
     // Access Control (for Contribution: Timesheets, Expenses, Chat)
     // Visibility is controlled by permissions (projects.view)
     public string AccessPolicy { get; set; } = "Public"; // "Public" or "Restricted"
-    public List<string> AllowedTeamIds { get; set; } = new();
-    public List<string> AllowedUserIds { get; set; } = new();
+    public List<string> AllowedTeamIds { get; set; } = [];
+    public List<string> AllowedUserIds { get; set; } = [];
 
     // Approved Tasks for this project (If empty, NO tasks are allowed? Or all? User said "only the approved task... will show up")
     // Use hashset for performance if needed, but List is fine for JSON serialization
-    public List<string> ApprovedWorkTypeIds { get; set; } = new();
+    public List<string> ApprovedWorkTypeIds { get; set; } = [];
 
     // NEW: Budget & Allocations
-    public List<ProjectTaskAllocation> Allocations { get; set; } = new();
+    public List<ProjectTaskAllocation> Allocations { get; set; } = [];
 
     // NEW: Purchase Orders
-    public List<ClientPO> PurchaseOrders { get; set; } = new();
+    public List<ClientPO> PurchaseOrders { get; set; } = [];
 
-    public List<string> NoteCategories { get; set; } = new() { "General", "Meeting", "Event", "Maintenance", "Email" };
-    public Dictionary<string, string> NoteCategoryColors { get; set; } = new();
+    public List<string> NoteCategories { get; set; } = ["General", "Meeting", "Event", "Maintenance", "Email"];
+    public Dictionary<string, string> NoteCategoryColors { get; set; } = [];
 
     // Project Group membership (optional) - if set, invoicing is managed at group level
     public string? ProjectGroupId { get; set; }
@@ -145,10 +135,10 @@ public static class ProjectStatus
     public const string Completed = "Completed";
     public const string Archived = "Archived";
 
-    public static List<string> All => new()
-    {
+    public static List<string> All =>
+    [
         Draft, Quoted, InProduction, WaitingForPayment, Discovery, OnHold, Completed, Archived
-    };
+    ];
 }
 
 public class ProjectStatusConfig
@@ -156,7 +146,7 @@ public class ProjectStatusConfig
     public string Id { get; set; } = Guid.NewGuid().ToString();
     public string Name { get; set; } = string.Empty;
     public string Color { get; set; } = "Default"; // MudBlazor Color Enum as string
-    public bool IsSystemDefault { get; set; } = false; // Cannot be renamed/deleted if true (optional, but good practice)
+    public bool IsSystemDefault { get; set; } // Cannot be renamed/deleted if true (optional, but good practice)
     public string SystemMapping { get; set; } = SystemStatusMappings.Standard;
 }
 
@@ -166,7 +156,7 @@ public static class SystemStatusMappings
     public const string Completed = "Completed";
     public const string Archived = "Archived";
 
-    public static List<string> All => new() { Standard, Completed, Archived };
+    public static List<string> All => [Standard, Completed, Archived];
 }
 
 public class ProjectTaskAllocation

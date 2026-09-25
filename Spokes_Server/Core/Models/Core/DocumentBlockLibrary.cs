@@ -23,12 +23,12 @@ public interface IDocumentBlock
 
 public static class DocumentBlockLibrary
 {
-    private static readonly List<IDocumentBlock> _blocks = new()
-    {
+    private static readonly List<IDocumentBlock> _blocks =
+    [
         new LetterheadBlock(),
         new SignatureBlock(),
         new LetterSignatureBlock()
-    };
+    ];
 
     public static IReadOnlyList<IDocumentBlock> GetAll() => _blocks.AsReadOnly();
 
@@ -41,8 +41,8 @@ public class SignatureBlock : IDocumentBlock
     public string DisplayName => "Signature Block";
     public string Description => "A dual-column signature block for Client and Company.";
 
-    public List<BlockFieldDefinition> Fields => new()
-    {
+    public List<BlockFieldDefinition> Fields =>
+    [
         new BlockFieldDefinition { Key = "IntroText", Label = "Introductory Text", DefaultValue = "By signing below, the parties agree to the terms herein." },
 
         new BlockFieldDefinition { Key = "ClientLabel", Label = "Client Signature Label", DefaultValue = "Client Signature" },
@@ -52,7 +52,7 @@ public class SignatureBlock : IDocumentBlock
         new BlockFieldDefinition { Key = "CompanyLabel", Label = "Company Signature Label", DefaultValue = "Authorized Signature (Spokes)" },
         new BlockFieldDefinition { Key = "CompanyName", Label = "Company Name", DefaultValue = "@Company.Name" },
         new BlockFieldDefinition { Key = "CompanyNameRep", Label = "Company Representative", DefaultValue = "@ProjectManager.Name" }
-    };
+    ];
 
     public string RenderHtml(DocumentBlockInstance instance, Project? project, CompanyProfile? profile, Employee? pm)
     {
@@ -95,8 +95,8 @@ public class LetterheadBlock : IDocumentBlock
     public string DisplayName => "Letterhead";
     public string Description => "Professional company letterhead with logo, address, date, and recipient.";
 
-    public List<BlockFieldDefinition> Fields => new()
-    {
+    public List<BlockFieldDefinition> Fields =>
+    [
         new BlockFieldDefinition { Key = "ShowCompanyAddress", Label = "Show Company Address & Phone", DefaultValue = "true", FieldType = "toggle" },
         new BlockFieldDefinition { Key = "ShowCompanyName", Label = "Show Company Name Text", DefaultValue = "true", FieldType = "toggle" },
         new BlockFieldDefinition { Key = "Date", Label = "Date", DefaultValue = "@Today" },
@@ -107,7 +107,7 @@ public class LetterheadBlock : IDocumentBlock
         new BlockFieldDefinition { Key = "RecipientPhone", Label = "Recipient Phone", DefaultValue = "" },
         new BlockFieldDefinition { Key = "Subject", Label = "Subject Line", DefaultValue = "" },
         new BlockFieldDefinition { Key = "Greeting", Label = "Greeting", DefaultValue = "Dear @Client.ContactPrefix @Client.ContactName," }
-    };
+    ];
 
     public string RenderHtml(DocumentBlockInstance instance, Project? project, CompanyProfile? profile, Employee? pm)
     {
@@ -157,7 +157,7 @@ public class LetterheadBlock : IDocumentBlock
             ? $", {recipientPosition}" : "";
 
         // Build address block (company + address + phone grouped together)
-        var addressLines = new List<string>();
+        List<string> addressLines = [];
         if (!string.IsNullOrEmpty(recipientCompany)) addressLines.Add(recipientCompany);
         if (!string.IsNullOrEmpty(recipientAddress))
         {
@@ -207,13 +207,13 @@ public class LetterSignatureBlock : IDocumentBlock
     public string DisplayName => "Letter Signature";
     public string Description => "A single-person signature block for the bottom of a letter.";
 
-    public List<BlockFieldDefinition> Fields => new()
-    {
+    public List<BlockFieldDefinition> Fields =>
+    [
         new BlockFieldDefinition { Key = "SignOff", Label = "Sign-off", DefaultValue = "Sincerely," },
         new BlockFieldDefinition { Key = "SignatoryName", Label = "Signatory Name", DefaultValue = "@ProjectManager.Name" },
         new BlockFieldDefinition { Key = "SignatoryRole", Label = "Signatory Role", DefaultValue = "@ProjectManager.Position" },
         new BlockFieldDefinition { Key = "SignatureImage", Label = "Signature Image", DefaultValue = "", FieldType = "signature" }
-    };
+    ];
 
     public string RenderHtml(DocumentBlockInstance instance, Project? project, CompanyProfile? profile, Employee? pm)
     {

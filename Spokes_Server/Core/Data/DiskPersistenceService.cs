@@ -12,13 +12,25 @@ public class DiskPersistenceService : BackgroundService
     private readonly Channel<WriteJob> _queue;
     private readonly ILogger<DiskPersistenceService> _logger;
     private readonly JsonSerializerOptions _jsonOptions;
+    private readonly Spokes_Server.Core.Services.Core.IStorageHealthService? _storageHealth;
+    private readonly Spokes_Server.Core.Services.Logging.ISystemLogService? _systemLog;
 
     public DiskPersistenceService(ILogger<DiskPersistenceService> logger)
+        : this(logger, null, null)
+    {
+    }
+
+    public DiskPersistenceService(
+        ILogger<DiskPersistenceService> logger,
+        Spokes_Server.Core.Services.Core.IStorageHealthService? storageHealth = null,
+        Spokes_Server.Core.Services.Logging.ISystemLogService? systemLog = null)
     {
         _logger = logger;
+        _storageHealth = storageHealth;
+        _systemLog = systemLog;
         // Unbounded = Infinite buffer. Fast UI, but consumes RAM if disk is slow.
         _queue = Channel.CreateUnbounded<WriteJob>();
-        _jsonOptions = new JsonSerializerOptions { WriteIndented = true };
+        _jsonOptions = new() { WriteIndented = true };
     }
 
     // UI calls this. Returns IMMEDIATELY.
@@ -28,21 +40,15 @@ public class DiskPersistenceService : BackgroundService
         _queue.Writer.TryWrite(new WriteJob(path, bytes, false));
     }
 
-    public void QueueDelete(string path)
-    {
-        _queue.Writer.TryWrite(new WriteJob(path, null, true));
-    }
+    public void QueueDelete(string path) => _queue.Writer.TryWrite(new WriteJob(path, null, true));
 
-    public async ValueTask QueueWriteAsync(string path, object data)
+    public ValueTask QueueWriteAsync(string path, object data)
     {
         var bytes = JsonSerializer.SerializeToUtf8Bytes(data, _jsonOptions);
-        await _queue.Writer.WriteAsync(new WriteJob(path, bytes, false));
+        return _queue.Writer.WriteAsync(new WriteJob(path, bytes, false));
     }
 
-    public async ValueTask QueueDeleteAsync(string path)
-    {
-        await _queue.Writer.WriteAsync(new WriteJob(path, null, true));
-    }
+    public ValueTask QueueDeleteAsync(string path) => _queue.Writer.WriteAsync(new WriteJob(path, null, true));
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -76,6 +82,7 @@ public class DiskPersistenceService : BackgroundService
 
     private async Task ProcessJob(WriteJob job)
     {
+        string? tempPath = null;
         try
         {
             if (job.IsDelete)
@@ -86,22 +93,40 @@ public class DiskPersistenceService : BackgroundService
             {
                 // Ensure folder exists
                 var dir = Path.GetDirectoryName(job.FilePath);
-                if (!Directory.Exists(dir)) Directory.CreateDirectory(dir!);
+                if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
 
                 // Write to temp file first, then move (Atomic Save)
                 // This prevents corrupted files if power cuts out mid-write
-                var tempPath = job.FilePath + ".tmp";
-                using (var stream = File.Create(tempPath))
+                tempPath = job.FilePath + ".tmp";
+                await using (var stream = File.Create(tempPath))
                 {
                     await stream.WriteAsync(job.Data);
                 }
 
                 File.Move(tempPath, job.FilePath, overwrite: true);
+                tempPath = null;
             }
+
+            _storageHealth?.RecordPersistenceSuccess();
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to persist file: {Path}", job.FilePath);
+            _storageHealth?.RecordPersistenceFailure();
+            _systemLog?.LogError("Storage", $"Failed to persist file {job.FilePath}: {ex.Message}", ex.ToString());
+
+            if (tempPath != null)
+            {
+                try
+                {
+                    if (File.Exists(tempPath)) File.Delete(tempPath);
+                }
+                catch
+                {
+                    // Ignore failure to delete temp file in error path
+                }
+            }
         }
     }
+
 }

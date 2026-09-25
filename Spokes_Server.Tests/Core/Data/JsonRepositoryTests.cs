@@ -1,11 +1,6 @@
-using Spokes_Server.Core.Services.Communication;
-using Spokes_Server.Core.Services.Projects;
-using Spokes_Server.Core.Services.Core;
 using Microsoft.Extensions.Logging;
 using Moq;
 using Spokes_Server.Core.Data;
-using System.IO;
-using System.Linq;
 using System.Text.Json;
 
 namespace Spokes_Server.Tests.Core.Data
@@ -23,10 +18,8 @@ namespace Spokes_Server.Tests.Core.Data
         {
         }
 
-        protected override string GetFilePath(TestEntity item)
-        {
-            return Path.Combine(_basePath, $"{item.Id}.json");
-        }
+        protected override string GetFilePath(TestEntity item) =>
+            Path.Combine(_basePath, $"{item.Id}.json");
     }
 
     public class JsonRepositoryTests : IDisposable
@@ -37,7 +30,7 @@ namespace Spokes_Server.Tests.Core.Data
 
         public JsonRepositoryTests()
         {
-            _testDataDir = Path.Combine(Path.GetTempPath(), "Spokes_Test_JsonRepo_" + Guid.NewGuid().ToString());
+            _testDataDir = Path.Combine(Path.GetTempPath(), $"Spokes_Test_JsonRepo_{Guid.NewGuid()}");
             Directory.CreateDirectory(_testDataDir);
 
             var mockLogger = new Mock<ILogger<DiskPersistenceService>>();
@@ -69,8 +62,8 @@ namespace Spokes_Server.Tests.Core.Data
             _repo.Save(entity);
 
             var items = _repo.GetAll();
-            Assert.Single(items);
-            Assert.Equal("123", items.First().Id);
+            var item = Assert.Single(items);
+            Assert.Equal("123", item.Id);
 
             var byId = _repo.GetById("123");
             Assert.NotNull(byId);
@@ -131,7 +124,110 @@ namespace Spokes_Server.Tests.Core.Data
             Assert.Single(items);
             Assert.NotNull(_repo.GetById("e1"));
         }
+
+        [Fact]
+        public async Task SaveAsync_AddsToCache_QueuesWrite_AndTriggersOnSaved()
+        {
+            var entity = new TestEntity { Id = "async-1", Name = "Async Test" };
+            TestEntity? eventEntity = null;
+            _repo.OnSaved += e => eventEntity = e;
+
+            await _repo.SaveAsync(entity);
+
+            var items = await _repo.GetAllAsync();
+            var item = Assert.Single(items);
+            Assert.Equal("async-1", item.Id);
+
+            var byId = await _repo.GetByIdAsync("async-1");
+            Assert.NotNull(byId);
+            Assert.Equal("Async Test", byId.Name);
+
+            Assert.NotNull(eventEntity);
+            Assert.Same(entity, eventEntity);
+        }
+
+        [Fact]
+        public void Save_TriggersOnSaved_Event()
+        {
+            var entity = new TestEntity { Id = "save-event", Name = "Event Test" };
+            TestEntity? eventEntity = null;
+            _repo.OnSaved += e => eventEntity = e;
+
+            _repo.Save(entity);
+
+            Assert.NotNull(eventEntity);
+            Assert.Same(entity, eventEntity);
+        }
+
+        [Fact]
+        public async Task DeleteAsync_RemovesFromCacheAndQueuesDelete()
+        {
+            var entity = new TestEntity { Id = "async-del", Name = "Async Delete" };
+            await _repo.SaveAsync(entity);
+
+            Assert.NotNull(await _repo.GetByIdAsync("async-del"));
+
+            await _repo.DeleteAsync("async-del");
+
+            Assert.Null(await _repo.GetByIdAsync("async-del"));
+            Assert.Empty(await _repo.GetAllAsync());
+        }
+
+        [Fact]
+        public async Task GetAllAsync_ReturnsAllCachedEntities()
+        {
+            var entity1 = new TestEntity { Id = "g1", Name = "Entity 1" };
+            var entity2 = new TestEntity { Id = "g2", Name = "Entity 2" };
+
+            await _repo.SaveAsync(entity1);
+            await _repo.SaveAsync(entity2);
+
+            var all = await _repo.GetAllAsync();
+
+            Assert.Equal(2, all.Count);
+            Assert.Contains(all, e => e.Id == "g1");
+            Assert.Contains(all, e => e.Id == "g2");
+        }
+
+        [Fact]
+        public async Task GetByIdAsync_ReturnsEntityWhenPresent_AndNullWhenMissing()
+        {
+            var entity = new TestEntity { Id = "present-id", Name = "Present" };
+            await _repo.SaveAsync(entity);
+
+            var present = await _repo.GetByIdAsync("present-id");
+            var missing = await _repo.GetByIdAsync("missing-id");
+
+            Assert.NotNull(present);
+            Assert.Equal("present-id", present.Id);
+            Assert.Null(missing);
+        }
+
+        [Fact]
+        public void LoadFromDisk_WhenDirectoryDoesNotExist_ReturnsGracefully()
+        {
+            var nonExistentDir = Path.Combine(Path.GetTempPath(), "Spokes_Test_NonExistent_" + Guid.NewGuid());
+            var repo = new TestEntityRepository(_writer, nonExistentDir);
+
+            repo.LoadFromDisk(); // Should not throw
+
+            Assert.Empty(repo.GetAll());
+        }
+
+        [Fact]
+        public void Delete_WhenIdDoesNotExist_DoesNotThrowOrQueue()
+        {
+            var exception = Record.Exception(() => _repo.Delete("non-existent-id"));
+            Assert.Null(exception);
+            Assert.Empty(_repo.GetAll());
+        }
+
+        [Fact]
+        public async Task DeleteAsync_WhenIdDoesNotExist_DoesNotThrowOrQueue()
+        {
+            var exception = await Record.ExceptionAsync(() => _repo.DeleteAsync("non-existent-id"));
+            Assert.Null(exception);
+            Assert.Empty(await _repo.GetAllAsync());
+        }
     }
 }
-
-

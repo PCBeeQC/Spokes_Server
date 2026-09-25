@@ -1,46 +1,45 @@
-using Spokes_Server.Core.Services.Communication;
-using Spokes_Server.Core.Models.HR;
+namespace Spokes_Server.Tests.Core.Services.Communication;
+
 using Microsoft.Extensions.Logging;
 using Moq;
+using Spokes_Server.Core.Models.HR;
+using Spokes_Server.Core.Services.Communication.Notifications;
 
-namespace Spokes_Server.Tests.Core.Services.Communication
+public class NotificationQueueServiceTests
 {
-    public class NotificationQueueServiceTests
+    private readonly NotificationQueueService _service;
+
+    public NotificationQueueServiceTests()
     {
-        private readonly NotificationQueueService _service;
+        _service = new NotificationQueueService(new Mock<ILogger<NotificationQueueService>>().Object);
+    }
 
-        public NotificationQueueServiceTests()
+    [Fact]
+    public void IsWithinSchedule_ReturnsTrue_WhenScheduleDisabled()
+    {
+        var employee = new Employee
         {
-            _service = new NotificationQueueService(new Mock<ILogger<NotificationQueueService>>().Object);
-        }
+            NotificationScheduleEnabled = false
+        };
+        Assert.True(_service.IsWithinSchedule(employee));
+    }
 
-        [Fact]
-        public void IsWithinSchedule_ReturnsTrue_WhenScheduleDisabled()
+    [Fact]
+    public void IsWithinSchedule_ReturnsTrue_WhenInsideActiveHours()
+    {
+        var employee = new Employee
         {
-            var employee = new Employee
+            NotificationScheduleEnabled = true,
+            NotificationSchedule = Enumerable.Range(0, 7).Select(i => new DaySchedule
             {
-                NotificationScheduleEnabled = false
-            };
-            Assert.True(_service.IsWithinSchedule(employee));
-        }
-
-        [Fact]
-        public void IsWithinSchedule_ReturnsTrue_WhenInsideActiveHours()
-        {
-            var now = DateTime.Now;
-            var employee = new Employee
-            {
-                NotificationScheduleEnabled = true,
-                NotificationSchedule = Enumerable.Range(0, 7).Select(i => new DaySchedule
-                {
-                    Day = (DayOfWeek)i,
-                    IsEnabled = true,
-                    StartHour = 0,
-                    EndHour = 24  // All day enabled
-                }).ToList()
-            };
-            Assert.True(_service.IsWithinSchedule(employee));
-        }
+                Day = (DayOfWeek)i,
+                IsEnabled = true,
+                StartHour = 0,
+                EndHour = 24  // All day enabled
+            }).ToList()
+        };
+        Assert.True(_service.IsWithinSchedule(employee));
+    }
 
         [Fact]
         public void IsWithinSchedule_ReturnsFalse_WhenOutsideActiveHours()
@@ -90,7 +89,7 @@ namespace Spokes_Server.Tests.Core.Services.Communication
             var employee = new Employee
             {
                 NotificationScheduleEnabled = true,
-                NotificationSchedule = new List<DaySchedule>()
+                NotificationSchedule = []
             };
             Assert.True(_service.IsWithinSchedule(employee));
         }
@@ -134,4 +133,3 @@ namespace Spokes_Server.Tests.Core.Services.Communication
             Assert.Contains("user2", ids);
         }
     }
-}

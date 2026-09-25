@@ -1,23 +1,23 @@
-using Spokes_Server.Core.Services.Communication;
-using Spokes_Server.Core.Services.Projects;
-using Spokes_Server.Core.Services.Core;
-using Microsoft.Extensions.Logging;
-using Spokes_Server.Core.Data.Repositories.Core;
-using Spokes_Server.Core.Data.Repositories.Projects;
-using Spokes_Server.Core.Data.Repositories.Accounting;
-
-using Spokes_Server.Core.Data.Repositories.HR;
-using Spokes_Server.Core.Models.Core;
-using System.Text.Json;
-using WebPush;
-using WebPushSubscription = WebPush.PushSubscription;
-using Microsoft.Extensions.Configuration;
+using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Net.Http;
 using System.Net.Http.Json;
-using Microsoft.AspNetCore.DataProtection;
 using System.Security.Cryptography;
+using System.Text.Json;
+using System.Threading.Tasks;
+using Microsoft.AspNetCore.DataProtection;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 using Spokes_Server.Core.Constants;
+using Spokes_Server.Core.Data.Repositories.Core;
+using Spokes_Server.Core.Data.Repositories.HR;
+using Spokes_Server.Core.Models.Core;
+using Spokes_Server.Core.Services.Core;
 using Spokes_Server.Core.Services.Licensing;
+using Spokes_Server.Core.Services.Logging;
+using WebPush;
+using WebPushSubscription = WebPush.PushSubscription;
 
 namespace Spokes_Server.Core.Services.Communication.Notifications;
 
@@ -40,9 +40,9 @@ public class WebPushService : IWebPushService
     private readonly IConfiguration _configuration;
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly IDataProtectionProvider _dataProtection;
-    private readonly Spokes_Server.Core.Services.Logging.ISystemLogService _systemLog;
-    private readonly Spokes_Server.Core.Services.Core.EncryptionService _encryptionService;
-    private readonly Spokes_Server.Core.Services.Licensing.LicenseValidationService _licenseValidation;
+    private readonly ISystemLogService _systemLog;
+    private readonly EncryptionService _encryptionService;
+    private readonly LicenseValidationService _licenseValidation;
 
     public WebPushService(
         DeviceSessionRepository sessions,
@@ -56,9 +56,9 @@ public class WebPushService : IWebPushService
         IConfiguration configuration,
         IHttpClientFactory httpClientFactory,
         IDataProtectionProvider dataProtection,
-        Spokes_Server.Core.Services.Logging.ISystemLogService systemLog,
-        Spokes_Server.Core.Services.Core.EncryptionService encryptionService,
-        Spokes_Server.Core.Services.Licensing.LicenseValidationService licenseValidation)
+        ISystemLogService systemLog,
+        EncryptionService encryptionService,
+        LicenseValidationService licenseValidation)
     {
         _sessions = sessions;
         _employees = employees;
@@ -80,10 +80,7 @@ public class WebPushService : IWebPushService
     /// Get the public VAPID key for client-side subscription.
     /// </summary>
     public string GetVapidPublicKey()
-    {
-        var profile = _companyProfile.Get();
-        return profile?.VapidPublicKey ?? string.Empty;
-    }
+        => _companyProfile.Get()?.VapidPublicKey ?? string.Empty;
 
     /// <summary>
     /// Check if push notifications are configured.
@@ -127,7 +124,7 @@ public class WebPushService : IWebPushService
     /// optionally filtered by presence tier.
     /// </summary>
     public async Task SendNotificationAsync(string userId, string title, string body,
-        string? url = null, string? icon = null, PresenceTier? tier = null, string? tag = null, object[]? actions = null, string category = "chat", string? threadId = null, string? serverName = null, string? channelName = null, bool isGroupChat = false, int? badge = null, bool isSilent = false)
+        string? url = null, string? icon = null, PresenceTier? tier = null, string? tag = null, object[]? actions = null, string category = "chat", string? threadId = null, string? serverName = null, string? channelName = null, bool isGroupChat = false, int? badge = null, bool isSilent = false, string? sound = null)
     {
         var profile = _companyProfile.Get();
         if (profile == null || string.IsNullOrEmpty(profile.VapidPublicKey) || string.IsNullOrEmpty(profile.VapidPrivateKey))
@@ -162,7 +159,8 @@ public class WebPushService : IWebPushService
                 ServerName = serverName,
                 ChannelName = channelName,
                 IsGroupChat = isGroupChat,
-                Badge = badge
+                Badge = badge,
+                Sound = sound
             });
             _logger.LogDebug("User {UserId} outside schedule, notification queued", userId);
             return;
@@ -170,7 +168,7 @@ public class WebPushService : IWebPushService
 
 
 
-        await SendPushToSubscriptionsAsync(userId, title, body, url, icon, tier, tag, actions, profile, category, threadId, serverName, channelName, isGroupChat, badge, isSilent);
+        await SendPushToSubscriptionsAsync(userId, title, body, url, icon, tier, tag, actions, profile, category, threadId, serverName, channelName, isGroupChat, badge, isSilent, sound);
     }
 
     /// <summary>
@@ -186,7 +184,7 @@ public class WebPushService : IWebPushService
         if (employee == null || !employee.PushNotificationsEnabled)
             return;
 
-        await SendPushToSubscriptionsAsync(userId, "", "", null, null, PresenceTier.MobileOnly, null, null, profile, "clear_notification", threadId, null, null, false, 0, false);
+        await SendPushToSubscriptionsAsync(userId, "", "", null, null, PresenceTier.MobileOnly, null, null, profile, "clear_notification", threadId, null, null, false, null, false, null);
     }
 
     /// <summary>
@@ -194,7 +192,7 @@ public class WebPushService : IWebPushService
     /// Used by the background flush service for queued notifications.
     /// </summary>
     public async Task SendNotificationDirectAsync(string userId, string title, string body,
-        string? url = null, string? icon = null, PresenceTier? tier = null, string? tag = null, object[]? actions = null, string category = "chat", string? threadId = null, string? serverName = null, string? channelName = null, bool isGroupChat = false, int? badge = null, bool isSilent = false)
+        string? url = null, string? icon = null, PresenceTier? tier = null, string? tag = null, object[]? actions = null, string category = "chat", string? threadId = null, string? serverName = null, string? channelName = null, bool isGroupChat = false, int? badge = null, bool isSilent = false, string? sound = null)
     {
         var profile = _companyProfile.Get();
         if (profile == null || string.IsNullOrEmpty(profile.VapidPublicKey) || string.IsNullOrEmpty(profile.VapidPrivateKey))
@@ -206,14 +204,14 @@ public class WebPushService : IWebPushService
 
 
 
-        await SendPushToSubscriptionsAsync(userId, title, body, url, icon, tier, tag, actions, profile, category, threadId, serverName, channelName, isGroupChat, badge, isSilent);
+        await SendPushToSubscriptionsAsync(userId, title, body, url, icon, tier, tag, actions, profile, category, threadId, serverName, channelName, isGroupChat, badge, isSilent, sound);
     }
 
     /// <summary>
     /// Core push delivery logic shared by both SendNotificationAsync and SendNotificationDirectAsync.
     /// </summary>
     private async Task SendPushToSubscriptionsAsync(string userId, string title, string body,
-        string? url, string? icon, PresenceTier? tier, string? tag, object[]? actions, Models.Core.CompanyProfile profile, string category, string? threadId, string? serverName, string? channelName, bool isGroupChat, int? badge, bool isSilent)
+        string? url, string? icon, PresenceTier? tier, string? tag, object[]? actions, Models.Core.CompanyProfile profile, string category, string? threadId, string? serverName, string? channelName, bool isGroupChat, int? badge, bool isSilent, string? sound = null)
     {
         List<DeviceSession> subscriptions;
         if (tier == PresenceTier.DesktopOnly)
@@ -246,6 +244,16 @@ public class WebPushService : IWebPushService
         var encodedToken = System.Net.WebUtility.UrlEncode(token);
         var defaultIcon = $"/spokesapi/Media/Icon?t={encodedToken}";
 
+        var effectiveServerName = !string.IsNullOrWhiteSpace(serverName)
+            ? serverName
+            : (!string.IsNullOrWhiteSpace(profile?.CompanyName) ? profile.CompanyName : "Spokes");
+
+        var effectiveThreadId = !string.IsNullOrWhiteSpace(threadId)
+            ? threadId
+            : (!string.IsNullOrWhiteSpace(tag) ? tag : null);
+
+        var effectiveSound = isSilent ? null : (sound ?? NotificationCategoryRegistry.GetCategory(category)?.DefaultSoundFileName ?? (category == "chat" ? "spokesnotif1.wav" : "default"));
+
         var payload = new
         {
             title,
@@ -255,7 +263,8 @@ public class WebPushService : IWebPushService
             tag = tag,
             actions = actions,
             isSilent = isSilent,
-            data = new { url = url ?? "/chat", threadId = threadId, serverName = serverName, channelName = channelName, isGroupChat = isGroupChat }
+            sound = effectiveSound,
+            data = new { url = url ?? (category == "calendar" ? "/planning/calendar" : "/chat"), threadId = effectiveThreadId, serverName = effectiveServerName, channelName = channelName, isGroupChat = isGroupChat }
         };
         var payloadJson = JsonSerializer.Serialize(payload);
 
@@ -293,7 +302,8 @@ public class WebPushService : IWebPushService
                     httpClient.DefaultRequestHeaders.Add("X-Relay-Key", SpokesConstants.PushRelayKey);
 
                     string? absoluteImageUrl = null;
-                    string? originUrl = _systemConfigs.Get().ServerPublicUrl?.TrimEnd('/');
+                    var rawPublicUrl = _systemConfigs.Get().ServerPublicUrl;
+                    string? originUrl = string.IsNullOrWhiteSpace(rawPublicUrl) ? null : rawPublicUrl.TrimEnd('/');
 
                     string serverId = serverConfig.DatabaseCreationId;
                     string serverIdSignature = serverConfig.DatabaseCreationIdSignature;
@@ -314,16 +324,17 @@ public class WebPushService : IWebPushService
                         {
                             Title = title,
                             Body = body,
-                            Url = url ?? "/chat",
+                            Url = url ?? (category == "calendar" ? "/planning/calendar" : "/chat"),
                             Category = category,
                             ImageUrl = absoluteImageUrl,
                             OriginUrl = originUrl,
-                            ThreadId = threadId,
-                            ServerName = serverName,
+                            ThreadId = effectiveThreadId,
+                            ServerName = effectiveServerName,
                             ChannelName = channelName,
                             IsGroupChat = isGroupChat,
                             ServerIconUrl = originUrl != null ? $"{originUrl}{defaultIcon}" : defaultIcon,
-                            IsSilent = isSilent
+                            IsSilent = isSilent,
+                            Sound = isSilent ? null : (sound ?? NotificationCategoryRegistry.GetCategory(category)?.DefaultSoundFileName ?? (category == "chat" ? "spokesnotif1.wav" : "default"))
                         };
                         var innerPayloadBytes = System.Text.Encoding.UTF8.GetBytes(JsonSerializer.Serialize(innerPayload));
 
@@ -360,20 +371,21 @@ public class WebPushService : IWebPushService
                             Tag = Convert.ToBase64String(authTag),
                             IsEncrypted = true,
                             Category = category,
-                            Sound = category == "chat" ? "SpokesNotif1.wav" : "default",
+                            Sound = isSilent ? null : (sound ?? NotificationCategoryRegistry.GetCategory(category)?.DefaultSoundFileName ?? (category == "chat" ? "spokesnotif1.wav" : "default")),
                             ServerId = serverId,
                             ServerIdSignature = serverIdSignature,
                             DatabaseCreationVersion = databaseCreationVersion,
                             DatabaseCreationSignature = databaseCreationSignature,
                             KeyHash = keyHash,
                             LicensePayload = licensePayload,
-                            ThreadId = threadId,
-                            ServerName = serverName,
+                            ThreadId = effectiveThreadId,
+                            ServerName = effectiveServerName,
                             ChannelName = channelName,
                             IsGroupChat = isGroupChat,
                             ServerIconUrl = originUrl != null ? $"{originUrl}{defaultIcon}" : defaultIcon,
                             Badge = badge,
-                            IsSilent = isSilent
+                            IsSilent = isSilent,
+                            OriginUrl = originUrl
                         };
                     }
                     else
@@ -383,19 +395,19 @@ public class WebPushService : IWebPushService
                             Token = sub.PushEndpoint,
                             Title = title,
                             Body = body,
-                            Url = url ?? "/chat",
+                            Url = url ?? (category == "calendar" ? "/planning/calendar" : "/chat"),
                             Category = category,
                             ImageUrl = absoluteImageUrl,
                             OriginUrl = originUrl,
-                            Sound = category == "chat" ? "SpokesNotif1.wav" : "default",
+                            Sound = isSilent ? null : (sound ?? NotificationCategoryRegistry.GetCategory(category)?.DefaultSoundFileName ?? (category == "chat" ? "spokesnotif1.wav" : "default")),
                             ServerId = serverId,
                             ServerIdSignature = serverIdSignature,
                             DatabaseCreationVersion = databaseCreationVersion,
                             DatabaseCreationSignature = databaseCreationSignature,
                             KeyHash = keyHash,
                             LicensePayload = licensePayload,
-                            ThreadId = threadId,
-                            ServerName = serverName,
+                            ThreadId = effectiveThreadId,
+                            ServerName = effectiveServerName,
                             ChannelName = channelName,
                             IsGroupChat = isGroupChat,
                             ServerIconUrl = originUrl != null ? $"{originUrl}{defaultIcon}" : defaultIcon,
@@ -462,6 +474,10 @@ public class WebPushService : IWebPushService
         var encodedToken = System.Net.WebUtility.UrlEncode(token);
         var defaultIcon = $"/spokesapi/Media/Icon?t={encodedToken}";
 
+        var employee = _employees.GetById(userId);
+        var userSoundChoice = employee?.GetNotificationSound(category);
+        var pushSound = NotificationSoundCatalog.GetEffectivePushSound(category, userSoundChoice);
+
         var payload = new
         {
             title,
@@ -470,7 +486,7 @@ public class WebPushService : IWebPushService
             badge = defaultIcon,
             tag = "test-push",
             actions = new object[] { new { action = "open", title = "Open App" } },
-            data = new { url = "/" }
+            data = new { url = "/", category = category, sound = pushSound }
         };
         var payloadJson = JsonSerializer.Serialize(payload);
 
@@ -508,7 +524,8 @@ public class WebPushService : IWebPushService
                     Title = title,
                     Body = body,
                     Url = "/",
-                    Category = category
+                    Category = category,
+                    Sound = pushSound
                 };
                 var innerPayloadBytes = System.Text.Encoding.UTF8.GetBytes(JsonSerializer.Serialize(innerPayload));
 
@@ -545,7 +562,7 @@ public class WebPushService : IWebPushService
                     Tag = Convert.ToBase64String(tag),
                     IsEncrypted = true,
                     Category = category,
-                    Sound = category == "chat" ? "SpokesNotif1.wav" : "default",
+                    Sound = pushSound,
                     ServerId = serverId,
                     ServerIdSignature = serverIdSignature,
                     DatabaseCreationVersion = databaseCreationVersion,
@@ -563,7 +580,7 @@ public class WebPushService : IWebPushService
                     Body = body,
                     Url = "/",
                     Category = category,
-                    Sound = category == "chat" ? "SpokesNotif1.wav" : "default",
+                    Sound = pushSound,
                     ServerId = serverId,
                     ServerIdSignature = serverIdSignature,
                     DatabaseCreationVersion = databaseCreationVersion,

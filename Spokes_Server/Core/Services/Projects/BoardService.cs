@@ -1,17 +1,6 @@
-using Spokes_Server.Core.Services.Communication;
-using Spokes_Server.Core.Services.Projects;
-using Spokes_Server.Core.Services.Core;
-using Spokes_Server.Core.Data.Repositories.Core;
+using System.Text.Json;
 using Spokes_Server.Core.Data.Repositories.Projects;
-using Spokes_Server.Core.Data.Repositories.Accounting;
-using Spokes_Server.Core.Data.Repositories.Communication;
-using Spokes_Server.Core.Data.Repositories.HR;
-using Spokes_Server.Core.Models.Core;
 using Spokes_Server.Core.Models.Projects;
-using Spokes_Server.Core.Models.Accounting;
-using Spokes_Server.Core.Models.Communication;
-using Spokes_Server.Core.Models.HR;
-
 
 namespace Spokes_Server.Core.Services.Projects;
 
@@ -37,7 +26,7 @@ public class BoardService
             Description = description,
             Icon = icon,
             OwnerId = ownerId,
-            MemberIds = !string.IsNullOrEmpty(ownerId) ? new List<string> { ownerId } : new List<string>() // Add owner as member by default? Usually yes.
+            MemberIds = !string.IsNullOrEmpty(ownerId) ? [ownerId] : [] // Add owner as member by default? Usually yes.
         };
 
         // Add default "Status" property
@@ -47,12 +36,12 @@ public class BoardService
         {
             Name = "Status",
             Type = BoardPropertyType.Select,
-            Options = new List<BoardPropertyOption>
-            {
+            Options =
+            [
                 new() { Name = "To Do", Color = "default" },
                 new() { Name = "In Progress", Color = "info" },
                 new() { Name = "Done", Color = "success" }
-            }
+            ]
         };
 
         board.Properties.Add(statusProp);
@@ -73,10 +62,7 @@ public class BoardService
         return board;
     }
 
-    public void UpdateBoard(Board board)
-    {
-        _boards.Save(board);
-    }
+    public void UpdateBoard(Board board) => _boards.Save(board);
 
     public void DeleteBoard(string boardId)
     {
@@ -122,10 +108,7 @@ public class BoardService
         _boardCards.Save(card);
     }
 
-    public void DeleteCard(string cardId)
-    {
-        _boardCards.Delete(cardId);
-    }
+    public void DeleteCard(string cardId) => _boardCards.Delete(cardId);
 
     // --- PROPERTY OPERATIONS ---
 
@@ -183,7 +166,7 @@ public class BoardService
     public List<string> GetTemplates()
     {
         // System Templates
-        var list = new List<string> { "Empty", "Kanban", "Roadmap", "Simple CRM" };
+        List<string> list = ["Empty", "Kanban", "Roadmap", "Simple CRM"];
 
         // Custom Templates
         var custom = _boardTemplates.GetAll().Select(t => t.Name).ToList();
@@ -204,8 +187,8 @@ public class BoardService
         };
 
         // Serialize/Deserialize to ensure deep clone and no reference sharing
-        var json = System.Text.Json.JsonSerializer.Serialize(template);
-        var clone = System.Text.Json.JsonSerializer.Deserialize<BoardTemplate>(json);
+        var json = JsonSerializer.Serialize(template);
+        var clone = JsonSerializer.Deserialize<BoardTemplate>(json);
 
         if (clone != null)
         {
@@ -227,12 +210,12 @@ public class BoardService
                 Title = title,
                 Icon = customTemplate.Icon,
                 OwnerId = ownerId,
-                MemberIds = !string.IsNullOrEmpty(ownerId) ? new List<string> { ownerId } : new List<string>()
+                MemberIds = !string.IsNullOrEmpty(ownerId) ? [ownerId] : []
             };
 
             // Deep Clone logic: We use JSON serialization to avoid reference issues
-            var json = System.Text.Json.JsonSerializer.Serialize(customTemplate);
-            var tempClone = System.Text.Json.JsonSerializer.Deserialize<BoardTemplate>(json);
+            var json = JsonSerializer.Serialize(customTemplate);
+            var tempClone = JsonSerializer.Deserialize<BoardTemplate>(json);
 
             if (tempClone != null)
             {
@@ -363,14 +346,14 @@ public class BoardService
             Cards = cards
         };
 
-        return System.Text.Json.JsonSerializer.Serialize(export, new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
+        return JsonSerializer.Serialize(export, new JsonSerializerOptions { WriteIndented = true });
     }
 
     public Board? ImportBoardFromJson(string json, string ownerId = "")
     {
         try
         {
-            var export = System.Text.Json.JsonSerializer.Deserialize<BoardExport>(json);
+            var export = JsonSerializer.Deserialize<BoardExport>(json);
             if (export?.Board == null) throw new Exception("Invalid Board JSON");
 
             var oldBoard = export.Board;
@@ -382,7 +365,7 @@ public class BoardService
             newBoard.CreatedAt = DateTime.Now;
             newBoard.UpdatedAt = DateTime.Now;
             newBoard.OwnerId = ownerId;
-            newBoard.MemberIds = !string.IsNullOrEmpty(ownerId) ? new List<string> { ownerId } : new List<string>();
+            newBoard.MemberIds = !string.IsNullOrEmpty(ownerId) ? [ownerId] : [];
 
             _boards.Save(newBoard);
 
@@ -416,9 +399,6 @@ public class BoardService
     public class BoardExport
     {
         public Board Board { get; set; } = default!;
-        public List<BoardCard> Cards { get; set; } = new();
+        public List<BoardCard> Cards { get; set; } = [];
     }
 }
-
-
-

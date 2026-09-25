@@ -17,19 +17,15 @@ public class HRService
     }
 
     public HourBankResult CalculateHourBank(string employeeId)
-    {
-        return _overtimeService.CalculateHourBank(employeeId);
-    }
+        => _overtimeService.CalculateHourBank(employeeId);
 
     public WeeklyOvertimeResult CalculateWeeklyOvertime(string employeeId, int year, int weekNumber)
-    {
-        return _overtimeService.CalculateWeeklyOvertime(employeeId, year, weekNumber);
-    }
+        => _overtimeService.CalculateWeeklyOvertime(employeeId, year, weekNumber);
 
     public bool SubmitTimesheet(string timesheetId, TimesheetSettings? settings = null)
     {
         var timesheet = _db.Timesheets.GetById(timesheetId);
-        if (timesheet == null || (timesheet.Status != "Draft" && timesheet.Status != "Rejected"))
+        if (timesheet == null || timesheet.Status is not ("Draft" or "Rejected"))
             return false;
 
         if (settings != null)
@@ -146,7 +142,7 @@ public class HRService
 
         try
         {
-            var weekMonday = System.Globalization.ISOWeek.ToDateTime(timesheet.Year, timesheet.WeekNumber, DayOfWeek.Monday);
+            var weekMonday = ISOWeek.ToDateTime(timesheet.Year, timesheet.WeekNumber, DayOfWeek.Monday);
             var weekSunday = weekMonday.AddDays(6);
             var cutoffDate = DateTime.Today.AddDays(-settings.LockTimesheetsOlderThanDays);
             return weekSunday < cutoffDate;

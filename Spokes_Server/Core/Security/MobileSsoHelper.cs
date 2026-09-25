@@ -1,5 +1,4 @@
 using Microsoft.AspNetCore.Http;
-using System;
 
 namespace Spokes_Server.Core.Security;
 
@@ -32,7 +31,7 @@ public static class MobileSsoHelper
     {
         var serverBase = $"{context.Request.Scheme}://{context.Request.Host}";
 
-        var html = $@"
+        return $@"
             <!DOCTYPE html>
             <html>
                 <head>
@@ -144,6 +143,5 @@ public static class MobileSsoHelper
                 </body>
             </html>
         ";
-        return html;
     }
 }

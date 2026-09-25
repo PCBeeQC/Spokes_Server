@@ -11,7 +11,7 @@ window.spokesVault = {
      * On web, returns null (vault key comes from HttpOnly cookie, handled server-side).
      */
     getStoredVaultKey: async function () {
-        if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.Preferences) {
+        if (window.Capacitor?.Plugins?.Preferences) {
             try {
                 const vaultKey = 'chat_vault_key_' + window.location.hostname;
                 let res = await window.Capacitor.Plugins.Preferences.get({ key: vaultKey });
@@ -43,9 +43,9 @@ window.spokesVault = {
      * @param {string} encryptedKey - The Data Protection-encrypted vault password.
      */
     storeVaultKey: async function (encryptedKey) {
-        if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.Preferences) {
+        if (window.Capacitor?.Plugins?.Preferences) {
             const key = 'chat_vault_key_' + window.location.hostname;
-            await window.Capacitor.Plugins.Preferences.set({ key: key, value: encryptedKey });
+            await window.Capacitor.Plugins.Preferences.set({ key, value: encryptedKey });
         }
     },
 
@@ -54,7 +54,7 @@ window.spokesVault = {
      * Removes both the namespaced key and any legacy global keys.
      */
     clearStoredVaultKey: async function () {
-        if (window.Capacitor && window.Capacitor.isNativePlatform()) {
+        if (window.Capacitor?.isNativePlatform?.()) {
             const vaultKeyHost = 'chat_vault_key_' + window.location.hostname;
             await window.Capacitor.Plugins.Preferences.remove({ key: vaultKeyHost });
             await window.Capacitor.Plugins.Preferences.remove({ key: 'chat_vault_key' });

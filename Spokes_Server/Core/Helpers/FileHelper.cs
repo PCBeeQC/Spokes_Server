@@ -1,4 +1,3 @@
-using System.IO;
 using MudBlazor;
 
 namespace Spokes_Server.Core.Helpers;
@@ -15,15 +14,15 @@ public static class FileHelper
     public static bool IsVideoFile(string fileName)
     {
         if (string.IsNullOrEmpty(fileName)) return false;
-        var ext = Path.GetExtension(fileName).ToLower();
-        return ext == ".mp4" || ext == ".webm" || ext == ".mov" || ext == ".ogg" || ext == ".avi" || ext == ".mkv";
+        var ext = Path.GetExtension(fileName).ToLowerInvariant();
+        return ext is ".mp4" or ".webm" or ".mov" or ".ogg" or ".avi" or ".mkv";
     }
 
     public static bool IsAudioFile(string fileName)
     {
         if (string.IsNullOrEmpty(fileName)) return false;
-        var ext = Path.GetExtension(fileName).ToLower();
-        return ext == ".mp3" || ext == ".wav" || ext == ".webm" || ext == ".weba" || ext == ".ogg" || ext == ".m4a" || ext == ".aac";
+        var ext = Path.GetExtension(fileName).ToLowerInvariant();
+        return ext is ".mp3" or ".wav" or ".webm" or ".weba" or ".ogg" or ".m4a" or ".aac";
     }
 
     public static string GetFileIcon(string fileName)

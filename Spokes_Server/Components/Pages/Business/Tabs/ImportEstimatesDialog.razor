@@ -42,13 +42,10 @@
 @code {
     [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
 
-    private List<RecurringExpense> Estimates = new();
-    private HashSet<RecurringExpense> SelectedEstimates = new();
+    private List<RecurringExpense> Estimates = [];
+    private HashSet<RecurringExpense> SelectedEstimates = [];
 
-    protected override void OnInitialized()
-    {
-        Estimates = Db.RecurringExpenses.GetAll().Where(e => e.IsEstimate).ToList();
-    }
+    protected override void OnInitialized() => Estimates = Db.RecurringExpenses.GetAll().Where(e => e.IsEstimate).ToList();
 
     private void Cancel() => MudDialog.Cancel();
 

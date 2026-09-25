@@ -1,5 +1,4 @@
 using Microsoft.JSInterop;
-using System.Threading.Tasks;
 
 namespace Spokes_Server.Core.Utilities;
 
@@ -10,8 +9,6 @@ public class SpokesDomInteropService : JsModuleBase
     {
     }
 
-    public async Task WaitForElement(string selector, int timeout = 2000)
-    {
-        await SafeInvokeVoidAsync("waitForElement", selector, timeout);
-    }
+    public Task WaitForElement(string selector, int timeout = 2000) =>
+        SafeInvokeVoidAsync("waitForElement", selector, timeout);
 }

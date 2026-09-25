@@ -1,8 +1,3 @@
-using System;
-using System.IO;
-using System.Linq;
-using System.Text.RegularExpressions;
-using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using Spokes_Server.Aggregate;
 using Spokes_Server.Core.Services.Core;
@@ -39,7 +34,7 @@ public class LegacyAttachmentMigrationService
         
         foreach (var note in notes)
         {
-            if (note.Attachments == null || !note.Attachments.Any()) continue;
+            if (note.Attachments == null || note.Attachments.Count == 0) continue;
             
             bool modified = false;
 
@@ -113,7 +108,7 @@ public class LegacyAttachmentMigrationService
         return path.StartsWith("data:") && path.Contains(";base64,");
     }
 
-    private async Task<string> MigrateBase64StringAsync(string category, string contextId, string fallbackFileName, string base64DataUri)
+    private async Task<string?> MigrateBase64StringAsync(string category, string contextId, string fallbackFileName, string base64DataUri)
     {
         // Extract base64 part
         var parts = base64DataUri.Split(";base64,");
@@ -123,11 +118,14 @@ public class LegacyAttachmentMigrationService
         var base64String = parts[1];
 
         // determine extension if missing
-        string extension = ".bin";
-        if (meta.Contains("image/png")) extension = ".png";
-        else if (meta.Contains("image/jpeg")) extension = ".jpg";
-        else if (meta.Contains("application/pdf")) extension = ".pdf";
-        else if (meta.Contains("text/plain")) extension = ".txt";
+        string extension = meta switch
+        {
+            _ when meta.Contains("image/png") => ".png",
+            _ when meta.Contains("image/jpeg") => ".jpg",
+            _ when meta.Contains("application/pdf") => ".pdf",
+            _ when meta.Contains("text/plain") => ".txt",
+            _ => ".bin"
+        };
 
         if (string.IsNullOrWhiteSpace(fallbackFileName))
         {

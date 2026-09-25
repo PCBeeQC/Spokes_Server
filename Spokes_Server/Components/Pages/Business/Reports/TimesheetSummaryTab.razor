@@ -1,0 +1,368 @@
+@using MudBlazor
+@using Spokes_Server.Core.Helpers
+@using Spokes_Server.Core.Models.Reports
+@using Spokes_Server.Core.Services.Reports
+@inject ITimesheetReportService ReportService
+
+<!-- Visual Analytics Row: Stacked Bar + Donut Chart with Center Duration -->
+<MudGrid Class="mb-4">
+    <!-- Primary Daily Distribution Chart -->
+    <MudItem xs="12" lg="8">
+        <MudPaper Elevation="0" Outlined="true" Class="pa-4 rounded-lg h-100" Style="background: var(--mud-palette-surface);">
+            <MudStack Row="true" Justify="Justify.SpaceBetween" AlignItems="AlignItems.Center" Class="mb-3">
+                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+                    <MudIcon Icon="@Icons.Material.Filled.BarChart" Color="Color.Primary" />
+                    <MudText Typo="Typo.h6">Time & Billability Distribution</MudText>
+                </MudStack>
+                <MudSelect T="ChartType" @bind-Value="_primaryChartType" @bind-Value:after="RebuildPrimaryChart" Class="d-print-none" Margin="Margin.Dense" Variant="Variant.Outlined" Style="max-width: 170px;">
+                    <MudSelectItem Value="@ChartType.StackedBar">Stacked Bar ($)</MudSelectItem>
+                    <MudSelectItem Value="@ChartType.Bar">Standard Bar</MudSelectItem>
+                    <MudSelectItem Value="@ChartType.Line">Line Trend</MudSelectItem>
+                </MudSelect>
+            </MudStack>
+
+            @if (!_dayLabels.Any())
+            {
+                <MudText Color="Color.Default" Class="py-12 text-center" Style="opacity: 0.6;">No data available for the selected filters.</MudText>
+            }
+            else
+            {
+                @if (_primaryChartType == ChartType.StackedBar)
+                {
+                    <MudChart T="double" ChartType="ChartType.StackedBar" ChartSeries="@_primaryStackedSeries" XAxisLabels="@_dayLabels" Width="100%" Height="320px" ChartOptions="@_stackedOptions" />
+                }
+                else if (_primaryChartType == ChartType.Bar)
+                {
+                    <MudChart T="double" ChartType="ChartType.Bar" ChartSeries="@_primaryBarSeries" XAxisLabels="@_dayLabels" Width="100%" Height="320px" ChartOptions="@_barOptions" />
+                }
+                else
+                {
+                    <MudChart T="double" ChartType="ChartType.Line" ChartSeries="@_primaryBarSeries" XAxisLabels="@_dayLabels" Width="100%" Height="320px" ChartOptions="@_lineOptions" />
+                }
+                <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mt-1 d-block text-center">
+                    <b>X-Axis:</b> Timeline (Calendar Days) &nbsp;|&nbsp; <b>Y-Axis:</b> Duration (Hours [h]) &nbsp;|&nbsp; <b>Legend:</b> Green = Billable ($), Gray = Non-Billable
+                </MudText>
+            }
+        </MudPaper>
+    </MudItem>
+
+    <!-- Categorical Donut Chart with Center Total Duration -->
+    <MudItem xs="12" lg="4">
+        <MudPaper Elevation="0" Outlined="true" Class="pa-4 rounded-lg h-100 d-flex flex-column justify-space-between" Style="background: var(--mud-palette-surface);">
+            <div>
+                <MudStack Row="true" Justify="Justify.SpaceBetween" AlignItems="AlignItems.Center" Class="mb-3">
+                    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+                        <MudIcon Icon="@Icons.Material.Filled.PieChart" Color="Color.Primary" />
+                        <MudText Typo="Typo.h6">Breakdown</MudText>
+                    </MudStack>
+                    <MudSelect T="ReportGroupBy" @bind-Value="_donutDimension" @bind-Value:after="RebuildDonutData" Class="d-print-none" Margin="Margin.Dense" Variant="Variant.Outlined" Style="max-width: 150px;">
+                        <MudSelectItem Value="@ReportGroupBy.Project">Project</MudSelectItem>
+                        <MudSelectItem Value="@ReportGroupBy.Client">Client</MudSelectItem>
+                        <MudSelectItem Value="@ReportGroupBy.Employee">Employee</MudSelectItem>
+                        <MudSelectItem Value="@ReportGroupBy.Task">Task</MudSelectItem>
+                    </MudSelect>
+                </MudStack>
+
+                @if (!_donutData.Any())
+                {
+                    <MudText Color="Color.Default" Class="py-12 text-center" Style="opacity: 0.6;">No data to display.</MudText>
+                }
+                else
+                {
+                    <div style="position: relative; width: 100%; display: flex; justify-content: center;">
+                        <MudChart T="double" ChartType="ChartType.Donut" InputData="@_donutData" InputLabels="@_donutLabels" Width="100%" Height="300px" ChartOptions="@_donutOptions" />
+                        <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); text-align: center; pointer-events: none;">
+                            <MudText Typo="Typo.caption" Style="color: var(--mud-palette-text-secondary); text-transform: uppercase;">Total Duration</MudText>
+                            <MudText Typo="Typo.h5" Style="font-weight: 700; color: var(--mud-palette-text-primary);">@ReportService.FormatDuration(Entries.Sum(e => e.Entry.Hours), Format)</MudText>
+                        </div>
+                    </div>
+                }
+            </div>
+            <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mt-1 d-block text-center">
+                Distribution across top @Math.Min(8, _donutLabels.Length) @_donutDimension.ToString().ToLower()s
+            </MudText>
+        </MudPaper>
+    </MudItem>
+</MudGrid>
+
+<!-- Interactive Universal Chart Explorer Accordion -->
+<MudExpansionPanels Outlined="true" Elevation="3" Class="border-solid mb-6 d-print-none">
+    <MudExpansionPanel Text="Interactive Chart Explorer (Stacked Bar, Bar, Donut, Pie, Line, Time Series, Heat Map)" Icon="@Icons.Material.Filled.Analytics">
+        <TimesheetChartExplorer Entries="@Entries" Format="@Format" ApplyRounding="@ApplyRounding" />
+    </MudExpansionPanel>
+</MudExpansionPanels>
+
+<!-- Grouped Hierarchical Table Section -->
+<MudPaper Elevation="0" Outlined="true" Class="rounded-lg" Style="background: var(--mud-palette-surface);">
+    <!-- Grouping Toolbar -->
+    <MudToolBar Class="d-flex flex-wrap gap-4 py-2 border-b">
+        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+            <MudIcon Icon="@Icons.Material.Filled.TableChart" Color="Color.Primary" />
+            <MudText Typo="Typo.h6">Summary Breakdown</MudText>
+        </MudStack>
+
+        <MudSpacer />
+
+        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="3" Class="flex-wrap d-print-none">
+            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+                <MudText Typo="Typo.body2" Color="Color.Secondary">Group by:</MudText>
+                <MudSelect T="ReportGroupBy" @bind-Value="PrimaryGroupBy" @bind-Value:after="RebuildSummaryGroups" Margin="Margin.Dense" Variant="Variant.Outlined" Dense="true" Style="width: 140px;">
+                    <MudSelectItem Value="@ReportGroupBy.Project">Project</MudSelectItem>
+                    <MudSelectItem Value="@ReportGroupBy.Client">Client</MudSelectItem>
+                    <MudSelectItem Value="@ReportGroupBy.Employee">Employee</MudSelectItem>
+                    <MudSelectItem Value="@ReportGroupBy.Task">Task</MudSelectItem>
+                    <MudSelectItem Value="@ReportGroupBy.Date">Date</MudSelectItem>
+                </MudSelect>
+            </MudStack>
+
+            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+                <MudText Typo="Typo.body2" Color="Color.Secondary">Subgroup by:</MudText>
+                <MudSelect T="ReportSubGroupBy" @bind-Value="SecondaryGroupBy" @bind-Value:after="RebuildSummaryGroups" Margin="Margin.Dense" Variant="Variant.Outlined" Dense="true" Style="width: 140px;">
+                    <MudSelectItem Value="@ReportSubGroupBy.Description">Description</MudSelectItem>
+                    <MudSelectItem Value="@ReportSubGroupBy.Task">Task</MudSelectItem>
+                    <MudSelectItem Value="@ReportSubGroupBy.Employee">Employee</MudSelectItem>
+                    <MudSelectItem Value="@ReportSubGroupBy.Project">Project</MudSelectItem>
+                    <MudSelectItem Value="@ReportSubGroupBy.None">None</MudSelectItem>
+                </MudSelect>
+            </MudStack>
+
+            <MudSwitch @bind-Value="_showBudgetEstimates" Label="Show Budget" Color="Color.Primary" />
+        </MudStack>
+    </MudToolBar>
+
+    <!-- Tree-style Grouped Table -->
+    <MudTable Items="@_groups" Dense="true" Hover="true" Bordered="false" Striped="false" Elevation="0">
+        <HeaderContent>
+            <MudTh Style="width: 45%;">TITLE</MudTh>
+            <MudTh Style="text-align: right; width: 15%;">DURATION</MudTh>
+            <MudTh Style="text-align: right; width: 15%;">BILLABLE</MudTh>
+            <MudTh Style="text-align: right; width: 25%;">@(AmountMode == AmountDisplayMode.CostAmount ? "COST" : AmountMode == AmountDisplayMode.ProfitMargin ? "PROFIT" : "AMOUNT")</MudTh>
+        </HeaderContent>
+        <RowTemplate>
+            <!-- Primary Group Row -->
+            <MudTd>
+                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+                    @if (context.Subgroups.Any())
+                    {
+                        <MudIconButton Icon="@(context.IsExpanded ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)" OnClick="@(() => context.IsExpanded = !context.IsExpanded)" Size="Size.Small" />
+                    }
+                    else
+                    {
+                        <div style="width: 32px;"></div>
+                    }
+                    <MudChip T="string" Size="Size.Small" Variant="Variant.Filled" Color="Color.Default" Style="font-size: 0.75rem; min-width: 24px; text-align: center;">
+                        @context.EntryCount
+                    </MudChip>
+                    <div style="width: 10px; height: 10px; border-radius: 50%; background-color: @context.Color; flex-shrink: 0;"></div>
+                    <MudText Typo="Typo.body2" Style="font-weight: 600;">@context.Key</MudText>
+                    @if (!string.IsNullOrEmpty(context.Subtitle))
+                    {
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">- @context.Subtitle</MudText>
+                    }
+                </MudStack>
+
+                @if (_showBudgetEstimates && context.AllocatedHours.HasValue && context.AllocatedHours > 0)
+                {
+                    <div class="ml-10 mt-1" style="max-width: 300px;">
+                        <MudStack Row="true" Justify="Justify.SpaceBetween" AlignItems="AlignItems.Center">
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">Budget: @context.TotalHours.ToString("0.0") / @context.AllocatedHours.Value.ToString("0.0") h (@(context.BudgetUsedPercentage)%)</MudText>
+                        </MudStack>
+                        <MudProgressLinear Color="@(context.BudgetUsedPercentage > 100 ? Color.Error : context.BudgetUsedPercentage > 80 ? Color.Warning : Color.Success)" Value="@((double)Math.Min(100, context.BudgetUsedPercentage ?? 0))" Class="my-1 rounded" />
+                    </div>
+                }
+            </MudTd>
+            <MudTd Style="text-align: right; font-weight: 700;">
+                @ReportService.FormatDuration(context.TotalHours, Format)
+            </MudTd>
+            <MudTd Style="text-align: right;">
+                @ReportService.FormatDuration(context.BillableHours, Format)
+            </MudTd>
+            <MudTd Style="text-align: right; font-weight: 600;">
+                @if (AmountMode == AmountDisplayMode.CostAmount)
+                {
+                    @ReportService.FormatCurrency(context.CostAmount)
+                }
+                else if (AmountMode == AmountDisplayMode.ProfitMargin)
+                {
+                    <span>@ReportService.FormatCurrency(context.BillableAmount - context.CostAmount)</span>
+                }
+                else if (AmountMode == AmountDisplayMode.BillableAmount)
+                {
+                    @ReportService.FormatCurrency(context.BillableAmount)
+                }
+                else
+                {
+                    <span style="opacity: 0.5;">-</span>
+                }
+            </MudTd>
+        </RowTemplate>
+
+        <ChildRowContent>
+            @if (context.IsExpanded && context.Subgroups.Any())
+            {
+                @foreach (var sub in context.Subgroups)
+                {
+                    <MudTr Style="background: rgba(var(--mud-palette-surface-rgb), 0.5);">
+                        <MudTd Class="pl-14">
+                            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+                                <MudIcon Icon="@Icons.Material.Filled.SubdirectoryArrowRight" Size="Size.Small" Color="Color.Secondary" />
+                                <MudText Typo="Typo.body2">@sub.Key</MudText>
+                                <MudChip T="string" Size="Size.Small" Variant="Variant.Text" Color="Color.Default" Style="font-size: 0.7rem;">
+                                    @sub.EntryCount entries
+                                </MudChip>
+                            </MudStack>
+                        </MudTd>
+                        <MudTd Style="text-align: right; font-weight: 500;">
+                            @ReportService.FormatDuration(sub.TotalHours, Format)
+                        </MudTd>
+                        <MudTd Style="text-align: right; opacity: 0.8;">
+                            @ReportService.FormatDuration(sub.BillableHours, Format)
+                        </MudTd>
+                        <MudTd Style="text-align: right; opacity: 0.9;">
+                            @if (AmountMode == AmountDisplayMode.CostAmount)
+                            {
+                                @ReportService.FormatCurrency(sub.CostAmount)
+                            }
+                            else if (AmountMode == AmountDisplayMode.ProfitMargin)
+                            {
+                                <span>@ReportService.FormatCurrency(sub.BillableAmount - sub.CostAmount)</span>
+                            }
+                            else if (AmountMode == AmountDisplayMode.BillableAmount)
+                            {
+                                @ReportService.FormatCurrency(sub.BillableAmount)
+                            }
+                            else
+                            {
+                                <span style="opacity: 0.5;">-</span>
+                            }
+                        </MudTd>
+                    </MudTr>
+                }
+            }
+        </ChildRowContent>
+    </MudTable>
+</MudPaper>
+
+@code {
+    [Parameter] public List<TimesheetReportEntry> Entries { get; set; } = [];
+    [Parameter] public TimeDisplayFormat Format { get; set; } = TimeDisplayFormat.Duration_HHMM;
+    [Parameter] public AmountDisplayMode AmountMode { get; set; } = AmountDisplayMode.BillableAmount;
+    [Parameter] public bool ApplyRounding { get; set; }
+
+    public ReportGroupBy PrimaryGroupBy { get; set; } = ReportGroupBy.Project;
+    public ReportSubGroupBy SecondaryGroupBy { get; set; } = ReportSubGroupBy.Description;
+
+    private bool _showBudgetEstimates = true;
+    private ChartType _primaryChartType = ChartType.StackedBar;
+    private ReportGroupBy _donutDimension = ReportGroupBy.Project;
+
+    private List<TimesheetGroupSummary> _groups = [];
+
+    // Primary Chart Data
+    private string[] _dayLabels = [];
+    private List<ChartSeries<double>> _primaryStackedSeries = [];
+    private List<ChartSeries<double>> _primaryBarSeries = [];
+    private StackedBarChartOptions _stackedOptions = new();
+    private BarChartOptions _barOptions = new();
+    private LineChartOptions _lineOptions = new();
+
+    // Donut Chart Data
+    private double[] _donutData = [];
+    private string[] _donutLabels = [];
+    private ChartOptions _donutOptions = new();
+
+    protected override void OnParametersSet()
+    {
+        RebuildSummaryGroups();
+        RebuildPrimaryChart();
+        RebuildDonutData();
+    }
+
+    public void RebuildSummaryGroups()
+    {
+        _groups = ReportService.BuildSummaryGroups(Entries, PrimaryGroupBy, SecondaryGroupBy);
+    }
+
+    private void RebuildPrimaryChart()
+    {
+        var dayGroups = Entries
+            .GroupBy(e => e.Entry.Date.Date)
+            .OrderBy(g => g.Key)
+            .ToList();
+
+        _dayLabels = dayGroups.Select(g => g.Key.ToString("ddd, MMM dd")).ToArray();
+
+        var billable = dayGroups.Select(g => (double)g.Where(e => e.Entry.IsBillable).Sum(e => e.Entry.Hours)).ToArray();
+        var nonBillable = dayGroups.Select(g => (double)g.Where(e => !e.Entry.IsBillable).Sum(e => e.Entry.Hours)).ToArray();
+        var total = dayGroups.Select(g => (double)g.Sum(e => e.Entry.Hours)).ToArray();
+
+        _primaryStackedSeries =
+        [
+            new ChartSeries<double> { Name = "Billable ($)", Data = billable },
+            new ChartSeries<double> { Name = "Non-Billable", Data = nonBillable }
+        ];
+
+        _primaryBarSeries =
+        [
+            new ChartSeries<double> { Name = "Total Hours", Data = total }
+        ];
+
+        _stackedOptions = new StackedBarChartOptions
+        {
+            XAxisTitle = "Timeline (Calendar Days)",
+            YAxisTitle = "Duration (Hours)",
+            YAxisFormat = "{0:0.0}h",
+            ShowValues = true,
+            YAxisLines = true,
+            XAxisLines = true,
+            ChartPalette = ["#10B981", "#94A3B8"]
+        };
+
+        _barOptions = new BarChartOptions
+        {
+            XAxisTitle = "Timeline (Calendar Days)",
+            YAxisTitle = "Duration (Hours)",
+            YAxisFormat = "{0:0.0}h",
+            ShowValues = true,
+            YAxisLines = true,
+            XAxisLines = true,
+            ChartPalette = ["#3B82F6"]
+        };
+
+        _lineOptions = new LineChartOptions
+        {
+            XAxisTitle = "Timeline (Calendar Days)",
+            YAxisTitle = "Duration (Hours)",
+            YAxisFormat = "{0:0.0}h",
+            YAxisLines = true,
+            XAxisLines = true,
+            ChartPalette = ["#3B82F6"]
+        };
+    }
+
+    private void RebuildDonutData()
+    {
+        var categories = _donutDimension switch
+        {
+            ReportGroupBy.Employee => Entries.GroupBy(e => e.EmployeeName),
+            ReportGroupBy.Client => Entries.GroupBy(e => !string.IsNullOrEmpty(e.ClientId) ? e.ClientId : "No Client"),
+            ReportGroupBy.Task => Entries.GroupBy(e => e.TaskName),
+            _ => Entries.GroupBy(e => e.ProjectName)
+        };
+
+        var top = categories
+            .Select(g => new { Name = g.Key, Total = (double)g.Sum(e => e.Entry.Hours) })
+            .Where(x => x.Total > 0)
+            .OrderByDescending(x => x.Total)
+            .Take(8)
+            .ToList();
+
+        _donutLabels = top.Select(t => t.Name).ToArray();
+        _donutData = top.Select(t => t.Total).ToArray();
+
+        _donutOptions = new ChartOptions
+        {
+            ChartPalette = ["#3B82F6", "#10B981", "#F59E0B", "#EF4444", "#8B5CF6", "#EC4899", "#14B8A6", "#F97316"]
+        };
+    }
+}

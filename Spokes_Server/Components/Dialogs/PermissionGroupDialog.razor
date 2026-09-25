@@ -1,7 +1,4 @@
-@using Spokes_Server.Core.Models.Core
 @using Spokes_Server.Core.Constants
-@using MudBlazor
-@using Spokes_Server.Core.Data
 @inject Database Db
 
 <MudDialog>
@@ -77,7 +74,7 @@
 
     private string GetShortPermName(string category, string perm)
     {
-        return perm.StartsWith(category + ".") ? perm.Substring(category.Length + 1) : perm;
+        return perm.StartsWith($"{category}.") ? perm[(category.Length + 1)..] : perm;
     }
 
     private void TogglePerm(string p, bool hasIt)
@@ -88,12 +85,11 @@
             Group.Permissions.Remove(p);
     }
 
-    private bool IsBusinessCategory(string categoryKey)
+    private static readonly HashSet<string> BusinessCategories = new(StringComparer.OrdinalIgnoreCase)
     {
-        var businessCategories = new[] { 
-            "Projects", "Email", "Address Book", "Finance", 
-            "Purchases", "Timesheets", "Business Documents", "My Week" 
-        };
-        return businessCategories.Contains(categoryKey);
-    }
+        "Projects", "Email", "Address Book", "Finance",
+        "Purchases", "Timesheets", "Business Documents", "My Week"
+    };
+
+    private static bool IsBusinessCategory(string categoryKey) => BusinessCategories.Contains(categoryKey);
 }

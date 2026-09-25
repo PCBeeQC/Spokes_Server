@@ -1,17 +1,10 @@
 @page "/organization"
 @implements IDisposable
 @using Spokes_Server.Components.Pages.Admin.Features
-@attribute [Authorize]
-@inject AuthenticationStateProvider AuthStateProvider
-@inject NavigationManager Nav
-@using Microsoft.AspNetCore.Components.Authorization
 @using Spokes_Server.Core.Constants
-@using System.Security.Claims
-
+@inject NavigationManager Nav
 @inject UserService UserService
-@inject Spokes_Server.Core.Services.Core.AppLabelService AppLabels
-@using Spokes_Server.Core.Models.Core
-@using Spokes_Server.Core.Data
+@inject AppLabelService AppLabels
 @inject Database Db
 
 <PageTitle>Directory</PageTitle>
@@ -62,7 +55,7 @@
     [SupplyParameterFromQuery] public string? Tab { get; set; }
     private bool IsFriendEdition => Db.CompanyProfile.Get()?.Edition == "Family";
     private int activeTabIndex = 0;
-    private bool _hasAccess = false;
+    private bool _hasAccess;
 
     protected override void OnParametersSet()
     {

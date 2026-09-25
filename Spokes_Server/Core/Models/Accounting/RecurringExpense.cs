@@ -1,14 +1,6 @@
 namespace Spokes_Server.Core.Models.Accounting;
 
-using Spokes_Server.Core.Models.Core;
-using Spokes_Server.Core.Models.Projects;
-using Spokes_Server.Core.Models.Communication;
-using Spokes_Server.Core.Models.HR;
-
 using Spokes_Server.Core.Data;
-
-
-
 
 public class RecurringExpense : IDataEntity
 {
@@ -17,10 +9,7 @@ public class RecurringExpense : IDataEntity
     public override bool Equals(object? obj)
     {
         if (ReferenceEquals(this, obj)) return true;
-        if (obj == null || GetType() != obj.GetType())
-            return false;
-        var other = (RecurringExpense)obj;
-        return Id == other.Id;
+        return obj is RecurringExpense other && Id == other.Id;
     }
 
     public override int GetHashCode() => Id?.GetHashCode() ?? base.GetHashCode();
@@ -36,7 +25,7 @@ public class RecurringExpense : IDataEntity
     public DateTime NextDueDate { get; set; } = DateTime.Today;
 
     // History of Bills/Payments
-    public List<RecurringBillRecord> History { get; set; } = new();
+    public List<RecurringBillRecord> History { get; set; } = [];
 }
 
 public class RecurringBillRecord
@@ -50,10 +39,10 @@ public class RecurringBillRecord
     public string AttachmentPath { get; set; } = string.Empty;
     public string AttachmentName { get; set; } = string.Empty;
 
-    public bool IsPaid { get; set; } = false;
+    public bool IsPaid { get; set; }
     public DateTime? DatePaid { get; set; }
 
-    public List<PaymentRecord> Payments { get; set; } = new();
+    public List<PaymentRecord> Payments { get; set; } = [];
     
     public decimal AmountPaid => Payments.Any() ? Payments.Sum(p => p.Amount) : (IsPaid ? Amount : 0);
     public decimal BalanceDue => Amount - AmountPaid;
@@ -68,6 +57,3 @@ public static class RecurringExpenseFrequency
     public const string OneTime = "One-Time";
     public const string AsNeeded = "As Needed";
 }
-
-
-

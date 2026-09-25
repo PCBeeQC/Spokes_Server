@@ -1,21 +1,11 @@
-using Spokes_Server.Core.Services.Communication;
-using Spokes_Server.Core.Services.Projects;
-using Spokes_Server.Core.Services.Core;
-using Microsoft.AspNetCore.Mvc;
-using Spokes_Server.Core.Services;
-using Spokes_Server.Core.Data.Repositories.Core;
-using Spokes_Server.Core.Data.Repositories.Projects;
-using Spokes_Server.Core.Data.Repositories.Accounting;
-using Spokes_Server.Core.Data.Repositories.Communication;
-using Spokes_Server.Core.Data.Repositories.HR;
-using Spokes_Server.Core.Constants;
-using Spokes_Server.Core.Models.Core;
-using Spokes_Server.Core.Models.Projects;
-using Spokes_Server.Core.Models.Accounting;
-using Spokes_Server.Core.Models.Communication;
-using Spokes_Server.Core.Models.HR;
-using System.Security.Claims;
 using Microsoft.AspNetCore.Cors;
+using Microsoft.AspNetCore.Mvc;
+using Spokes_Server.Core.Constants;
+using Spokes_Server.Core.Data.Repositories.Core;
+using Spokes_Server.Core.Data.Repositories.HR;
+using Spokes_Server.Core.Services.Communication;
+using Spokes_Server.Core.Services.Core;
+using Spokes_Server.Core.Services.Licensing;
 
 namespace Spokes_Server.Controllers
 {
@@ -50,7 +40,7 @@ namespace Spokes_Server.Controllers
             var profile = _companyProfile.Get();
             var config = _systemConfig.Get();
             var appName = !string.IsNullOrEmpty(profile?.CompanyName) ? profile.CompanyName : "Spokes";
-            var shortName = !string.IsNullOrEmpty(profile?.CompanyName) ? profile.CompanyName : "Spokes";
+            var shortName = appName;
             var token = config?.PublicBrandingToken ?? "default";
 
             // Determine start_url based on permissions
@@ -58,14 +48,8 @@ namespace Spokes_Server.Controllers
             if (User.Identity?.IsAuthenticated == true)
             {
                 var employee = _userService.GetEmployee(User);
-                bool hasChatPermission = false;
-                if (employee != null)
-                {
-                    hasChatPermission = employee.IsActive && !employee.IsSuspended && !employee.IsBanned && 
-                                        (employee.IsAdmin || employee.HasPermission(AppPermissions.Chat.Use));
-                }
-
-                if (hasChatPermission)
+                if (employee != null && employee.IsActive && !employee.IsSuspended && !employee.IsBanned && 
+                    (employee.IsAdmin || employee.HasPermission(AppPermissions.Chat.Use)))
                 {
                     startUrl = "/chat";
                 }
@@ -94,13 +78,10 @@ namespace Spokes_Server.Controllers
                         type = "image/png"
                     }
                 },
-                spokes_version = Spokes_Server.Core.Services.Licensing.LicenseValidationService.AppVersion
+                spokes_version = LicenseValidationService.AppVersion
             };
 
             return Content(System.Text.Json.JsonSerializer.Serialize(manifest), "application/manifest+json");
         }
     }
 }
-
-
-

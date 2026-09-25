@@ -6,7 +6,7 @@
               Placeholder="@Placeholder" 
               Adornment="Adornment.Start" 
               AdornmentIcon="@Icons.Material.Filled.Search" 
-              IconSize="MudBlazor.Size.Medium" 
+              IconSize="Size.Medium" 
               Class="@Class" 
               Immediate="true"
               Clearable="true" />
@@ -16,15 +16,17 @@
     [Parameter] public EventCallback<string> ValueChanged { get; set; }
     [Parameter] public string Placeholder { get; set; } = "Search...";
     [Parameter] public string Class { get; set; } = "mt-0";
-    [Parameter] public int DebounceInterval { get; set; } = 300;
+    [Parameter] public int DebounceInterval { get; set; } = 500;
 
     private System.Timers.Timer? _debounceTimer;
 
     protected override void OnInitialized()
     {
         base.OnInitialized();
-        _debounceTimer = new System.Timers.Timer(DebounceInterval);
-        _debounceTimer.AutoReset = false;
+        _debounceTimer = new System.Timers.Timer(DebounceInterval)
+        {
+            AutoReset = false
+        };
         _debounceTimer.Elapsed += async (s, e) =>
         {
             await SafeInvokeAsync(() => ValueChanged.InvokeAsync(Value));

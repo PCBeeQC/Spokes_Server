@@ -1,8 +1,9 @@
 namespace Spokes_Server.Core.Security;
 
+using System.Security.Claims;
+using System.Text.Encodings.Web;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.Extensions.Options;
-using System.Text.Encodings.Web;
 
 /// <summary>
 /// Options for the DeviceToken authentication scheme.
@@ -117,13 +118,13 @@ public class DeviceTokenAuthHandler : AuthenticationHandler<DeviceTokenAuthOptio
 
         // 5. Build the principal and return success
         var identity = sessionService.BuildIdentity(employee, session.Id);
-        var principal = new System.Security.Claims.ClaimsPrincipal(identity);
+        var principal = new ClaimsPrincipal(identity);
         var ticket = new AuthenticationTicket(principal, Scheme.Name);
 
         return AuthenticateResult.Success(ticket);
     }
 
-    protected override async Task HandleChallengeAsync(AuthenticationProperties properties)
+    protected override Task HandleChallengeAsync(AuthenticationProperties properties)
     {
         var path = Request.Path.Value?.ToLowerInvariant() ?? "";
         
@@ -143,6 +144,6 @@ public class DeviceTokenAuthHandler : AuthenticationHandler<DeviceTokenAuthOptio
             Response.Redirect(target);
         }
         
-        await Task.CompletedTask;
+        return Task.CompletedTask;
     }
 }

@@ -1,18 +1,13 @@
 @using Spokes_Server.Core.Models.Core
 @using Spokes_Server.Core.Models.Projects
 @using Spokes_Server.Core.Models.Accounting
-@using Spokes_Server.Core.Models.Communication
-@using Spokes_Server.Core.Models.HR
 @using Spokes_Server.Core.Data
 @using Spokes_Server.Components.Dialogs
 @inject Database Db
 @inject IDialogService DialogService
 @inject ISnackbar Snackbar
-@inject AuthenticationStateProvider AuthStateProvider
-@using Microsoft.AspNetCore.Components.Authorization
 @using Spokes_Server.Core.Constants
 @inject UserService UserService
-@inject Spokes_Server.Core.Services.Accounting.FinancialCalculationEngine CalcEngine
 
 <MudGrid Class="mb-4 align-center">
 
@@ -177,7 +172,7 @@
 @code {
     [Parameter] public string ProjectId { get; set; } = string.Empty;
     [Inject] NavigationManager Nav { get; set; } = default!;
-    private List<Quote> Quotes = new();
+    private List<Quote> Quotes = [];
     private bool CanEdit = false;
 
     protected override async Task OnInitializedAsync()
@@ -255,26 +250,15 @@
         }
     }
 
-    private void OpenViewer(Quote quote)
-    {
+    private void OpenViewer(Quote quote) =>
         Nav.NavigateTo($"/projects/{ProjectId}/quotes/{quote.Id}");
-    }
 
     private Project Project;
-    private List<Invoice> Invoices = new();
-    private string CreationMode = "Cost+";
+    private List<Invoice> Invoices = [];
 
     // Unbilled Tracking
     private decimal UnbilledLabor = 0;
     private decimal UnbilledExpenses = 0;
-
-
-    private void UpdateBillingMethod(string method)
-    {
-        Project.BillingMethod = method;
-        Db.Projects.Save(Project);
-        Refresh(); // Recalculate UI
-    }
 
     private void CalculateUnbilled()
     {
@@ -352,8 +336,6 @@
     }
 
 
-    private void OpenInvoice(Invoice inv)
-    {
+    private void OpenInvoice(Invoice inv) =>
         Nav.NavigateTo($"/projects/{ProjectId}/invoices/{inv.Id}");
-    }
 }

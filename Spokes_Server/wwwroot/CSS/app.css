@@ -23,6 +23,17 @@ html, body {
         -webkit-user-select: auto;
         user-select: auto;
     }
+
+    /* Instant 0ms tactile feedback for touch devices before server RTT */
+    .mud-button-root:active,
+    .mud-icon-button:active,
+    .mud-list-item-clickable:active,
+    .mud-nav-link:active,
+    .mud-chip:active {
+        opacity: 0.72;
+        transform: scale(0.97);
+        transition: transform 0.04s ease-out, opacity 0.04s ease-out;
+    }
 }
 
 /* Hide native scrollbars globally (Android WebView compatibility) */
@@ -307,3 +318,24 @@ video.livekit-screenshare::-webkit-media-controls-overlay-play-button {
         opacity: 1 !important;
     }
 }
+
+/* DatePicker styling for days with system logs */
+.mud-day.log-date-has-logs {
+    border: 2px solid var(--mud-palette-primary) !important;
+    border-radius: 50% !important;
+    font-weight: 700 !important;
+}
+
+.mud-day.log-date-has-logs:not(.mud-selected) {
+    color: var(--mud-palette-primary) !important;
+    background-color: var(--mud-palette-primary-hover) !important;
+}
+
+/* Responsive dialog sizing: on mobile screens, FullWidth dialogs span 100% width rather than calc(100% - 64px) */
+@media (max-width: 600px) {
+    .mud-dialog.mud-dialog-width-full {
+        width: 100% !important;
+    }
+}
+
+

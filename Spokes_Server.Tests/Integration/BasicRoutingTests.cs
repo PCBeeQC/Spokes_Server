@@ -815,7 +815,6 @@ namespace Spokes_Server.Tests.Integration
         {
             using var scope = _factory.Services.CreateScope();
             var db = scope.ServiceProvider.GetRequiredService<Spokes_Server.Aggregate.Database>();
-            var sessionService = scope.ServiceProvider.GetRequiredService<Spokes_Server.Core.Security.SessionService>();
             var ticketStore = scope.ServiceProvider.GetRequiredService<Microsoft.AspNetCore.Authentication.Cookies.ITicketStore>();
 
             // Virtual system-renderer has no employee in db.Employees
@@ -999,7 +998,6 @@ namespace Spokes_Server.Tests.Integration
         {
             using var scope = _factory.Services.CreateScope();
             var db = scope.ServiceProvider.GetRequiredService<Spokes_Server.Aggregate.Database>();
-            var ticketStore = scope.ServiceProvider.GetRequiredService<Microsoft.AspNetCore.Authentication.Cookies.ITicketStore>();
 
             var employee = new Spokes_Server.Core.Models.HR.Employee
             {
@@ -1163,8 +1161,8 @@ namespace Spokes_Server.Tests.Integration
             Assert.Contains("/sso/login/mobile-bootstrap", html);
             Assert.Contains("spokes_refresh_", html);
 
-            var cookies = response.Headers.Contains("Set-Cookie")
-                ? response.Headers.GetValues("Set-Cookie").ToList()
+            var cookies = response.Headers.TryGetValues("Set-Cookie", out var cList)
+                ? cList.ToList()
                 : new List<string>();
             // Verify Spokes_Session_v3 is NOT deleted to protect sliding session cookies
             Assert.DoesNotContain(cookies, c => c.StartsWith("Spokes_Session_v3=;"));

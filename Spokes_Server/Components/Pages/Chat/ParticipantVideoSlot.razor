@@ -17,11 +17,7 @@
 
     private bool _rendered;
 
-    protected override bool ShouldRender()
-    {
-        if (_rendered) return false;
-        return true;
-    }
+    protected override bool ShouldRender() => !_rendered;
 
     protected override void OnAfterRender(bool firstRender)
     {

@@ -3,16 +3,14 @@
 <PageTitle>@Project?.Name - Details</PageTitle>
 @using Spokes_Server.Core.Models.Core
 @using Spokes_Server.Core.Models.Projects
-@using Spokes_Server.Core.Models.Accounting
-@using Spokes_Server.Core.Models.Communication
-@using Spokes_Server.Core.Models.HR
 @using Spokes_Server.Core.Data
 @using Spokes_Server.Core.Constants
+@using Spokes_Server.Core.Services
+@using Spokes_Server.Components.Pages.Projects.Tabs
 @inject Database Db
 @inject ISnackbar Snackbar
 @inject IDialogService DialogService
 @inject NavigationManager Nav
-@using Spokes_Server.Core.Services
 @inject UserService UserService
 
 @if (Project == null)
@@ -61,39 +59,31 @@ else
     <MudTabs ActivePanelIndex="activeTabIndex" ActivePanelIndexChanged="UpdateActiveTab" Outlined="true" Elevation="0" Border="true" Rounded="true" TabPanelsClass="pa-4">
 
         <MudTabPanel Text="Dashboard" Icon="@Icons.Material.Filled.Dashboard">
-            <Spokes_Server.Components.Pages.Projects.Tabs.ProjectOverview ProjectId="@Id" />
+            <ProjectOverview ProjectId="@Id" />
         </MudTabPanel>
 
         <MudTabPanel Text="Timeline" Icon="@Icons.Material.Filled.Timeline">
-             <Spokes_Server.Components.Pages.Projects.Tabs.ProjectTimeline ProjectId="@Id" Project="@Project" />
+             <ProjectTimeline ProjectId="@Id" Project="@Project" />
         </MudTabPanel>
 
         @if (!Project.IsInternal)
         {
             <MudTabPanel Text="Quote & Invoices" Icon="@Icons.Material.Filled.RequestQuote">
-                <Spokes_Server.Components.Pages.Projects.Tabs.QuoteList ProjectId="@Id" />
+                <QuoteList ProjectId="@Id" />
             </MudTabPanel>
 
-            @* <MudTabPanel Text="Purchase Orders" Icon="@Icons.Material.Filled.AttachFile">
-                <Spokes_Server.Components.Pages.Projects.Tabs.ActivePurchaseOrders Project="@Project" />
-            </MudTabPanel> *@
-
-            @* <MudTabPanel Text="Invoices" Icon="@Icons.Material.Filled.Receipt">
-                <Spokes_Server.Components.Pages.Projects.Tabs.InvoiceList ProjectId="@Id" />
-            </MudTabPanel> *@
-
             <MudTabPanel Text="Documents" Icon="@Icons.Material.Filled.Description">
-                <Spokes_Server.Components.Pages.Projects.Tabs.ProjectDocuments ProjectId="@Id" Project="@Project" />
+                <ProjectDocuments ProjectId="@Id" Project="@Project" />
             </MudTabPanel>
 
             <MudTabPanel Text="Labor" Icon="@Icons.Material.Filled.Construction">
-                <Spokes_Server.Components.Pages.Projects.Tabs.LaborProgress ProjectId="@Id" />
+                <LaborProgress ProjectId="@Id" />
             </MudTabPanel>
         }
         else
         {
             <MudTabPanel Text="Documents" Icon="@Icons.Material.Filled.Description">
-                <Spokes_Server.Components.Pages.Projects.Tabs.ProjectDocuments ProjectId="@Id" Project="@Project" />
+                <ProjectDocuments ProjectId="@Id" Project="@Project" />
             </MudTabPanel>
         }
 
@@ -140,12 +130,11 @@ else
     [SupplyParameterFromQuery] public string? Tab { get; set; }
 
     private Project? Project;
-    private int activeTabIndex = 0;
-    private List<ProjectStatusConfig> AvailableStatuses = new();
+    private int activeTabIndex;
+    private List<ProjectStatusConfig> AvailableStatuses = [];
 
-    [Inject] AuthenticationStateProvider AuthStateProvider { get; set; }
-    private bool CanEdit = false;
-    private bool CanDelete = false;
+    private bool CanEdit;
+    private bool CanDelete;
 
     protected override async Task OnInitializedAsync()
     {
@@ -170,17 +159,6 @@ else
             CanEdit = emp.HasPermission(AppPermissions.Projects.Edit);
             CanDelete = emp.HasPermission(AppPermissions.Projects.Delete);
         }
-    }
-
-
-    private Color GetStatusColor(string status)
-    {
-        var match = AvailableStatuses.FirstOrDefault(s => s.Name.Equals(status, StringComparison.InvariantCultureIgnoreCase));
-        if (match != null && Enum.TryParse<Color>(match.Color, out var c))
-        {
-            return c;
-        }
-        return Color.Default;
     }
 
     // Logic to switch tabs based on URL
@@ -227,14 +205,12 @@ else
             var statusConfig = AvailableStatuses.FirstOrDefault(s => string.Equals(s.Name, newStatus, StringComparison.OrdinalIgnoreCase));
             bool isArchived = statusConfig?.SystemMapping == SystemStatusMappings.Archived;
 
-            if (isArchived) Project.IsActive = false;
-            else Project.IsActive = true;
+            Project.IsActive = !isArchived;
 
             Db.Projects.Save(Project);
             TimelineEventHelper.EvaluateProjectCommissions(Db, Project.Id);
             
             Snackbar.Add($"Status manual update: {newStatus}", Severity.Success);
-            
         }
     }
 

@@ -1,14 +1,6 @@
 namespace Spokes_Server.Core.Models.Accounting;
 
-using Spokes_Server.Core.Models.Core;
-using Spokes_Server.Core.Models.Projects;
-using Spokes_Server.Core.Models.Communication;
-using Spokes_Server.Core.Models.HR;
-
 using Spokes_Server.Core.Data;
-
-
-
 
 public class ExpenseReport : IDataEntity
 {
@@ -17,10 +9,7 @@ public class ExpenseReport : IDataEntity
     public override bool Equals(object? obj)
     {
         if (ReferenceEquals(this, obj)) return true;
-        if (obj == null || GetType() != obj.GetType())
-            return false;
-        var other = (ExpenseReport)obj;
-        return Id == other.Id;
+        return obj is ExpenseReport other && Id == other.Id;
     }
 
     public override int GetHashCode() => Id?.GetHashCode() ?? base.GetHashCode();
@@ -36,21 +25,16 @@ public class ExpenseReport : IDataEntity
     public DateTime? DatePaid { get; set; }
 
     // Content
-    public List<ExpenseItem> Items { get; set; } = new();
+    public List<ExpenseItem> Items { get; set; } = [];
 
     // Financials
     // This is a calculated property based on items
     public decimal TotalAmount => Items.Sum(i => i.Total);
 
-    public string Status
-    {
-        get
-        {
-            if (DatePaid.HasValue) return ExpenseReportStatus.Paid;
-            if (DateSubmitted.HasValue) return ExpenseReportStatus.Submitted;
-            return ExpenseReportStatus.Draft;
-        }
-    }
+    public string Status =>
+        DatePaid.HasValue ? ExpenseReportStatus.Paid :
+        DateSubmitted.HasValue ? ExpenseReportStatus.Submitted :
+        ExpenseReportStatus.Draft;
 }
 
 public class ExpenseItem
@@ -62,7 +46,7 @@ public class ExpenseItem
     public string Description { get; set; } = string.Empty;
 
     // Type of Expense
-    public bool IsKilometrage { get; set; } = false;
+    public bool IsKilometrage { get; set; }
 
     // For Kilometrage
     public decimal Kilometers { get; set; } = 0;

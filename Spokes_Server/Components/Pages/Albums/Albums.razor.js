@@ -47,8 +47,8 @@ async function handleFiles(fileList, dotNetHelper) {
     let totalSize = 0;
     const maxAllowedSize = 268435456; // 256MB
 
-    for (let i = 0; i < fileList.length; i++) {
-        totalSize += fileList[i].size;
+    for (const file of fileList) {
+        totalSize += file.size;
     }
 
     if (totalSize > maxAllowedSize) {
@@ -56,8 +56,7 @@ async function handleFiles(fileList, dotNetHelper) {
         return;
     }
 
-    for (let i = 0; i < fileList.length; i++) {
-        const file = fileList[i];
+    for (const file of fileList) {
         
         await dotNetHelper.invokeMethodAsync('OnPasteUploadStarted');
         try {

@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using Spokes_Server.Core.Models.Projects;
 using Spokes_Server.Core.Models.HR;
 
@@ -10,8 +11,8 @@ public static class ContextTagRegistry
     /// </summary>
     public static List<ContextTagDefinition> GetAvailableTags()
     {
-        return new List<ContextTagDefinition>
-        {
+        return
+        [
             // Project
             new() { Tag = "@Project.Name", Description = "Project name", Category = "Project" },
             new() { Tag = "@Project.Number", Description = "Project number", Category = "Project" },
@@ -44,14 +45,14 @@ public static class ContextTagRegistry
             // Date
             new() { Tag = "@Today", Description = "Current date", Category = "Date" },
             new() { Tag = "@Year", Description = "Current year", Category = "Date" },
-        };
+        ];
     }
 
     /// <summary>
     /// Resolves all @tags in the body string against a project context.
     /// Unknown tags are left as-is.
     /// </summary>
-    [return: System.Diagnostics.CodeAnalysis.NotNullIfNotNull("body")]
+    [return: NotNullIfNotNull("body")]
     public static string? Resolve(string? body, Project? project, CompanyProfile? profile, Employee? projectManager)
     {
         if (string.IsNullOrEmpty(body)) return body;
@@ -72,8 +73,8 @@ public static class ContextTagRegistry
         var client = project?.Client;
         var now = DateTime.Now;
 
-        var replacements = new List<(string, string)>
-        {
+        List<(string, string)> replacements =
+        [
             // Project
             ("@Project.Name", project?.Name ?? ""),
             ("@Project.Number", project?.ProjectNumber ?? ""),
@@ -106,14 +107,14 @@ public static class ContextTagRegistry
             // Date
             ("@Today", now.ToString("MMMM dd, yyyy")),
             ("@Year", now.Year.ToString()),
-        };
+        ];
 
         return replacements;
     }
 
     private static string FormatClientAddressMultiLine(ClientInfo client)
     {
-        var parts = new List<string>();
+        List<string> parts = [];
 
         if (!string.IsNullOrWhiteSpace(client.BusinessAdressNumber))
             parts.Add(client.BusinessAdressNumber);
@@ -122,7 +123,7 @@ public static class ContextTagRegistry
 
         var line1 = string.Join(" ", parts);
 
-        var cityState = new List<string>();
+        List<string> cityState = [];
         if (!string.IsNullOrWhiteSpace(client.BusinessAdressCity))
             cityState.Add(client.BusinessAdressCity);
         if (!string.IsNullOrWhiteSpace(client.BusinessAdressState))
@@ -132,7 +133,7 @@ public static class ContextTagRegistry
 
         var line2 = string.Join(", ", cityState);
 
-        var lines = new List<string>();
+        List<string> lines = [];
         if (!string.IsNullOrEmpty(line1)) lines.Add(line1);
         if (!string.IsNullOrEmpty(line2)) lines.Add(line2);
         if (!string.IsNullOrWhiteSpace(client.BusinessAdressCountry))
@@ -143,7 +144,7 @@ public static class ContextTagRegistry
 
     private static string FormatCompanyAddress(CompanyProfile profile)
     {
-        var parts = new List<string>();
+        List<string> parts = [];
         if (!string.IsNullOrWhiteSpace(profile.AddressStreet))
             parts.Add(profile.AddressStreet);
         if (!string.IsNullOrWhiteSpace(profile.AddressCity))
@@ -160,9 +161,9 @@ public static class ContextTagRegistry
 
     private static string FormatClientAddressInline(ClientInfo client)
     {
-        var parts = new List<string>();
+        List<string> parts = [];
 
-        var streetParts = new List<string>();
+        List<string> streetParts = [];
         if (!string.IsNullOrWhiteSpace(client.BusinessAdressNumber))
             streetParts.Add(client.BusinessAdressNumber);
         if (!string.IsNullOrWhiteSpace(client.BusinessAdressStreet))
@@ -184,11 +185,11 @@ public static class ContextTagRegistry
 
     private static string FormatCompanyAddressMultiLine(CompanyProfile profile)
     {
-        var lines = new List<string>();
+        List<string> lines = [];
         if (!string.IsNullOrWhiteSpace(profile.AddressStreet))
             lines.Add(profile.AddressStreet);
 
-        var cityState = new List<string>();
+        List<string> cityState = [];
         if (!string.IsNullOrWhiteSpace(profile.AddressCity))
             cityState.Add(profile.AddressCity);
         if (!string.IsNullOrWhiteSpace(profile.AddressState))

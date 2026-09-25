@@ -1,21 +1,16 @@
 @using Spokes_Server.Core.Models.Core
 @using Spokes_Server.Core.Models.Projects
-@using Spokes_Server.Core.Models.Accounting
 @using Spokes_Server.Core.Models.Communication
-@using Spokes_Server.Core.Models.HR
 @using Spokes_Server.Core.Data
 @using Spokes_Server.Components.Dialogs
 @using Spokes_Server.Components.Pages.Email
 @using Spokes_Server.Core.Services.Communication
-@using MudBlazor
-@using Markdig
 @inject Database Db
 @inject IDialogService DialogService
 @inject ISnackbar Snackbar
 @inject IJSRuntime JS
 @inject AuthenticationStateProvider AuthStateProvider
 @inject Spokes_Server.Core.Services.Core.IFileService FileService
-@inject IConfiguration Configuration
 @inject Spokes_Server.Core.Services.Core.MarkdownSanitizerService MarkdownSanitizer
 
 <div class="d-flex flex-column gap-4 mb-4">
@@ -192,11 +187,11 @@ else
     [Parameter] public string ProjectId { get; set; } = string.Empty;
     [Parameter] public Project Project { get; set; } = default!;
 
-    private List<ProjectNote> Notes = new();
-    private List<int> Years = new();
-    private HashSet<string> ExpandedNotes = new();
+    private List<ProjectNote> Notes = [];
+    private List<int> Years = [];
+    private HashSet<string> ExpandedNotes = [];
     private string CurrentUser = "Unknown";
-    private Dictionary<string, string> _emailBodyCache = new();
+    private Dictionary<string, string> _emailBodyCache = [];
 
     protected override async Task OnInitializedAsync()
     {
@@ -284,10 +279,7 @@ else
         ExpandedNotes = Notes.Select(n => n.Id).ToHashSet();
     }
     
-    private void CollapseAll()
-    {
-        ExpandedNotes.Clear();
-    }
+    private void CollapseAll() => ExpandedNotes.Clear();
 
     private async Task ScrollToYear(int year)
     {
@@ -382,10 +374,8 @@ else
     /// <summary>
     /// Returns the cached email body HTML. Must be pre-loaded via LoadEmailBodyAsync.
     /// </summary>
-    private string GetEmailBody(ProjectNote note)
-    {
-        return _emailBodyCache.TryGetValue(note.Id, out var cached) ? cached : "";
-    }
+    private string GetEmailBody(ProjectNote note) =>
+        _emailBodyCache.TryGetValue(note.Id, out var cached) ? cached : "";
 
     /// <summary>
     /// Asynchronously loads the email body from the .eml file into cache.

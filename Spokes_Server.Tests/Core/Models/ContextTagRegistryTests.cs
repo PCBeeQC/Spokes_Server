@@ -6,57 +6,48 @@ namespace Spokes_Server.Tests.Core.Models
 {
     public class ContextTagRegistryTests
     {
-        private Project CreateTestProject()
+        private Project CreateTestProject() => new Project
         {
-            return new Project
+            Name = "Robot Arm Assembly",
+            ProjectNumber = "PRJ-2401-0001",
+            Description = "Automated robot arm for packaging line",
+            Status = ProjectStatus.InProduction,
+            Client = new ClientInfo
             {
-                Name = "Robot Arm Assembly",
-                ProjectNumber = "PRJ-2401-0001",
-                Description = "Automated robot arm for packaging line",
-                Status = ProjectStatus.InProduction,
-                Client = new ClientInfo
-                {
-                    BusinessName = "Acme Corporation",
-                    ContactPersonPrefix = "Mr.",
-                    ContactPersonName = "John Smith",
-                    ContactPersonTitle = "VP of Operations",
-                    ContactPersonEmail = "john@acme.com",
-                    ContactPersonPhone = "555-1234",
-                    BusinessAdressNumber = "123",
-                    BusinessAdressStreet = "Industrial Blvd",
-                    BusinessAdressCity = "Montreal",
-                    BusinessAdressState = "QC",
-                    BusinessAdressZip = "H2X 1Y4",
-                    BusinessAdressCountry = "Canada"
-                }
-            };
-        }
+                BusinessName = "Acme Corporation",
+                ContactPersonPrefix = "Mr.",
+                ContactPersonName = "John Smith",
+                ContactPersonTitle = "VP of Operations",
+                ContactPersonEmail = "john@acme.com",
+                ContactPersonPhone = "555-1234",
+                BusinessAdressNumber = "123",
+                BusinessAdressStreet = "Industrial Blvd",
+                BusinessAdressCity = "Montreal",
+                BusinessAdressState = "QC",
+                BusinessAdressZip = "H2X 1Y4",
+                BusinessAdressCountry = "Canada"
+            }
+        };
 
-        private CompanyProfile CreateTestProfile()
+        private CompanyProfile CreateTestProfile() => new CompanyProfile
         {
-            return new CompanyProfile
-            {
-                CompanyName = "Poly Robotics",
-                AddressStreet = "456 Tech Ave",
-                AddressCity = "Laval",
-                AddressState = "QC",
-                AddressZip = "H7T 2T9",
-                AddressCountry = "Canada",
-                PhoneNumber = "514-555-9876",
-                Website = "https://polyrobotics.com"
-            };
-        }
+            CompanyName = "Poly Robotics",
+            AddressStreet = "456 Tech Ave",
+            AddressCity = "Laval",
+            AddressState = "QC",
+            AddressZip = "H7T 2T9",
+            AddressCountry = "Canada",
+            PhoneNumber = "514-555-9876",
+            Website = "https://polyrobotics.com"
+        };
 
-        private Employee CreateTestManager()
+        private Employee CreateTestManager() => new Employee
         {
-            return new Employee
-            {
-                FirstName = "Alice",
-                LastName = "Martin",
-                Email = "alice@polyrobotics.com",
-                Position = "Senior Project Manager"
-            };
-        }
+            FirstName = "Alice",
+            LastName = "Martin",
+            Email = "alice@polyrobotics.com",
+            Position = "Senior Project Manager"
+        };
 
         [Fact]
         public void GetAvailableTags_ReturnsAllExpectedTags()
@@ -227,6 +218,86 @@ Project Manager: @ProjectManager.Name (@ProjectManager.Email)";
             Assert.DoesNotContain("@Client", result);
             Assert.DoesNotContain("@Company", result);
             Assert.DoesNotContain("@ProjectManager", result);
+        }
+
+        [Fact]
+        public void Resolve_ReplacesClientAddressMultiLine()
+        {
+            var body = "Client Address:\n@Client.AddressMultiLine";
+            var result = ContextTagRegistry.Resolve(body, CreateTestProject(), CreateTestProfile(), CreateTestManager());
+
+            var expectedAddress = "123 Industrial Blvd\nMontreal, QC, H2X 1Y4\nCanada";
+            Assert.Equal($"Client Address:\n{expectedAddress}", result);
+        }
+
+        [Fact]
+        public void Resolve_ReplacesCompanyAddressMultiLine()
+        {
+            var body = "Company Address:\n@Company.AddressMultiLine";
+            var result = ContextTagRegistry.Resolve(body, CreateTestProject(), CreateTestProfile(), CreateTestManager());
+
+            var expectedAddress = "456 Tech Ave\nLaval, QC, H7T 2T9\nCanada";
+            Assert.Equal($"Company Address:\n{expectedAddress}", result);
+        }
+
+        [Fact]
+        public void Resolve_WhenProjectOrClientIsNull_AddressTagsResolveToEmpty()
+        {
+            var body = "Addr: [@Client.Address], Multi: [@Client.AddressMultiLine]";
+
+            var resultNullProject = ContextTagRegistry.Resolve(body, null, CreateTestProfile(), CreateTestManager());
+            Assert.Equal("Addr: [], Multi: []", resultNullProject);
+
+            var projectWithoutClient = new Project { Name = "Test" };
+            var resultNullClient = ContextTagRegistry.Resolve(body, projectWithoutClient, CreateTestProfile(), CreateTestManager());
+            Assert.Equal("Addr: [], Multi: []", resultNullClient);
+        }
+
+        [Fact]
+        public void Resolve_WhenCompanyProfileIsNull_CompanyAddressTagsResolveToEmpty()
+        {
+            var body = "Addr: [@Company.Address], Multi: [@Company.AddressMultiLine]";
+            var result = ContextTagRegistry.Resolve(body, CreateTestProject(), null, CreateTestManager());
+
+            Assert.Equal("Addr: [], Multi: []", result);
+        }
+
+        [Fact]
+        public void Resolve_FormatsClientAddress_WithPartialFields()
+        {
+            // Case 1: City and Country only
+            var projectCityCountry = new Project
+            {
+                Client = new ClientInfo
+                {
+                    BusinessAdressCity = "Paris",
+                    BusinessAdressCountry = "France"
+                }
+            };
+            var bodyInline = "@Client.Address";
+            var bodyMulti = "@Client.AddressMultiLine";
+
+            var resultCityCountryInline = ContextTagRegistry.Resolve(bodyInline, projectCityCountry, null, null);
+            var resultCityCountryMulti = ContextTagRegistry.Resolve(bodyMulti, projectCityCountry, null, null);
+
+            Assert.Equal("Paris, France", resultCityCountryInline);
+            Assert.Equal("Paris\nFrance", resultCityCountryMulti);
+
+            // Case 2: Street only (with number)
+            var projectStreet = new Project
+            {
+                Client = new ClientInfo
+                {
+                    BusinessAdressNumber = "10",
+                    BusinessAdressStreet = "Main St"
+                }
+            };
+
+            var resultStreetInline = ContextTagRegistry.Resolve(bodyInline, projectStreet, null, null);
+            var resultStreetMulti = ContextTagRegistry.Resolve(bodyMulti, projectStreet, null, null);
+
+            Assert.Equal("10 Main St", resultStreetInline);
+            Assert.Equal("10 Main St", resultStreetMulti);
         }
     }
 }

@@ -571,7 +571,9 @@
       }
       if (unsentDenoisedDataLength >= outData.length) {
         const denoisedFrame = this._circularBuffer.subarray(this._denoisedBufferIndx, this._denoisedBufferIndx + outData.length);
-        outData.set(denoisedFrame, 0);
+        for (let ch = 0; ch < outputs[0].length; ch++) {
+          outputs[0][ch].set(denoisedFrame, 0);
+        }
         this._denoisedBufferIndx += outData.length;
       }
       if (this._denoisedBufferIndx === this._circularBufferLength) {

@@ -1,19 +1,10 @@
 @page "/planning/manager"
 @implements IDisposable
-@using Spokes_Server.Core.Data
-@using Spokes_Server.Core.Models.Core
-@using Spokes_Server.Core.Models.Projects
-@using Spokes_Server.Core.Models.Accounting
-@using Spokes_Server.Core.Models.Communication
-@using Spokes_Server.Core.Models.HR
-@using MudBlazor
 @using System.Globalization
 @inject Database Db
 @inject NavigationManager Nav
 @inject ISnackbar Snackbar
 @inject IDialogService DialogService
-@inject AuthenticationStateProvider AuthStateProvider
-@attribute [Authorize]
 @inject UserService UserService
 
 <PageTitle>Team Planning</PageTitle>
@@ -241,18 +232,18 @@
     private int CurrentYear = DateTime.Today.Year;
     private int CurrentWeek;
     private bool Loading = true;
-    private bool IsSaving = false;
+    private bool IsSaving;
     
     // --- DATA ---
-    private Employee CurrentUser;
-    private List<Team> MyTeams = new();
-    private List<Project> ActiveProjects = new();
+    private Employee? CurrentUser;
+    private List<Team> MyTeams = [];
+    private List<Project> ActiveProjects = [];
     
     // --- VIEW MODELS ---
-    private List<EmployeePlanViewModel> AllEmployeePlans = new(); // Cache of all loaded plans
+    private List<EmployeePlanViewModel> AllEmployeePlans = []; // Cache of all loaded plans
 
     [SupplyParameterFromQuery] public int? Tab { get; set; }
-    private int activeTabIndex = 0;
+    private int activeTabIndex;
 
     protected override void OnParametersSet()
     {
@@ -264,10 +255,7 @@
 
     private bool _isDisposed;
 
-    public void Dispose()
-    {
-        _isDisposed = true;
-    }
+    public void Dispose() => _isDisposed = true;
 
     private void UpdateActiveTab(int index)
     {
@@ -308,21 +296,14 @@
 
         LoadData();
 
-        var currentUser = await UserService.GetEmployeeAsync();
-        if (currentUser != null)
+        if (CurrentUser != null)
         {
             var all = Db.Employees.GetAll().Where(e => e.IsActive).ToList();
             var teams = Db.Teams.GetAll();
-            var myTeams = teams.Where(t => t.LeaderId == currentUser.Id).ToList();
-
-            // Helper Logic:
-            // Accessible: Members of my teams, or recursive down?
-            // For simplified "Team Leader" logic: I access anyone in my team.
-            // If we want recursive (Leader of leaders), we need more complex logic.
-            // Assuming "ManagerTimesheets" is primarily for direct team management.
+            var myTeams = teams.Where(t => t.LeaderId == CurrentUser.Id).ToList();
 
             // Admin gets everyone
-            if (currentUser.IsAdmin)
+            if (CurrentUser.IsAdmin)
             {
                 AllAccessibleEmployees = all.OrderBy(e => e.FullName).ToList();
                 DirectReports = AllAccessibleEmployees.Where(e => myTeams.Any(t => t.Id == e.TeamId)).ToList();
@@ -391,7 +372,7 @@
     // --- HELPERS ---
     private List<DemandViewModel> GetTeamDemand(string teamId)
     {
-        var demand = new List<DemandViewModel>();
+        List<DemandViewModel> demand = [];
         
         // 1. Get accepted quotes for active projects
         var activeProjectIds = ActiveProjects.Select(p => p.Id).ToHashSet();
@@ -458,7 +439,7 @@
     private List<EmployeePlanViewModel> GetTeamMemberPlans(string teamId)
     {
         var team = MyTeams.FirstOrDefault(t => t.Id == teamId);
-        if (team == null) return new();
+        if (team == null) return [];
 
         return AllEmployeePlans.Where(p => 
             p.Employee.TeamId == teamId || 
@@ -467,7 +448,6 @@
     }
 
     // --- AUTO SAVE ---
-    // (Same as before)
     private void UpdateProjectByName(WeeklyPlan plan, PlanEntry entry, string projectName)
     {
         entry.ProjectName = projectName;
@@ -503,10 +483,12 @@
     {
          var members = GetTeamMemberPlans(team.Id).Select(vm => vm.Employee).ToList();
          
-         var parameters = new DialogParameters();
-         parameters.Add("Members", members);
-         parameters.Add("ProjectName", item.ProjectName);
-         parameters.Add("TaskName", item.TaskName);
+         var parameters = new DialogParameters
+         {
+             ["Members"] = members,
+             ["ProjectName"] = item.ProjectName,
+             ["TaskName"] = item.TaskName
+         };
          
          var dialog = await DialogService.ShowAsync<AllocateDialog>("Allocate Work", parameters);
          var result = await dialog.Result;
@@ -532,17 +514,17 @@
     }
 
     // --- MODELS ---
-    public class EmployeePlanViewModel { public Employee Employee { get; set; } public WeeklyPlan Plan { get; set; } }
+    public class EmployeePlanViewModel { public Employee Employee { get; set; } = default!; public WeeklyPlan Plan { get; set; } = default!; }
     
     public class DemandViewModel
     {
-        public string ProjectName { get; set; }
-        public string ProjectId { get; set; }
-        public string TaskName { get; set; }
-        public string WorkTypeId { get; set; }
+        public string ProjectName { get; set; } = "";
+        public string ProjectId { get; set; } = "";
+        public string TaskName { get; set; } = "";
+        public string WorkTypeId { get; set; } = "";
         public decimal QuotedHours { get; set; }
         public decimal AssignedHours { get; set; }
-        public string Description { get; set; }
+        public string Description { get; set; } = "";
         public DateOnly? Deadline { get; set; }
     }
 
@@ -555,20 +537,11 @@
         public Color UtilizationColor { get; set; }
     }
 
-
-    //Team timesheet 
+    // Team timesheet 
     private Employee? SelectedEmployee;
-    private List<Employee> DirectReports = new();
-    private List<Employee> AllAccessibleEmployees = new();
+    private List<Employee> DirectReports = [];
+    private List<Employee> AllAccessibleEmployees = [];
     private bool _loading = true;
-
-    // Unused helper removed or simplified?
-    // The previous CanManage was recursive based on ManagerId.
-    // If we only stick to "Team Members", we don't need recursion unless we have sub-teams.
-    // Let's remove CanManage if it's not used elsewhere. It IS used in line 88 of original, but I replaced the logic.
-    // So we can remove it.
-
-
 
     private void OpenTimesheet()
     {
@@ -578,10 +551,7 @@
         }
     }
 
-    private void OpenTimesheetFor(Employee emp)
-    {
-        Nav.NavigateTo($"/timesheet/{emp.Id}");
-    }
+    private void OpenTimesheetFor(Employee emp) => Nav.NavigateTo($"/timesheet/{emp.Id}");
 }
 
 

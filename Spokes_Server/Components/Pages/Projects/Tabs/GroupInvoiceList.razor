@@ -1,15 +1,12 @@
 @using Spokes_Server.Core.Models.Core
 @using Spokes_Server.Core.Models.Projects
 @using Spokes_Server.Core.Models.Accounting
-@using Spokes_Server.Core.Models.Communication
-@using Spokes_Server.Core.Models.HR
 @using Spokes_Server.Components.Dialogs
 @using Spokes_Server.Core.Data
 @inject Database Db
 @inject IDialogService DialogService
 @inject ISnackbar Snackbar
 @inject NavigationManager Nav
-@inject Spokes_Server.Core.Services.Accounting.FinancialCalculationEngine CalcEngine
 
 <MudGrid Class="mb-4">
     <MudItem xs="12" md="6">
@@ -63,18 +60,14 @@
     [Parameter] public string ProjectGroupId { get; set; } = string.Empty;
 
     private ProjectGroup? Group;
-    private List<Invoice> Invoices = new();
-    private string CreationMode = "Cost+";
+    private List<Invoice> Invoices = [];
     private int ProjectCount = 0;
 
     // Unbilled Tracking
     private decimal UnbilledLabor = 0;
     private decimal UnbilledExpenses = 0;
 
-    protected override void OnInitialized()
-    {
-        Refresh();
-    }
+    protected override void OnInitialized() => Refresh();
 
     private void Refresh()
     {

@@ -1,5 +1,4 @@
-using Spokes_Server.Core.Helpers;
-using Xunit;
+using CsvHelperClass = Spokes_Server.Core.Helpers.CsvHelper;
 
 namespace Spokes_Server.Tests.Core.Helpers
 {
@@ -12,7 +11,7 @@ namespace Spokes_Server.Tests.Core.Helpers
         [InlineData("Text with spaces", "Text with spaces")]
         public void EscapeCsv_ReturnsPlainString_WhenNoSpecialCharacters(string? input, string expected)
         {
-            var result = CsvHelper.EscapeCsv(input);
+            var result = CsvHelperClass.EscapeCsv(input);
             Assert.Equal(expected, result);
         }
 
@@ -23,7 +22,7 @@ namespace Spokes_Server.Tests.Core.Helpers
         [InlineData("Line1\rLine2", "\"Line1\rLine2\"")]
         public void EscapeCsv_QuotesAndEscapes_WhenDelimitersPresent(string input, string expected)
         {
-            var result = CsvHelper.EscapeCsv(input);
+            var result = CsvHelperClass.EscapeCsv(input);
             Assert.Equal(expected, result);
         }
 
@@ -36,8 +35,28 @@ namespace Spokes_Server.Tests.Core.Helpers
         [InlineData("=cmd|'/C calc'!A0")]
         public void EscapeCsv_SanitizesFormulaInjectionTriggers(string input)
         {
-            var result = CsvHelper.EscapeCsv(input);
+            var result = CsvHelperClass.EscapeCsv(input);
             Assert.True(result.StartsWith("'") || result.StartsWith("\"'"));
+        }
+
+        [Theory]
+        [InlineData("=SUM(A1, B1)", "\"'=SUM(A1, B1)\"")]
+        [InlineData("-Discount, 10%", "\"'-Discount, 10%\"")]
+        [InlineData("=Value with \"quote\"", "\"'=Value with \"\"quote\"\"\"")]
+        [InlineData("+Line1\nLine2", "\"'+Line1\nLine2\"")]
+        public void EscapeCsv_CombinedFormulaTriggerAndDelimiters_QuotesAndSanitizes(string input, string expected)
+        {
+            var result = CsvHelperClass.EscapeCsv(input);
+            Assert.Equal(expected, result);
+        }
+
+        [Theory]
+        [InlineData("\rExploit", "\"'\rExploit\"")]
+        [InlineData("\r\nExploit", "\"'\r\nExploit\"")]
+        public void EscapeCsv_CarriageReturnTrigger_SanitizesFormula(string input, string expected)
+        {
+            var result = CsvHelperClass.EscapeCsv(input);
+            Assert.Equal(expected, result);
         }
     }
 }

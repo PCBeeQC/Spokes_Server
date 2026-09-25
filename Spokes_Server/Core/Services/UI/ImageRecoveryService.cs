@@ -1,5 +1,3 @@
-using System;
-
 namespace Spokes_Server.Core.Services.UI;
 
 /// <summary>
@@ -12,8 +10,5 @@ public class ImageRecoveryService
     /// </summary>
     public event Action? OnTokensWiped;
 
-    public void NotifyTokensWiped()
-    {
-        OnTokensWiped?.Invoke();
-    }
+    public void NotifyTokensWiped() => OnTokensWiped?.Invoke();
 }

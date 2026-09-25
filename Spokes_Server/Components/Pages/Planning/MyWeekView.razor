@@ -1,17 +1,7 @@
-@using Spokes_Server.Core.Data
-@using Spokes_Server.Core.Models.Core
-@using Spokes_Server.Core.Models.Projects
-@using Spokes_Server.Core.Models.Accounting
-@using Spokes_Server.Core.Models.Communication
-@using Spokes_Server.Core.Models.HR
 @using Spokes_Server.Core.Constants
-@using MudBlazor
 @using System.Globalization
 @inject Database Db
-@inject ISnackbar Snackbar
 @inject UserService UserService
-@inject AuthenticationStateProvider AuthStateProvider
-@using Spokes_Server.Core.Services
 
 <div class="my-week-view">
     <div class="d-flex justify-space-between align-center mb-4">
@@ -114,11 +104,10 @@
     private int CurrentWeek;
     private WeeklyPlan CurrentPlan = new();
 
-    private List<Project> ActiveProjects = new();
-    private List<WorkType> WorkTypes = new();
+    private List<Project> ActiveProjects = [];
 
-    private Employee CurrentEmployee = default!;
-    private bool CanEdit = false;
+    private Employee? CurrentEmployee;
+    private bool CanEdit;
 
     protected override async Task OnInitializedAsync()
     {
@@ -133,13 +122,10 @@
         }
 
         // Fix Filter: Ensure we get active projects (Status string comparison)
-        // Also load WorkTypes for "SubTask"
         ActiveProjects = Db.Projects.GetAll()
         .Where(p => (p.Status != ProjectStatus.Archived && p.Status != ProjectStatus.Draft) || p.IsInternal)
         .OrderBy(p => p.DisplayName)
         .ToList();
-
-        WorkTypes = Db.WorkTypes.GetAll().OrderBy(w => w.Name).ToList();
 
         LoadPlan();
     }
@@ -173,9 +159,7 @@
         .Select(x => x.DisplayName);
     }
 
-    private bool IsSaving = false;
-
-    // ... LoadPlan ...
+    private bool IsSaving;
 
     private void UpdateProjectByName(PlanEntry entry, string projectName)
     {
@@ -218,9 +202,6 @@
     {
         IsSaving = true;
         StateHasChanged();
-        
-        // Simulate async delay if backend is fast, to show the UI state
-        // await Task.Delay(300);
 
         Db.WeeklyPlans.Save(CurrentPlan);
         

@@ -1,10 +1,3 @@
-@using Spokes_Server.Core.Models.Core
-@using Spokes_Server.Core.Helpers
-@using Spokes_Server.Core.Models.Projects
-@using Spokes_Server.Core.Models.Accounting
-@using Spokes_Server.Core.Models.HR
-@using MudBlazor
-
 <MudDialog>
     <TitleContent>
         <div class="d-flex align-center gap-2 px-4 pt-3">
@@ -183,20 +176,20 @@
     }
 
     // --- Search Helpers ---
-    private async Task<IEnumerable<string>> SearchProjects(string value, CancellationToken token)
-        => TimesheetSearchHelper.SearchProjects(value, Projects);
+    private Task<IEnumerable<string>> SearchProjects(string value, CancellationToken token)
+        => Task.FromResult(TimesheetSearchHelper.SearchProjects(value, Projects));
 
     private string GetProjectName(string id)
         => TimesheetSearchHelper.GetProjectName(id, Projects);
 
-    private async Task<IEnumerable<string>> SearchTasks(string value, CancellationToken token)
-        => TimesheetSearchHelper.SearchTasks(value, ProjectId, Projects, WorkTypes);
+    private Task<IEnumerable<string>> SearchTasks(string value, CancellationToken token)
+        => Task.FromResult(TimesheetSearchHelper.SearchTasks(value, ProjectId, Projects, WorkTypes));
 
     private string GetTaskName(string id)
         => TimesheetSearchHelper.GetTaskName(id, WorkTypes);
 
-    private async Task<IEnumerable<string>> SearchSubTasks(string value, CancellationToken token)
-        => TimesheetSearchHelper.SearchSubTasks(value, WorkTypeId, WorkTypes);
+    private Task<IEnumerable<string>> SearchSubTasks(string value, CancellationToken token)
+        => Task.FromResult(TimesheetSearchHelper.SearchSubTasks(value, WorkTypeId, WorkTypes));
 
     private string GetSubTaskName(string subTaskId)
         => TimesheetSearchHelper.GetSubTaskName(subTaskId, WorkTypeId, WorkTypes);

@@ -1,11 +1,6 @@
 @page "/projects/{ProjectId}/documents/{DocumentId}"
-@using Spokes_Server.Core.Models.Core
-@using Spokes_Server.Core.Models.Projects
-@using Spokes_Server.Core.Data
-@using Spokes_Server.Core.Services.Core
-@using Spokes_Server.Components.Shared
-@using MudBlazor
-@using Markdig
+@using Spokes_Server.Core.Services.Documents
+@using Spokes_Server.Components.Pages.Email
 @inject Database Db
 @inject ISnackbar Snackbar
 @inject IDialogService DialogService
@@ -13,10 +8,9 @@
 @inject IJSRuntime JS
 @inject ILogger<DocumentViewer> Logger
 @inject UserService UserService
-@implements IAsyncDisposable
-@using Spokes_Server.Core.Services.Documents
 @inject DocumentPdfService PdfService
 @inject MarkdownSanitizerService MarkdownSanitizer
+@implements IAsyncDisposable
 
 <style>
     .markdown-content h1,
@@ -174,8 +168,8 @@ else
 }
 
 @code {
-    [Parameter] public string ProjectId { get; set; } = string.Empty;
-    [Parameter] public string DocumentId { get; set; } = string.Empty;
+    [Parameter] public string ProjectId { get; set; } = "";
+    [Parameter] public string DocumentId { get; set; } = "";
 
     private ProjectDocument? _document;
     private Project? _project;
@@ -183,11 +177,10 @@ else
     private Employee? _pm;
     private DocumentTemplate? _template;
 
-    private bool _isAdmin = false;
-
-    private bool _isEditing = false;
-    private string _editingBody = string.Empty;
-    private bool _needsPagination = false;
+    private bool _isAdmin;
+    private bool _isEditing;
+    private string _editingBody = "";
+    private bool _needsPagination;
 
     private const int PageHeight = 940;
 
@@ -247,7 +240,7 @@ else
 
     private string GetResolvedBody()
     {
-        if (_document == null || _project == null || _profile == null) return string.Empty;
+        if (_document == null || _project == null || _profile == null) return "";
 
         // If Sent, show the frozen body exactly as is
         if (_document.Status == "Final")
@@ -354,7 +347,7 @@ else
             {
                 try { System.IO.File.Delete(_document.PdfPath); } catch { }
             }
-            _document.PdfPath = string.Empty;
+            _document.PdfPath = "";
         }
         else if (newStatus == "Final" && oldStatus == "Draft")
         {
@@ -370,7 +363,7 @@ else
         _document.Status = newStatus;
         _document.UpdatedAt = DateTime.UtcNow;
         Db.ProjectDocuments.Save(_document);
-        Spokes_Server.Core.Services.Projects.TimelineEventHelper.ProcessDocumentStatusChange(Db, _document, oldStatus, newStatus, null);
+        TimelineEventHelper.ProcessDocumentStatusChange(Db, _document, oldStatus, newStatus, null);
         Snackbar.Add($"Status updated to {newStatus}", Severity.Success);
         
         await InvokeAsync(StateHasChanged);
@@ -455,10 +448,7 @@ else
         _isEditing = true;
     }
 
-    private async Task Print()
-    {
-        await JS.InvokeVoidAsync("window.print");
-    }
+    private Task Print() => JS.InvokeVoidAsync("window.print").AsTask();
 
     private void GoBack() => Nav.NavigateTo($"/projects/{ProjectId}?tab=documents");
 
@@ -483,7 +473,7 @@ else
         };
 
         var options = new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true };
-        await DialogService.ShowAsync<Spokes_Server.Components.Pages.Email.EmailComposer>("Send Email", parameters, options);
+        await DialogService.ShowAsync<EmailComposer>("Send Email", parameters, options);
     }
 
     private async Task OpenPdf()

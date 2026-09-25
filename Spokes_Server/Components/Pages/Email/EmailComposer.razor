@@ -1,11 +1,3 @@
-@using Spokes_Server.Core.Services
-@using Spokes_Server.Core.Models.Core
-@using Spokes_Server.Core.Models.Projects
-@using Spokes_Server.Core.Models.Accounting
-@using Spokes_Server.Core.Models.Communication
-@using Spokes_Server.Core.Models.HR
-@using System.IO
-@using System.Linq
 @using Spokes_Server.Components.Shared
 @using Spokes_Server.Components.Dialogs
 @using Microsoft.AspNetCore.Components.Authorization
@@ -191,26 +183,26 @@
     [Parameter] public bool IsTemplate { get; set; }
 
     private bool _isLoading = true;
-    private bool _canAttachDocuments = false;
+    private bool _canAttachDocuments;
 
     // ──────────────────── Form state ────────────────────
     private MudForm _form = default!;
     private SpokesRichTextEditor _editor = default!;
     private bool _success;
     private bool _isSending;
-    private bool _editorReady = false;
+    private bool _editorReady;
 
     private string _from = "";
-    private List<string> _toList = new();
-    private List<string> _ccList = new();
-    private List<string> _bccList = new();
-    private bool _showCcBcc = false;
+    private List<string> _toList = [];
+    private List<string> _ccList = [];
+    private List<string> _bccList = [];
+    private bool _showCcBcc;
     private string _subject = "";
     private string _body = "";
 
-    private List<IBrowserFile> _attachments = new();
-    private List<EmailAttachmentMeta> _existingAttachments = new();
-    private List<(string Path, string FileName)> _preloadedAttachments = new();
+    private List<IBrowserFile> _attachments = [];
+    private List<EmailAttachmentMeta> _existingAttachments = [];
+    private List<(string Path, string FileName)> _preloadedAttachments = [];
 
 
 

@@ -1,13 +1,11 @@
-@using Spokes_Server.Core.Models.HR
-@using MudBlazor
-@inject Spokes_Server.Aggregate.Database Db
+@inject Database Db
 
 @{
     var team = Team ?? (!string.IsNullOrEmpty(TeamId) ? Db.Teams.GetById(TeamId) : null);
     string safeColor = string.IsNullOrEmpty(team?.Color) ? "#1E88E5" : team.Color;
     var name = team?.Name ?? TeamName;
     string teamInitial = !string.IsNullOrWhiteSpace(name)
-        ? name.Trim().Substring(0, 1).ToUpper()
+        ? name.Trim()[..1].ToUpper()
         : "T";
 
     string calculatedFontSize = !string.IsNullOrEmpty(FontSize)

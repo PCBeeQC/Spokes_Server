@@ -1,18 +1,8 @@
 @page "/business-dashboard"
-@inject NavigationManager Nav
-@using Spokes_Server.Core.Data
-@using Spokes_Server.Core.Models.Core
-@using Spokes_Server.Core.Models.Projects
-@using Spokes_Server.Core.Models.Accounting
-@using Spokes_Server.Core.Models.Communication
-@using Spokes_Server.Core.Models.HR
-@using Spokes_Server.Components.Shared
-@using MudBlazor
-@inject Database Db
-@inject Spokes_Server.Core.Services.Accounting.FinancialCalculationEngine CalcEngine
-
-@using Spokes_Server.Core.Constants
 @attribute [Authorize(Policy = AppPermissions.Finance.AccessAccounting)]
+@using Spokes_Server.Core.Constants
+@inject NavigationManager Nav
+@inject Database Db
 <PageTitle>Business Dashboard</PageTitle>
 
 <MudContainer MaxWidth="MaxWidth.ExtraLarge" Class="mt-4 pb-16">
@@ -337,45 +327,45 @@
 
 @code {
     // --- KPI Data ---
-    private decimal TotalInvoicedThisMonth = 0;
-    private decimal TotalInvoicedLastMonth = 0;
-    private decimal TotalARDue = 0;
-    private int UnpaidInvoicesCount = 0;
-    private int ActiveProjectsCount = 0;
-    private decimal PipelineValue = 0;
-    private int PendingQuotesCount = 0;
+    private decimal TotalInvoicedThisMonth;
+    private decimal TotalInvoicedLastMonth;
+    private decimal TotalARDue;
+    private int UnpaidInvoicesCount;
+    private int ActiveProjectsCount;
+    private decimal PipelineValue;
+    private int PendingQuotesCount;
 
     // --- Action Required ---
-    private List<Invoice> InvoicesDueSoon = new();
-    private List<Quote> StaleQuotes = new();
-    private int DraftQuotesCount = 0;
+    private List<Invoice> InvoicesDueSoon = [];
+    private List<Quote> StaleQuotes = [];
+    private int DraftQuotesCount;
 
     // --- Project Status ---
-    private Dictionary<string, int> ProjectStatusCounts = new();
+    private Dictionary<string, int> ProjectStatusCounts = [];
 
     // --- Projects Needing Attention ---
-    private List<ProjectAlert> ProjectAlerts = new();
+    private List<ProjectAlert> ProjectAlerts = [];
 
     // --- Cash Flow Details ---
     // Money In
-    private decimal MoneyInReceived = 0;
-    private decimal MoneyInPending = 0;
+    private decimal MoneyInReceived;
+    private decimal MoneyInPending;
     private decimal MoneyInTotal => MoneyInReceived + MoneyInPending;
 
     // Money Out Details
-    private decimal RecurringBillsThisMonth = 0;
-    private decimal OneTimeBillsThisMonth = 0;
-    private decimal StandardBillsThisMonth = 0;
-    private decimal PoBillsThisMonth = 0;
-    private decimal ExpensesThisMonth = 0;
-    private decimal CommissionsThisMonth = 0;
+    private decimal RecurringBillsThisMonth;
+    private decimal OneTimeBillsThisMonth;
+    private decimal StandardBillsThisMonth;
+    private decimal PoBillsThisMonth;
+    private decimal ExpensesThisMonth;
+    private decimal CommissionsThisMonth;
 
     // Summary
     private decimal MoneyOutTotal => RecurringBillsThisMonth + OneTimeBillsThisMonth + StandardBillsThisMonth + PoBillsThisMonth + ExpensesThisMonth + CommissionsThisMonth;
     private decimal NetCashFlow => MoneyInTotal - MoneyOutTotal;
 
     // --- Helpers ---
-    private Dictionary<string, string> ProjectNames = new();
+    private Dictionary<string, string> ProjectNames = [];
 
     protected override void OnInitialized()
     {
@@ -619,7 +609,7 @@ ProjectStatus.Completed
         }
     }
 
-    private string GetProjectName(string projectId) => ProjectNames.TryGetValue(projectId, out var name) ? name : "Unknown";
+    private string GetProjectName(string projectId) => ProjectNames.GetValueOrDefault(projectId, "Unknown");
 
     private string GetGrowth(decimal current, decimal last)
     {

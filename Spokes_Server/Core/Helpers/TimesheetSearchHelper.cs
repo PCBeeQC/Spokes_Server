@@ -25,9 +25,9 @@ public static class TimesheetSearchHelper
     {
         var p = projects.FirstOrDefault(x => x.Id == projectId);
 
-        IEnumerable<WorkType> allowedTasks = Enumerable.Empty<WorkType>();
+        IEnumerable<WorkType> allowedTasks = [];
 
-        if (p != null && p.ApprovedWorkTypeIds.Any())
+        if (p != null && p.ApprovedWorkTypeIds.Count > 0)
         {
             allowedTasks = workTypes.Where(t => p.ApprovedWorkTypeIds.Contains(t.Id));
         }
@@ -51,10 +51,10 @@ public static class TimesheetSearchHelper
 
     public static IEnumerable<string> SearchSubTasks(string? searchText, string workTypeId, List<WorkType> workTypes)
     {
-        if (string.IsNullOrEmpty(workTypeId)) return Enumerable.Empty<string>();
+        if (string.IsNullOrEmpty(workTypeId)) return [];
 
         var task = workTypes.FirstOrDefault(t => t.Id == workTypeId);
-        if (task == null) return Enumerable.Empty<string>();
+        if (task == null) return [];
 
         var subTasks = task.SubTasks.AsEnumerable();
 
@@ -123,10 +123,7 @@ public static class TimesheetSearchHelper
                 return val; // Treat "8" as 8 hours
             }
             // 85 -> 1:25 (85 minutes)
-            if (val > 24)
-            {
-                return val / 60m;
-            }
+            return val / 60m;
         }
 
         return 0;

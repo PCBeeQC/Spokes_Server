@@ -1,12 +1,6 @@
-@using Spokes_Server.Core.Models.Core
-@using Spokes_Server.Core.Models.Projects
-@using Spokes_Server.Core.Models.Accounting
-@using Spokes_Server.Core.Models.Communication
-@using Spokes_Server.Core.Models.HR
-@using Spokes_Server.Core.Data
-@using Spokes_Server.Core.Services.Communication
+@using Spokes_Server.Core.Constants
+@using Spokes_Server.Core.Services.Security
 @using Spokes_Server.Components.Dialogs
-@using Spokes_Server.Core.Services.Core
 @inject Database Db
 @inject ChatService ChatService
 @inject ScopedKeystoreService ScopedKeystore
@@ -229,9 +223,15 @@
                                     @foreach(var userId in Channel.AllowedPostUserIds ?? new())
                                     {
                                         var user = Employees.FirstOrDefault(u => u.Id == userId);
-                                        if (user != null)
+                                        if (user != null && !user.IsSystem)
                                         {
                                             <EmployeeChip Employee="@user" OnClose="@(() => RemovePostUserAsync(userId))" Size="Size.Small" />
+                                        }
+                                        else
+                                        {
+                                            <MudChip T="string" Color="Color.Default" Variant="Variant.Outlined" Size="Size.Small" OnClose="@(() => RemovePostUserAsync(userId))">
+                                                @(user?.FullName ?? "Deleted User")
+                                            </MudChip>
                                         }
                                     }
                                 </div>
@@ -523,7 +523,7 @@
 @code {
     [Parameter] public ChatChannel? Channel { get; set; }
     [Parameter] public string DisplayName { get; set; } = "";
-    [Parameter] public List<Employee> Employees { get; set; } = new();
+    [Parameter] public List<Employee> Employees { get; set; } = [];
     [Parameter] public Dictionary<string, string>? DecryptedContents { get; set; }
     [Parameter] public string? CurrentUserId { get; set; }
     [Parameter] public EventCallback OnClose { get; set; }
@@ -534,9 +534,9 @@
     [Parameter] public EventCallback OnDeleteChannel { get; set; }
     [Parameter] public EventCallback<string> OnRemoveMember { get; set; }
 
-    private List<Employee> _members = new();
-    private List<ChatMessage> _pinnedMessages = new();
-    private List<ChatCategory> _allCategories = new();
+    private List<Employee> _members = [];
+    private List<ChatMessage> _pinnedMessages = [];
+    private List<ChatCategory> _allCategories = [];
     
     // Dynamic Display Name: Uses explicit Channel.Name if provided, otherwise falls back to generated DisplayName
     private string CurrentDisplayName =>
@@ -545,19 +545,19 @@
             : Channel.Name;
 
     // Edit state
-    private bool _isEditingName = false;
+    private bool _isEditingName;
     private string _editingName = "";
-    private bool _isEditingDescription = false;
+    private bool _isEditingDescription;
     private string _editingDescription = "";
-    private bool _showAddMember = false;
+    private bool _showAddMember;
 
     // Team management state
-    private List<Team> _teams = new();
-    private bool _showAddTeam = false;
+    private List<Team> _teams = [];
+    private bool _showAddTeam;
 
     // Announcement state
-    private bool _showAddPostTeam = false;
-    private bool _showAddPostUser = false;
+    private bool _showAddPostTeam;
+    private bool _showAddPostUser;
 
     private bool IsGroupChannel => Channel?.ChannelType == ChatChannelType.Group || 
                                    Channel?.ChannelType == ChatChannelType.Team ||
@@ -569,19 +569,16 @@
     private bool IsOwner => IsTeamChannel ? IsCurrentUserTeamLeader() : Channel?.CreatedById == CurrentUserId;
     private Employee? _currentUserObj => Employees.FirstOrDefault(e => e.Id == CurrentUserId);
     private bool IsAdminOrCreator => _currentUserObj?.IsAdmin == true || IsOwner;
-    private bool CanManageCategories => _currentUserObj?.HasPermission(Spokes_Server.Core.Constants.AppPermissions.Chat.CreateChannels) == true || _currentUserObj?.IsAdmin == true;
+    private bool CanManageCategories => _currentUserObj?.HasPermission(AppPermissions.Chat.CreateChannels) == true || _currentUserObj?.IsAdmin == true;
 
-    private bool CanDeleteChannel()
-    {
-        return IsAdminOrCreator;
-    }
+    private bool CanDeleteChannel() => IsAdminOrCreator;
 
     private bool CanEditChannelInfo()
     {
         if (Channel?.IsArchived == true) return false;
         if (IsAdminOrCreator) return true;
 
-        if (_currentUserObj?.HasPermission(Spokes_Server.Core.Constants.AppPermissions.Chat.EditAllPublicChannels) == true)
+        if (_currentUserObj?.HasPermission(AppPermissions.Chat.EditAllPublicChannels) == true)
         {
             if (Channel?.ChannelType == ChatChannelType.General || Channel?.ChannelType == ChatChannelType.Project)
             {
@@ -771,9 +768,19 @@
     {
         if (employee == null || Channel == null || !IsAdminOrCreator) return;
 
-        if (!Channel.ParticipantIds.Contains(employee.Id))
+        bool added = false;
+        lock (Channel)
         {
-            Channel.ParticipantIds.Add(employee.Id);
+            if (!Channel.ParticipantIds.Contains(employee.Id))
+            {
+                var updated = new List<string>(Channel.ParticipantIds) { employee.Id };
+                Channel.ParticipantIds = updated;
+                added = true;
+            }
+        }
+
+        if (added)
+        {
             await ChatService.UpdateChannelAsync(Channel);
             await OnChannelUpdated.InvokeAsync();
             LoadMembers();
@@ -788,7 +795,13 @@
         if (Channel == null || string.IsNullOrEmpty(memberId) || !IsAdminOrCreator) return;
         if (memberId == Channel.CreatedById) return; // Can't remove the creator
 
-        Channel.ParticipantIds.Remove(memberId);
+        lock (Channel)
+        {
+            var updated = new List<string>(Channel.ParticipantIds);
+            updated.Remove(memberId);
+            Channel.ParticipantIds = updated;
+        }
+
         await ChatService.UpdateChannelAsync(Channel);
         await OnRemoveMember.InvokeAsync(memberId);
         LoadMembers();
@@ -802,12 +815,17 @@
     {
         if (Channel == null || string.IsNullOrEmpty(CurrentUserId)) return;
 
-        Channel.ParticipantIds.Remove(CurrentUserId);
-
-        // Transfer ownership if the creator is leaving
-        if (Channel.CreatedById == CurrentUserId && Channel.ParticipantIds.Any())
+        lock (Channel)
         {
-            Channel.CreatedById = Channel.ParticipantIds.First();
+            var updated = new List<string>(Channel.ParticipantIds);
+            updated.Remove(CurrentUserId);
+            Channel.ParticipantIds = updated;
+
+            // Transfer ownership if the creator is leaving
+            if (Channel.CreatedById == CurrentUserId && Channel.ParticipantIds.Any())
+            {
+                Channel.CreatedById = Channel.ParticipantIds.First();
+            }
         }
 
         await ChatService.UpdateChannelAsync(Channel);

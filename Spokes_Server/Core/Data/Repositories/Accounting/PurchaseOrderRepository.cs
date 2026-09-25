@@ -1,8 +1,4 @@
-using Spokes_Server.Core.Models.Core;
-using Spokes_Server.Core.Models.Projects;
 using Spokes_Server.Core.Models.Accounting;
-using Spokes_Server.Core.Models.Communication;
-using Spokes_Server.Core.Models.HR;
 
 namespace Spokes_Server.Core.Data.Repositories.Accounting;
 
@@ -13,10 +9,8 @@ public class PurchaseOrderRepository : JsonRepository<PurchaseOrder>
     {
     }
 
-    protected override string GetFilePath(PurchaseOrder item)
-    {
-        return Path.Combine(_basePath, $"{item.Id}.json");
-    }
+    protected override string GetFilePath(PurchaseOrder item) =>
+        Path.Combine(_basePath, $"{item.Id}.json");
 
     // Override Save to handle ID generation
     public override void Save(PurchaseOrder item)

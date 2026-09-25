@@ -1,11 +1,3 @@
-@using Spokes_Server.Core.Data
-@using Spokes_Server.Core.Models.Core
-@using Spokes_Server.Core.Models.Projects
-@using Spokes_Server.Core.Models.Accounting
-@using Spokes_Server.Core.Models.Communication
-@using Spokes_Server.Core.Models.HR
-@using Spokes_Server.Core.Services
-@using Spokes_Server.Core.Helpers
 @inject Database Db
 @inject TimerService TimerService
 @inject UserService UserService
@@ -27,7 +19,7 @@
                 }
             </MudSelect>
 
-            @if (_subTasks.Any())
+            @if (_subTasks.Count > 0)
             {
                     <MudSelect T="string" @bind-Value="_selectedSubTaskId" Label="Sub-Task" Variant="Variant.Outlined" Dense="true"
                         Clearable="true" AnchorOrigin="Origin.BottomCenter">
@@ -119,7 +111,7 @@
         if (!string.IsNullOrEmpty(projectId))
         {
             var project = _projects.FirstOrDefault(p => p.Id == projectId);
-            if (project != null && project.ApprovedWorkTypeIds.Any())
+            if (project != null && project.ApprovedWorkTypeIds.Count > 0)
             {
                 _filteredWorkTypes = _allWorkTypes.Where(w => project.ApprovedWorkTypeIds.Contains(w.Id)).ToList();
             }

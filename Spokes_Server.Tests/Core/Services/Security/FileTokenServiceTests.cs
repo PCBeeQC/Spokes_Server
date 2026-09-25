@@ -1,16 +1,12 @@
-using System;
-using System.Linq;
-using System.Text;
 using Microsoft.AspNetCore.DataProtection;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Caching.Memory;
+using Microsoft.Extensions.DependencyInjection;
 using Spokes_Server.Core.Services.Security;
-using Xunit;
 
-namespace Spokes_Server.Tests.Core.Services.Security
+namespace Spokes_Server.Tests.Core.Services.Security;
+
+public class FileTokenServiceTests
 {
-    public class FileTokenServiceTests
-    {
         private readonly IMemoryCache _memoryCache;
         private readonly IDataProtectionProvider _dataProtection;
 
@@ -114,5 +110,73 @@ namespace Spokes_Server.Tests.Core.Services.Security
             // Assert — should fail (different encryption keys)
             Assert.Null(payload);
         }
+
+        [Fact]
+        public void GenerateAccessToken_WithDifferentKeysOrFiles_GeneratesDifferentTokens()
+        {
+            // Arrange
+            var service = new FileTokenService(_dataProtection, _memoryCache);
+
+            // Act
+            string token1 = service.GenerateAccessToken("chat", "ch1", "file1.png", "keyA");
+            string token2 = service.GenerateAccessToken("chat", "ch1", "file2.png", "keyA");
+            string token3 = service.GenerateAccessToken("chat", "ch1", "file1.png", "keyB");
+
+            // Assert
+            Assert.NotEqual(token1, token2);
+            Assert.NotEqual(token1, token3);
+            Assert.NotEqual(token2, token3);
+        }
+
+        [Fact]
+        public void GenerateAccessToken_FileNameExtraction_HandlesForwardSlashes()
+        {
+            // Arrange
+            var service = new FileTokenService(_dataProtection, _memoryCache);
+
+            // Act
+            string token = service.GenerateAccessToken("docs", "ctx1", "a/b/c/doc.pdf");
+            var payload = service.UnprotectToken(token);
+
+            // Assert
+            Assert.NotNull(payload);
+            Assert.Equal("doc.pdf", payload.FileName);
+        }
+
+        [Fact]
+        public void GenerateAccessToken_FileNameExtraction_NoSlashes_UsesEntirePath()
+        {
+            // Arrange
+            var service = new FileTokenService(_dataProtection, _memoryCache);
+
+            // Act
+            string token = service.GenerateAccessToken("docs", "ctx1", "simple.txt");
+            var payload = service.UnprotectToken(token);
+
+            // Assert
+            Assert.NotNull(payload);
+            Assert.Equal("simple.txt", payload.FileName);
+        }
+
+        [Fact]
+        public void FileTokenPayload_Properties_CanGetAndSet()
+        {
+            // Arrange
+            var payload = new FileTokenPayload();
+            long nowTicks = DateTime.UtcNow.Ticks;
+
+            // Act
+            payload.Category = "invoices";
+            payload.ContextId = "inv-123";
+            payload.FileName = "invoice.pdf";
+            payload.EncryptionKeyBase64 = "c2VjcmV0";
+            payload.ExpiryTicks = nowTicks;
+
+            // Assert
+            Assert.Equal("invoices", payload.Category);
+            Assert.Equal("inv-123", payload.ContextId);
+            Assert.Equal("invoice.pdf", payload.FileName);
+            Assert.Equal("c2VjcmV0", payload.EncryptionKeyBase64);
+            Assert.Equal(nowTicks, payload.ExpiryTicks);
+        }
     }
-}

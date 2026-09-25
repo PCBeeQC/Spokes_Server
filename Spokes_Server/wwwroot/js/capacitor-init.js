@@ -3,10 +3,19 @@
 (function fastBootStatusBar() {
     if (window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) {
         let attempts = 0;
-        const applyStatusBar = () => {
+        const applyStatusBar = async () => {
             if (window.Capacitor.Plugins && window.Capacitor.Plugins.StatusBar) {
+                let isDarkMode = true;
+                if (window.Capacitor.Plugins.Preferences) {
+                    try {
+                        const res = await window.Capacitor.Plugins.Preferences.get({ key: 'spokes_is_dark_mode' });
+                        if (res && res.value !== null && res.value !== undefined) {
+                            isDarkMode = res.value !== 'false';
+                        }
+                    } catch (e) {}
+                }
                 window.Capacitor.Plugins.StatusBar.setOverlaysWebView({ overlay: true }).catch(console.error);
-                window.Capacitor.Plugins.StatusBar.setStyle({ style: 'DARK' }).catch(console.error);
+                window.Capacitor.Plugins.StatusBar.setStyle({ style: isDarkMode ? 'DARK' : 'LIGHT' }).catch(console.error);
             } else if (attempts < 50) {
                 attempts++;
                 setTimeout(applyStatusBar, 10);
@@ -16,17 +25,50 @@
     }
 })();
 
+// Unified platform check
+window.isCapacitorNative = function () {
+    return navigator.userAgent.includes("Capacitor") || Boolean(window.Capacitor?.isNativePlatform?.());
+};
+
 // Support dynamic theme toggling from Blazor
 window.setCapacitorStatusBarStyle = async function (isDarkMode) {
-    if (window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) {
+    if (window.isCapacitorNative()) {
         try {
-            if (Capacitor.Plugins.StatusBar) {
+            if (window.Capacitor?.Plugins?.StatusBar) {
                 // Style.DARK means light text for dark backgrounds. Style.LIGHT means dark text for light backgrounds.
                 const style = isDarkMode ? 'DARK' : 'LIGHT';
-                await Capacitor.Plugins.StatusBar.setStyle({ style: style });
+                await window.Capacitor.Plugins.StatusBar.setOverlaysWebView({ overlay: true });
+                await window.Capacitor.Plugins.StatusBar.setStyle({ style: style });
+            }
+            if (window.Capacitor?.Plugins?.Preferences) {
+                await window.Capacitor.Plugins.Preferences.set({
+                    key: 'spokes_is_dark_mode',
+                    value: isDarkMode ? 'true' : 'false'
+                });
             }
         } catch (err) {
             console.error('[Capacitor-Init] Error applying StatusBar style/color:', err);
+        }
+    }
+};
+
+window.reapplyCapacitorStatusBarStyle = async function () {
+    if (window.isCapacitorNative()) {
+        try {
+            let isDarkMode = true;
+            if (window.Capacitor?.Plugins?.Preferences) {
+                const res = await window.Capacitor.Plugins.Preferences.get({ key: 'spokes_is_dark_mode' });
+                if (res && res.value !== null && res.value !== undefined) {
+                    isDarkMode = res.value !== 'false';
+                }
+            }
+            if (window.Capacitor?.Plugins?.StatusBar) {
+                await window.Capacitor.Plugins.StatusBar.setOverlaysWebView({ overlay: true });
+                const style = isDarkMode ? 'DARK' : 'LIGHT';
+                await window.Capacitor.Plugins.StatusBar.setStyle({ style: style });
+            }
+        } catch (err) {
+            console.error('[Capacitor-Init] Error reapplying StatusBar style:', err);
         }
     }
 };
@@ -53,7 +95,7 @@ window.initCapacitorEnv = async function () {
         console.trace('[DOUBLE-LOAD-DEBUG] initCapacitorEnv duplicate call stack');
     }
     window._capacitorInitStartedAt = Date.now();
-    if (window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) {
+    if (window.isCapacitorNative()) {
         try {
             // Check if we restarted the server specifically to open a notification
             // Skip if runStartup() in App.razor already handled it (avoids redundant bridge call)
@@ -147,33 +189,43 @@ window.initCapacitorEnv = async function () {
                     window.Capacitor.Plugins.FirebaseMessaging.addListener('notificationActionPerformed', async (action) => {
                          console.log('[Capacitor-Init] Push notification tapped', action);
                          
-                         // Deduplicate stuck intents that Android replays on cold start
-                         const notificationId = action.notification && action.notification.id ? action.notification.id : (action.notification && action.notification.data ? JSON.stringify(action.notification.data) : null);
-                         if (notificationId) {
-                             try {
-                                 let recentIds = JSON.parse(localStorage.getItem('spokes_recent_notifications') || '[]');
-                                 if (recentIds.includes(notificationId)) {
-                                     console.log('[Capacitor-Init] Ignoring duplicate notification tap event (stuck intent).');
-                                     
-                                     // Attempt to clear the notification from native tray if it's still there
-                                     if (window.Capacitor.Plugins.FirebaseMessaging.removeAllDeliveredNotifications) {
-                                         window.Capacitor.Plugins.FirebaseMessaging.removeAllDeliveredNotifications().catch(() => {});
-                                     }
-                                     return;
-                                 }
-                                 recentIds.push(notificationId);
-                                 if (recentIds.length > 10) recentIds.shift();
-                                 localStorage.setItem('spokes_recent_notifications', JSON.stringify(recentIds));
-                             } catch(e) {
-                                 console.error('[Capacitor-Init] Error in notification deduplication', e);
-                             }
+                         if (action && (action.actionId === 'decline' || action.actionId === 'decline_call')) {
+                             return;
                          }
                          
-                         const data = action.notification.data;
-                         const targetUrl = (data && data.url) ? data.url : ((data && data.Url) ? data.Url : null);
+                          // Deduplicate stuck intents that Android replays in rapid succession (< 5000ms)
+                          const data = action.notification ? action.notification.data : null;
+                          const uniqueKey = (data && (data.google_message_id || data.messageId || data.sentAt)) 
+                              ? (data.google_message_id || data.messageId || data.sentAt)
+                              : ((action.notification && action.notification.id) ? (action.notification.id + '') : null);
+                          
+                          if (uniqueKey) {
+                              try {
+                                  const now = Date.now();
+                                  let recentRecords = JSON.parse(localStorage.getItem('spokes_recent_notif_taps') || '[]');
+                                  // Keep only records within the last 5 seconds
+                                  recentRecords = recentRecords.filter(r => (now - r.time) < 5000);
+                                  if (recentRecords.some(r => r.key === uniqueKey)) {
+                                      console.log('[Capacitor-Init] Ignoring duplicate notification tap event within 5s window:', uniqueKey);
+                                      if (window.Capacitor.Plugins.FirebaseMessaging && window.Capacitor.Plugins.FirebaseMessaging.removeAllDeliveredNotifications) {
+                                          window.Capacitor.Plugins.FirebaseMessaging.removeAllDeliveredNotifications().catch(() => {});
+                                      }
+                                      return;
+                                  }
+                                  recentRecords.push({ key: uniqueKey, time: now });
+                                  localStorage.setItem('spokes_recent_notif_taps', JSON.stringify(recentRecords));
+                              } catch(e) {
+                                  console.error('[Capacitor-Init] Error in notification deduplication', e);
+                              }
+                          }
+
+                         let targetUrl = (data && data.url) ? data.url : ((data && data.Url) ? data.Url : null);
                          const originUrl = (data && data.originUrl) ? data.originUrl : ((data && data.OriginUrl) ? data.OriginUrl : null);
 
                          if (targetUrl) {
+                             if (!targetUrl.includes('client=mobile')) {
+                                 targetUrl += (targetUrl.includes('?') ? '&' : '?') + 'client=mobile';
+                             }
                              const ensureCookies = async () => {
                                  if (window.Capacitor.Plugins.CapacitorCookies) {
                                      try { await window.Capacitor.Plugins.CapacitorCookies.getCookies(); } catch(e) {}
@@ -216,53 +268,48 @@ window.initCapacitorEnv = async function () {
                                  }
                              }
                              
-                             // Same origin
-                             if (window.spokesDotNetRef) {
-                                 let success = false;
-                                 window.spokesPendingNav = targetUrl;
-                                 for (let i = 0; i < 20; i++) {
-                                     if (window._blazorDisconnected) {
-                                         await new Promise(r => setTimeout(r, 500));
-                                         continue;
-                                     }
-                                     try {
-                                         const timeoutPromise = new Promise((_, reject) => {
-                                             setTimeout(() => reject(new Error('timeout')), 400);
-                                         });
-                                         await Promise.race([
-                                             window.spokesDotNetRef.invokeMethodAsync('NavigateTo', targetUrl),
-                                             timeoutPromise
-                                         ]);
-                                         success = true;
-                                         window.spokesPendingNav = null;
-                                         break;
-                                     } catch (e) {
-                                         await new Promise(r => setTimeout(r, 100));
-                                     }
-                                 }
-                                 if (!success) {
-                                     await ensureCookies();
-                                     window.location.href = targetUrl;
-                                 }
-                             } else {
-                                 console.log('[Capacitor-Init] Blazor not fully ready, storing pendingNotificationRoute');
-                                 window.pendingNotificationRoute = targetUrl;
-                             }
-                         }
+                              // Same origin
+                              if (window.spokesDotNetRef) {
+                                  window.spokesPendingNav = targetUrl;
+                                  try {
+                                      await window.spokesDotNetRef.invokeMethodAsync('NavigateTo', targetUrl);
+                                      window.spokesPendingNav = null;
+                                  } catch (e) {
+                                      console.warn('[Capacitor-Init] Blazor NavigateTo invocation failed:', e);
+                                      // If the circuit was truly broken or Blazor disconnected, fallback to hard reload
+                                      if (window._blazorDisconnected || !window.spokesDotNetRef) {
+                                          await ensureCookies();
+                                          window.location.href = targetUrl;
+                                      }
+                                  }
+                              } else {
+                                  console.log('[Capacitor-Init] Blazor not fully ready, storing pendingNotificationRoute');
+                                  window.pendingNotificationRoute = targetUrl;
+                              }
+                          }
                     });
                     console.log('[Capacitor-Init] Registered native notificationActionPerformed listener successfully.');
                 }
                 
-                if (Capacitor.Plugins.Browser) {
-                    Capacitor.Plugins.App.addListener('appStateChange', (state) => {
+                Capacitor.Plugins.App.addListener('appStateChange', (state) => {
                     console.log('[Capacitor-Init] App state changed. isActive:', state.isActive);
                     if (!state.isActive) {
                         if (window.__spokesPushSubscriptionId) {
                             let url = `/spokesapi/push/unfocus?subscriptionId=${window.__spokesPushSubscriptionId}`;
                             fetch(url, { method: 'POST', cache: 'no-store' }).catch(console.error);
                         }
+                    } else {
+                        window.reapplyCapacitorStatusBarStyle();
                     }
                 });
+
+                document.addEventListener('visibilitychange', () => {
+                    if (document.visibilityState === 'visible') {
+                        window.reapplyCapacitorStatusBarStyle();
+                    }
+                });
+
+                if (Capacitor.Plugins.Browser) {
                     Capacitor.Plugins.Browser.addListener('browserFinished', () => {
                         console.log('[Capacitor-Init] browserFinished event received. User manually closed the system browser.');
                         // If the WebView was used as a logout proxy (which opens the browser), reset it to the login screen.
@@ -293,14 +340,10 @@ window.initCapacitorEnv = async function () {
 // to avoid bridge contention with initDeviceId() on Android.
 // See: App.razor runStartup() for the orchestrated boot sequence.
 
-window.isCapacitorNative = function () {
-    return navigator.userAgent.includes("Capacitor") || !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
-};
-
 window.openCapacitorBrowser = async function (url) {
     console.log('[Capacitor-Init] openCapacitorBrowser called with URL:', url);
     
-    const isProbablyNative = navigator.userAgent.includes("Capacitor") || !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
+    const isProbablyNative = window.isCapacitorNative();
     
     if (isProbablyNative) {
         try {
@@ -335,7 +378,7 @@ window.openCapacitorBrowser = async function (url) {
 // via the native SsoAuthPlugin. 
 window.openSsoAuth = async function (url) {
     console.log('[Capacitor-Init] openSsoAuth PKCE flow starting...');
-    const isProbablyNative = navigator.userAgent.includes("Capacitor") || !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
+    const isProbablyNative = window.isCapacitorNative();
 
     if (!isProbablyNative) {
         console.log('[Capacitor-Init] Not a native platform, falling back to window.location.href');
@@ -465,7 +508,7 @@ window.openSsoAuth = async function (url) {
 
 window.openSsoLogout = async function (url) {
     console.log('[Capacitor-Init] openSsoLogout called with URL:', url);
-    const isProbablyNative = navigator.userAgent.includes("Capacitor") || !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
+    const isProbablyNative = window.isCapacitorNative();
     
     if (!isProbablyNative) {
         window.location.href = url;
@@ -517,7 +560,7 @@ window.openSsoLogout = async function (url) {
 };
 
 window.spokesCopyText = async function (text) {
-    if (!!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform())) {
+    if (window.isCapacitorNative()) {
         try {
             await Capacitor.Plugins.Clipboard.write({ string: text });
             return;

@@ -1,8 +1,3 @@
-using System;
-using System.IO;
-using System.Threading;
-using System.Threading.Tasks;
-
 namespace Spokes_Server.Components.Pages.Chat;
 
 public class ProgressStream : Stream
@@ -15,9 +10,11 @@ public class ProgressStream : Stream
 
     public ProgressStream(Stream innerStream, long totalBytes, Action<long> onProgressCallback)
     {
-        _innerStream = innerStream ?? throw new ArgumentNullException(nameof(innerStream));
+        ArgumentNullException.ThrowIfNull(innerStream);
+        ArgumentNullException.ThrowIfNull(onProgressCallback);
+        _innerStream = innerStream;
         _totalBytes = totalBytes;
-        _onProgressCallback = onProgressCallback ?? throw new ArgumentNullException(nameof(onProgressCallback));
+        _onProgressCallback = onProgressCallback;
     }
 
     public override bool CanRead => _innerStream.CanRead;

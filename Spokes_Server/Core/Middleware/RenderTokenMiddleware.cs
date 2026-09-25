@@ -1,7 +1,4 @@
-using System;
 using System.Security.Claims;
-using System.Threading.Tasks;
-using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Spokes_Server.Aggregate;
@@ -41,16 +38,17 @@ public class RenderTokenMiddleware
                 db.DeviceSessions.Save(session);
 
                 // Create a temporary admin identity for this request
-                var claims = new[]
-                {
+                Claim[] claims =
+                [
                     new Claim(ClaimTypes.NameIdentifier, "headless-renderer"),
                     new Claim(ClaimTypes.Name, "Headless Renderer"),
                     new Claim(ClaimTypes.Role, "Admin"),
                     new Claim("EmployeeId", "system-renderer"),
                     new Claim("SessionId", sessionId),
+                    new Claim("Spokes_InternalRenderer", "true"),
                     new Claim("Permission", AppPermissions.Projects.View),
                     new Claim("Permission", AppPermissions.Purchases.ManagePOs)
-                };
+                ];
 
                 var identity = new ClaimsIdentity(claims, CookieAuthenticationDefaults.AuthenticationScheme);
                 var principal = new ClaimsPrincipal(identity);

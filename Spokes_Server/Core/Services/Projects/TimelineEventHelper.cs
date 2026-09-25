@@ -1,11 +1,9 @@
-namespace Spokes_Server.Core.Services.Projects;
-
-using Spokes_Server.Core.Data;
-using Spokes_Server.Core.Models.Projects;
-using Spokes_Server.Core.Models.Accounting;
 using Spokes_Server.Aggregate;
-using System;
-using System.Linq;
+using Spokes_Server.Core.Data;
+using Spokes_Server.Core.Models.Accounting;
+using Spokes_Server.Core.Models.Projects;
+
+namespace Spokes_Server.Core.Services.Projects;
 
 public static class TimelineEventHelper
 {
@@ -104,7 +102,7 @@ public static class TimelineEventHelper
     public static void EvaluateProjectCommissions(Database db, string projectId)
     {
         var project = db.Projects.GetById(projectId);
-        if (project == null || !project.Commissions.Any()) return;
+        if (project == null || project.Commissions.Count == 0) return;
 
         var profile = db.CompanyProfile.Get();
 
@@ -126,9 +124,8 @@ public static class TimelineEventHelper
             if (existingLedgers.Any(l => l.Status != CommissionStatus.Clawback)) return;
 
             var quotes = db.Quotes.GetByProject(projectId);
-            var calcEngine = new Spokes_Server.Core.Services.Accounting.FinancialCalculationEngine(db.Invoices, db.Quotes, db.Projects);
             var quoteRevenue = quotes.Where(q => q.Status == "Accepted").Sum(q => q.GrandTotal);
-            var totalIncome = projectInvoices.Any() ? projectInvoices.Sum(i => i.SubTotal) : quoteRevenue;
+            var totalIncome = projectInvoices.Count > 0 ? projectInvoices.Sum(i => i.SubTotal) : quoteRevenue;
 
             var allPos = db.Purchases.GetAll().Where(p => p.Items.Any(i => i.ProjectId == projectId)).ToList();
             var totalPurchases = allPos.SelectMany(p => p.Items.Where(i => i.ProjectId == projectId)).Sum(i => i.Total);
@@ -141,10 +138,7 @@ public static class TimelineEventHelper
             foreach (var comm in project.Commissions)
             {
                 var basis = string.IsNullOrEmpty(comm.CommissionBasis) ? CommissionBasisTypes.Revenue : comm.CommissionBasis;
-
-                decimal baseAmount = 0;
-                if (basis.Contains("Margin")) baseAmount = projectGrossMargin;
-                else baseAmount = totalIncome;
+                decimal baseAmount = basis.Contains("Margin") ? projectGrossMargin : totalIncome;
 
                 if (baseAmount <= 0) continue;
 

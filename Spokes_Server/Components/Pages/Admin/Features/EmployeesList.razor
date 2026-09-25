@@ -1,10 +1,6 @@
 @using Spokes_Server.Core.Models.Core
-@using Spokes_Server.Core.Models.Projects
-@using Spokes_Server.Core.Models.Accounting
-@using Spokes_Server.Core.Models.Communication
 @using Spokes_Server.Core.Models.HR
 @using Spokes_Server.Core.Data
-@using Microsoft.AspNetCore.Components.Authorization
 @using Spokes_Server.Components.Pages.Users
 @using Spokes_Server.Components.Dialogs
 @using Spokes_Server.Components.Shared
@@ -15,7 +11,6 @@
 @inject IDialogService DialogService
 @inject ISnackbar Snackbar
 @inject ChatService ChatService
-@inject AuthenticationStateProvider AuthStateProvider
 @inject NavigationManager Nav
 @inject IServiceScopeFactory ScopeFactory
 @inject Spokes_Server.Core.Services.Core.AppLabelService AppLabels
@@ -199,16 +194,17 @@
     private async Task CreateNewEmployee()
     {
         var newEmployee = new Employee { FirstName = "", LastName = "", IsActive = true };
-        var parameters = new DialogParameters();
         var allOpenIdAccounts = Db.OpenIdAccounts.GetAll().ToList();
-
-        parameters.Add("Employee", newEmployee);
-        parameters.Add("AllEmployees", EmployeeList);
-        parameters.Add("AllTeams", Db.Teams.GetAll().OrderBy(t => t.Name).ToList());
-        parameters.Add("AllOpenIdAccounts", allOpenIdAccounts);
+        var parameters = new DialogParameters
+        {
+            ["Employee"] = newEmployee,
+            ["AllEmployees"] = EmployeeList,
+            ["AllTeams"] = Db.Teams.GetAll().OrderBy(t => t.Name).ToList(),
+            ["AllOpenIdAccounts"] = allOpenIdAccounts
+        };
         
         var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Large };
-        var dialog = await DialogService.ShowAsync<EmployeeDialog>(($"Create New {AppLabels.Employee}"), parameters, options);
+        var dialog = await DialogService.ShowAsync<EmployeeDialog>($"Create New {AppLabels.Employee}", parameters, options);
         var result = await dialog.Result;
 
         if (!result.Canceled)
@@ -225,24 +221,25 @@
                 await emailService.SyncEmployeeAsync(createdEmp.Id);
             });
 
-            Snackbar.Add(($"{AppLabels.Employee} '{createdEmp.FullName}' created"), Severity.Success);
+            Snackbar.Add($"{AppLabels.Employee} '{createdEmp.FullName}' created", Severity.Success);
             RefreshList();
         }
     }
 
     private async Task OpenEditDialog(Employee emp)
     {
-        var parameters = new DialogParameters();
         var clone = System.Text.Json.JsonSerializer.Deserialize<Employee>(System.Text.Json.JsonSerializer.Serialize(emp));
         var allOpenIdAccounts = Db.OpenIdAccounts.GetAll().ToList();
-
-        parameters.Add("Employee", clone);
-        parameters.Add("AllEmployees", EmployeeList);
-        parameters.Add("AllTeams", Db.Teams.GetAll().OrderBy(t => t.Name).ToList());
-        parameters.Add("AllOpenIdAccounts", allOpenIdAccounts);
+        var parameters = new DialogParameters
+        {
+            ["Employee"] = clone,
+            ["AllEmployees"] = EmployeeList,
+            ["AllTeams"] = Db.Teams.GetAll().OrderBy(t => t.Name).ToList(),
+            ["AllOpenIdAccounts"] = allOpenIdAccounts
+        };
 
         var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Large };
-        var dialog = await DialogService.ShowAsync<EmployeeDialog>(($"Edit {AppLabels.Employee}"), parameters, options);
+        var dialog = await DialogService.ShowAsync<EmployeeDialog>($"Edit {AppLabels.Employee}", parameters, options);
         var result = await dialog.Result;
 
         if (!result.Canceled)
@@ -258,7 +255,7 @@
                 await emailService.SyncEmployeeAsync(updatedEmp.Id);
             });
 
-            Snackbar.Add(($"{AppLabels.Employee} updated"), Severity.Success);
+            Snackbar.Add($"{AppLabels.Employee} updated", Severity.Success);
             RefreshList();
         }
     }
@@ -276,9 +273,9 @@
     {
         var parameters = new DialogParameters
         {
-            { "ContentText", $"Are you sure you want to delete the employee '{emp.FullName}'? This action cannot be undone. Any OpenID accounts linked to this employee will be unlinked." },
-            { "ButtonText", "Delete" },
-            { "Color", Color.Error }
+            ["ContentText"] = $"Are you sure you want to delete the employee '{emp.FullName}'? This action cannot be undone. Any OpenID accounts linked to this employee will be unlinked.",
+            ["ButtonText"] = "Delete",
+            ["Color"] = Color.Error
         };
 
         var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Small };
@@ -295,7 +292,7 @@
             }
 
             Db.Employees.Delete(emp.Id);
-            Snackbar.Add(($"{AppLabels.Employee} '{emp.FullName}' deleted"), Severity.Warning);
+            Snackbar.Add($"{AppLabels.Employee} '{emp.FullName}' deleted", Severity.Warning);
             RefreshList();
         }
     }

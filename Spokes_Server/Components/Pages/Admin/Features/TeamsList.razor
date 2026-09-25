@@ -1,10 +1,5 @@
 @using Spokes_Server.Core.Data
-@using Spokes_Server.Core.Models.Core
-@using Spokes_Server.Core.Models.Projects
-@using Spokes_Server.Core.Models.Accounting
-@using Spokes_Server.Core.Models.Communication
 @using Spokes_Server.Core.Models.HR
-@using MudBlazor
 @using Spokes_Server.Components.Pages.Admin
 @using Spokes_Server.Components.Shared
 @inject Database Db
@@ -81,8 +76,8 @@
 </style>
 
 @code {
-    private List<Team> TeamList = new();
-    private List<Employee> Employees = new();
+    private List<Team> TeamList = [];
+    private List<Employee> Employees = [];
     private string searchString = "";
     private Employee? _currentUser;
     private bool _isAdminOrManager => _currentUser?.IsAdmin == true || _currentUser?.HasPermission(Spokes_Server.Core.Constants.AppPermissions.Admin.ManageUsers) == true;
@@ -105,10 +100,7 @@
         return false;
     }
 
-    private void RefreshList()
-    {
-        TeamList = Db.Teams.GetAll().OrderBy(t => t.Name).ToList();
-    }
+    private void RefreshList() => TeamList = Db.Teams.GetAll().OrderBy(t => t.Name).ToList();
 
     private string GetEmployeeName(string id)
     {
@@ -134,7 +126,7 @@
     private async Task AddTeam()
     {
         var t = new Team();
-        var result = await ShowDialog(t, ($"Create New {AppLabels.Team}"));
+        var result = await ShowDialog(t, $"Create New {AppLabels.Team}");
         if (result != null)
         {
             Db.Teams.Save(result.Team);
@@ -150,18 +142,19 @@
 
     private async Task ViewTeam(Team team)
     {
-        var parameters = new DialogParameters();
-        parameters.Add("Team", team);
-        
         var leader = Employees.FirstOrDefault(e => e.Id == team.LeaderId);
-        parameters.Add("Leader", leader);
-        
         var members = Employees.Where(e => e.TeamId == team.Id).ToList();
         if (leader != null && !members.Any(m => m.Id == leader.Id))
         {
             members.Add(leader);
         }
-        parameters.Add("Members", members);
+
+        var parameters = new DialogParameters
+        {
+            ["Team"] = team,
+            ["Leader"] = leader,
+            ["Members"] = members
+        };
 
         var options = new DialogOptions { CloseButton = true, MaxWidth = MaxWidth.Small, FullWidth = true };
         await DialogService.ShowAsync<TeamProfileDialog>("", parameters, options);
@@ -211,9 +204,9 @@
     {
         var parameters = new DialogParameters
         {
-            { "ContentText", $"Are you sure you want to delete {team.Name}? Members will need to be reassigned." },
-            { "ButtonText", "Delete" },
-            { "Color", Color.Error }
+            ["ContentText"] = $"Are you sure you want to delete {team.Name}? Members will need to be reassigned.",
+            ["ButtonText"] = "Delete",
+            ["Color"] = Color.Error
         };
 
         var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Small };
@@ -230,9 +223,11 @@
 
     private async Task<TeamDialog.TeamDialogResult?> ShowDialog(Team team, string title)
     {
-        var parameters = new DialogParameters();
-        parameters.Add("Team", team);
-        parameters.Add("Employees", Employees);
+        var parameters = new DialogParameters
+        {
+            ["Team"] = team,
+            ["Employees"] = Employees
+        };
 
         var dialog = await DialogService.ShowAsync<TeamDialog>(title, parameters);
         var result = await dialog.Result;

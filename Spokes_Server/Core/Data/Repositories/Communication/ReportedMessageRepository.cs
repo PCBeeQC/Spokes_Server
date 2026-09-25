@@ -1,9 +1,6 @@
-namespace Spokes_Server.Core.Data.Repositories.Communication;
-
 using Spokes_Server.Core.Models.Communication;
 
-using Microsoft.Extensions.Configuration;
-using System.IO;
+namespace Spokes_Server.Core.Data.Repositories.Communication;
 
 public class ReportedMessageRepository : JsonRepository<ReportedMessage>
 {
@@ -12,8 +9,6 @@ public class ReportedMessageRepository : JsonRepository<ReportedMessage>
     {
     }
 
-    protected override string GetFilePath(ReportedMessage item)
-    {
-        return Path.Combine(_basePath, $"{item.Id}.json");
-    }
+    protected override string GetFilePath(ReportedMessage item) =>
+        Path.Combine(_basePath, $"{item.Id}.json");
 }

@@ -1,5 +1,6 @@
 namespace Spokes_Server.Core.Models.Core;
 
+using System.Text.Json.Serialization;
 using Spokes_Server.Core.Data;
 
 /// <summary>
@@ -12,10 +13,7 @@ public class DeviceSession : IDataEntity
     public override bool Equals(object? obj)
     {
         if (ReferenceEquals(this, obj)) return true;
-        if (obj == null || GetType() != obj.GetType())
-            return false;
-        var other = (DeviceSession)obj;
-        return Id == other.Id;
+        return obj is DeviceSession other && Id == other.Id;
     }
 
     public override int GetHashCode() => Id?.GetHashCode() ?? base.GetHashCode();
@@ -112,9 +110,22 @@ public class DeviceSession : IDataEntity
     /// <summary>User agent string captured during push subscription (for debugging).</summary>
     public string PushUserAgent { get; set; } = string.Empty;
 
+    /// <summary>Whether this device is running inside the Capacitor mobile app shell.</summary>
+    public bool IsCapacitor { get; set; }
+
     // --- Computed helpers ---
 
     /// <summary>Whether this device has an active push subscription.</summary>
-    [System.Text.Json.Serialization.JsonIgnore]
+    [JsonIgnore]
     public bool HasPush => !string.IsNullOrEmpty(PushEndpoint);
+
+    /// <summary>
+    /// Whether this session is identified as running in the Capacitor app, either via explicit
+    /// flag or legacy heuristics (NativeRelay subscription, (App) device info, Capacitor User-Agent).
+    /// </summary>
+    [JsonIgnore]
+    public bool IsCapacitorApp => IsCapacitor
+        || PushSubscriptionType == "NativeRelay"
+        || (!string.IsNullOrEmpty(DeviceInfo) && DeviceInfo.Contains("(App)"))
+        || (!string.IsNullOrEmpty(PushUserAgent) && PushUserAgent.Contains("Capacitor", StringComparison.OrdinalIgnoreCase));
 }

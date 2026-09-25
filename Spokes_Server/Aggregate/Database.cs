@@ -5,13 +5,9 @@ using Spokes_Server.Core.Data.Repositories.Accounting;
 using Spokes_Server.Core.Data.Repositories.Communication;
 using Spokes_Server.Core.Data.Repositories.HR;
 using Spokes_Server.Core.Models.Core;
-using Spokes_Server.Core.Models.Projects;
-using Spokes_Server.Core.Models.Accounting;
 using Spokes_Server.Core.Models.Communication;
-using Spokes_Server.Core.Models.HR;
 using Microsoft.Extensions.Configuration;
 using System;
-using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
@@ -38,6 +34,7 @@ public class Database
     public virtual ProjectGroupRepository ProjectGroups { get; }
     public virtual EmployeeRepository Employees { get; }
     public virtual TimesheetRepository Timesheets { get; }
+    public virtual HourBankAdjustmentRepository HourBankAdjustments { get; }
     public virtual WorkTypeRepository WorkTypes { get; }
     public virtual RateCardRepository RateCards { get; }
     public virtual QuoteRepository Quotes { get; }
@@ -59,6 +56,7 @@ public class Database
     public virtual ChatCategoryRepository ChatCategories { get; }
     public virtual ChatMessageRepository ChatMessages { get; }
     public virtual ChatReadStateRepository ChatReadStates { get; }
+    public virtual UserClientStateRepository ClientStates { get; }
     public virtual ReportedMessageRepository ReportedMessages { get; }
     public virtual PushSubscriptionRepository PushSubscriptions { get; }
     public virtual AlbumRepository Albums { get; }
@@ -92,6 +90,12 @@ public class Database
     public virtual PrivateContactRepository PrivateContacts { get; }
 
 
+    public Database()
+    {
+        _dataPath = "Data";
+        _persistence = null!;
+    }
+
     /// <summary>
     /// Lightweight constructor for unit tests focusing on identity and sessions.
     /// </summary>
@@ -109,6 +113,7 @@ public class Database
         ProjectGroupRepository projectGroups,
         EmployeeRepository employees,
         TimesheetRepository timesheets,
+        HourBankAdjustmentRepository hourBankAdjustments,
         WorkTypeRepository workTypes,
         RateCardRepository rateCards,
         QuoteRepository quotes,
@@ -126,6 +131,7 @@ public class Database
         ChatCategoryRepository chatCategories,
         ChatMessageRepository chatMessages,
         ChatReadStateRepository chatReadStates,
+        UserClientStateRepository clientStates,
         ReportedMessageRepository reportedMessages,
         PushSubscriptionRepository pushSubscriptions,
         AlbumRepository albums,
@@ -168,6 +174,7 @@ public class Database
         ProjectGroups = projectGroups;
         Employees = employees;
         Timesheets = timesheets;
+        HourBankAdjustments = hourBankAdjustments;
         WorkTypes = workTypes;
         RateCards = rateCards;
         Quotes = quotes;
@@ -186,6 +193,7 @@ public class Database
         ChatCategories = chatCategories;
         ChatMessages = chatMessages;
         ChatReadStates = chatReadStates;
+        ClientStates = clientStates;
         ReportedMessages = reportedMessages;
         PushSubscriptions = pushSubscriptions;
         Albums = albums;
@@ -254,6 +262,7 @@ public class Database
             () => ProjectGroups.LoadFromDisk(),
             () => Employees.LoadFromDisk(),
             () => Timesheets.LoadFromDisk(),
+            () => HourBankAdjustments.LoadFromDisk(),
             () => WorkTypes.LoadFromDisk(),
             () => RateCards.LoadFromDisk(),
             () => Quotes.LoadFromDisk(),
@@ -271,6 +280,7 @@ public class Database
             () => ChatCategories.LoadFromDisk(),
             () => ChatMessages.LoadFromDisk(),
             () => ChatReadStates.LoadFromDisk(),
+            () => ClientStates.LoadFromDisk(),
             () => ReportedMessages.LoadFromDisk(),
             () => PushSubscriptions.LoadFromDisk(),
             () => Albums.LoadFromDisk(),
@@ -299,6 +309,9 @@ public class Database
 
         // Ensure default Categories exist
         ChatCategories.EnsureDefaultCategories();
+
+        // Heal/reconcile channel activity timestamps against message history
+        ChatChannels.ReconcileChannelActivityTimestamps(ChatMessages);
 
         // Bootstrapping: Link dynamic permission groups for employees
         var profile = CompanyProfile.Get();
@@ -415,19 +428,18 @@ public class Database
             .Where(s => s.RevokedAt == null && s.ExpiresAt < DateTime.UtcNow)
             .ToList();
 
-        if (expiredSessions.Any())
+        if (!expiredSessions.Any()) return;
+
+        Console.WriteLine($"[Cleanup] Revoking {expiredSessions.Count} expired device sessions...");
+        foreach (var session in expiredSessions)
         {
-            Console.WriteLine($"[Cleanup] Revoking {expiredSessions.Count} expired device sessions...");
-            foreach (var session in expiredSessions)
+            session.RevokedAt = DateTime.UtcNow;
+            if (session.HasPush)
             {
-                session.RevokedAt = DateTime.UtcNow;
-                if (session.HasPush)
-                {
-                    session.PushEndpoint = null;
-                    session.PushEnabled = false;
-                }
-                DeviceSessions.Save(session);
+                session.PushEndpoint = null;
+                session.PushEnabled = false;
             }
+            DeviceSessions.Save(session);
         }
     }
 
@@ -451,7 +463,7 @@ public class Database
                     if (item != null)
                     {
                         var newDir = Path.Combine(dataPath, "Employees", item.EmployeeId, "Email", "Folders");
-                        if (!Directory.Exists(newDir)) Directory.CreateDirectory(newDir);
+                        Directory.CreateDirectory(newDir);
 
                         var newPath = Path.Combine(newDir, Path.GetFileName(file));
                         if (!File.Exists(newPath)) File.Move(file, newPath);
@@ -477,7 +489,7 @@ public class Database
                     {
                         // Move Message JSON
                         var newMsgDir = Path.Combine(dataPath, "Employees", item.EmployeeId, "Email", "Messages");
-                        if (!Directory.Exists(newMsgDir)) Directory.CreateDirectory(newMsgDir);
+                        Directory.CreateDirectory(newMsgDir);
 
                         var newMsgPath = Path.Combine(newMsgDir, Path.GetFileName(file));
                         if (!File.Exists(newMsgPath)) File.Move(file, newMsgPath);
@@ -487,7 +499,7 @@ public class Database
                         if (File.Exists(oldBodyFile))
                         {
                             var newBodyDir = Path.Combine(dataPath, "Employees", item.EmployeeId, "Email", "Bodies");
-                            if (!Directory.Exists(newBodyDir)) Directory.CreateDirectory(newBodyDir);
+                            Directory.CreateDirectory(newBodyDir);
 
                             var newBodyPath = Path.Combine(newBodyDir, $"{item.Id}.html");
                             if (!File.Exists(newBodyPath)) File.Move(oldBodyFile, newBodyPath);
@@ -608,8 +620,7 @@ public class Database
         logger?.LogInformation("Database restored from backup: {Path}", filePath);
 
         bool casdoorRestarted = false;
-        var sysConfig = SystemConfigs.Get();
-        if (sysConfig != null && sysConfig.ProviderType == IdpType.BuiltInCasdoor)
+        if (SystemConfigs.Get()?.ProviderType == IdpType.BuiltInCasdoor)
         {
             try
             {

@@ -1,24 +1,15 @@
-using Spokes_Server.Core.Services.Communication;
-using Spokes_Server.Core.Services.Projects;
-using Spokes_Server.Core.Services.Core;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.DependencyInjection;
 using Spokes_Server.Core.Data.Repositories.Core;
-using Spokes_Server.Core.Data.Repositories.Projects;
-using Spokes_Server.Core.Data.Repositories.Accounting;
-using Spokes_Server.Core.Data.Repositories.Communication;
 using Spokes_Server.Core.Data.Repositories.HR;
 using Spokes_Server.Core.Models.Core;
-using Spokes_Server.Core.Models.Projects;
-using Spokes_Server.Core.Models.Accounting;
-using Spokes_Server.Core.Models.Communication;
-using Spokes_Server.Core.Models.HR;
-using Spokes_Server.Core.Services;
-using System.Security.Claims;
-using WebPushException = WebPush.WebPushException;
-using Microsoft.AspNetCore.DataProtection;
+using Spokes_Server.Core.Services.Core;
 using Spokes_Server.Core.Services.Licensing;
-using Microsoft.Extensions.DependencyInjection;
+using Spokes_Server.Core.Services.Logging;
+using Spokes_Server.Core.Services.Communication.Chat;
+using WebPushException = WebPush.WebPushException;
 
 namespace Spokes_Server.Controllers;
 
@@ -85,7 +76,6 @@ public class PushController : SpokesControllerBase
             return Unauthorized();
         }
 
-        var resolvedDeviceId = request.DeviceId;
         var sessionId = User.FindFirst("SessionId")?.Value;
 
         // Find the caller's DeviceSession using multiple strategies
@@ -103,10 +93,10 @@ public class PushController : SpokesControllerBase
         }
 
         // Strategy 2: DeviceId + UserId (fallback)
-        if (session == null && !string.IsNullOrEmpty(resolvedDeviceId))
+        if (session == null && !string.IsNullOrEmpty(request.DeviceId))
         {
             session = _sessions.GetActiveByEmployeeId(userId)
-                .FirstOrDefault(s => s.DeviceId == resolvedDeviceId);
+                .FirstOrDefault(s => s.DeviceId == request.DeviceId);
         }
 
         if (session == null)
@@ -132,8 +122,24 @@ public class PushController : SpokesControllerBase
         session.PushEnabled = true;
         session.PushSubscribedAt = DateTime.UtcNow;
         session.PushUserAgent = Request.Headers.UserAgent.ToString();
-        session.DeviceType = !string.IsNullOrEmpty(request.DeviceType) ? request.DeviceType : "Desktop";
-        session.IsIdleDetectionEnabled = request.IsIdleDetectionEnabled ?? (request.DeviceType == "Desktop");
+
+        bool isCapacitor = request.IsCapacitor == true
+            || session.PushSubscriptionType == "NativeRelay"
+            || session.PushUserAgent.Contains("Capacitor", StringComparison.OrdinalIgnoreCase)
+            || session.IsCapacitorApp;
+
+        if (isCapacitor)
+        {
+            session.IsCapacitor = true;
+            session.DeviceType = "Mobile";
+            session.IsIdleDetectionEnabled = false;
+        }
+        else
+        {
+            session.DeviceType = !string.IsNullOrEmpty(request.DeviceType) ? request.DeviceType : "Desktop";
+            session.IsIdleDetectionEnabled = request.IsIdleDetectionEnabled ?? (request.DeviceType == "Desktop");
+        }
+
         if (!string.IsNullOrEmpty(request.DeviceName))
             session.DeviceName = request.DeviceName;
 
@@ -199,14 +205,9 @@ public class PushController : SpokesControllerBase
 
         // Security: Only allow unsubscribing sessions owned by the current user
         var session = _sessions.GetByPushEndpoint(request.Endpoint);
-        if (session == null)
+        if (session == null || session.EmployeeId != userId)
         {
-            return Ok(new { message = "No subscription found" });
-        }
-
-        if (session.EmployeeId != userId)
-        {
-            // Don't reveal that the subscription exists but belongs to someone else
+            // Don't reveal whether the subscription exists or belongs to someone else
             return Ok(new { message = "No subscription found" });
         }
 
@@ -293,7 +294,7 @@ public class PushController : SpokesControllerBase
             s.PushSubscriptionType,
             s.CreatedAt,
             s.LastSeenAt,
-            HasPush = s.HasPush,
+            s.HasPush,
             Endpoint = s.PushEndpoint ?? string.Empty,
             UserAgent = s.PushUserAgent,
             s.DeviceId
@@ -329,6 +330,11 @@ public class PushController : SpokesControllerBase
         if (request.IsIdleDetectionEnabled.HasValue)
             session.IsIdleDetectionEnabled = request.IsIdleDetectionEnabled.Value;
 
+        if (session.IsCapacitorApp)
+        {
+            session.IsIdleDetectionEnabled = false;
+        }
+
         await _sessions.SaveAsync(session);
         return Ok(new { message = "Device updated" });
     }
@@ -352,7 +358,6 @@ public class PushController : SpokesControllerBase
         }
 
         _sessions.ClearPushFields(session);
-        await Task.CompletedTask;
         return Ok(new { message = "Device deleted" });
     }
 
@@ -361,8 +366,9 @@ public class PushController : SpokesControllerBase
     /// </summary>
     [HttpPost("devices/{id}/test")]
     public async Task<IActionResult> SendDeviceTestNotification(string id, 
-        [FromServices] Microsoft.AspNetCore.DataProtection.IDataProtectionProvider dataProtection,
-        [FromServices] Spokes_Server.Core.Services.Logging.ISystemLogService systemLog)
+        [FromServices] IDataProtectionProvider dataProtection,
+        [FromServices] ISystemLogService systemLog,
+        [FromQuery] string category = "chat")
     {
         var userId = GetCurrentUserId();
         if (string.IsNullOrEmpty(userId))
@@ -381,7 +387,7 @@ public class PushController : SpokesControllerBase
 
         try
         {
-            bool wasEncrypted = await _webPush.SendDeviceTestNotificationAsync(id, userId, "Test Notification", $"Rich push notification test from {sender.FirstName}", icon);
+            bool wasEncrypted = await _webPush.SendDeviceTestNotificationAsync(id, userId, "Test Notification", $"Rich push notification test from {sender.FirstName}", icon, category);
             return Ok(new { message = wasEncrypted ? "Test notification sent (Encrypted)" : "Test notification sent (Encrypted Text)" });
         }
         catch (LicenseExpiredException lex)
@@ -405,7 +411,7 @@ public class PushController : SpokesControllerBase
     /// Send a test notification to the current user.
     /// </summary>
     [HttpPost("test")]
-    public async Task<IActionResult> SendTestNotification()
+    public async Task<IActionResult> SendTestNotification([FromQuery] string category = "chat")
     {
         var userId = GetCurrentUserId();
         if (string.IsNullOrEmpty(userId))
@@ -413,7 +419,11 @@ public class PushController : SpokesControllerBase
             return Unauthorized();
         }
 
-        await _webPush.SendNotificationAsync(userId, "Test Notification", "Push notifications are working!");
+        var sender = await _employees.GetByIdAsync(userId);
+        var userSoundChoice = sender?.GetNotificationSound(category);
+        var sound = NotificationSoundCatalog.GetEffectivePushSound(category, userSoundChoice);
+
+        await _webPush.SendNotificationAsync(userId, "Test Notification", "Push notifications are working!", category: category, sound: sound);
         return Ok(new { message = "Test notification sent" });
     }
 
@@ -463,12 +473,20 @@ public class PushController : SpokesControllerBase
     /// </summary>
     [HttpPost("unfocus")]
     [AllowAnonymous]
-    public async Task<IActionResult> Unfocus([FromQuery] string subscriptionId, [FromServices] PresenceStateService presence)
+    public async Task<IActionResult> Unfocus(
+        [FromQuery] string subscriptionId,
+        [FromServices] PresenceStateService presence,
+        [FromServices] UserClientStateService clientStateService)
     {
         Console.WriteLine($"[PushController] Unfocus endpoint hit for subscriptionId: {subscriptionId}");
         await Task.CompletedTask;
         if (!string.IsNullOrEmpty(subscriptionId))
         {
+            var userId = presence.GetUserIdBySubscription(subscriptionId);
+            if (!string.IsNullOrEmpty(userId))
+            {
+                clientStateService.FlushToDiskIfUnsent(userId);
+            }
             presence.SetConnectionFocusBySubscription(subscriptionId, false);
             Console.WriteLine($"[PushController] SetConnectionFocusBySubscription called for {subscriptionId}");
         }
@@ -485,6 +503,7 @@ public class SubscribeRequest
     public string? DeviceType { get; set; }
     public string? DeviceName { get; set; }
     public bool? IsIdleDetectionEnabled { get; set; }
+    public bool? IsCapacitor { get; set; }
     public string? PublicKey { get; set; }
     public string? DeviceId { get; set; }
 }

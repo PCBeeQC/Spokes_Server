@@ -1,6 +1,3 @@
-using System;
-using System.Collections.Generic;
-using System.Linq;
 using Spokes_Server.Core.Models.Communication;
 using Spokes_Server.Core.Models.HR;
 
@@ -91,7 +88,7 @@ public static class ChatChannelFormatter
                     .Take(3)
                     .ToList();
 
-                return names.Any() ? string.Join(", ", names) : "Direct Message";
+                return names.Count > 0 ? string.Join(", ", names) : "Direct Message";
             }
         }
 
@@ -113,7 +110,7 @@ public static class ChatChannelFormatter
             if (otherParticipantIds.Count > 3)
                 return string.Join(", ", names) + $" +{otherParticipantIds.Count - 3}";
 
-            if (names.Any())
+            if (names.Count > 0)
                 return string.Join(", ", names);
 
             return "Group Chat";

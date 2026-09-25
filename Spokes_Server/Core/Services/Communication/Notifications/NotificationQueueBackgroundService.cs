@@ -1,7 +1,15 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Spokes_Server.Core.Data.Repositories.Communication;
 using Spokes_Server.Core.Data.Repositories.HR;
 using Spokes_Server.Core.Models.Core;
+using Spokes_Server.Core.Services.Logging;
 
 namespace Spokes_Server.Core.Services.Communication.Notifications;
 
@@ -80,7 +88,7 @@ public class NotificationQueueBackgroundService : BackgroundService
                 var item = queued.First();
                 try
                 {
-                    await webPush.SendNotificationDirectAsync(userId, item.Title, item.Body, item.Url, item.Icon, item.Tier, item.Tag, item.Actions, "chat", item.ThreadId, item.ServerName, item.ChannelName, item.IsGroupChat, item.Badge);
+                    await webPush.SendNotificationDirectAsync(userId, item.Title, item.Body, item.Url, item.Icon, item.Tier, item.Tag, item.Actions, "chat", item.ThreadId, item.ServerName, item.ChannelName, item.IsGroupChat, item.Badge, sound: item.Sound);
                 }
                 catch (Exception ex)
                 {
@@ -93,7 +101,7 @@ public class NotificationQueueBackgroundService : BackgroundService
                 int chatCount = queued.Count(q => q.Url != null && q.Url.StartsWith("/chat", StringComparison.OrdinalIgnoreCase));
                 int otherCount = queued.Count - emailCount - chatCount;
 
-                var parts = new List<string>();
+                List<string> parts = [];
                 if (emailCount > 0) parts.Add($"{emailCount} new email{(emailCount > 1 ? "s" : "")}");
                 if (chatCount > 0) parts.Add($"{chatCount} new message{(chatCount > 1 ? "s" : "")}");
                 if (otherCount > 0) parts.Add($"{otherCount} other notification{(otherCount > 1 ? "s" : "")}");
@@ -121,11 +129,12 @@ public class NotificationQueueBackgroundService : BackgroundService
 
         using var scope = _serviceProvider.CreateScope();
         var webPush = scope.ServiceProvider.GetRequiredService<IWebPushService>();
-        var readStates = scope.ServiceProvider.GetRequiredService<Spokes_Server.Core.Data.Repositories.Communication.ChatReadStateRepository>();
+        var readStates = scope.ServiceProvider.GetRequiredService<ChatReadStateRepository>();
         var presence = scope.ServiceProvider.GetRequiredService<PresenceStateService>();
-        var messages = scope.ServiceProvider.GetRequiredService<Spokes_Server.Core.Data.Repositories.Communication.ChatMessageRepository>();
-        var emailMessages = scope.ServiceProvider.GetRequiredService<Spokes_Server.Core.Data.Repositories.Communication.EmailMessageRepository>();
-        var systemLog = scope.ServiceProvider.GetRequiredService<Spokes_Server.Core.Services.Logging.ISystemLogService>();
+        var messages = scope.ServiceProvider.GetRequiredService<ChatMessageRepository>();
+        var emailMessages = scope.ServiceProvider.GetRequiredService<EmailMessageRepository>();
+        var systemLog = scope.ServiceProvider.GetRequiredService<ISystemLogService>();
+        var notificationRouting = scope.ServiceProvider.GetRequiredService<NotificationRoutingService>();
 
         foreach (var item in matured)
         {
@@ -157,9 +166,12 @@ public class NotificationQueueBackgroundService : BackgroundService
                     continue; // They are active on desktop right now, don't buzz the phone
                 }
 
-                // 3. Send mobile push!
+                // 3. Recalculate badge count fresh (enqueued value may be stale after 1-minute delay)
+                var freshBadge = await notificationRouting.GetTotalBadgeCountAsync(item.UserId);
+
+                // 4. Send mobile push!
                 _logger.LogInformation("Flushing delayed mobile push for user {UserId}, Type {Type}, Msg {MsgId}", item.UserId, item.Type, item.MessageId);
-                await webPush.SendNotificationDirectAsync(item.UserId, item.Title, item.Body, item.Url, item.Icon, Spokes_Server.Core.Models.Core.PresenceTier.MobileOnly, item.Tag, item.Actions, "chat", item.ChannelId, item.ServerName, item.ChannelName, item.IsGroupChat, item.Badge, item.IsSilent);
+                await webPush.SendNotificationDirectAsync(item.UserId, item.Title, item.Body, item.Url, item.Icon, PresenceTier.MobileOnly, item.Tag, item.Actions, item.Category, item.ChannelId, item.ServerName, item.ChannelName, item.IsGroupChat, freshBadge, item.IsSilent, sound: item.Sound);
             }
             catch (Exception ex)
             {

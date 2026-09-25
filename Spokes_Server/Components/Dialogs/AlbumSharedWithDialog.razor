@@ -1,9 +1,5 @@
-@using Spokes_Server.Core.Models.Communication
-@using Spokes_Server.Core.Models.HR
 @using Spokes_Server.Core.Services.Communication.Chat
-@using MudBlazor
 @using Spokes_Server.Components.Shared
-@using Spokes_Server.Aggregate
 
 @inject Database Db
 @inject IChatChannelAccessService ChatAccess
@@ -116,7 +112,6 @@
     private Album? _album;
     private List<ChatChannel> _channels = new();
     private List<Employee> _users = new();
-    private bool _isOwnerOrContributor = false;
 
     protected override void OnInitialized()
     {
@@ -127,8 +122,6 @@
     {
         _album = Db.Albums.GetById(AlbumId);
         if (_album == null) return;
-
-        _isOwnerOrContributor = _album.OwnerId == CurrentUserId || _album.ContributorUserIds.Contains(CurrentUserId);
 
         _channels = Db.ChatChannels.GetAll()
             .Where(c => _album.SharedWithChannelIds.Contains(c.Id))

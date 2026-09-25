@@ -1,7 +1,12 @@
 @page "/setup"
-@attribute [Microsoft.AspNetCore.Authorization.AllowAnonymous]
-@layout Spokes_Server.Components.Layout.LoginLayout
+@attribute [AllowAnonymous]
+@layout LoginLayout
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.Extensions.Hosting
+@using Spokes_Server.Components.Layout
 @using Spokes_Server.Core.Services.Core
+@using Spokes_Server.Core.Services.Licensing
+@using Spokes_Server.Core.Constants
 @using Spokes_Server.Aggregate
 @using Spokes_Server.Core.Models.Core
 @inject CasdoorProvisioningService CasdoorService
@@ -9,12 +14,12 @@
 @inject NavigationManager Nav
 @inject IJSRuntime JSRuntime
 @inject ISnackbar Snackbar
-@inject Spokes_Server.Core.Services.Core.IFileService FileService
-@inject Spokes_Server.Core.Services.Licensing.LicenseValidationService LicenseService
-@inject Spokes_Server.Core.Services.Core.AppLabelService AppLabels
+@inject IFileService FileService
+@inject LicenseValidationService LicenseService
+@inject AppLabelService AppLabels
 @inject IHttpClientFactory HttpClientFactory
 @inject IDialogService DialogService
-@inject Microsoft.Extensions.Hosting.IHostApplicationLifetime AppLifetime
+@inject IHostApplicationLifetime AppLifetime
 
 <PageTitle>Spokes Setup</PageTitle>
 
@@ -116,13 +121,13 @@
             @if (!string.IsNullOrEmpty(_licensePayload))
             {
                 var currentValidation = LicenseService.ValidateLicense(_licensePayload, Db.ServerConfigs.GetOrCreateGlobalConfig());
-                @if (currentValidation.Status == Spokes_Server.Core.Services.Licensing.LicenseStatus.Valid)
+                @if (currentValidation.Status == LicenseStatus.Valid)
                 {
                     <MudAlert Severity="Severity.Success" Class="mb-4">
                         <b>Spokes Pass Active:</b> Your Spokes instance is enabled for Native Mobile Push Notifications.
                     </MudAlert>
                 }
-                else if (currentValidation.Status == Spokes_Server.Core.Services.Licensing.LicenseStatus.Expired)
+                else if (currentValidation.Status == LicenseStatus.Expired)
                 {
                     <MudAlert Severity="Severity.Warning" Class="mb-4">
                         <b>Spokes Pass Expired:</b> @currentValidation.Message Native mobile push notifications will be disabled until renewed.
@@ -135,11 +140,11 @@
                     </MudAlert>
                 }
 
-                Spokes_Server.Core.Services.Licensing.SpokesLicenseFile? license = null;
+                SpokesLicenseFile? license = null;
                 try 
                 { 
                     var options = new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true };
-                    license = System.Text.Json.JsonSerializer.Deserialize<Spokes_Server.Core.Services.Licensing.SpokesLicenseFile>(_licensePayload, options); 
+                    license = System.Text.Json.JsonSerializer.Deserialize<SpokesLicenseFile>(_licensePayload, options); 
                 } 
                 catch { }
                 
@@ -386,12 +391,12 @@
 @code {
     private int _step = 1;
     private IdpType _selectedType = IdpType.None;
-    private bool _isProvisioning = false;
-    private bool _isValidatingExternal = false;
-    private bool _isRestarting = false;
-    private bool _hasSavedCrendentials = false;
-    private bool _eulaAcceptedCheckbox = false;
-    private bool _enableAutoUpdate = false;
+    private bool _isProvisioning;
+    private bool _isValidatingExternal;
+    private bool _isRestarting;
+    private bool _hasSavedCrendentials;
+    private bool _eulaAcceptedCheckbox;
+    private bool _enableAutoUpdate;
 
     private string _companyName = "";
     private string _logoBase64 = "";
@@ -522,26 +527,23 @@
 
     private void ApplyDefaultServerConfigurations(CompanyProfile profile)
     {
-        if (profile.PermissionGroups == null)
-        {
-            profile.PermissionGroups = new();
-        }
-
-        if (!profile.PermissionGroups.Any())
-        {
-            if (_selectedEdition == "Family")
-            {
-                var defaults = Spokes_Server.Core.Constants.DefaultPermissionGroups.GetFriendDefaults();
-                profile.PermissionGroups.AddRange(defaults);
-                profile.DefaultPermissionGroupId = "friend_member";
-            }
-            else
-            {
-                var defaults = Spokes_Server.Core.Constants.DefaultPermissionGroups.GetBusinessDefaults();
-                profile.PermissionGroups.AddRange(defaults);
-                profile.DefaultPermissionGroupId = "business_employee";
-            }
-        }
+        profile.PermissionGroups ??= [];
+ 
+         if (!profile.PermissionGroups.Any())
+         {
+             if (_selectedEdition == "Family")
+             {
+                 var defaults = DefaultPermissionGroups.GetFriendDefaults();
+                 profile.PermissionGroups.AddRange(defaults);
+                 profile.DefaultPermissionGroupId = "friend_member";
+             }
+             else
+             {
+                 var defaults = DefaultPermissionGroups.GetBusinessDefaults();
+                 profile.PermissionGroups.AddRange(defaults);
+                 profile.DefaultPermissionGroupId = "business_employee";
+             }
+         }
 
         profile.BackupsEnabled = true;
         profile.BackupRetentionCount = 5;
@@ -744,15 +746,15 @@
             var config = Db.ServerConfigs.GetOrCreateGlobalConfig();
             var validationResult = LicenseService.ValidateLicense(json, config);
 
-            if (validationResult.Status == Spokes_Server.Core.Services.Licensing.LicenseStatus.Valid || 
-                validationResult.Status == Spokes_Server.Core.Services.Licensing.LicenseStatus.Tolerated ||
-                validationResult.Status == Spokes_Server.Core.Services.Licensing.LicenseStatus.Expired)
+            if (validationResult.Status == LicenseStatus.Valid || 
+                validationResult.Status == LicenseStatus.Tolerated ||
+                validationResult.Status == LicenseStatus.Expired)
             {
                 if (validationResult.ParsedLicense != null)
                 {
                     _licensePayload = json;
                     
-                    var newEditions = Spokes_Server.Core.Services.Licensing.LicenseValidationService.GetAvailableEditions(validationResult);
+                    var newEditions = LicenseValidationService.GetAvailableEditions(validationResult);
                     if (!newEditions.Contains(_selectedEdition))
                     {
                         _selectedEdition = newEditions.FirstOrDefault() ?? "Family";
@@ -764,7 +766,7 @@
                         _selectedEdition = newEditions.First();
                     }
                     
-                    if (validationResult.Status == Spokes_Server.Core.Services.Licensing.LicenseStatus.Expired)
+                    if (validationResult.Status == LicenseStatus.Expired)
                     {
                         Snackbar.Add($"Expired License Saved: {validationResult.Message}", Severity.Warning);
                     }
@@ -810,6 +812,6 @@
     {
         var config = Db.ServerConfigs.GetOrCreateGlobalConfig();
         var validationResult = LicenseService.ValidateLicense(_licensePayload, config);
-        return Spokes_Server.Core.Services.Licensing.LicenseValidationService.GetAvailableEditions(validationResult);
+        return LicenseValidationService.GetAvailableEditions(validationResult);
     }
 }

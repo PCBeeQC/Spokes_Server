@@ -1,5 +1,9 @@
+using System.Reflection;
+using Timer = System.Timers.Timer;
 using Microsoft.AspNetCore.Components;
 using MudBlazor;
+using Spokes_Server.Aggregate;
+using Spokes_Server.Core.Data;
 using Spokes_Server.Core.Extensions;
 
 namespace Spokes_Server.Components.Shared;
@@ -11,10 +15,10 @@ public abstract class SpokesDialogBase<T> : SpokesComponentBase where T : class
 
     public T Model { get; set; } = default!;
 
-    [Inject] protected global::Spokes_Server.Aggregate.Database Db { get; set; } = default!;
+    [Inject] protected Database Db { get; set; } = default!;
 
-    private System.Timers.Timer? _autoSaveTimer;
-    private System.Reflection.MethodInfo? _saveMethod;
+    private Timer? _autoSaveTimer;
+    private MethodInfo? _saveMethod;
     private object? _repositoryInstance;
 
     protected override void OnInitialized()
@@ -22,16 +26,12 @@ public abstract class SpokesDialogBase<T> : SpokesComponentBase where T : class
         base.OnInitialized();
         
         var type = GetType();
-        var props = type.GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
-        var paramProp = props.FirstOrDefault(p => p.PropertyType == typeof(T) && p.GetCustomAttributes(typeof(ParameterAttribute), true).Any());
+        var props = type.GetProperties(BindingFlags.Public | BindingFlags.Instance);
+        var paramProp = props.FirstOrDefault(p => p.PropertyType == typeof(T) && p.IsDefined(typeof(ParameterAttribute), true));
         
-        if (paramProp != null)
+        if (paramProp?.GetValue(this) is T original)
         {
-            var original = paramProp.GetValue(this) as T;
-            if (original != null)
-            {
-                Model = original.DeepClone();
-            }
+            Model = original.DeepClone();
         }
 
         SetupAutoSave();
@@ -39,18 +39,18 @@ public abstract class SpokesDialogBase<T> : SpokesComponentBase where T : class
 
     private void SetupAutoSave()
     {
-        var dbProps = typeof(global::Spokes_Server.Aggregate.Database).GetProperties();
+        var dbProps = typeof(Database).GetProperties();
         foreach (var prop in dbProps)
         {
             var propType = prop.PropertyType;
             while (propType != null && propType != typeof(object))
             {
-                if (propType.IsGenericType && propType.GetGenericTypeDefinition() == typeof(Spokes_Server.Core.Data.JsonRepository<>))
+                if (propType.IsGenericType && propType.GetGenericTypeDefinition() == typeof(JsonRepository<>))
                 {
                     if (propType.GetGenericArguments()[0] == typeof(T))
                     {
                         _repositoryInstance = prop.GetValue(Db);
-                        _saveMethod = propType.GetMethod("Save", new[] { typeof(T) });
+                        _saveMethod = propType.GetMethod("Save", [typeof(T)]);
                         break;
                     }
                 }
@@ -61,15 +61,17 @@ public abstract class SpokesDialogBase<T> : SpokesComponentBase where T : class
 
         if (_saveMethod != null && _repositoryInstance != null)
         {
-            _autoSaveTimer = new System.Timers.Timer(5000);
-            _autoSaveTimer.AutoReset = true;
+            _autoSaveTimer = new Timer(5000)
+            {
+                AutoReset = true
+            };
             _autoSaveTimer.Elapsed += (s, e) => 
             {
                 if (Model != null)
                 {
                     _ = SafeInvokeAsync(() => 
                     {
-                        _saveMethod.Invoke(_repositoryInstance, new object[] { Model });
+                        _saveMethod.Invoke(_repositoryInstance, [Model]);
                     });
                 }
             };
@@ -92,7 +94,7 @@ public abstract class SpokesDialogBase<T> : SpokesComponentBase where T : class
         if (_autoSaveTimer != null) _autoSaveTimer.Stop();
         if (_saveMethod != null && _repositoryInstance != null && Model != null)
         {
-            _saveMethod.Invoke(_repositoryInstance, new object[] { Model });
+            _saveMethod.Invoke(_repositoryInstance, [Model]);
         }
         MudDialog.Close(DialogResult.Ok(Model));
     }

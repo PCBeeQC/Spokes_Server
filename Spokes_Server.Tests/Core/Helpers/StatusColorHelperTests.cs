@@ -1,6 +1,5 @@
 using MudBlazor;
 using Spokes_Server.Core.Helpers;
-using Xunit;
 
 namespace Spokes_Server.Tests.Core.Helpers;
 
@@ -23,6 +22,7 @@ public class StatusColorHelperTests
     [Theory]
     [InlineData("Final", Color.Info)]
     [InlineData("final", Color.Info)]
+    [InlineData("  final  ", Color.Info)]
     [InlineData("Partially Paid", Color.Info)]
     [InlineData("Partially Billed", Color.Info)]
     [InlineData("Payable", Color.Info)]
@@ -35,6 +35,7 @@ public class StatusColorHelperTests
 
     [Theory]
     [InlineData("Pending", Color.Warning)]
+    [InlineData("  Pending  ", Color.Warning)]
     [InlineData("Awaiting Approval", Color.Warning)]
     [InlineData("Discovery", Color.Warning)]
     [InlineData("In Progress", Color.Warning)]
@@ -45,6 +46,7 @@ public class StatusColorHelperTests
 
     [Theory]
     [InlineData("Overdue", Color.Error)]
+    [InlineData("  Overdue  ", Color.Error)]
     [InlineData("Clawback", Color.Error)]
     [InlineData("Rejected", Color.Error)]
     [InlineData("Cancelled", Color.Error)]
@@ -57,6 +59,7 @@ public class StatusColorHelperTests
 
     [Theory]
     [InlineData("Draft", Color.Default)]
+    [InlineData("  Draft  ", Color.Default)]
     [InlineData("Closed", Color.Default)]
     [InlineData("Completed", Color.Default)]
     [InlineData("Project In Progress", Color.Default)]

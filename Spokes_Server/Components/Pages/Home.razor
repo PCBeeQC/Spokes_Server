@@ -1,18 +1,9 @@
 @page "/"
-@inject NavigationManager Nav
-@using Spokes_Server.Core.Data
-@using Spokes_Server.Core.Models.Core
-@using Spokes_Server.Core.Models.Projects
-@using Spokes_Server.Core.Models.Accounting
-@using Spokes_Server.Core.Models.Communication
-@using Spokes_Server.Core.Models.HR
-@using Spokes_Server.Core.Services
-@using Spokes_Server.Components.Shared
 @using Spokes_Server.Core.Constants
-@using Spokes_Server.Core.Helpers
-@using MudBlazor
 @using System.Globalization
 @using Spokes_Server.Components.Dialogs
+@using Spokes_Server.Components.Pages.Chat
+@inject NavigationManager Nav
 @inject Database Db
 @inject UserService UserService
 @inject IDialogService DialogService
@@ -22,7 +13,7 @@
 
 @if (IsFriendEdition)
 {
-    <Spokes_Server.Components.Pages.Chat.Chat />
+    <Chat />
 }
 else
 {
@@ -56,7 +47,7 @@ else
                                     OnClick="@(() => Nav.NavigateTo("/planning/calendar"))">Calendar</MudButton>
                             </div>
 
-                            @if (WeekEvents.Any())
+                            @if (WeekEvents.Count > 0)
 
                             {
                                 <MudList T="string" Dense="true">
@@ -70,11 +61,15 @@ else
                                         
                                         @foreach (var evt in group)
                                         {
-                                            var cat = Categories.FirstOrDefault(c => string.Equals(c.Id, evt.Category, StringComparison.OrdinalIgnoreCase) || string.Equals(c.Name, evt.Category, StringComparison.OrdinalIgnoreCase));
-                                            Color catColor = Color.Info;
-                                            if (cat != null) Enum.TryParse(cat.Color, out catColor);
+                                            var effCat = CalendarEffectiveCategory.Resolve(
+                                                evt,
+                                                _currentUser?.Id ?? "",
+                                                _currentUserTeamIds,
+                                                _employeeNames,
+                                                _teamNames,
+                                                Categories.ToDictionary(c => c.Id, c => c));
 
-                                            <MudListItem T="string" Icon="@Icons.Material.Filled.Event" IconColor="@catColor" OnClick="@(() => OpenEventDialog(evt))">
+                                            <MudListItem T="string" Icon="@Icons.Material.Filled.Event" IconColor="@effCat.Color" OnClick="@(() => OpenEventDialog(evt))">
                                                 <div class="d-flex justify-space-between align-center" style="width: 100%">
                                                     <div class="d-flex flex-column">
                                                         <MudText Typo="Typo.subtitle2">@evt.Title</MudText>
@@ -82,9 +77,9 @@ else
                                                             @(evt.IsAllDay ? "All Day" : $"{evt.Start:HH:mm} - {evt.End:HH:mm}")
                                                         </MudText>
                                                     </div>
-                                                    @if (cat != null)
+                                                    @if (!string.IsNullOrEmpty(effCat.DisplayName))
                                                     {
-                                                        <MudChip T="string" Color="@catColor" Size="Size.Small" Variant="Variant.Outlined">@cat.Name</MudChip>
+                                                        <MudChip T="string" Color="@effCat.Color" Size="Size.Small" Variant="Variant.Outlined">@effCat.DisplayName</MudChip>
                                                     }
                                                 </div>
                                             </MudListItem>
@@ -296,6 +291,9 @@ else
 
     private List<CalendarEvent> WeekEvents = new();
     private List<CalendarCategory> Categories = new();
+    private HashSet<string> _currentUserTeamIds = [];
+    private Dictionary<string, string> _employeeNames = [];
+    private Dictionary<string, string> _teamNames = [];
 
 
 
@@ -333,7 +331,21 @@ else
         
         if (!IsFriendEdition)
         {
-            Categories = Db.CompanyProfile.Get().CalendarCategories;
+            var serverProfile = Db.CompanyProfile.Get();
+            Categories = _currentUser != null
+                ? _currentUser.EnsureCalendarCategories(serverProfile)
+                : CalendarCategoryDefaults.CloneList(serverProfile?.CalendarCategories);
+
+            _employeeNames = Db.Employees.GetAll().ToDictionary(e => e.Id, e => e.FullName);
+            _teamNames = Db.Teams.GetAll().ToDictionary(t => t.Id, t => t.Name);
+            _currentUserTeamIds.Clear();
+            if (!string.IsNullOrEmpty(_currentUser?.TeamId))
+                _currentUserTeamIds.Add(_currentUser.TeamId);
+            if (_currentUser != null)
+            {
+                foreach (var t in Db.Teams.GetAll().Where(t => t.LeaderId == _currentUser.Id))
+                    _currentUserTeamIds.Add(t.Id);
+            }
         }
 
         if (_currentUser != null && !IsFriendEdition)
@@ -477,7 +489,7 @@ else
         .Where(e => (e.IsCompanyWide || 
                      e.EmployeeId == _currentUser.Id || 
                      (e.Attendees != null && e.Attendees.Contains(_currentUser.Id)) || 
-                     (!string.IsNullOrEmpty(_currentUser.TeamId) && e.InvitedTeamIds != null && e.InvitedTeamIds.Contains(_currentUser.TeamId))) &&
+                     (e.InvitedTeamIds != null && e.InvitedTeamIds.Any(tId => _currentUserTeamIds.Contains(tId)))) &&
         e.Start < endOfWeek && e.End > today) // Overlaps this week
 
 
@@ -1065,7 +1077,14 @@ else
     private async Task OpenEventDialog(CalendarEvent evt)
     {
         var parameters = new DialogParameters { ["Event"] = evt, ["IsNew"] = false };
-        var dialog = await DialogService.ShowAsync<CalendarEventDialog>("Event Details", parameters);
+        var options = new DialogOptions
+        {
+            MaxWidth = MaxWidth.Small,
+            FullWidth = true,
+            CloseButton = true,
+            CloseOnEscapeKey = true
+        };
+        var dialog = await DialogService.ShowAsync<CalendarEventDialog>("Event Details", parameters, options);
         var result = await dialog.Result;
 
         if (result != null && !result.Canceled)

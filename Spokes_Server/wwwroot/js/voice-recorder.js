@@ -158,7 +158,7 @@ window.spokesVoiceRecorder = {
                 this.audioChunks = [];
 
                 // Push to the exact same upload pipeline as images/files
-                if (window.spokesUpload && window.spokesUpload.uploadFileObject) {
+                if (window.spokesUpload?.uploadFileObject) {
                     if (uploaderDotNetRef) {
                         uploaderDotNetRef.invokeMethodAsync('OnUploadStartedCallback', 1).catch(() => {});
                     }
@@ -192,7 +192,7 @@ window.spokesAudioPlayer = {
     pause: (el) => el.pause(),
     setCurrentTime: (el, time) => { el.currentTime = time; },
     getDuration: async (el) => {
-        if (el.duration === Infinity || isNaN(el.duration)) {
+        if (el.duration === Infinity || Number.isNaN(el.duration)) {
             return new Promise((resolve) => {
                 el._isCalculatingDuration = true;
                 let cleanup = null;
@@ -203,7 +203,7 @@ window.spokesAudioPlayer = {
                 }, 2000);
 
                 const onDurationChange = () => {
-                    if (el.duration !== Infinity && !isNaN(el.duration)) {
+                    if (el.duration !== Infinity && !Number.isNaN(el.duration)) {
                         if (cleanup) cleanup();
                         resolve(el.duration);
                     }
@@ -227,3 +227,144 @@ window.spokesAudioPlayer = {
         return el.currentTime;
     }
 };
+
+window.spokesMicDiagnostic = {
+    mediaRecorder: null,
+    audioChunks: [],
+    stream: null,
+    audioCtx: null,
+    analyser: null,
+    source: null,
+    animationId: null,
+    lastBlobUrl: null,
+
+    start: async function (canvasId, deviceId = null) {
+        this.stop();
+
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+            console.error('[spokesMicDiagnostic] getUserMedia not supported.');
+            return false;
+        }
+
+        try {
+            const constraints = {
+                audio: deviceId ? { deviceId: { exact: deviceId } } : true
+            };
+            this.stream = await navigator.mediaDevices.getUserMedia(constraints);
+            this.audioChunks = [];
+
+            let options = { mimeType: 'audio/webm' };
+            if (!MediaRecorder.isTypeSupported('audio/webm')) {
+                if (MediaRecorder.isTypeSupported('audio/mp4')) {
+                    options = { mimeType: 'audio/mp4' };
+                } else if (MediaRecorder.isTypeSupported('audio/ogg')) {
+                    options = { mimeType: 'audio/ogg' };
+                } else {
+                    options = {};
+                }
+            }
+
+            this.mediaRecorder = new MediaRecorder(this.stream, options);
+            this.mediaRecorder.ondataavailable = (e) => {
+                if (e.data && e.data.size > 0) {
+                    this.audioChunks.push(e.data);
+                }
+            };
+            this.mediaRecorder.start(100);
+
+            if (canvasId) {
+                const canvas = document.getElementById(canvasId);
+                if (canvas) {
+                    const canvasCtx = canvas.getContext("2d");
+                    const dpr = window.devicePixelRatio || 1;
+                    const rect = canvas.getBoundingClientRect();
+                    canvas.width = rect.width * dpr;
+                    canvas.height = rect.height * dpr;
+                    canvasCtx.scale(dpr, dpr);
+
+                    const AudioContext = window.AudioContext || window.webkitAudioContext;
+                    this.audioCtx = new AudioContext();
+                    this.analyser = this.audioCtx.createAnalyser();
+                    this.source = this.audioCtx.createMediaStreamSource(this.stream);
+                    this.source.connect(this.analyser);
+
+                    this.analyser.fftSize = 64;
+                    const bufferLength = this.analyser.frequencyBinCount;
+                    const dataArray = new Uint8Array(bufferLength);
+
+                    const draw = () => {
+                        if (!this.stream) return;
+                        this.animationId = requestAnimationFrame(draw);
+
+                        this.analyser.getByteFrequencyData(dataArray);
+
+                        canvasCtx.clearRect(0, 0, rect.width, rect.height);
+                        const barWidth = (rect.width / bufferLength) * 2;
+                        let barHeight;
+                        let x = 0;
+
+                        for (let i = 0; i < bufferLength; i++) {
+                            barHeight = (dataArray[i] / 255) * rect.height;
+                            canvasCtx.fillStyle = 'rgba(89, 74, 226, 0.85)';
+                            canvasCtx.fillRect(x, rect.height / 2 - barHeight / 2, barWidth, Math.max(2, barHeight));
+                            x += barWidth + 1;
+                        }
+                    };
+                    draw();
+                }
+            }
+
+            return true;
+        } catch (err) {
+            console.error('[spokesMicDiagnostic] Error starting test:', err);
+            return false;
+        }
+    },
+
+    stop: function () {
+        if (this.animationId) {
+            cancelAnimationFrame(this.animationId);
+            this.animationId = null;
+        }
+        if (this.source) {
+            try { this.source.disconnect(); } catch (e) {}
+            this.source = null;
+        }
+        if (this.audioCtx) {
+            try { this.audioCtx.close(); } catch (e) {}
+            this.audioCtx = null;
+        }
+        if (this.stream) {
+            try { this.stream.getTracks().forEach(t => t.stop()); } catch (e) {}
+            this.stream = null;
+        }
+
+        return new Promise((resolve) => {
+            if (this.mediaRecorder && this.mediaRecorder.state !== 'inactive') {
+                this.mediaRecorder.onstop = () => {
+                    if (this.lastBlobUrl) {
+                        try { URL.revokeObjectURL(this.lastBlobUrl); } catch (e) {}
+                    }
+                    const mimeType = this.mediaRecorder?.mimeType || 'audio/webm';
+                    const audioBlob = new Blob(this.audioChunks, { type: mimeType });
+                    this.lastBlobUrl = URL.createObjectURL(audioBlob);
+                    this.mediaRecorder = null;
+                    resolve(this.lastBlobUrl);
+                };
+                this.mediaRecorder.stop();
+            } else {
+                this.mediaRecorder = null;
+                resolve(null);
+            }
+        });
+    },
+
+    cleanup: function () {
+        this.stop();
+        if (this.lastBlobUrl) {
+            try { URL.revokeObjectURL(this.lastBlobUrl); } catch (e) {}
+            this.lastBlobUrl = null;
+        }
+    }
+};
+

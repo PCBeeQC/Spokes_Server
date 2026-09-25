@@ -1,10 +1,4 @@
-@using Spokes_Server.Core.Models.Core
-@using Spokes_Server.Core.Models.Projects
-@using Spokes_Server.Core.Models.Accounting
-@using Spokes_Server.Core.Models.Communication
-@using Spokes_Server.Core.Models.HR
-@using MudBlazor
-@inject Spokes_Server.Core.Services.Core.AppLabelService AppLabels
+@inject AppLabelService AppLabels
 
 <MudDialog>
     <DialogContent>
@@ -60,11 +54,11 @@
 @code {
     [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
     [Parameter] public Team Team { get; set; } = default!;
-    [Parameter] public List<Employee> Employees { get; set; } = new();
+    [Parameter] public List<Employee> Employees { get; set; } = [];
 
     private MudForm form = default!;
     private bool success;
-    private HashSet<string> SelectedMemberIds { get; set; } = new();
+    private HashSet<string> SelectedMemberIds { get; set; } = [];
 
     protected override void OnInitialized()
     {
@@ -103,7 +97,7 @@
     public class TeamDialogResult
     {
         public Team Team { get; set; } = new();
-        public List<string> MemberIds { get; set; } = new();
+        public List<string> MemberIds { get; set; } = [];
     }
 }
 

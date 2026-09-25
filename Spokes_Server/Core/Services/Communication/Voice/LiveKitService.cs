@@ -1,8 +1,10 @@
-namespace Spokes_Server.Core.Services.Communication.Voice;
-
+using System;
 using System.Diagnostics;
+using System.IO;
 using Microsoft.Extensions.Logging;
 using Spokes_Server.Core.Models.Core;
+
+namespace Spokes_Server.Core.Services.Communication.Voice;
 
 public class LiveKitService
 {
@@ -50,6 +52,11 @@ keys:
   {systemConfig.LiveKitApiKey}: {systemConfig.LiveKitApiSecret}
 logging:
   level: {logLevel}
+audio:
+  active_level: 36
+  min_percentile: 20
+  update_interval: 100
+  smooth_intervals: 2
 ";
 
             File.WriteAllText("/app/livekit.yaml", livekitYaml);

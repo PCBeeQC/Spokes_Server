@@ -1,10 +1,8 @@
-using System;
-using Xunit;
 using Spokes_Server.Core.Services.Core;
 
-namespace Spokes_Server.Tests.Core.Services.Core
-{
-    public class MarkdownSanitizerServiceTests
+namespace Spokes_Server.Tests.Core.Services.Core;
+
+public class MarkdownSanitizerServiceTests
     {
         private readonly MarkdownSanitizerService _service;
 
@@ -17,7 +15,7 @@ namespace Spokes_Server.Tests.Core.Services.Core
         public void RenderSanitizedHtml_NullOrEmpty_ReturnsEmptyString()
         {
             // Act & Assert
-            Assert.Equal(string.Empty, _service.RenderSanitizedHtml(null));
+            Assert.Equal(string.Empty, _service.RenderSanitizedHtml(null!));
             Assert.Equal(string.Empty, _service.RenderSanitizedHtml(""));
         }
 
@@ -104,11 +102,11 @@ namespace Spokes_Server.Tests.Core.Services.Core
             // Assert: Code block content does not contain &nbsp;
             var codeEnd = result.IndexOf("</pre>");
             Assert.True(codeEnd > 0);
-            var codeSection = result.Substring(0, codeEnd);
+            var codeSection = result[..codeEnd];
             Assert.DoesNotContain("&nbsp;", codeSection);
 
             // Assert: Blank line outside code block is preserved as &nbsp;
-            var textSection = result.Substring(codeEnd);
+            var textSection = result[codeEnd..];
             Assert.Contains("&nbsp;", textSection);
         }
 
@@ -138,5 +136,80 @@ namespace Spokes_Server.Tests.Core.Services.Core
             // Assert
             Assert.Contains("&nbsp;", result);
         }
+
+        [Fact]
+        public void RenderSanitizedHtml_CachesResult_ReturnsSameOutput()
+        {
+            // Arrange
+            var markdown = "Caching test markdown";
+
+            // Act
+            var firstResult = _service.RenderSanitizedHtml(markdown);
+            var secondResult = _service.RenderSanitizedHtml(markdown);
+
+            // Assert
+            Assert.NotNull(firstResult);
+            Assert.Equal(firstResult, secondResult);
+        }
+
+        [Fact]
+        public void RenderSanitizedHtml_ThematicDelimiters_AsterisksAndUnderscores()
+        {
+            // Arrange & Act
+            var resultAsterisks = _service.RenderSanitizedHtml("Paragraph\n\n***\n\nNext");
+            var resultUnderscores = _service.RenderSanitizedHtml("Paragraph\n\n___\n\nNext");
+
+            // Assert
+            Assert.Contains("<hr", resultAsterisks);
+            Assert.DoesNotContain("<h2>&nbsp;</h2>", resultAsterisks);
+            Assert.DoesNotContain("<h2", resultAsterisks);
+
+            Assert.Contains("<hr", resultUnderscores);
+            Assert.DoesNotContain("<h2>&nbsp;</h2>", resultUnderscores);
+            Assert.DoesNotContain("<h2", resultUnderscores);
+        }
+
+        [Fact]
+        public void RenderSanitizedHtml_SetextHeadingDelimiterWithEquals()
+        {
+            // Arrange
+            var markdown = "Heading Title\n===\n\nParagraph text";
+
+            // Act
+            var result = _service.RenderSanitizedHtml(markdown);
+
+            // Assert
+            Assert.Contains("<h1>Heading Title</h1>", result);
+            Assert.Contains("<p>Paragraph text</p>", result);
+        }
+
+        [Fact]
+        public void RenderSanitizedHtml_ContainerBlockquoteWithBlankLine()
+        {
+            // Arrange
+            var markdown = "> Quote line 1\n>\n> Quote line 2";
+
+            // Act
+            var result = _service.RenderSanitizedHtml(markdown);
+
+            // Assert
+            Assert.Contains("<blockquote>", result);
+            Assert.Contains("Quote line 1", result);
+            Assert.Contains("Quote line 2", result);
+        }
+
+        [Fact]
+        public void RenderSanitizedHtml_PreservesCarriageReturns_WhenBlankLineHasCrLf()
+        {
+            // Arrange
+            var markdown = "Line 1\r\n\r\nLine 2";
+
+            // Act
+            var result = _service.RenderSanitizedHtml(markdown);
+
+            // Assert
+            Assert.Contains("&nbsp;", result);
+            Assert.Contains("Line 1", result);
+            Assert.Contains("Line 2", result);
+        }
     }
-}

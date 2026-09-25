@@ -2,24 +2,20 @@
 @using Spokes_Server.Core.Models.Core
 @using Spokes_Server.Core.Models.Projects
 @using Spokes_Server.Core.Models.Accounting
-@using Spokes_Server.Core.Models.Communication
 @using Spokes_Server.Core.Models.HR
 @using Spokes_Server.Core.Data
-@using Spokes_Server.Components.Pages.Purchases
-@using MudBlazor
+@using Spokes_Server.Core.Constants
+@using Spokes_Server.Core.Services.Documents
+@using Spokes_Server.Components.Dialogs
+@using Spokes_Server.Components.Pages.Email
 @inject Database Db
 @inject ISnackbar Snackbar
 @inject IDialogService DialogService
 @inject NavigationManager Nav
 @inject IJSRuntime JS
-@inject AuthenticationStateProvider AuthStateProvider
-@using Microsoft.AspNetCore.Components.Authorization
-@using Spokes_Server.Core.Constants
 @inject UserService UserService
-@inject Spokes_Server.Core.Services.Accounting.FinancialCalculationEngine CalcEngine
-@implements IAsyncDisposable
-@using Spokes_Server.Core.Services.Documents
 @inject DocumentPdfService PdfService
+@implements IAsyncDisposable
 
 @if (PO == null || Template == null || Profile == null)
 {
@@ -410,15 +406,15 @@ else
     private PurchaseOrder? PO;
     private CompanyProfile? Profile;
     private DocumentTemplate? Template;
-    private Dictionary<string, string> ProjectNames = new();
+    private Dictionary<string, string> ProjectNames = [];
 
     private string IssuedByName = "";
     private string IssuedByEmail = "";
-    private bool CanManageBills = false;
-    private bool _isAdmin = false;
+    private bool CanManageBills;
+    private bool _isAdmin;
 
     private const int PageHeight = 940;
-    private bool _needsPagination = false;
+    private bool _needsPagination;
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
@@ -497,7 +493,7 @@ else
         }
     }
 
-    private string GetProjectName(string projectId) => ProjectNames.ContainsKey(projectId) ? ProjectNames[projectId] : "";
+    private string GetProjectName(string projectId) => ProjectNames.TryGetValue(projectId, out var name) ? name : "";
     private string FormatMoney(decimal amount)
     {
         var symbol = Template?.CurrencySymbol ?? "$";
@@ -534,15 +530,9 @@ else
         }
     }
 
-    private async Task GeneratePdf()
-    {
-        await JS.InvokeVoidAsync("window.print");
-    }
+    private async Task GeneratePdf() => await JS.InvokeVoidAsync("window.print");
 
-    private void UpdateStatus(string newStatus)
-    {
-        _ = UpdateStatusAsync(newStatus);
-    }
+    private void UpdateStatus(string newStatus) => _ = UpdateStatusAsync(newStatus);
 
     private async Task UpdateStatusAsync(string newStatus)
     {
@@ -579,7 +569,7 @@ else
     }
 
     // --- BILLS LOGIC ---
-    private List<Bill> LinkedBills = new();
+    private List<Bill> LinkedBills = [];
 
     private void LoadBills()
     {
@@ -607,20 +597,17 @@ else
         await OpenBillDialog(bill);
     }
 
-    private async Task EditBill(Bill bill)
-    {
-        await OpenBillDialog(bill);
-    }
+    private Task EditBill(Bill bill) => OpenBillDialog(bill);
 
     private async Task RecordPayment(Bill bill)
     {
-        var parameters = new DialogParameters<Spokes_Server.Components.Dialogs.RecordPaymentDialog>
+        var parameters = new DialogParameters<RecordPaymentDialog>
         {
             { x => x.Message, $"Record payment for {bill.Description}" },
             { x => x.MaxAmount, bill.BalanceDue },
             { x => x.ExistingPayments, bill.Payments }
         };
-        var dialog = await DialogService.ShowAsync<Spokes_Server.Components.Dialogs.RecordPaymentDialog>("Record Payment", parameters);
+        var dialog = await DialogService.ShowAsync<RecordPaymentDialog>("Record Payment", parameters);
         var result = await dialog.Result;
 
         if (result != null && !result.Canceled && result.Data is PaymentRecord payment)
@@ -642,7 +629,7 @@ else
         var parameters = new DialogParameters { ["Bill"] = bill };
         var options = new DialogOptions { MaxWidth = MaxWidth.ExtraExtraLarge, FullWidth = true, CloseButton = true };
 
-        var dialog = await DialogService.ShowAsync<Spokes_Server.Components.Dialogs.BillEditorDialog>("Bill Details", parameters,
+        var dialog = await DialogService.ShowAsync<BillEditorDialog>("Bill Details", parameters,
         options);
         var result = await dialog.Result;
 
@@ -688,7 +675,7 @@ else
         };
 
         var options = new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true };
-        await DialogService.ShowAsync<Spokes_Server.Components.Pages.Email.EmailComposer>("Send Email", parameters, options);
+        await DialogService.ShowAsync<EmailComposer>("Send Email", parameters, options);
     }
 
     private async Task OpenPdf()

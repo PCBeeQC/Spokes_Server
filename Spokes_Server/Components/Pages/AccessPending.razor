@@ -1,7 +1,7 @@
 @page "/access-pending"
 @layout LoginLayout
-@using Microsoft.AspNetCore.Components.Authorization
 @using Spokes_Server.Components.Layout
+@using System.Security.Claims
 @inject AuthenticationStateProvider AuthStateProvider
 @inject NavigationManager Nav
 
@@ -64,7 +64,7 @@
             ?? user.Identity.Name
             ?? "Unknown";
             userEmail = user.FindFirst("email")?.Value
-            ?? user.FindFirst(System.Security.Claims.ClaimTypes.Email)?.Value
+            ?? user.FindFirst(ClaimTypes.Email)?.Value
             ?? "Not provided";
 
             // If user has an EmployeeId claim, they shouldn't be here - redirect to home

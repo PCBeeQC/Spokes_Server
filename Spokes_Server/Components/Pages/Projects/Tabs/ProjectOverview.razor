@@ -1,12 +1,10 @@
 @using Spokes_Server.Core.Models.Core
 @using Spokes_Server.Core.Models.Projects
 @using Spokes_Server.Core.Models.Accounting
-@using Spokes_Server.Core.Models.Communication
 @using Spokes_Server.Core.Models.HR
 @using Spokes_Server.Core.Data
 @inject Database Db
 @inject NavigationManager Nav
-@inject Spokes_Server.Core.Services.Accounting.FinancialCalculationEngine CalcEngine
 
 <MudGrid Class="mb-6">
 
@@ -457,8 +455,8 @@
         public decimal GrandTotal => NetTotal + TaxAmount;
     }
 
-    private List<LaborRow> LaborRows = new();
-    private List<PurchaseRow> PurchaseRows = new();
+    private List<LaborRow> LaborRows = [];
+    private List<PurchaseRow> PurchaseRows = [];
 
     private decimal TotalRevenue = 0;
     private decimal TotalLaborCost => LaborRows.Sum(r => r.CostIncurred);
@@ -485,7 +483,6 @@
     private decimal TotalPaid = 0;
     private decimal BalanceDue => TotalInvoiced - TotalPaid;
     private Project CurrentProject;
-    private bool IsCommissionPayable = false;
 
     // Timeline Context
     private Quote? AcceptedQuote = null;
@@ -524,7 +521,7 @@
         public string Status { get; set; }
     }
 
-    private List<CommissionBreakdownRow> CommissionRows = new();
+    private List<CommissionBreakdownRow> CommissionRows = [];
 
     private void LoadCommissions()
     {
@@ -583,13 +580,6 @@
 
         TotalInvoiced = projectInvoices.Sum(i => i.GrandTotal);
         TotalPaid = projectInvoices.Sum(i => i.AmountPaid);
-
-        // Check Commission Status
-        if (CurrentProject != null)
-        {
-            var profile = Db.CompanyProfile.Get();
-            IsCommissionPayable = CurrentProject.IsCommissionPayable(projectInvoices, profile.ProjectStatuses);
-        }
 
         // Check for Aging Receivables (> 30 days old with balance due)
         var unpaidInvoices = projectInvoices
@@ -736,7 +726,7 @@
         public string ReceiptPath { get; set; }
     }
 
-    private List<ExpenseRow> ExpenseRows = new();
+    private List<ExpenseRow> ExpenseRows = [];
     private decimal TotalExpenseCost => ExpenseRows.Sum(e => e.Total);
 
     private void LoadExpenses()

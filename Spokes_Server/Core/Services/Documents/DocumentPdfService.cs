@@ -1,7 +1,5 @@
-using System;
-using System.IO;
-using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using PuppeteerSharp;
 using PuppeteerSharp.Media;
@@ -24,7 +22,7 @@ public class DocumentPdfService : IDisposable
     private readonly string _dataPath;
     private IBrowser? _browser;
 
-    public DocumentPdfService(RenderTokenService tokenService, IHttpContextAccessor httpContextAccessor, Microsoft.Extensions.Configuration.IConfiguration config, ILogger<DocumentPdfService> logger)
+    public DocumentPdfService(RenderTokenService tokenService, IHttpContextAccessor httpContextAccessor, IConfiguration config, ILogger<DocumentPdfService> logger)
     {
         _tokenService = tokenService;
         _httpContextAccessor = httpContextAccessor;
@@ -48,7 +46,7 @@ public class DocumentPdfService : IDisposable
         _browser = await Puppeteer.LaunchAsync(new LaunchOptions
         {
             Headless = true,
-            Args = new[] { "--no-sandbox", "--disable-setuid-sandbox" }
+            Args = ["--no-sandbox", "--disable-setuid-sandbox"]
         });
 
         return _browser;
@@ -118,7 +116,7 @@ public class DocumentPdfService : IDisposable
             // 2. Navigate and wait until network is mostly idle (so fonts/images load)
             await page.GoToAsync(url, new NavigationOptions
             {
-                WaitUntil = new[] { WaitUntilNavigation.Networkidle0 }
+                WaitUntil = [WaitUntilNavigation.Networkidle0]
             });
 
             _logger.LogInformation("Waiting for layout shift completion...");

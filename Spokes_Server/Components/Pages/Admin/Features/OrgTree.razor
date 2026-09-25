@@ -1,12 +1,7 @@
-@using Spokes_Server.Core.Models.Core
-@using Spokes_Server.Core.Models.Projects
-@using Spokes_Server.Core.Models.Accounting
-@using Spokes_Server.Core.Models.Communication
 @using Spokes_Server.Core.Models.HR
 @using Spokes_Server.Core.Data
 @inject Database Db
 @inject NavigationManager Nav
-@using MudBlazor
 
 <MudPaper Class="pa-4" Elevation="0" Outlined="true">
     <MudText Typo="Typo.h6" Class="mb-4">Organization Chart</MudText>
@@ -64,9 +59,9 @@
 </MudPaper>
 
 @code {
-    private List<TreeItemData<Employee>> TreeItems = new();
-    private List<Employee> AllEmployees = new();
-    private List<Team> AllTeams = new();
+    private List<TreeItemData<Employee>> TreeItems = [];
+    private List<Employee> AllEmployees = [];
+    private List<Team> AllTeams = [];
 
     protected override void OnInitialized()
     {
@@ -105,24 +100,12 @@
 
     private TreeItemData<Employee> CreateNode(Employee emp)
     {
-        var node = new TreeItemData<Employee>
+        return new TreeItemData<Employee>
         {
             Value = emp,
-            Expanded = true
+            Expanded = true,
+            Children = AllEmployees.Where(e => GetderivedManagerId(e) == emp.Id).Select(CreateNode).ToList()
         };
-
-        // Find children: Anyone whose derived manager is ME
-        var children = AllEmployees.Where(e => GetderivedManagerId(e) == emp.Id).ToList();
-        
-        var childrenList = new List<TreeItemData<Employee>>();
-        foreach (var child in children)
-        {
-            childrenList.Add(CreateNode(child));
-        }
-        
-        node.Children = childrenList;
-        
-        return node;
     }
 
     private string GetTeamName(string teamId)
@@ -131,14 +114,8 @@
         return AllTeams.FirstOrDefault(t => t.Id == teamId)?.Name ?? "";
     }
 
-    private void OpenTimesheet(string employeeId)
-    {
-        Nav.NavigateTo($"/timesheet/{employeeId}");
-    }
+    private void OpenTimesheet(string employeeId) => Nav.NavigateTo($"/timesheet/{employeeId}");
 
-    private IEnumerable<Team> GetTeamsLedBy(string employeeId)
-    {
-        return AllTeams.Where(t => t.LeaderId == employeeId);
-    }
+    private IEnumerable<Team> GetTeamsLedBy(string employeeId) => AllTeams.Where(t => t.LeaderId == employeeId);
 }
 

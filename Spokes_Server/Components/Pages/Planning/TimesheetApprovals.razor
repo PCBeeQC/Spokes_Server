@@ -1,14 +1,8 @@
 @page "/planning/timesheet-approvals"
 <PageTitle>Timesheet Approvals</PageTitle>
-@using Spokes_Server.Core.Data
-@using Spokes_Server.Core.Models.Core
-@using Spokes_Server.Core.Models.HR
-@using Spokes_Server.Core.Models.Projects
-@using Spokes_Server.Core.Constants
-@using Spokes_Server.Core.Services
 @using Spokes_Server.Core.Services.HR
+@using Spokes_Server.Components.Dialogs
 @using System.Globalization
-@using Microsoft.AspNetCore.Components.Authorization
 @inject Database Db
 @inject HRService HRService
 @inject UserService UserService
@@ -82,7 +76,7 @@
 @code {
     private bool _loading = true;
     private Employee? _currentUser;
-    private List<Timesheet> _pendingTimesheets = new();
+    private List<Timesheet> _pendingTimesheets = [];
 
     protected override async Task OnInitializedAsync()
     {
@@ -127,10 +121,7 @@
         }
     }
 
-    private bool IsTeamLeader(Employee emp)
-    {
-        return Db.Teams.GetAll().Any(t => t.LeaderId == emp.Id);
-    }
+    private bool IsTeamLeader(Employee emp) => Db.Teams.GetAll().Any(t => t.LeaderId == emp.Id);
 
     private string GetEmployeeDisplayName(Timesheet ts)
     {
@@ -160,13 +151,13 @@
     {
         if (_currentUser == null) return;
 
-        var parameters = new DialogParameters<Spokes_Server.Components.Dialogs.NoteEditDialog>
+        var parameters = new DialogParameters<NoteEditDialog>
         {
             { x => x.Note, "" },
             { x => x.Title, "Rejection Reason" }
         };
         var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Small, FullWidth = true };
-        var dialog = await DialogService.ShowAsync<Spokes_Server.Components.Dialogs.NoteEditDialog>("Rejection Reason", parameters, options);
+        var dialog = await DialogService.ShowAsync<NoteEditDialog>("Rejection Reason", parameters, options);
         var dialogResult = await dialog.Result;
 
         if (!dialogResult.Canceled && dialogResult.Data is string rejectionNote)
@@ -178,7 +169,7 @@
         }
     }
 
-    private string GetWeekDateRange(Timesheet ts)
+    private static string GetWeekDateRange(Timesheet ts)
     {
         try
         {
@@ -191,7 +182,7 @@
         }
     }
 
-    private string FormatHours(decimal hours)
+    private static string FormatHours(decimal hours)
     {
         if (hours == 0) return "0:00";
         var ts = TimeSpan.FromHours((double)hours);

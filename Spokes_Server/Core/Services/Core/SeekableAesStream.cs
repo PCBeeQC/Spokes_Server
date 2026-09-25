@@ -1,5 +1,3 @@
-using System;
-using System.IO;
 using System.Security.Cryptography;
 
 namespace Spokes_Server.Core.Services.Core;
@@ -16,8 +14,11 @@ public class SeekableAesStream : Stream
 
     public SeekableAesStream(Stream baseStream, byte[] key)
     {
-        _baseStream = baseStream ?? throw new ArgumentNullException(nameof(baseStream));
-        _key = key ?? throw new ArgumentNullException(nameof(key));
+        ArgumentNullException.ThrowIfNull(baseStream);
+        ArgumentNullException.ThrowIfNull(key);
+
+        _baseStream = baseStream;
+        _key = key;
 
         if (!_baseStream.CanSeek || !_baseStream.CanRead)
             throw new ArgumentException("Base stream must be readable and seekable.");
@@ -122,8 +123,7 @@ public class SeekableAesStream : Stream
             _ => throw new ArgumentException("Invalid seek origin")
         };
 
-        if (targetPosition < 0) targetPosition = 0;
-        if (targetPosition > _length) targetPosition = _length;
+        targetPosition = Math.Clamp(targetPosition, 0, _length);
 
         if (targetPosition == _position && _cryptoStream != null)
             return _position;

@@ -1,11 +1,4 @@
-@using Spokes_Server.Core.Models.Core
-@using Spokes_Server.Core.Models.Projects
-@using Spokes_Server.Core.Models.Accounting
-@using Spokes_Server.Core.Models.Communication
-@using Spokes_Server.Core.Models.HR
-@using Spokes_Server.Core.Data
 @using Spokes_Server.Core.Constants
-@using Spokes_Server.Components.Shared
 @inject Database Db
 @inject IDialogService DialogService
 @inject ISnackbar Snackbar
@@ -424,17 +417,17 @@
 </div>
 
 @code {
-    [Parameter] public List<ExpenseReport> MyReports { get; set; } = new();
+    [Parameter] public List<ExpenseReport> MyReports { get; set; } = [];
     [Parameter] public string EmployeeId { get; set; } = "";
     [Parameter] public string EmployeeName { get; set; } = "";
-    [Parameter] public bool CanCreateReport { get; set; } = false;
+    [Parameter] public bool CanCreateReport { get; set; }
     [Parameter] public EventCallback OnReportUpdated { get; set; }
 
     private ExpenseReport? _activeReport;
     private List<ExpenseReport> DraftReports => MyReports.Where(r => r.Status == ExpenseReportStatus.Draft).ToList();
     private List<ExpenseReport> PastReports => MyReports.Where(r => r.Status != ExpenseReportStatus.Draft).ToList();
 
-    private List<Project> _projects = new();
+    private List<Project> _projects = [];
     private decimal _kilometrageRate = 0.65m;
 
     // Inline form state
@@ -443,11 +436,11 @@
     private string _itemProjectId = "";
     private string _itemDescription = "";
     private decimal _itemAmount = 0;
-    private bool _itemIsKilometrage = false;
+    private bool _itemIsKilometrage;
     private decimal _itemKilometers = 0;
     private string _itemReceiptPath = "";
-    private bool _isUploadingReceipt = false;
-    private double _uploadProgress = 0;
+    private bool _isUploadingReceipt;
+    private double _uploadProgress;
 
     protected override async Task OnInitializedAsync()
     {
@@ -499,7 +492,7 @@
             else
             {
                 var all = Db.Projects.GetAll().Where(p => p.IsActive);
-                var filtered = new List<Project>();
+                List<Project> filtered = [];
                 foreach (var p in all)
                 {
                     if (p.AccessPolicy == "Public")
@@ -533,7 +526,7 @@
         return proj?.DisplayName ?? "No Project";
     }
 
-    private bool IsImageFile(string? path)
+    private static bool IsImageFile(string? path)
     {
         if (string.IsNullOrEmpty(path)) return false;
         var ext = Path.GetExtension(path).ToLowerInvariant();
@@ -594,10 +587,7 @@
         catch { }
     }
 
-    private async Task OpenCurrentReceipt()
-    {
-        await OpenReceipt(_itemReceiptPath);
-    }
+    private Task OpenCurrentReceipt() => OpenReceipt(_itemReceiptPath);
 
     private void RemoveCurrentReceipt()
     {

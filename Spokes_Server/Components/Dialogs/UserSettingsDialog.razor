@@ -1,9 +1,8 @@
-@using Spokes_Server.Core.Models.Core
-@using Spokes_Server.Core.Models.HR
-@using Spokes_Server.Core.Data
 @using Spokes_Server.Core.Constants
-@using MudBlazor
-@using Microsoft.AspNetCore.Components.Authorization
+@using Spokes_Server.Core.Services.Licensing
+@using Spokes_Server.Core.Services.UI
+@using Spokes_Server.Core.Models.Communication.Notifications
+@using Microsoft.Extensions.Configuration
 @using System.Security.Claims
 @using System.Text.Json
 @implements IDisposable
@@ -11,13 +10,14 @@
 @inject ISnackbar Snackbar
 @inject Database Db
 @inject AuthenticationStateProvider AuthStateProvider
-@inject Spokes_Server.Core.Services.Core.UserService UserService
+@inject UserService UserService
 @inject IDialogService DialogService
 @inject PresenceStateService PresenceState
 @inject NavigationManager Nav
-@inject Spokes_Server.Core.Services.Core.AccountDeletionService AccountDeletionService
-@inject Microsoft.Extensions.Configuration.IConfiguration Config
-@inject Spokes_Server.Core.Services.Licensing.LicenseValidationService LicenseValidationService
+@inject AccountDeletionService AccountDeletionService
+@inject IConfiguration Config
+@inject LicenseValidationService LicenseValidationService
+@inject ISoundService SoundService
 
 <MudDialog>
     <TitleContent>
@@ -115,15 +115,25 @@
                                         <MudText Typo="Typo.body2">Limit Notification Sounds</MudText>
                                         <MudText Typo="Typo.caption" Color="Color.Secondary" Style="line-height: 1.2;">Only play a sound for the first few unread messages in a channel.</MudText>
                                     </div>
-                                <MudSwitch Value="_limitConsecutiveSounds" Color="Color.Secondary" Disabled="!_pushEnabled" ValueChanged="OnLimitConsecutiveSoundsChanged" T="bool" Class="ma-0" />
+                                <MudSwitch Value="_limitConsecutiveSounds" Color="Color.Secondary" ValueChanged="OnLimitConsecutiveSoundsChanged" T="bool" Class="ma-0" />
                                 </div>
                                 
                                 <MudCollapse Expanded="_limitConsecutiveSounds">
                                     <div class="d-flex align-center pt-2 pb-2 pl-4">
                                         <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mr-4">Notification limit per channel</MudText>
-                                        <MudNumericField Value="_consecutiveSoundLimit" T="int" ValueChanged="OnConsecutiveSoundLimitChanged" Min="1" Max="20" Variant="Variant.Outlined" Margin="Margin.Dense" Style="max-width: 80px;" Disabled="!_pushEnabled" />
+                                        <MudNumericField Value="_consecutiveSoundLimit" T="int" ValueChanged="OnConsecutiveSoundLimitChanged" Min="1" Max="20" Variant="Variant.Outlined" Margin="Margin.Dense" Style="max-width: 80px;" />
                                     </div>
                                 </MudCollapse>
+
+                                <MudDivider Class="my-2" />
+
+                                <div class="d-flex align-center justify-space-between py-2">
+                                    <div>
+                                        <MudText Typo="Typo.body2" Style="font-weight: 500;">Notification Sounds</MudText>
+                                        <MudText Typo="Typo.caption" Color="Color.Secondary" Style="line-height: 1.2;">Customize notification sounds for chats, calls, and calendar alerts.</MudText>
+                                    </div>
+                                    <MudButton Class="ml-2 flex-shrink-0" Variant="Variant.Outlined" Color="Color.Primary" OnClick="OpenNotificationSoundsDialog">Manage</MudButton>
+                                </div>
                         </div>
                     </MudPaper>
                 </div>
@@ -344,7 +354,7 @@
                                 <MudCardContent Class="pa-4 flex-grow-1">
                                     <div class="d-flex align-center justify-space-between mb-2">
                                         <div class="d-flex align-center gap-2" style="max-width: 100%;">
-                                            <MudIcon Icon="@(device.DeviceType == "Mobile" ? Icons.Material.Filled.PhoneAndroid : Icons.Material.Filled.Computer)" Size="Size.Small" Color="Color.Default" Class="flex-shrink-0" />
+                                            <MudIcon Icon="@(device.DeviceType == "Mobile" || device.IsCapacitor ? Icons.Material.Filled.PhoneAndroid : Icons.Material.Filled.Computer)" Size="Size.Small" Color="Color.Default" Class="flex-shrink-0" />
                                             
                                             @if (_editingDeviceId == device.Id)
                                             {
@@ -403,7 +413,7 @@
 
                                     @if (device.HasPush)
                                     {
-                                        var isDeviceMobile = device.DeviceType == "Mobile" || device.PushSubscriptionType == "NativeRelay";
+                                        var isDeviceMobile = device.DeviceType == "Mobile" || device.PushSubscriptionType == "NativeRelay" || device.IsCapacitor;
                                         var isPushBlockedForDevice = isDeviceMobile && !_isNativePushLicensed;
 
                                         <MudDivider Class="mb-3" />
@@ -421,7 +431,7 @@
                                                     ValueChanged="@(v => ToggleDeviceEnabled(device.Id, v))"
                                                     Color="Color.Primary" Size="Size.Small" />
                                             </div>
-                                            @if (device.DeviceType == "Desktop")
+                                            @if (device.DeviceType == "Desktop" && !device.IsCapacitor && !isDeviceMobile)
                                             {
                                                 <div class="d-flex justify-space-between align-center mt-n1">
                                                     <MudText Typo="Typo.body2" Color="Color.Secondary">Idle Tracking</MudText>
@@ -751,17 +761,18 @@
             _devices = sessions.Select(s => new DeviceInfo
             {
                 Id = s.Id,
-                DeviceType = s.DeviceType,
+                DeviceType = s.IsCapacitorApp ? "Mobile" : s.DeviceType,
                 DeviceName = !string.IsNullOrEmpty(s.DeviceName) ? s.DeviceName : s.DeviceInfo,
                 DeviceInfoText = s.DeviceInfo,
                 LastSeenAt = s.LastSeenAt,
                 IsEnabled = s.HasPush && s.PushEnabled,
-                IsIdleDetectionEnabled = s.IsIdleDetectionEnabled,
+                IsIdleDetectionEnabled = s.IsCapacitorApp ? false : s.IsIdleDetectionEnabled,
                 HasPush = s.HasPush,
                 PushSubscriptionType = s.PushSubscriptionType ?? "",
                 Endpoint = s.PushEndpoint ?? "",
                 HasVaultCookie = s.HasVaultCookie,
-                DeviceId = s.DeviceId
+                DeviceId = s.DeviceId,
+                IsCapacitor = s.IsCapacitorApp
             })
             .OrderByDescending(d => d.Id == _currentSessionId)
             .ThenByDescending(d => d.LastSeenAt)
@@ -971,6 +982,17 @@
                 return;
             }
             AddSubscriptionLog("Permission granted.");
+
+            if (permResult != null && permResult.TryGetValue("soundDisabled", out var sd) && sd?.ToString()?.Equals("True", StringComparison.OrdinalIgnoreCase) == true)
+            {
+                Snackbar.Add("Notification sounds are disabled for Spokes in your iPhone Settings.", Severity.Warning, config =>
+                {
+                    config.Action = "Open Settings";
+                    config.ActionColor = Color.Warning;
+                    config.OnClick = _ => JS.InvokeVoidAsync("pushNotifications.openAppSettings").AsTask();
+                    config.RequireInteraction = true;
+                });
+            }
 
             // 2. Register service worker
             AddSubscriptionLog("Registering service worker...");
@@ -1355,6 +1377,8 @@
         public bool Success { get; set; }
         public bool FallbackUsed { get; set; }
         public string? Error { get; set; }
+        public string? Category { get; set; }
+        public string? Sound { get; set; }
     }
 
     [JSInvokable]
@@ -1363,6 +1387,8 @@
         if (result.Success)
         {
             AddDebugLog($"Service Worker: Notification displayed successfully{(result.FallbackUsed ? " (using Safari fallback)" : "")}.");
+            var cat = !string.IsNullOrEmpty(result.Category) ? result.Category : NotificationCategories.Chat;
+            _ = SoundService.PlayNotificationSoundAsync(cat, isPreview: true);
         }
         else
         {
@@ -1385,6 +1411,7 @@
         public string Endpoint { get; set; } = "";
         public string? DeviceId { get; set; }
         public bool HasVaultCookie { get; set; } = false;
+        public bool IsCapacitor { get; set; } = false;
     }
 
     private async Task OpenSecureChatSettings()
@@ -1394,5 +1421,14 @@
         var dialog = await DialogService.ShowAsync<SecureChatSettingsDialog>("Secure Chat Settings", parameters);
         await dialog.Result;
         StateHasChanged(); // Refresh UI in case they enabled it
+    }
+
+    private async Task OpenNotificationSoundsDialog()
+    {
+        var parameters = new DialogParameters<NotificationSoundsDialog> { { x => x.Employee, _currentUser } };
+        var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Small, FullWidth = true };
+        var dialog = await DialogService.ShowAsync<NotificationSoundsDialog>("Notification Sounds", parameters, options);
+        await dialog.Result;
+        StateHasChanged();
     }
 }

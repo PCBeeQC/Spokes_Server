@@ -1,0 +1,307 @@
+@using MudBlazor
+@using Spokes_Server.Core.Helpers
+@using Spokes_Server.Core.Models.Reports
+@using Spokes_Server.Core.Services.Reports
+@inject ITimesheetReportService ReportService
+
+<MudPaper Elevation="0" Outlined="true" Class="pa-4 rounded-lg mb-6" Style="background: var(--mud-palette-surface);">
+    <MudGrid Class="align-center mb-4">
+        <MudItem xs="12" sm="6">
+            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+                <MudIcon Icon="@Icons.Material.Filled.Insights" Color="Color.Primary" />
+                <MudText Typo="Typo.h6">Interactive Chart Explorer</MudText>
+            </MudStack>
+        </MudItem>
+        <MudItem xs="12" sm="6" Class="d-flex justify-end gap-3 align-center d-print-none">
+            <MudSelect T="ChartType" Label="Chart Type" @bind-Value="_selectedChartType" @bind-Value:after="RebuildChartData" Margin="Margin.Dense" Variant="Variant.Outlined" Style="min-width: 200px;">
+                <MudSelectItem Value="@ChartType.StackedBar">Stacked Bar Chart</MudSelectItem>
+                <MudSelectItem Value="@ChartType.Bar">Bar Chart</MudSelectItem>
+                <MudSelectItem Value="@ChartType.Donut">Donut Chart</MudSelectItem>
+                <MudSelectItem Value="@ChartType.Pie">Pie Chart</MudSelectItem>
+                <MudSelectItem Value="@ChartType.Line">Line Chart</MudSelectItem>
+                <MudSelectItem Value="@ChartType.Timeseries">Time Series Chart</MudSelectItem>
+                <MudSelectItem Value="@ChartType.HeatMap">Heat Map Chart</MudSelectItem>
+            </MudSelect>
+
+            <MudSelect T="string" Label="Breakdown Metric" @bind-Value="_breakdownMetric" @bind-Value:after="RebuildChartData" Margin="Margin.Dense" Variant="Variant.Outlined" Style="min-width: 170px;">
+                <MudSelectItem Value="@("Project")">By Project</MudSelectItem>
+                <MudSelectItem Value="@("Employee")">By Employee</MudSelectItem>
+                <MudSelectItem Value="@("Client")">By Client</MudSelectItem>
+                <MudSelectItem Value="@("Task")">By Task</MudSelectItem>
+                <MudSelectItem Value="@("Day")">By Day (Timeline)</MudSelectItem>
+            </MudSelect>
+        </MudItem>
+    </MudGrid>
+
+    @if (!Entries.Any())
+    {
+        <MudAlert Severity="Severity.Info" Variant="Variant.Outlined">No timesheet entries found for the active filter criteria.</MudAlert>
+    }
+    else
+    {
+        <MudPaper Elevation="0" Outlined="false" Class="pa-2 d-flex flex-column align-center justify-center" Style="min-height: 380px; position: relative; overflow-x: auto;">
+            <ErrorBoundary>
+                <ChildContent>
+                    @if (_selectedChartType == ChartType.Donut || _selectedChartType == ChartType.Pie)
+                    {
+                        <div style="position: relative; width: 100%; display: flex; justify-content: center;">
+                            <MudChart T="double" ChartType="@_selectedChartType" InputData="@_pieData" InputLabels="@_pieLabels" Width="100%" Height="350px" ChartOptions="@_chartOptions" />
+                            @if (_selectedChartType == ChartType.Donut)
+                            {
+                                <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); text-align: center; pointer-events: none;">
+                                    <MudText Typo="Typo.caption" Style="color: var(--mud-palette-text-secondary); text-transform: uppercase;">Total Duration</MudText>
+                                    <MudText Typo="Typo.h5" Style="font-weight: 700; color: var(--mud-palette-text-primary);">@ReportService.FormatDuration(Entries.Sum(e => e.Entry.Hours), Format)</MudText>
+                                </div>
+                            }
+                        </div>
+                    }
+                    else if (_selectedChartType == ChartType.StackedBar)
+                    {
+                        <MudChart T="double" ChartType="ChartType.StackedBar" ChartSeries="@_stackedSeries" XAxisLabels="@_axisLabels" Width="100%" Height="350px" ChartOptions="@_stackedBarOptions" />
+                    }
+                    else if (_selectedChartType == ChartType.Bar)
+                    {
+                        <MudChart T="double" ChartType="ChartType.Bar" ChartSeries="@_barSeries" XAxisLabels="@_axisLabels" Width="100%" Height="350px" ChartOptions="@_barOptions" />
+                    }
+                    else if (_selectedChartType == ChartType.Line)
+                    {
+                        <MudChart T="double" ChartType="ChartType.Line" ChartSeries="@_lineSeries" XAxisLabels="@_axisLabels" Width="100%" Height="350px" ChartOptions="@_lineOptions" />
+                    }
+                    else if (_selectedChartType == ChartType.Timeseries)
+                    {
+                        <MudChart T="double" ChartType="ChartType.Timeseries" ChartSeries="@_lineSeries" XAxisLabels="@_axisLabels" Width="100%" Height="350px" ChartOptions="@_lineOptions" />
+                    }
+                    else if (_selectedChartType == ChartType.HeatMap)
+                    {
+                        <MudChart T="double" ChartType="ChartType.HeatMap" ChartSeries="@_heatMapSeries" XAxisLabels="@_heatMapXLabels" Width="100%" Height="350px" ChartOptions="@_chartOptions" />
+                    }
+                </ChildContent>
+                <ErrorContent>
+                    <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Class="my-4">
+                        Unable to render the chart for this combination of filters. Try switching the Breakdown Metric or selecting another chart type.
+                    </MudAlert>
+                </ErrorContent>
+            </ErrorBoundary>
+        </MudPaper>
+
+        <!-- Chart Axis & Unit Legend Note -->
+        <MudStack Row="true" Justify="Justify.SpaceBetween" AlignItems="AlignItems.Center" Class="mt-2 px-2">
+            <MudText Typo="Typo.caption" Color="Color.Secondary">
+                <b>X-Axis:</b> @_currentXAxisDescription &nbsp;|&nbsp; <b>Y-Axis:</b> @_currentYAxisDescription
+            </MudText>
+            <MudText Typo="Typo.caption" Color="Color.Secondary">
+                Values reflect @(ApplyRounding ? "Rounded" : "Actual") timesheet hours.
+            </MudText>
+        </MudStack>
+    }
+</MudPaper>
+
+@code {
+    [Parameter] public List<TimesheetReportEntry> Entries { get; set; } = [];
+    [Parameter] public TimeDisplayFormat Format { get; set; } = TimeDisplayFormat.Duration_HHMM;
+    [Parameter] public bool ApplyRounding { get; set; }
+
+    private ChartType _selectedChartType = ChartType.StackedBar;
+    private string _breakdownMetric = "Day";
+
+    private double[] _pieData = [];
+    private string[] _pieLabels = [];
+
+    private List<ChartSeries<double>> _stackedSeries = [];
+    private List<ChartSeries<double>> _barSeries = [];
+    private List<ChartSeries<double>> _lineSeries = [];
+    private List<ChartSeries<double>> _heatMapSeries = [];
+
+    private string[] _axisLabels = [];
+    private string[] _heatMapXLabels = [];
+
+    private ChartOptions _chartOptions = new();
+    private BarChartOptions _barOptions = new();
+    private StackedBarChartOptions _stackedBarOptions = new();
+    private LineChartOptions _lineOptions = new();
+
+    private string _currentXAxisDescription = "Date (Days)";
+    private string _currentYAxisDescription = "Duration (Hours [h])";
+
+    protected override void OnParametersSet()
+    {
+        RebuildChartData();
+    }
+
+    private void RebuildChartData()
+    {
+        if (!Entries.Any())
+        {
+            _pieData = [];
+            _pieLabels = [];
+            _stackedSeries = [];
+            _barSeries = [];
+            _lineSeries = [];
+            _axisLabels = [];
+            return;
+        }
+
+        ConfigureChartOptions();
+
+        // 1. Donut / Pie / Rose Data (Top 8 categories)
+        var categoryGroups = _breakdownMetric switch
+        {
+            "Employee" => Entries.GroupBy(e => e.EmployeeName),
+            "Client" => Entries.GroupBy(e => !string.IsNullOrEmpty(e.ClientId) ? e.ClientId : "No Client"),
+            "Task" => Entries.GroupBy(e => e.TaskName),
+            "Day" => Entries.GroupBy(e => e.Entry.Date.ToString("MMM dd")),
+            _ => Entries.GroupBy(e => e.ProjectName)
+        };
+
+        var topCategories = categoryGroups
+            .Select(g => new { Name = g.Key, Total = (double)g.Sum(e => e.Entry.Hours) })
+            .Where(x => x.Total > 0)
+            .OrderByDescending(x => x.Total)
+            .Take(8)
+            .ToList();
+
+        _pieLabels = topCategories.Select(c => c.Name).ToArray();
+        _pieData = topCategories.Select(c => c.Total).ToArray();
+
+        // 2. Stacked Bar / Bar / Line (Time distribution by day or entity)
+        if (_breakdownMetric == "Day")
+        {
+            var dayGroups = Entries
+                .GroupBy(e => e.Entry.Date.Date)
+                .OrderBy(g => g.Key)
+                .ToList();
+
+            _axisLabels = dayGroups.Select(g => g.Key.ToString("ddd, MMM dd")).ToArray();
+
+            var billableData = dayGroups.Select(g => (double)g.Where(e => e.Entry.IsBillable).Sum(e => e.Entry.Hours)).ToArray();
+            var nonBillableData = dayGroups.Select(g => (double)g.Where(e => !e.Entry.IsBillable).Sum(e => e.Entry.Hours)).ToArray();
+            var totalData = dayGroups.Select(g => (double)g.Sum(e => e.Entry.Hours)).ToArray();
+
+            _stackedSeries =
+            [
+                new ChartSeries<double> { Name = "Billable ($)", Data = billableData },
+                new ChartSeries<double> { Name = "Non-Billable", Data = nonBillableData }
+            ];
+
+            _barSeries =
+            [
+                new ChartSeries<double> { Name = "Total Hours", Data = totalData }
+            ];
+
+            _lineSeries =
+            [
+                new ChartSeries<double> { Name = "Daily Hours Logged", Data = totalData }
+            ];
+
+            _currentXAxisDescription = "Timeline / Calendar Days";
+            _currentYAxisDescription = "Duration in Hours (h)";
+        }
+        else
+        {
+            var entityGroups = categoryGroups
+                .Select(g => new
+                {
+                    Name = g.Key,
+                    Billable = (double)g.Where(e => e.Entry.IsBillable).Sum(e => e.Entry.Hours),
+                    NonBillable = (double)g.Where(e => !e.Entry.IsBillable).Sum(e => e.Entry.Hours),
+                    Total = (double)g.Sum(e => e.Entry.Hours)
+                })
+                .Where(x => x.Total > 0)
+                .OrderByDescending(x => x.Total)
+                .Take(10)
+                .ToList();
+
+            _axisLabels = entityGroups.Select(g => g.Name).ToArray();
+
+            _stackedSeries =
+            [
+                new ChartSeries<double> { Name = "Billable ($)", Data = entityGroups.Select(g => g.Billable).ToArray() },
+                new ChartSeries<double> { Name = "Non-Billable", Data = entityGroups.Select(g => g.NonBillable).ToArray() }
+            ];
+
+            _barSeries =
+            [
+                new ChartSeries<double> { Name = "Total Hours", Data = entityGroups.Select(g => g.Total).ToArray() }
+            ];
+
+            _lineSeries =
+            [
+                new ChartSeries<double> { Name = "Hours Trend", Data = entityGroups.Select(g => g.Total).ToArray() }
+            ];
+
+            _currentXAxisDescription = _breakdownMetric;
+            _currentYAxisDescription = "Duration in Hours (h)";
+        }
+
+        // 3. HeatMap (Days of week Mon-Sun vs Top Employees)
+        BuildHeatMapData();
+    }
+
+    private void ConfigureChartOptions()
+    {
+        _chartOptions = new ChartOptions
+        {
+            ChartPalette = ["#10B981", "#64748B", "#3B82F6", "#F59E0B", "#8B5CF6", "#EC4899", "#14B8A6"]
+        };
+
+        _barOptions = new BarChartOptions
+        {
+            XAxisTitle = _currentXAxisDescription,
+            YAxisTitle = "Duration (Hours)",
+            YAxisFormat = "{0:0.0}h",
+            ShowValues = true,
+            YAxisLines = true,
+            XAxisLines = true,
+            ChartPalette = ["#3B82F6", "#10B981", "#F59E0B"]
+        };
+
+        _stackedBarOptions = new StackedBarChartOptions
+        {
+            XAxisTitle = _currentXAxisDescription,
+            YAxisTitle = "Duration (Hours)",
+            YAxisFormat = "{0:0.0}h",
+            ShowValues = true,
+            YAxisLines = true,
+            XAxisLines = true,
+            ChartPalette = ["#10B981", "#94A3B8"]
+        };
+
+        _lineOptions = new LineChartOptions
+        {
+            XAxisTitle = _currentXAxisDescription,
+            YAxisTitle = "Duration (Hours)",
+            YAxisFormat = "{0:0.0}h",
+            YAxisLines = true,
+            XAxisLines = true,
+            ChartPalette = ["#3B82F6", "#10B981"]
+        };
+    }
+
+    private void BuildHeatMapData()
+    {
+        var daysOfWeek = new[] { "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun" };
+        _heatMapXLabels = daysOfWeek;
+
+        var topEmployees = Entries.GroupBy(e => e.EmployeeName)
+            .OrderByDescending(g => g.Sum(e => e.Entry.Hours))
+            .Take(5)
+            .ToList();
+
+        _heatMapSeries = [];
+        foreach (var empGroup in topEmployees)
+        {
+            var dayValues = new double[7];
+            for (int d = 0; d < 7; d++)
+            {
+                var targetDow = d == 6 ? DayOfWeek.Sunday : (DayOfWeek)(d + 1);
+                dayValues[d] = (double)empGroup.Where(e => e.Entry.Date.DayOfWeek == targetDow).Sum(e => e.Entry.Hours);
+            }
+
+            _heatMapSeries.Add(new ChartSeries<double>
+            {
+                Name = empGroup.Key,
+                Data = dayValues
+            });
+        }
+    }
+}

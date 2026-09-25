@@ -1,8 +1,6 @@
-using System;
 using System.IO;
 using System.Security.Cryptography;
 using System.Text;
-using System.Threading.Tasks;
 
 namespace Spokes_Server.Core.Services.Security;
 
@@ -73,7 +71,7 @@ public class CryptoService : ICryptoService
         using var encryptor = aes.CreateEncryptor();
         using var ms = new MemoryStream();
         // Prepend IV to the ciphertext
-        ms.Write(aes.IV, 0, aes.IV.Length);
+        ms.Write(aes.IV);
 
         using (var cs = new CryptoStream(ms, encryptor, CryptoStreamMode.Write))
         using (var sw = new StreamWriter(cs))
@@ -113,7 +111,7 @@ public class CryptoService : ICryptoService
         aes.GenerateIV();
 
         // Write IV first
-        await outputStream.WriteAsync(aes.IV, 0, aes.IV.Length);
+        await outputStream.WriteAsync(aes.IV);
 
         using var encryptor = aes.CreateEncryptor();
         await using var cs = new CryptoStream(outputStream, encryptor, CryptoStreamMode.Write, leaveOpen: true);

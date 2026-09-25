@@ -1,8 +1,5 @@
-using System;
 using Spokes_Server.Aggregate;
-using Spokes_Server.Core.Data.Repositories.Core;
-
-using Microsoft.Extensions.Configuration;
+using Spokes_Server.Core.Models.Core;
 
 namespace Spokes_Server.Core.Services.Security;
 
@@ -34,7 +31,7 @@ public class ServerEscrowService
         InitializeEscrow(envPassword, jsonPassword, profile);
     }
 
-    private void InitializeEscrow(string? envPassword, string? jsonPassword, Spokes_Server.Core.Models.Core.CompanyProfile profile)
+    private void InitializeEscrow(string? envPassword, string? jsonPassword, CompanyProfile profile)
     {
         if (string.IsNullOrEmpty(_masterPassword))
         {
@@ -42,6 +39,7 @@ public class ServerEscrowService
         }
 
         var config = _db.ServerConfigs.GetOrCreateGlobalConfig();
+        const string legacySalt = "ServerEscrowSalt_2024";
 
         // Handle Migration
         if (!string.IsNullOrEmpty(envPassword) && !string.IsNullOrEmpty(jsonPassword))
@@ -53,11 +51,14 @@ public class ServerEscrowService
                 {
                     try
                     {
-                        var oldKek = _crypto.DeriveKeyFromPassword(jsonPassword, "ServerEscrowSalt_2024", 100000);
+                        var oldSalt = !string.IsNullOrEmpty(config.ServerMasterKeySalt) ? config.ServerMasterKeySalt : legacySalt;
+                        var oldKek = _crypto.DeriveKeyFromPassword(jsonPassword, oldSalt, 100000);
                         var privKey = _crypto.DecryptAes(config.ServerMasterEncryptedPrivateKey, oldKek);
 
-                        var newKek = _crypto.DeriveKeyFromPassword(envPassword, "ServerEscrowSalt_2024", 100000);
+                        var newSalt = Guid.NewGuid().ToString("N");
+                        var newKek = _crypto.DeriveKeyFromPassword(envPassword, newSalt, 100000);
                         config.ServerMasterEncryptedPrivateKey = _crypto.EncryptAes(privKey, newKek);
+                        config.ServerMasterKeySalt = newSalt;
                         _db.ServerConfigs.Save(config);
                     }
                     catch (Exception ex)
@@ -74,16 +75,17 @@ public class ServerEscrowService
             _db.CompanyProfile.Save(profile);
         }
 
-        // Use a static salt for the server master key derivation
-        var kek = _crypto.DeriveKeyFromPassword(_masterPassword, "ServerEscrowSalt_2024", 100000);
-
         if (string.IsNullOrEmpty(config.ServerMasterRsaPublicKey) || string.IsNullOrEmpty(config.ServerMasterEncryptedPrivateKey))
         {
-            // First time setup: Generate Escrow RSA Key pair
+            // First time setup: Generate Escrow RSA Key pair with unique salt
+            var uniqueSalt = Guid.NewGuid().ToString("N");
+            var kek = _crypto.DeriveKeyFromPassword(_masterPassword, uniqueSalt, 100000);
+
             var (pub, priv) = _crypto.GenerateRsaKeyPair();
 
             config.ServerMasterRsaPublicKey = pub;
             config.ServerMasterEncryptedPrivateKey = _crypto.EncryptAes(priv, kek);
+            config.ServerMasterKeySalt = uniqueSalt;
             _db.ServerConfigs.Save(config);
 
             EscrowPublicKey = pub;
@@ -93,9 +95,30 @@ public class ServerEscrowService
         {
             // Load existing Escrow
             EscrowPublicKey = config.ServerMasterRsaPublicKey;
+            var currentSalt = !string.IsNullOrEmpty(config.ServerMasterKeySalt) ? config.ServerMasterKeySalt : legacySalt;
+            var kek = _crypto.DeriveKeyFromPassword(_masterPassword, currentSalt, 100000);
+
             try
             {
                 DecryptedEscrowPrivateKey = _crypto.DecryptAes(config.ServerMasterEncryptedPrivateKey, kek);
+
+                // Auto-upgrade legacy static salt if config has empty ServerMasterKeySalt
+                if (string.IsNullOrEmpty(config.ServerMasterKeySalt) && !string.IsNullOrEmpty(DecryptedEscrowPrivateKey))
+                {
+                    try
+                    {
+                        var newSalt = Guid.NewGuid().ToString("N");
+                        var newKek = _crypto.DeriveKeyFromPassword(_masterPassword, newSalt, 100000);
+                        config.ServerMasterEncryptedPrivateKey = _crypto.EncryptAes(DecryptedEscrowPrivateKey, newKek);
+                        config.ServerMasterKeySalt = newSalt;
+                        _db.ServerConfigs.Save(config);
+                        Console.WriteLine("[Escrow] Successfully upgraded server escrow key to unique per-instance salt.");
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"[Escrow] Failed to upgrade escrow salt: {ex.Message}");
+                    }
+                }
             }
             catch
             {

@@ -2,7 +2,6 @@ namespace Spokes_Server.Core.Security;
 
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
-using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.DependencyInjection;
 using Spokes_Server.Aggregate;
 

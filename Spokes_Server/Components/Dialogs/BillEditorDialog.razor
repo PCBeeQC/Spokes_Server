@@ -1,18 +1,8 @@
-@using Spokes_Server.Core.Models.Core
-@using Spokes_Server.Core.Models.Projects
-@using Spokes_Server.Core.Models.Accounting
-@using Spokes_Server.Core.Models.Communication
-@using Spokes_Server.Core.Models.HR
-@using Spokes_Server.Core.Data
-@using MudBlazor
-@using Microsoft.AspNetCore.Components.Authorization
 @using Spokes_Server.Core.Constants
 @inject Database Db
 @inject ISnackbar Snackbar
-@inject IJSRuntime JS
 @inject AuthenticationStateProvider AuthStateProvider
-@inject Spokes_Server.Core.Services.Core.UserService UserService
-@inject Spokes_Server.Core.Services.Accounting.FinancialCalculationEngine CalcEngine
+@inject UserService UserService
 @inject IDialogService DialogService
 
 <MudDialog>
@@ -211,7 +201,6 @@
         } 
     }
     private DateTime? DueDate { get => Bill.DueDate; set { if (value.HasValue) Bill.DueDate = value.Value; } }
-    private DateTime? DatePaid { get => Bill.DatePaid; set { Bill.DatePaid = value; } }
 
     protected override async Task OnInitializedAsync()
     {
@@ -290,8 +279,6 @@
             Snackbar.Add("All items from this PO have already been billed.", Severity.Info);
         }
     }
-
-    [Inject] private Spokes_Server.Core.Services.Core.IFileService FileService { get; set; } = default!;
 
     private void HandleBillApiUploaded(List<ApiFileUpload.UploadResult> results)
     {

@@ -1,18 +1,7 @@
-using Spokes_Server.Core.Data;
-using Spokes_Server.Core.Models.Core;
-using Spokes_Server.Core.Models.Projects;
-using Spokes_Server.Core.Models.Accounting;
-using Spokes_Server.Core.Models.Communication;
-using Spokes_Server.Core.Models.HR;
 using System.Collections.Concurrent;
 using System.Text.Json;
-using System;
-using System.Collections.Generic;
-using System.IO;
-using System.Linq;
-using Microsoft.Extensions.Configuration;
 using System.Threading;
-using System.Threading.Tasks;
+using Spokes_Server.Core.Models.Communication;
 
 namespace Spokes_Server.Core.Data.Repositories.Communication;
 
@@ -27,11 +16,8 @@ public class EmailMessageRepository : JsonRepository<EmailMessage>
     {
     }
 
-    protected override string GetFilePath(EmailMessage item)
-    {
-        // Data/Employees/{EmployeeId}/Email/Messages/{Id}.json
-        return Path.Combine(_basePath, item.EmployeeId, "Email", "Messages", $"{item.Id}.json");
-    }
+    protected override string GetFilePath(EmailMessage item) =>
+        Path.Combine(_basePath, item.EmployeeId, "Email", "Messages", $"{item.Id}.json");
 
     // Override LoadFromDisk to NOT load everything. 
     // Instead, we scan directories to build the Index.
@@ -46,12 +32,6 @@ public class EmailMessageRepository : JsonRepository<EmailMessage>
             var employeeId = Path.GetFileName(employeeDir);
             var foldersDir = Path.Combine(employeeDir, "Email", "Folders");
 
-            // We need to know which folders exist to organize the index
-            if (Directory.Exists(foldersDir))
-            {
-                // We'll trust the folder structure for now.
-            }
-
             var msgPath = Path.Combine(employeeDir, "Email", "Messages");
             if (!Directory.Exists(msgPath)) continue;
 
@@ -62,7 +42,7 @@ public class EmailMessageRepository : JsonRepository<EmailMessage>
                 try
                 {
                     var indexJson = File.ReadAllText(indexPath);
-                    var loadedIndex = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, EmailFolderIndex>>(indexJson);
+                    var loadedIndex = JsonSerializer.Deserialize<Dictionary<string, EmailFolderIndex>>(indexJson);
                     if (loadedIndex != null)
                     {
                         foreach (var kvp in loadedIndex)
@@ -86,7 +66,7 @@ public class EmailMessageRepository : JsonRepository<EmailMessage>
                 try
                 {
                     var json = File.ReadAllText(file);
-                    var item = System.Text.Json.JsonSerializer.Deserialize<EmailMessage>(json);
+                    var item = JsonSerializer.Deserialize<EmailMessage>(json);
                     if (item != null)
                     {
                         UpdateIndex(item);
@@ -163,10 +143,8 @@ public class EmailMessageRepository : JsonRepository<EmailMessage>
         }
     }
 
-    public override void Delete(string id)
-    {
+    public override void Delete(string id) =>
         throw new NotSupportedException("Use Delete(messageId, employeeId) instead to prevent state leaks and ensure correct file paths.");
-    }
 
     public void Delete(string messageId, string employeeId)
     {
@@ -190,14 +168,8 @@ public class EmailMessageRepository : JsonRepository<EmailMessage>
         }
     }
 
-    public bool Exists(string employeeId, string folderPath, uint uid)
-    {
-        if (_indices.TryGetValue($"{employeeId}:{folderPath}", out var index))
-        {
-            return index.Messages.ContainsKey(uid);
-        }
-        return false;
-    }
+    public bool Exists(string employeeId, string folderPath, uint uid) =>
+        _indices.TryGetValue($"{employeeId}:{folderPath}", out var index) && index.Messages.ContainsKey(uid);
 
     public bool TryClaimUid(string employeeId, string folderPath, uint uid, string messageId, string globalMessageId = "")
     {
@@ -259,7 +231,7 @@ public class EmailMessageRepository : JsonRepository<EmailMessage>
             try
             {
                 var json = File.ReadAllText(path);
-                item = System.Text.Json.JsonSerializer.Deserialize<EmailMessage>(json);
+                item = JsonSerializer.Deserialize<EmailMessage>(json);
                 if (item != null)
                 {
                     _cache[item.Id] = item;
@@ -303,23 +275,11 @@ public class EmailMessageRepository : JsonRepository<EmailMessage>
         return new List<uint>();
     }
 
-    public virtual int GetUnreadCount(string employeeId, string folderPath)
-    {
-        if (_indices.TryGetValue($"{employeeId}:{folderPath}", out var index))
-        {
-            return index.Messages.Values.Count(m => !m.IsRead);
-        }
-        return 0;
-    }
+    public virtual int GetUnreadCount(string employeeId, string folderPath) =>
+        _indices.TryGetValue($"{employeeId}:{folderPath}", out var index) ? index.Messages.Values.Count(m => !m.IsRead) : 0;
 
-    public int GetLocalMessageCount(string employeeId, string folderPath)
-    {
-        if (_indices.TryGetValue($"{employeeId}:{folderPath}", out var index))
-        {
-            return index.Messages.Count;
-        }
-        return 0;
-    }
+    public int GetLocalMessageCount(string employeeId, string folderPath) =>
+        _indices.TryGetValue($"{employeeId}:{folderPath}", out var index) ? index.Messages.Count : 0;
 
     public string? GetIdByUid(string employeeId, string folderPath, uint uid)
     {
@@ -512,14 +472,8 @@ public class EmailMessageRepository : JsonRepository<EmailMessage>
 
 
 
-    public bool HasMoreMessages(string employeeId, string folderPath)
-    {
-        if (_indices.TryGetValue($"{employeeId}:{folderPath}", out var index))
-        {
-            return index.Messages.Count > 50;
-        }
-        return false;
-    }
+    public bool HasMoreMessages(string employeeId, string folderPath) =>
+        _indices.TryGetValue($"{employeeId}:{folderPath}", out var index) && index.Messages.Count > 50;
 }
 
 public class EmailFolderIndex
@@ -536,5 +490,3 @@ public class MessageMetadata
     public bool IsRead { get; set; }
     public bool IsFlagged { get; set; }
 }
-
-

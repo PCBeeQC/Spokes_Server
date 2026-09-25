@@ -1,23 +1,24 @@
-using Spokes_Server.Core.Services.Communication;
-using Spokes_Server.Core.Services.Projects;
-using Spokes_Server.Core.Services.Core;
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Threading.Tasks;
 using MailKit;
 using MailKit.Net.Imap;
 using MailKit.Net.Smtp;
 using MailKit.Security;
+using Microsoft.AspNetCore.Components.Forms;
+using Microsoft.Extensions.Configuration;
 using MimeKit;
 using MimeKit.Text;
-using Spokes_Server.Core.Data.Repositories.Core;
-using Spokes_Server.Core.Data.Repositories.Projects;
-using Spokes_Server.Core.Data.Repositories.Accounting;
 using Spokes_Server.Core.Data.Repositories.Communication;
+using Spokes_Server.Core.Data.Repositories.Core;
 using Spokes_Server.Core.Data.Repositories.HR;
-using Spokes_Server.Core.Models.Core;
-using Spokes_Server.Core.Models.Projects;
-using Spokes_Server.Core.Models.Accounting;
 using Spokes_Server.Core.Models.Communication;
+using Spokes_Server.Core.Models.Core;
 using Spokes_Server.Core.Models.HR;
-using Microsoft.AspNetCore.Components.Forms; // For IBrowserFile
+using Spokes_Server.Core.Services.Communication;
+using Spokes_Server.Core.Services.Core;
 
 namespace Spokes_Server.Core.Services.Communication.Email;
 
@@ -1606,6 +1607,3 @@ public class EmailService
         }
     }
 }
-
-
-

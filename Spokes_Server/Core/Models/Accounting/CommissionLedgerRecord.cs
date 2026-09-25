@@ -9,10 +9,7 @@ public class CommissionLedgerRecord : IDataEntity
     public override bool Equals(object? obj)
     {
         if (ReferenceEquals(this, obj)) return true;
-        if (obj == null || GetType() != obj.GetType())
-            return false;
-        var other = (CommissionLedgerRecord)obj;
-        return Id == other.Id;
+        return obj is CommissionLedgerRecord other && Id == other.Id;
     }
 
     public override int GetHashCode() => Id?.GetHashCode() ?? base.GetHashCode();

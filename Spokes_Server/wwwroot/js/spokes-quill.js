@@ -1,7 +1,7 @@
 window.spokesQuill = {
     editors: {},
     init: function (elementId, content, dotNetHelper, readOnly, placeholder) {
-        var container = document.getElementById(elementId);
+        const container = document.getElementById(elementId);
         if (!container) return;
 
         // Ensure quill, blot formatter, and magic url are loaded
@@ -11,13 +11,13 @@ window.spokesQuill = {
         }
 
         if (!Quill.imports['modules/imageResize']) {
-            var Resizer = window.ResizeQuillImage || window.ImageResize || window.resizeQuillImage;
+            const Resizer = window.ResizeQuillImage || window.ImageResize || window.resizeQuillImage;
             if (typeof Resizer !== 'undefined') {
                 Quill.register('modules/imageResize', Resizer.default || Resizer);
             }
         }
         
-        var toolbarOptions = [
+        const toolbarOptions = [
             ['bold', 'italic', 'underline', 'strike'],
             ['blockquote', 'code-block'],
             [{ 'header': 1 }, { 'header': 2 }],
@@ -30,9 +30,9 @@ window.spokesQuill = {
             ['clean']
         ];
 
-        var hasImageResize = !!Quill.imports['modules/imageResize'];
+        const hasImageResize = !!Quill.imports['modules/imageResize'];
 
-        var config = {
+        const config = {
             theme: 'snow',
             modules: {
                 toolbar: toolbarOptions,
@@ -43,16 +43,16 @@ window.spokesQuill = {
             placeholder: placeholder || ''
         };
 
-        var quill = new Quill(container, config);
+        const quill = new Quill(container, config);
         
         if (content) {
-            var delta = quill.clipboard.convert({ html: content });
+            const delta = quill.clipboard.convert({ html: content });
             quill.setContents(delta, 'silent');
         }
 
         quill.on('text-change', function(delta, oldDelta, source) {
             if (source === 'user') {
-                var html = container.querySelector('.ql-editor').innerHTML;
+                let html = container.querySelector('.ql-editor').innerHTML;
                 if (html === '<p><br></p>') {
                     html = ''; // Normalize empty state
                 }
@@ -63,39 +63,39 @@ window.spokesQuill = {
         this.editors[elementId] = quill;
     },
     getHtml: function (elementId) {
-        var quill = this.editors[elementId];
+        const quill = this.editors[elementId];
         if (quill) {
-            var html = quill.getSemanticHTML ? quill.getSemanticHTML() : quill.root.innerHTML;
-            return html === '<p><br></p>' || html === '' ? '' : html;
+            const html = quill.getSemanticHTML ? quill.getSemanticHTML() : quill.root.innerHTML;
+            return !html || html === '<p><br></p>' ? '' : html;
         }
         return '';
     },
     setHtml: function (elementId, html) {
-        var quill = this.editors[elementId];
+        const quill = this.editors[elementId];
         if (quill) {
-            var delta = quill.clipboard.convert({ html: html || '' });
+            const delta = quill.clipboard.convert({ html: html || '' });
             quill.setContents(delta, 'silent');
         }
     },
     insertHtml: function (elementId, html) {
-        var quill = this.editors[elementId];
+        const quill = this.editors[elementId];
         if (quill) {
-            var range = quill.getSelection(true);
-            var index = range ? range.index : quill.getLength();
-            var delta = quill.clipboard.convert({ html: html });
-            var Delta = Quill.import('delta');
-            var insertion = new Delta().retain(index).concat(delta);
+            const range = quill.getSelection(true);
+            const index = range ? range.index : quill.getLength();
+            const delta = quill.clipboard.convert({ html: html });
+            const Delta = Quill.import('delta');
+            const insertion = new Delta().retain(index).concat(delta);
             quill.updateContents(insertion, 'user');
         }
     },
     clear: function (elementId) {
-        var quill = this.editors[elementId];
+        const quill = this.editors[elementId];
         if (quill) {
             quill.setText('');
         }
     },
     destroy: function (elementId) {
-        var quill = this.editors[elementId];
+        const quill = this.editors[elementId];
         if (quill) {
             // Remove DOM and event listeners conceptually
             delete this.editors[elementId];

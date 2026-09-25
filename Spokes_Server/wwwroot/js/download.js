@@ -1,10 +1,15 @@
-window.downloadFile = async (fileName, contentType, content) => {
+(function () {
+    'use strict';
+
+    const isNative = () => typeof window.isCapacitorNative === 'function' ? window.isCapacitorNative() : Boolean(window.Capacitor?.isNativePlatform?.());
+
+    window.downloadFile = async (fileName, contentType, content) => {
     const TAG = '[Download:downloadFile]';
     console.log(`${TAG} called. fileName=${fileName}, contentType=${contentType}, contentLength=${content?.length}`);
     const blob = new Blob([content], { type: contentType });
     console.log(`${TAG} blob created. size=${blob.size}, type=${blob.type}`);
 
-    if (window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) {
+    if (isNative()) {
         console.log(`${TAG} native platform detected. platform=${window.Capacitor.getPlatform()}`);
         try {
             if (window.Capacitor.Plugins.Filesystem && window.Capacitor.Plugins.Share) {
@@ -74,7 +79,7 @@ window.downloadFileFromStream = async (fileName, contentStreamReference) => {
     const TAG = '[Download:downloadFileFromStream]';
     console.log(`${TAG} called. fileName=${fileName}`);
 
-    if (window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) {
+    if (isNative()) {
         console.log(`${TAG} native platform detected. platform=${window.Capacitor.getPlatform()}`);
         try {
             if (window.Capacitor.Plugins.Filesystem && window.Capacitor.Plugins.Share) {
@@ -157,7 +162,7 @@ window.downloadFileFromUrl = async (fileName, url, forceShareMenu = false) => {
         const response = await fetch(url);
         if (!response.ok) throw new Error(`Network response was not ok: ${response.status} ${response.statusText}`);
 
-        if (window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) {
+        if (isNative()) {
             const platform = window.Capacitor.getPlatform();
             console.log(`${TAG} native platform detected. platform=${platform}`);
             
@@ -297,7 +302,7 @@ window.downloadMediaFromUrl = async (fileName, url) => {
         const response = await fetch(url);
         if (!response.ok) throw new Error(`Network response was not ok: ${response.status} ${response.statusText}`);
 
-        if (window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) {
+        if (isNative()) {
             console.log(`${TAG} native platform detected. platform=${window.Capacitor.getPlatform()}`);
             if (window.Capacitor.Plugins.Filesystem && window.Capacitor.Plugins.Media) {
                 try {
@@ -383,7 +388,7 @@ window.downloadMediaFromUrl = async (fileName, url) => {
 window.downloadOrOpenDocument = async (fileName, url) => {
     const TAG = '[Download:downloadOrOpenDocument]';
     console.log(`${TAG} called. fileName=${fileName}, url=${url}`);
-    if (window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) {
+    if (isNative()) {
         console.log(`${TAG} native platform detected. Browser.open fails on relative URLs and lacks auth cookies. Redirecting to downloadFileFromUrl...`);
         return window.downloadFileFromUrl(fileName, url);
     } else {
@@ -405,3 +410,14 @@ window.shareFileFromUrl = async (fileName, url) => {
     // Forces the Share Menu even on Android
     return window.downloadFileFromUrl(fileName, url, true);
 };
+
+window.spokesDownload = {
+    downloadFile: window.downloadFile,
+    downloadFileFromStream: window.downloadFileFromStream,
+    downloadFileFromUrl: window.downloadFileFromUrl,
+    downloadMediaFromUrl: window.downloadMediaFromUrl,
+    downloadOrOpenDocument: window.downloadOrOpenDocument,
+    shareFileFromUrl: window.shareFileFromUrl
+};
+})();
+

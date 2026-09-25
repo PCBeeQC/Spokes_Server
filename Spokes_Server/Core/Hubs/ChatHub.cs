@@ -1,21 +1,15 @@
-using Spokes_Server.Core.Services.Communication;
-using Spokes_Server.Core.Services.Projects;
-using Spokes_Server.Core.Services.Core;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.SignalR;
-using Spokes_Server.Core.Data.Repositories.Core;
-using Spokes_Server.Core.Data.Repositories.Projects;
-using Spokes_Server.Core.Data.Repositories.Accounting;
 using Spokes_Server.Core.Data.Repositories.Communication;
 using Spokes_Server.Core.Data.Repositories.HR;
-using Spokes_Server.Core.Models.Core;
-using Spokes_Server.Core.Models.Projects;
-using Spokes_Server.Core.Models.Accounting;
+using Spokes_Server.Core.Data.Repositories.Projects;
 using Spokes_Server.Core.Models.Communication;
 using Spokes_Server.Core.Models.HR;
-using Microsoft.Extensions.Logging;
-namespace Spokes_Server.Core.Hubs;
+using Spokes_Server.Core.Models.Projects;
+using Spokes_Server.Core.Services.Core;
+using Spokes_Server.Core.Services.Communication.Chat;
 
-using Microsoft.AspNetCore.Authorization;
+namespace Spokes_Server.Core.Hubs;
 
 /// <summary>
 /// SignalR hub for real-time chat functionality.
@@ -26,10 +20,9 @@ public class ChatHub : Hub
 {
     private readonly ChatChannelRepository _channels;
     private readonly ChatMessageRepository _messages;
-    private readonly ProjectRepository _projects;
     private readonly UserService _userService;
     private readonly ILogger<ChatHub> _logger;
-    private readonly TeamRepository _teams;
+    private readonly IChatAuthorizationService _chatAuth;
 
     // Concurrent dictionary to track which channels a connection is subscribed to
     private static readonly Dictionary<string, HashSet<string>> _connectionChannels = new();
@@ -41,14 +34,14 @@ public class ChatHub : Hub
         ProjectRepository projects,
         UserService userService,
         TeamRepository teams,
-        ILogger<ChatHub> logger)
+        ILogger<ChatHub> logger,
+        IChatAuthorizationService? chatAuth = null)
     {
         _channels = channels;
         _messages = messages;
-        _projects = projects;
         _userService = userService;
-        _teams = teams;
         _logger = logger;
+        _chatAuth = chatAuth ?? new ChatAuthorizationService(channels, projects, teams, null);
     }
 
     /// <summary>
@@ -89,7 +82,7 @@ public class ChatHub : Hub
         if (employee == null) return;
 
         var channel = _channels.GetById(channelId);
-        if (channel == null || !UserHasAccessToChannel(employee, channel)) return;
+        if (channel == null || !_chatAuth.CanUserAccessChannel(channel, employee)) return;
 
         await Groups.AddToGroupAsync(Context.ConnectionId, $"channel_{channelId}");
 
@@ -97,7 +90,7 @@ public class ChatHub : Hub
         {
             if (!_connectionChannels.ContainsKey(Context.ConnectionId))
             {
-                _connectionChannels[Context.ConnectionId] = new HashSet<string>();
+                _connectionChannels[Context.ConnectionId] = [];
             }
             _connectionChannels[Context.ConnectionId].Add(channelId);
         }
@@ -141,13 +134,13 @@ public class ChatHub : Hub
                 return;
             }
 
-            if (!UserHasAccessToChannel(employee, channel))
+            if (!_chatAuth.CanUserAccessChannel(channel, employee))
             {
                 _logger.LogWarning("SendMessage failed: User {UserId} denied read access to Channel {ChannelId}", employee.Id, channelId);
                 return;
             }
 
-            if (!UserCanPostToChannel(employee, channel))
+            if (!_chatAuth.CanUserPostToChannel(channel, employee))
             {
                 _logger.LogWarning("SendMessage failed: User {UserId} denied post access to Announcement Channel {ChannelId}", employee.Id, channelId);
                 return;
@@ -161,7 +154,7 @@ public class ChatHub : Hub
                 Content = content,
                 ReplyToId = replyToId,
                 SentAt = DateTime.UtcNow,
-                ReadBy = new List<string> { employee.Id }
+                ReadBy = [employee.Id]
             };
 
             // Save to database
@@ -223,7 +216,7 @@ public class ChatHub : Hub
         if (employee == null) return;
 
         var channel = _channels.GetById(channelId);
-        if (channel == null || !UserHasAccessToChannel(employee, channel)) return;
+        if (channel == null || !_chatAuth.CanUserAccessChannel(channel, employee)) return;
 
         await Clients.OthersInGroup($"channel_{channelId}").SendAsync("UserTyping", new
         {
@@ -242,7 +235,7 @@ public class ChatHub : Hub
         if (employee == null) return;
 
         var channel = _channels.GetById(channelId);
-        if (channel == null || !UserHasAccessToChannel(employee, channel)) return;
+        if (channel == null || !_chatAuth.CanUserAccessChannel(channel, employee)) return;
 
         await Clients.OthersInGroup($"channel_{channelId}").SendAsync("UserStoppedTyping", new
         {
@@ -260,10 +253,14 @@ public class ChatHub : Hub
         if (employee == null) return;
 
         var message = _messages.GetById(messageId);
-        if (message == null || message.SenderId != employee.Id) return;
+        if (message == null) return;
 
         var channel = _channels.GetById(message.ChannelId);
-        if (channel == null || !UserCanPostToChannel(employee, channel)) return;
+        if (channel == null || !_chatAuth.CanUserModifyMessage(message, channel, employee))
+        {
+            _logger.LogWarning("EditMessage failed: User {UserId} not authorized to edit message {MessageId}", employee.Id, messageId);
+            return;
+        }
 
         message.Content = newContent;
         message.EditedAt = DateTime.UtcNow;
@@ -287,7 +284,14 @@ public class ChatHub : Hub
         if (employee == null) return;
 
         var message = _messages.GetById(messageId);
-        if (message == null || message.SenderId != employee.Id) return;
+        if (message == null) return;
+
+        var channel = _channels.GetById(message.ChannelId);
+        if (channel == null || !_chatAuth.CanUserDeleteMessage(message, channel, employee))
+        {
+            _logger.LogWarning("DeleteMessage failed: User {UserId} not authorized to delete message {MessageId}", employee.Id, messageId);
+            return;
+        }
 
         message.IsDeleted = true;
         await _messages.SaveAsync(message);
@@ -311,7 +315,7 @@ public class ChatHub : Hub
         if (message == null) return;
 
         var channel = _channels.GetById(message.ChannelId);
-        if (channel == null || !UserHasAccessToChannel(employee, channel) || !UserCanPostToChannel(employee, channel)) return;
+        if (channel == null || !_chatAuth.CanUserAccessChannel(channel, employee) || !_chatAuth.CanUserPostToChannel(channel, employee)) return;
 
         var reactionKey = $"{emoji}:{employee.Id}";
         if (!message.Reactions.Contains(reactionKey))
@@ -342,7 +346,7 @@ public class ChatHub : Hub
         if (message == null) return;
 
         var channel = _channels.GetById(message.ChannelId);
-        if (channel == null || !UserHasAccessToChannel(employee, channel) || !UserCanPostToChannel(employee, channel)) return;
+        if (channel == null || !_chatAuth.CanUserAccessChannel(channel, employee) || !_chatAuth.CanUserPostToChannel(channel, employee)) return;
 
         var reactionKey = $"{emoji}:{employee.Id}";
         if (message.Reactions.Contains(reactionKey))
@@ -360,64 +364,8 @@ public class ChatHub : Hub
         }
     }
 
-    private bool UserHasAccessToChannel(Employee employee, ChatChannel channel)
-    {
-        if (employee.IsAdmin) return true;
-
-        if (channel.ChannelType == "General" || channel.ChannelType == ChatChannelType.General)
-        {
-            if (channel.IsDefaultGeneral) return true;
-            bool isRestricted = channel.ParticipantIds.Any() || channel.AllowedTeamIds.Any();
-            if (!isRestricted) return true; // Public general
-
-            if (channel.ParticipantIds.Contains(employee.Id)) return true;
-            if (employee.TeamId != null && channel.AllowedTeamIds.Contains(employee.TeamId)) return true;
-
-            return false;
-        }
-
-        if (channel.ChannelType == "Direct" || channel.ChannelType == ChatChannelType.Direct)
-        {
-            return channel.ParticipantIds.Contains(employee.Id);
-        }
-
-        if (channel.ChannelType == "Team" || channel.ChannelType == ChatChannelType.Team)
-        {
-            return channel.LinkedEntityId == employee.TeamId;
-        }
-
-        if (channel.ChannelType == "Project" || channel.ChannelType == ChatChannelType.Project)
-        {
-            if (channel.LinkedEntityId == null) return false;
-            var project = _projects.GetById(channel.LinkedEntityId);
-            if (project == null) return false;
-
-            if (project.AccessPolicy == "Public") return true;
-            if (project.AllowedUserIds.Contains(employee.Id)) return true;
-            if (employee.TeamId != null && project.AllowedTeamIds.Contains(employee.TeamId)) return true;
-
-            return false;
-        }
-
-        return false;
-    }
-
-    private bool UserCanPostToChannel(Employee employee, ChatChannel channel)
-    {
-        if (!channel.IsAnnouncementOnly) return true;
-
-        var userTeamIds = new System.Collections.Generic.List<string>();
-        if (employee.TeamId != null) userTeamIds.Add(employee.TeamId);
-        userTeamIds.AddRange(_teams.GetAll().Where(t => t.LeaderId == employee.Id).Select(t => t.Id));
-
-        return _channels.EvaluateChannelPostAccessRule(channel, employee.Id, userTeamIds, employee.IsAdmin);
-    }
-
     private Employee? GetCurrentEmployee()
     {
         return Context.User == null ? null : _userService.GetEmployee(Context.User);
     }
 }
-
-
-

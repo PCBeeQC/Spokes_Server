@@ -1,11 +1,10 @@
-using System;
 using System.Collections.Concurrent;
 
 namespace Spokes_Server.Core.Services.Documents;
 
 public class RenderTokenService
 {
-    private class TokenData
+    private sealed class TokenData
     {
         public DateTime ExpiresAt { get; set; }
     }
@@ -28,12 +27,7 @@ public class RenderTokenService
 
         CleanupExpired();
 
-        if (_tokens.TryRemove(token, out var data))
-        {
-            return DateTime.UtcNow <= data.ExpiresAt;
-        }
-
-        return false;
+        return _tokens.TryRemove(token, out var data) && DateTime.UtcNow <= data.ExpiresAt;
     }
 
     private void CleanupExpired()

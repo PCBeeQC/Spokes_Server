@@ -1,8 +1,5 @@
 @using Spokes_Server.Core.Data
-@using Spokes_Server.Core.Models.Core
-@using Spokes_Server.Core.Models.Projects
 @using Spokes_Server.Core.Models.Accounting
-@using Spokes_Server.Core.Models.Communication
 @using Spokes_Server.Core.Models.HR
 @inject Database Db
 @inject ISnackbar Snackbar
@@ -330,26 +327,25 @@
 
 
 @code {
-    private List<Employee> Employees = new();
-    private List<EmployerContribution> Contributions = new();
-    private List<Team> Teams = new();
+    private List<Employee> Employees = [];
+    private List<EmployerContribution> Contributions = [];
+    private List<Team> Teams = [];
 
     private MudAutocomplete<EmployerContribution>? _analysisContribAutocomplete;
     private EmployerContribution? _analysisAutoCompleteContribValue;
 
     // Config
-    private string? _nullString = null;
-    private bool _showAddForm = false;
-    private bool _isEditing = false;
+    private bool _showAddForm;
+    private bool _isEditing;
     private EmployerContribution NewContribution = new();
-    private IEnumerable<string> SelectedTeamIds { get; set; } = new HashSet<string>();
-    private IEnumerable<string> SelectedEmployeeIds { get; set; } = new HashSet<string>();
+    private IEnumerable<string> SelectedTeamIds { get; set; } = [];
+    private IEnumerable<string> SelectedEmployeeIds { get; set; } = [];
 
     // Analysis
-    private IEnumerable<string> _analysisTeamIds { get; set; } = new HashSet<string>();
-    private IEnumerable<string> _analysisContribIds { get; set; } = new HashSet<string>();
+    private IEnumerable<string> _analysisTeamIds { get; set; } = [];
+    private IEnumerable<string> _analysisContribIds { get; set; } = [];
     private string _analysisPeriodType { get; set; } = "Monthly";
-    private DateRange _analysisDateRange { get; set; } = new DateRange(DateTime.Today, DateTime.Today.AddMonths(1));
+    private DateRange _analysisDateRange { get; set; } = new(DateTime.Today, DateTime.Today.AddMonths(1));
     private AnalysisResult? _analysisResult;
     
     private int _analysisDays => _analysisPeriodType switch
@@ -661,7 +657,7 @@
         public decimal TotalCost { get; set; }
         public decimal GrossSalary { get; set; }
         public decimal TotalContributions { get; set; }
-        public Dictionary<string, decimal> CostByTeam { get; set; } = new();
+        public Dictionary<string, decimal> CostByTeam { get; set; } = [];
     }
 }
 

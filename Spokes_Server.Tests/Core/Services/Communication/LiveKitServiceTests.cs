@@ -1,13 +1,12 @@
-using Moq;
+namespace Spokes_Server.Tests.Core.Services.Communication;
+
 using Microsoft.Extensions.Logging;
+using Moq;
 using Spokes_Server.Core.Models.Core;
 using Spokes_Server.Core.Services.Communication.Voice;
-using Xunit;
 
-namespace Spokes_Server.Tests.Core.Services.Communication
+public class LiveKitServiceTests
 {
-    public class LiveKitServiceTests
-    {
         [Fact]
         public void ApplyPortConfiguration_ExecutesWithoutCrashing()
         {
@@ -116,4 +115,3 @@ namespace Spokes_Server.Tests.Core.Services.Communication
             Assert.False(idpChanged3);
         }
     }
-}

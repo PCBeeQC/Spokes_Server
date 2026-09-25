@@ -13,8 +13,7 @@ window.spokesAuth = window.spokesAuth || {};
  */
 window.spokesAuth.getHeaders = async function(extraHeaders, targetHostname) {
     var hdrs = Object.assign({}, extraHeaders || {});
-    if (window.Capacitor && window.Capacitor.isNativePlatform
-            && window.Capacitor.isNativePlatform()) {
+    if (typeof window.isCapacitorNative === 'function' ? window.isCapacitorNative() : Boolean(window.Capacitor?.isNativePlatform?.())) {
         hdrs['X-Spokes-Client'] = 'mobile';
         try {
             const host = targetHostname || window.location.hostname;
@@ -182,7 +181,26 @@ window.spokesAuth.refreshSessionAsync = async function() {
                 return false;
             }
 
-            const isNative = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
+            const isNative = typeof window.isCapacitorNative === 'function' ? window.isCapacitorNative() : Boolean(window.Capacitor?.isNativePlatform?.());
+
+            const reqBody = {
+                refreshToken: refreshRes.value,
+                deviceId: deviceId
+            };
+
+            // 1. Prime the Native Cookie Jar (so it doesn't wipe WebView later)
+            if (isNative && window.Capacitor?.Plugins?.CapacitorHttp?.post) {
+                try {
+                    await window.Capacitor.Plugins.CapacitorHttp.post({
+                        url: new URL('/spokesapi/auth/refresh', window.location.origin).href,
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'X-Spokes-Client': 'mobile'
+                        },
+                        data: reqBody
+                    });
+                } catch (e) { console.warn('[spokesAuth] Native cookie prime failed:', e); }
+            }
 
             const r = await fetch('/spokesapi/auth/refresh', {
                 method: 'POST',
@@ -190,15 +208,21 @@ window.spokesAuth.refreshSessionAsync = async function() {
                     'Content-Type': 'application/json',
                     'X-Spokes-Client': isNative ? 'mobile' : 'web'
                 },
-                body: JSON.stringify({
-                    refreshToken: refreshRes.value,
-                    deviceId: deviceId
-                }),
+                body: JSON.stringify(reqBody),
                 cache: 'no-store'
             });
 
             if (r.ok) {
                 try {
+                    // Force WKWebView cookie sync via hidden iframe
+                    if (isNative) {
+                        const iframe = document.createElement('iframe');
+                        iframe.style.display = 'none';
+                        iframe.src = '/spokesapi/auth/current-session?t=' + Date.now();
+                        document.body.appendChild(iframe);
+                        setTimeout(() => { if (iframe.parentNode) iframe.remove(); }, 5000);
+                    }
+                    
                     const data = await r.json();
                     if (data && data.expiresInSeconds) {
                         const validUntil = Date.now() + (data.expiresInSeconds * 1000);
@@ -263,5 +287,3 @@ window.spokesAuth.getSafeRedirectUrl = function(returnUrl, fallbackUrl) {
     } catch (e) {}
     return fallback;
 };
-
-

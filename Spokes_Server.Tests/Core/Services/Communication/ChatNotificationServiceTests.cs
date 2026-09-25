@@ -1,32 +1,24 @@
-using Spokes_Server.Core.Services.Communication;
-using Spokes_Server.Core.Services.Projects;
-using Spokes_Server.Core.Services.Core;
+namespace Spokes_Server.Tests.Core.Services.Communication;
+
+using System.Collections.Generic;
+using System.IO;
 using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Moq;
 using MudBlazor;
 using Spokes_Server.Core.Data;
-using Spokes_Server.Core.Data.Repositories.Core;
-using Spokes_Server.Core.Data.Repositories.Projects;
-using Spokes_Server.Core.Data.Repositories.Accounting;
 using Spokes_Server.Core.Data.Repositories.Communication;
+using Spokes_Server.Core.Data.Repositories.Core;
 using Spokes_Server.Core.Data.Repositories.HR;
-using Spokes_Server.Core.Models.Core;
-using Spokes_Server.Core.Models.Projects;
-using Spokes_Server.Core.Models.Accounting;
+using Spokes_Server.Core.Data.Repositories.Projects;
 using Spokes_Server.Core.Models.Communication;
+using Spokes_Server.Core.Models.Core;
 using Spokes_Server.Core.Models.HR;
-using Spokes_Server.Core.Services;
-// using Spokes_Server.Components.Shared;
-using System.Collections.Generic;
-using System.IO;
-using System.Linq;
-using System.Threading.Tasks;
+using Spokes_Server.Core.Services.Communication;
+using Spokes_Server.Core.Services.Core;
+using Spokes_Server.Core.Services.UI;
 using Xunit.Abstractions;
-
-namespace Spokes_Server.Tests.Core.Services.Communication
-{
     // A simple stub for NavigationManager since Moq can't mock its properties effectively
     public class TestNavigationManager : NavigationManager
     {
@@ -114,7 +106,8 @@ namespace Spokes_Server.Tests.Core.Services.Communication
                 new GlobalKeystoreService(),
                 new Mock<ICryptoService>().Object,
                 null,
-                dummyChatService);
+                dummyChatService,
+                new Mock<ISoundService>().Object);
         }
 
         public void Dispose()
@@ -211,7 +204,7 @@ namespace Spokes_Server.Tests.Core.Services.Communication
             Assert.Equal(0, _service.TotalUnreadCount); // But NO notification
 
             // 2. Message WITH mention
-            var msg2 = new ChatMessage { ChannelId = chanId, SenderId = "user-2", Content = "Hi @user-1", MentionedUserIds = new List<string> { userId } };
+            var msg2 = new ChatMessage { ChannelId = chanId, SenderId = "user-2", Content = "Hi @user-1", MentionedUserIds = [userId] };
             _chatState.NotifyMessageReceived(msg2);
 
             Assert.Equal(2, _service.GetUnreadCount(chanId));
@@ -248,7 +241,3 @@ namespace Spokes_Server.Tests.Core.Services.Communication
             Assert.Equal(1, _service.GetUnreadCount(chanId));
         }
     }
-}
-
-
-

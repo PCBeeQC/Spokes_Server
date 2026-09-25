@@ -1,16 +1,8 @@
 @page "/me/expenses"
 @implements IDisposable
 <PageTitle>My Expenses</PageTitle>
-@using Spokes_Server.Core.Models.Core
-@using Spokes_Server.Core.Models.Projects
-@using Spokes_Server.Core.Models.Accounting
-@using Spokes_Server.Core.Models.Communication
-@using Spokes_Server.Core.Models.HR
-@using Spokes_Server.Core.Data
 @using Spokes_Server.Core.Constants
-@using Spokes_Server.Components.Pages.Expenses
 @inject Database Db
-@inject AuthenticationStateProvider AuthStateProvider
 @inject IDialogService DialogService
 @inject ISnackbar Snackbar
 @inject NavigationManager Nav
@@ -145,18 +137,18 @@
 </style>
 
 @code {
-    private List<ExpenseReport> MyReports = new();
-    private List<CommissionItem> MyCommissions = new();
+    private List<ExpenseReport> MyReports = [];
+    private List<CommissionItem> MyCommissions = [];
     private string EmployeeId = "";
     private string EmployeeName = "";
-    private bool CanCreateReport = false;
+    private bool CanCreateReport;
 
     public class CommissionItem
     {
-        public string ProjectName { get; set; } = string.Empty;
+        public string ProjectName { get; set; } = "";
         public decimal Percentage { get; set; }
         public decimal Amount { get; set; }
-        public string Status { get; set; } = string.Empty;
+        public string Status { get; set; } = "";
         public DateTime? DatePaid { get; set; }
     }
 
@@ -233,7 +225,7 @@
         var parameters = new DialogParameters { ["Report"] = report, ["IsReadOnly"] = false };
         var options = new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true };
 
-        var dialog = await DialogService.ShowAsync<ExpenseReportDialog>("Edit Report", parameters);
+        var dialog = await DialogService.ShowAsync<ExpenseReportDialog>("Edit Report", parameters, options);
         var result = await dialog.Result;
 
         if (!result.Canceled)
@@ -248,7 +240,7 @@
     {
         var parameters = new DialogParameters { ["Report"] = report, ["IsReadOnly"] = true };
         var options = new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true };
-        await DialogService.ShowAsync<ExpenseReportDialog>("View Report", parameters);
+        await DialogService.ShowAsync<ExpenseReportDialog>("View Report", parameters, options);
     }
 
     private void SubmitReport(ExpenseReport report)
@@ -256,7 +248,6 @@
         // Simple submit
         report.DateSubmitted = DateTime.Now;
         Db.ExpenseReports.Save(report);
-        Refresh();
         Refresh();
         Snackbar.Add("Report Submitted for Approval", Severity.Success);
     }
@@ -277,7 +268,7 @@
     }
 
     [SupplyParameterFromQuery] public string? Tab { get; set; }
-    private int activeTabIndex = 0;
+    private int activeTabIndex;
 
     protected override void OnParametersSet()
     {
@@ -294,10 +285,7 @@
 
     private bool _isDisposed;
 
-    public void Dispose()
-    {
-        _isDisposed = true;
-    }
+    public void Dispose() => _isDisposed = true;
 
     private void UpdateActiveTab(int index)
     {

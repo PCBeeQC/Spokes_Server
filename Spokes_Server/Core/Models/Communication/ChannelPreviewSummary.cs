@@ -1,8 +1,5 @@
 namespace Spokes_Server.Core.Models.Communication;
 
-using System;
-using System.Collections.Generic;
-
 /// <summary>
 /// Lightweight in-memory summary of a channel's latest message used for sidebar rendering
 /// without loading full message histories from disk.

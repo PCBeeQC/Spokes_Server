@@ -1,25 +1,16 @@
 @page "/projects/{ProjectId}/invoices/{InvoiceId}"
-@using Spokes_Server.Core.Models.Core
-@using Spokes_Server.Core.Models.Projects
-@using Spokes_Server.Core.Models.Accounting
-@using Spokes_Server.Core.Models.Communication
-@using Spokes_Server.Core.Models.HR
-@using Spokes_Server.Core.Data
 @using Spokes_Server.Components.Dialogs
-@using MudBlazor
+@using Spokes_Server.Components.Pages.Email
+@using Spokes_Server.Core.Constants
+@using Spokes_Server.Core.Services.Documents
 @inject Database Db
 @inject ISnackbar Snackbar
 @inject IDialogService DialogService
 @inject NavigationManager Nav
 @inject IJSRuntime JS
-@inject AuthenticationStateProvider AuthStateProvider
-@using Microsoft.AspNetCore.Components.Authorization
-@using Spokes_Server.Core.Constants
 @inject UserService UserService
-@inject Spokes_Server.Core.Services.Accounting.FinancialCalculationEngine CalcEngine
-@implements IAsyncDisposable
-@using Spokes_Server.Core.Services.Documents
 @inject DocumentPdfService PdfService
+@implements IAsyncDisposable
 
 @if (Invoice == null || Template == null || Profile == null)
 {
@@ -270,8 +261,8 @@ else
 }
 
 @code {
-    [Parameter] public string ProjectId { get; set; }
-    [Parameter] public string InvoiceId { get; set; }
+    [Parameter] public string ProjectId { get; set; } = "";
+    [Parameter] public string InvoiceId { get; set; } = "";
 
     private Project? Project;
     private Invoice? Invoice;
@@ -280,10 +271,10 @@ else
     private string ProjectManagerName = "";
     private string ProjectManagerEmail = "";
     private bool HasTransparency => Invoice.HideCostAndMarkup && Invoice.Lines.Any(l => l.MarkupPercentage > 0);
-    private bool CanManageAccounting = false;
+    private bool CanManageAccounting;
 
     private const int PageHeight = 940;
-    private bool _needsPagination = false;
+    private bool _needsPagination;
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
@@ -441,7 +432,7 @@ else
             {
                 try { System.IO.File.Delete(Invoice.PdfPath); } catch { }
             }
-            Invoice.PdfPath = string.Empty;
+            Invoice.PdfPath = "";
         }
         else if (oldStatus == "Draft" && (newStatus == "Final" || newStatus == "Paid"))
         {
@@ -450,7 +441,7 @@ else
         }
 
         Db.Invoices.Save(Invoice);
-        Spokes_Server.Core.Services.Projects.TimelineEventHelper.ProcessInvoiceStatusChange(Db, Invoice, oldStatus, newStatus, null);
+        TimelineEventHelper.ProcessInvoiceStatusChange(Db, Invoice, oldStatus, newStatus, null);
         Snackbar.Add($"Status updated to {newStatus}", Severity.Success);
         
         await RefreshViewer();
@@ -463,22 +454,19 @@ else
     }
 
     // UPDATED: Now triggers the browser print dialog
-    private async Task PrintPdf()
-    {
-        await JS.InvokeVoidAsync("window.print");
-    }
+    private Task PrintPdf() => JS.InvokeVoidAsync("window.print").AsTask();
 
     private async Task RegisterPayment()
     {
-        var parameters = new DialogParameters<Spokes_Server.Components.Dialogs.RecordPaymentDialog> 
+        var parameters = new DialogParameters<RecordPaymentDialog> 
         { 
             { x => x.MaxAmount, Invoice.BalanceDue },
             { x => x.Message, "Enter the amount received from the client." },
             { x => x.ExistingPayments, Invoice.Payments }
         };
-        var dialog = await DialogService.ShowAsync<Spokes_Server.Components.Dialogs.RecordPaymentDialog>("Register Payment", parameters);
+        var dialog = await DialogService.ShowAsync<RecordPaymentDialog>("Register Payment", parameters);
         var result = await dialog.Result;
-        if (!result.Canceled && result.Data is Spokes_Server.Core.Models.Accounting.PaymentRecord payment)
+        if (!result.Canceled && result.Data is PaymentRecord payment)
         {
             Invoice.Payments.Add(payment);
             var oldStatus = Invoice.Status;
@@ -494,7 +482,7 @@ else
             }
             
             Db.Invoices.Save(Invoice);
-            Spokes_Server.Core.Services.Projects.TimelineEventHelper.ProcessInvoiceStatusChange(Db, Invoice, oldStatus, Invoice.Status, null);
+            TimelineEventHelper.ProcessInvoiceStatusChange(Db, Invoice, oldStatus, Invoice.Status, null);
             Snackbar.Add($"Payment of {payment.Amount:C} Registered", Severity.Success);
             await RefreshViewer();
         }
@@ -506,7 +494,7 @@ else
         var options = new DialogOptions { MaxWidth = MaxWidth.ExtraExtraLarge, FullWidth = true };
 
         // This calls the dialog defined below
-        var dialog = await DialogService.ShowAsync<Spokes_Server.Components.Dialogs.InvoiceMasterDialog>("Edit Invoice", parameters, options);
+        var dialog = await DialogService.ShowAsync<InvoiceMasterDialog>("Edit Invoice", parameters, options);
         var result = await dialog.Result;
 
         if (!result.Canceled)
@@ -591,7 +579,7 @@ else
         };
 
         var options = new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true };
-        await DialogService.ShowAsync<Spokes_Server.Components.Pages.Email.EmailComposer>("Send Email", parameters, options);
+        await DialogService.ShowAsync<EmailComposer>("Send Email", parameters, options);
     }
 
     private async Task OpenPdf()

@@ -1,13 +1,9 @@
 @page "/business/expenses"
+@attribute [Authorize(Policy = AppPermissions.Finance.AccessAccounting)]
 @implements IDisposable
 @using Spokes_Server.Core.Constants
 @using Spokes_Server.Components.Pages.BusinessExpenses.Tabs
-@attribute [Authorize(Policy = AppPermissions.Finance.AccessAccounting)]
-@* Ideally we check granular permissions, but for now we route here if they have access.
-The NavMenu prevents navigation, and we can add imperative check if needed.
-Actually, let's stick to the convention if strict perms are needed.
-Wait, the user said "Put it under Finance.AccessAccounting".
-So I should probably check that manually or rely on NavMenu + a check here. *@
+@inject NavigationManager Nav
 
 <PageTitle>Forward Planning</PageTitle>
 
@@ -33,10 +29,8 @@ So I should probably check that manually or rely on NavMenu + a check here. *@
 </MudContainer>
 
 @code {
-    // We could add an OnInitialized check for permissions here to redirect if needed.
-    [Inject] NavigationManager Nav { get; set; }
     [SupplyParameterFromQuery] public string? Tab { get; set; }
-    private int activeTabIndex = 0;
+    private int activeTabIndex;
 
     protected override void OnParametersSet()
     {

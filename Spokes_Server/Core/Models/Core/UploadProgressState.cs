@@ -1,51 +1,48 @@
-using System;
+namespace Spokes_Server.Core.Models.Core;
 
-namespace Spokes_Server.Core.Models.Core
+public class UploadProgressState
 {
-    public class UploadProgressState
+    private double _progress;
+    private string _statusText = "Uploading...";
+    private bool _isUploading;
+
+    public event Action? OnStateChanged;
+
+    public double Progress
     {
-        private double _progress = 0;
-        private string _statusText = "Uploading...";
-        private bool _isUploading = false;
-
-        public event Action? OnStateChanged;
-
-        public double Progress
+        get => _progress;
+        set
         {
-            get => _progress;
-            set
+            if (_progress != value)
             {
-                if (_progress != value)
-                {
-                    _progress = value;
-                    OnStateChanged?.Invoke();
-                }
+                _progress = value;
+                OnStateChanged?.Invoke();
             }
         }
+    }
 
-        public string StatusText
+    public string StatusText
+    {
+        get => _statusText;
+        set
         {
-            get => _statusText;
-            set
+            if (_statusText != value)
             {
-                if (_statusText != value)
-                {
-                    _statusText = value;
-                    OnStateChanged?.Invoke();
-                }
+                _statusText = value;
+                OnStateChanged?.Invoke();
             }
         }
+    }
 
-        public bool IsUploading
+    public bool IsUploading
+    {
+        get => _isUploading;
+        set
         {
-            get => _isUploading;
-            set
+            if (_isUploading != value)
             {
-                if (_isUploading != value)
-                {
-                    _isUploading = value;
-                    OnStateChanged?.Invoke();
-                }
+                _isUploading = value;
+                OnStateChanged?.Invoke();
             }
         }
     }

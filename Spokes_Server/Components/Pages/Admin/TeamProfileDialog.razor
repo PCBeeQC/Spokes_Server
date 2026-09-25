@@ -1,10 +1,4 @@
-@using Spokes_Server.Core.Models.Core
-@using Spokes_Server.Core.Models.Projects
-@using Spokes_Server.Core.Models.Accounting
-@using Spokes_Server.Core.Models.Communication
-@using Spokes_Server.Core.Models.HR
-@using MudBlazor
-@inject Spokes_Server.Core.Services.Core.AppLabelService AppLabels
+@inject AppLabelService AppLabels
 
 <MudDialog DisableSidePadding="true">
     <DialogContent>
@@ -75,13 +69,7 @@
     [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
     [Parameter] public Team Team { get; set; } = default!;
     [Parameter] public Employee? Leader { get; set; }
-    [Parameter] public List<Employee> Members { get; set; } = new();
+    [Parameter] public List<Employee> Members { get; set; } = [];
 
     private void Close() => MudDialog.Close(DialogResult.Ok(true));
-
-    private string GetTintedBackground(string hexColor)
-    {
-        if (string.IsNullOrEmpty(hexColor) || !hexColor.StartsWith("#")) return "var(--mud-palette-background-grey)";
-        return hexColor + "1A"; // Append 10% opacity to hex
-    }
 }

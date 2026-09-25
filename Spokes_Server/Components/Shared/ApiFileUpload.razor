@@ -1,7 +1,7 @@
 @inject IJSRuntime JS
-@using Microsoft.JSInterop
-@inject Microsoft.Extensions.Configuration.IConfiguration Config
-@inject MudBlazor.IDialogService DialogService
+@using Microsoft.Extensions.Configuration
+@inject IConfiguration Config
+@inject IDialogService DialogService
 @implements IAsyncDisposable
 
 <div class="api-file-upload d-inline-block @Class" style="@Style">

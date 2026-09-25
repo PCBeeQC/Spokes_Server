@@ -1,42 +1,40 @@
 using Spokes_Server.Components.Layout;
-using System;
 
-namespace Spokes_Server.Core.Services.Communication
+namespace Spokes_Server.Core.Services.Communication;
+
+public class ShareTargetStateService
 {
-    public class ShareTargetStateService
+    private readonly object _lock = new();
+    private MainLayout.SharePayload? _pendingPayload;
+    private string? _targetChannelId;
+
+    public MainLayout.SharePayload? PendingPayload
     {
-        private readonly object _lock = new();
-        private MainLayout.SharePayload? _pendingPayload;
-        private string? _targetChannelId;
+        get { lock (_lock) return _pendingPayload; }
+    }
+    public string? TargetChannelId
+    {
+        get { lock (_lock) return _targetChannelId; }
+    }
 
-        public MainLayout.SharePayload? PendingPayload
+    public event Action? OnPayloadReceived;
+
+    public void SetPayload(MainLayout.SharePayload payload, string channelId)
+    {
+        lock (_lock)
         {
-            get { lock (_lock) return _pendingPayload; }
+            _pendingPayload = payload;
+            _targetChannelId = channelId;
         }
-        public string? TargetChannelId
-        {
-            get { lock (_lock) return _targetChannelId; }
-        }
+        OnPayloadReceived?.Invoke();
+    }
 
-        public event Action? OnPayloadReceived;
-
-        public void SetPayload(MainLayout.SharePayload payload, string channelId)
+    public void Clear()
+    {
+        lock (_lock)
         {
-            lock (_lock)
-            {
-                _pendingPayload = payload;
-                _targetChannelId = channelId;
-            }
-            OnPayloadReceived?.Invoke();
-        }
-
-        public void Clear()
-        {
-            lock (_lock)
-            {
-                _pendingPayload = null;
-                _targetChannelId = null;
-            }
+            _pendingPayload = null;
+            _targetChannelId = null;
         }
     }
 }

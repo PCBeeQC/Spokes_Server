@@ -1,14 +1,8 @@
 namespace Spokes_Server.Core.Models.HR;
 
+using System.Text.Json.Serialization;
 using Spokes_Server.Core.Models.Core;
-using Spokes_Server.Core.Models.Projects;
-using Spokes_Server.Core.Models.Accounting;
-using Spokes_Server.Core.Models.Communication;
-
 using Spokes_Server.Core.Data;
-
-
-
 
 public class Employee : IDataEntity
 {
@@ -17,10 +11,7 @@ public class Employee : IDataEntity
     public override bool Equals(object? obj)
     {
         if (ReferenceEquals(this, obj)) return true;
-        if (obj == null || GetType() != obj.GetType())
-            return false;
-        var other = (Employee)obj;
-        return Id == other.Id;
+        return obj is Employee other && Id == other.Id;
     }
 
     public override int GetHashCode() => Id?.GetHashCode() ?? base.GetHashCode();
@@ -39,12 +30,13 @@ public class Employee : IDataEntity
     public string Email { get; set; } = string.Empty;
     public string Position { get; set; } = string.Empty;
 
-    [System.Text.Json.Serialization.JsonIgnore]
+    [JsonIgnore]
     public string DisplaySubtitle => string.IsNullOrEmpty(Position) ? (IsEmailPublic ? Email : "") : Position;
 
     public string TeamId { get; set; } = string.Empty;
     public decimal WeeklyHours { get; set; } = 40.0m; // Default to 40 hours
-    public decimal HourlyRate { get; set; } = 0; // For "Forward Looking" cost calculation only. Not for Payroll.
+    public List<EmployeeWorkSchedule> WorkSchedules { get; set; } = [];
+    public decimal HourlyRate { get; set; } // For "Forward Looking" cost calculation only. Not for Payroll.
 
     // Personal Info
     public string PhoneNumber { get; set; } = string.Empty;
@@ -55,32 +47,42 @@ public class Employee : IDataEntity
     public string PersonalEmail { get; set; } = string.Empty;
 
     // Privacy Settings
-    public bool IsEmailPublic { get; set; } = false;
+    public bool IsEmailPublic { get; set; }
 
     // UI Preferences
     public bool IsDarkMode { get; set; } = true;
-    public bool ChatPublicCollapsed { get; set; } = false;
-    public bool ChatProjectsCollapsed { get; set; } = false;
-    public bool ChatTeamsCollapsed { get; set; } = false;
-    public bool ChatGroupChatsCollapsed { get; set; } = false;
-    public bool ChatDirectCollapsed { get; set; } = false;
-    public bool ChatArchiveCollapsed { get; set; } = false;
-    public Dictionary<string, bool> ChatCustomCategoriesCollapsed { get; set; } = new();
+    public bool ChatPublicCollapsed { get; set; }
+    public bool ChatProjectsCollapsed { get; set; }
+    public bool ChatTeamsCollapsed { get; set; }
+    public bool ChatGroupChatsCollapsed { get; set; }
+    public bool ChatDirectCollapsed { get; set; }
+    public bool ChatArchiveCollapsed { get; set; }
+    public Dictionary<string, bool> ChatCustomCategoriesCollapsed { get; set; } = [];
     public bool PushNotificationsEnabled { get; set; } = true;
     public bool ChatNotificationsEnabled { get; set; } = true;
     public bool ReactionNotificationsEnabled { get; set; } = true;
     public bool ReplyNotificationsTreatAsMention { get; set; } = true;
     public bool EmailNotificationsEnabled { get; set; } = true;
     public bool ModerationNotificationsEnabled { get; set; } = true;
-    public bool LimitConsecutiveNotificationSounds { get; set; } = false;
+    public bool LimitConsecutiveNotificationSounds { get; set; }
     public int ConsecutiveNotificationSoundLimit { get; set; } = 3;
+    public Dictionary<string, string> NotificationSounds { get; set; } = [];
+
+    public string GetNotificationSound(string categoryId) =>
+        NotificationSounds.TryGetValue(categoryId, out var soundId) && !string.IsNullOrWhiteSpace(soundId)
+            ? soundId
+            : "spokes_default";
+
+    public void SetNotificationSound(string categoryId, string soundId) =>
+        NotificationSounds[categoryId] = soundId;
+
     public string? LastSeenUpdateVersion { get; set; }
 
 
     // Custom Sidebar Ordering
-    public bool UsesCustomSidebarOrder { get; set; } = false;
-    public Dictionary<string, int> CustomCategoryOrder { get; set; } = new();
-    public Dictionary<string, int> CustomChannelOrder { get; set; } = new();
+    public bool UsesCustomSidebarOrder { get; set; }
+    public Dictionary<string, int> CustomCategoryOrder { get; set; } = [];
+    public Dictionary<string, int> CustomChannelOrder { get; set; } = [];
 
     public string? AvatarBase64 { get; set; }
 
@@ -88,34 +90,52 @@ public class Employee : IDataEntity
 
     public uint AvatarVersion { get; set; } = 1;
 
-    [System.Text.Json.Serialization.JsonIgnore]
+    [JsonIgnore]
     public bool HasCustomAvatar => !string.IsNullOrEmpty(AvatarFile) || !string.IsNullOrEmpty(AvatarBase64);
 
     public string? ProfileColor { get; set; }
-    public List<string> FavoriteLinks { get; set; } = new();
-    public List<string> RecentEmojis { get; set; } = new();
-    public List<string> RecentGifs { get; set; } = new();
+    public List<string> FavoriteLinks { get; set; } = [];
+    public List<string> RecentEmojis { get; set; } = [];
+    public List<string> RecentGifs { get; set; } = [];
+
+    // Personal Calendar Categories
+    public List<CalendarCategory> CalendarCategories { get; set; } = [];
+
+    public List<CalendarCategory> EnsureCalendarCategories(CompanyProfile? serverProfile = null)
+    {
+        if (CalendarCategories == null || CalendarCategories.Count == 0)
+        {
+            CalendarCategories = CalendarCategoryDefaults.CloneList(serverProfile?.CalendarCategories);
+        }
+        return CalendarCategories;
+    }
 
     // Notification Schedule — per-day active hours
-    public bool NotificationScheduleEnabled { get; set; } = false;
-    public List<DaySchedule> NotificationSchedule { get; set; } = Enumerable.Range(0, 7)
-        .Select(i => new DaySchedule { Day = (DayOfWeek)i }).ToList();
+    public bool NotificationScheduleEnabled { get; set; }
+    public List<DaySchedule> NotificationSchedule { get; set; } =
+    [
+        .. Enumerable.Range(0, 7).Select(i => new DaySchedule { Day = (DayOfWeek)i })
+    ];
 
     // Security
-    public bool IsAdmin { get; set; } = false;
+    public bool IsAdmin { get; set; }
     public bool IsActive { get; set; } = true;
-    public bool IsSuspended { get; set; } = false;
-    public bool IsBanned { get; set; } = false;
+    public bool IsSuspended { get; set; }
+    public bool IsBanned { get; set; }
+    public bool IsSystem { get; set; }
+
+    [JsonIgnore]
+    public bool IsSelectable => IsActive && !IsSuspended && !IsBanned && !IsSystem;
 
     // Secure Chat Keys
     public string? PublicKey { get; set; }
     public string? EncryptedPrivateKey { get; set; }
     public bool HasChatPassword => !string.IsNullOrEmpty(EncryptedPrivateKey);
-    public bool DismissedChatWizardPermanently { get; set; } = false;
+    public bool DismissedChatWizardPermanently { get; set; }
     public DateTimeOffset? ChatWizardRemindLaterDate { get; set; }
 
     // License Banner Dismissal (Matching Secure Chat Wizard Pattern)
-    public bool DismissedLicenseBannerPermanently { get; set; } = false;
+    public bool DismissedLicenseBannerPermanently { get; set; }
     public DateTimeOffset? LicenseBannerRemindLaterDate { get; set; }
 
     // Email Credentials (Portable Encrypted)
@@ -124,16 +144,16 @@ public class Employee : IDataEntity
     public string? SignatureImageBase64 { get; set; }
 
     // The Flexible Permission List
-    public List<string> Permissions { get; set; } = new();
+    public List<string> Permissions { get; set; } = [];
     
     // Dynamic Permission Group Link
     public string? PermissionGroupId { get; set; }
     
-    [System.Text.Json.Serialization.JsonIgnore]
+    [JsonIgnore]
     public PermissionGroup? PermissionGroup { get; set; }
 
     // Blocked Users
-    public List<string> BlockedUserIds { get; set; } = new();
+    public List<string> BlockedUserIds { get; set; } = [];
 
     // The Logic: Admin can do anything. Others check the list.
     public bool HasPermission(string permission)

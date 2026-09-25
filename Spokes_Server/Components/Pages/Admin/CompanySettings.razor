@@ -1,26 +1,25 @@
 @page "/admin/settings"
 @implements IDisposable
 <PageTitle>Company Settings</PageTitle>
-@using Spokes_Server.Core.Models
-@using Spokes_Server.Core.Data
-@using MudBlazor
+@using Spokes_Server.Core.Constants
+@using Spokes_Server.Core.Services.Licensing
+@using Microsoft.Extensions.Hosting
+@using Microsoft.Extensions.Configuration
+@using System.Security.Claims
+
 @inject Database Db
 @inject ISnackbar Snackbar
 @inject IDialogService DialogService
 @inject IJSRuntime JS
 @inject AuthenticationStateProvider AuthStateProvider
 @inject NavigationManager Nav
-@inject Microsoft.Extensions.Hosting.IHostApplicationLifetime AppLifetime
+@inject IHostApplicationLifetime AppLifetime
 @inject ILogger<CompanySettings> Logger
-@inject Microsoft.Extensions.Configuration.IConfiguration Config
-@inject Spokes_Server.Core.Services.Licensing.LicenseValidationService LicenseValidationService
-@inject Spokes_Server.Core.Services.Core.AppLabelService AppLabels
-@inject Spokes_Server.Core.Services.Core.ServerUpdateService ServerUpdateService
-@inject Spokes_Server.Core.Services.Communication.Voice.LiveKitService LiveKitService
-@using Microsoft.AspNetCore.Components.Authorization
-@using System.Security.Claims
-@using Spokes_Server.Core.Constants
-@using Spokes_Server.Core.Models.Core
+@inject IConfiguration Config
+@inject LicenseValidationService LicenseValidationService
+@inject AppLabelService AppLabels
+@inject ServerUpdateService ServerUpdateService
+@inject LiveKitService LiveKitService
 
 
 
@@ -37,7 +36,7 @@
             {
                 <MudMenuItem OnClick="@(() => UpdateActiveTab(2))" Icon="@Icons.Material.Filled.Palette">Project Statuses</MudMenuItem>
             }
-            <MudMenuItem OnClick="@(() => UpdateActiveTab(3))" Icon="@Icons.Material.Filled.Category">Calendar Categories</MudMenuItem>
+            <MudMenuItem OnClick="@(() => UpdateActiveTab(3))" Icon="@Icons.Material.Filled.Category">Default Calendar Categories</MudMenuItem>
             <MudMenuItem OnClick="@(() => UpdateActiveTab(4))" Icon="@Icons.Material.Filled.Backup">Backups & Restore</MudMenuItem>
             <MudMenuItem OnClick="@(() => UpdateActiveTab(5))" Icon="@Icons.Material.Filled.Security">Permission Groups</MudMenuItem>
             @if (!IsFriendEdition)
@@ -380,8 +379,7 @@
     {
         <MudGrid>
             <MudItem xs="12">
-                <MudText Typo="Typo.body2" Class="mb-4">Configure categories for calendar events and their display
-                    colors.</MudText>
+                <MudText Typo="Typo.body2" Class="mb-4">Configure the default calendar categories assigned to new users upon account creation. Each user has full control to customize their own personal categories independently.</MudText>
             </MudItem>
 
             <MudItem xs="12" Class="mt-n4">
@@ -753,7 +751,7 @@
                 <MudItem xs="12" sm="6" Class="mt-n4">
                     <MudSelect ShrinkLabel="true" @bind-Value="Profile.Moderation.TextAction" Label="Action on Violation" Variant="Variant.Outlined" Margin="Margin.Dense">
                         <MudSelectItem Value="TextModerationAction.Block">Block Message</MudSelectItem>
-                        <MudSelectItem Value="TextModerationAction.Sanitize">Sanitize Message (replace with ***)</MudSelectItem>
+                        <MudSelectItem Value="TextModerationAction.Sanitize">Sanitize Message (replace with random letters)</MudSelectItem>
                     </MudSelect>
                 </MudItem>
                 <MudItem xs="12" Class="mt-2">
@@ -1046,6 +1044,7 @@
                                AdditionalDateClassesFunc="GetLogDateClasses"
                                Variant="Variant.Outlined"
                                Margin="Margin.Dense" />
+                <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mt-1">Dates with a colored ring have log entries.</MudText>
             </MudItem>
             <MudItem xs="12">
                 <MudPaper Class="pa-4" Outlined="true" Style="background-color: #1e1e1e; max-height: 600px; overflow-y: auto;">
@@ -1076,8 +1075,31 @@
     {
         <MudGrid>
             <MudItem xs="12" Class="mt-n2">
-                <MudText Typo="Typo.h5" GutterBottom="true">Timesheet Settings</MudText>
-                <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-4">Configure timesheet behavior for your organization.</MudText>
+                <MudText Typo="Typo.h5" GutterBottom="true">Timesheet & HR Settings</MudText>
+                <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-4">Configure timesheet behavior and HR rules for your organization.</MudText>
+            </MudItem>
+
+            @* HR & Overtime Settings *@
+            <MudItem xs="12">
+                <MudPaper Class="pa-4" Outlined="true">
+                    <MudText Typo="Typo.subtitle1" Class="mb-2"><b>HR & Overtime</b></MudText>
+                    <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-3">Configure how employee hour banks and overtime thresholds are calculated.</MudText>
+                    
+                    <MudSwitch T="bool" Value="Profile.HRConfig.EnableHourBank" ValueChanged="@(async (bool v) => { Profile.HRConfig.EnableHourBank = v; await SaveProfile(); })" Label="Enable Hour Bank" Color="Color.Primary" />
+                    
+                    <MudSelect T="string" Value="Profile.HRConfig.OvertimeCalculationMode" ValueChanged="@(async (string v) => { Profile.HRConfig.OvertimeCalculationMode = v; await SaveProfile(); })" Label="Overtime Calculation Mode" Variant="Variant.Outlined" Margin="Margin.Dense" Class="mt-3" Style="max-width: 300px;">
+                        <MudSelectItem Value="@("Weekly")">Weekly (Default)</MudSelectItem>
+                        <MudSelectItem Value="@("Daily")">Daily</MudSelectItem>
+                        <MudSelectItem Value="@("None")">None (Disabled)</MudSelectItem>
+                    </MudSelect>
+
+                    @if (Profile.HRConfig.OvertimeCalculationMode == "Daily")
+                    {
+                        <MudNumericField T="decimal" Value="Profile.HRConfig.DailyOvertimeThreshold" ValueChanged="@(async (decimal v) => { Profile.HRConfig.DailyOvertimeThreshold = v; await SaveProfile(); })" Label="Daily Overtime Threshold (Hours)" Variant="Variant.Outlined" Margin="Margin.Dense" Class="mt-3" Style="max-width: 300px;" Min="1" Max="24" Step="0.5m" />
+                    }
+
+                    <MudNumericField T="decimal" Value="Profile.HRConfig.MaxBankableHours" ValueChanged="@(async (decimal v) => { Profile.HRConfig.MaxBankableHours = v; await SaveProfile(); })" Label="Max Bankable Hours (0 for unlimited)" Variant="Variant.Outlined" Margin="Margin.Dense" Class="mt-3" Style="max-width: 300px;" Min="0" Step="1" />
+                </MudPaper>
             </MudItem>
 
             @* Features *@
@@ -1179,8 +1201,9 @@
     [SupplyParameterFromQuery] public bool Restored { get; set; }
     [SupplyParameterFromQuery] public bool CasdoorRestarted { get; set; }
     private int activeTabIndex = 0;
+    private int _previousActiveTabIndex = -1;
 
-    private List<DateTime> _availableLogDates = new();
+    private HashSet<DateTime> _availableLogDates = new();
     private DateTime _selectedLogDate = DateTime.Today;
     private List<Spokes_Server.Core.Services.Logging.SystemLogEntry> _currentLogs = new();
 
@@ -1188,7 +1211,7 @@
     {
         if (!string.IsNullOrEmpty(Tab))
         {
-            activeTabIndex = Tab.ToLower() switch
+            var newIndex = Tab.ToLower() switch
             {
                 "profile" => 0,
                 "templates" => 1,
@@ -1203,6 +1226,15 @@
                 "timesheets" => 10,
                 _ => 0
             };
+
+            if (newIndex == 9 && _previousActiveTabIndex != 9)
+            {
+                _selectedLogDate = DateTime.Today;
+                _availableLogDates = SystemLog.GetAvailableLogDates().Select(d => d.Date).ToHashSet();
+                _ = LoadLogsForDate(_selectedLogDate);
+            }
+            activeTabIndex = newIndex;
+            _previousActiveTabIndex = newIndex;
         }
     }
 
@@ -1219,6 +1251,13 @@
         
         activeTabIndex = index;
         
+        if (index == 9)
+        {
+            _selectedLogDate = DateTime.Today;
+            _availableLogDates = SystemLog.GetAvailableLogDates().Select(d => d.Date).ToHashSet();
+            _ = LoadLogsForDate(_selectedLogDate);
+        }
+
         // Prevent navigation if the component is being disposed due to navigating to another page
         if (!Nav.Uri.Contains("/admin/settings", StringComparison.OrdinalIgnoreCase))
         {
@@ -1271,15 +1310,8 @@
         RefreshTemplates();
         RefreshBackups();
 
-        _availableLogDates = SystemLog.GetAvailableLogDates();
-        if (_availableLogDates.Count > 0 && !_availableLogDates.Contains(_selectedLogDate))
-        {
-            _selectedLogDate = _availableLogDates.First();
-        }
-        else if (_availableLogDates.Count == 0)
-        {
-            _availableLogDates.Add(DateTime.Today);
-        }
+        _availableLogDates = SystemLog.GetAvailableLogDates().Select(d => d.Date).ToHashSet();
+        _selectedLogDate = DateTime.Today;
         await LoadLogsForDate(_selectedLogDate);
     }
 
@@ -1321,8 +1353,8 @@
     // --- Logs Logic ---
     private async Task OnLogDateChanged(DateTime newDate)
     {
-        _selectedLogDate = newDate;
-        await LoadLogsForDate(newDate);
+        _selectedLogDate = newDate.Date;
+        await LoadLogsForDate(_selectedLogDate);
     }
 
     private async Task OnLogDateChangedNullable(DateTime? date)
@@ -1336,7 +1368,7 @@
     private string GetLogDateClasses(DateTime date)
     {
         if (_availableLogDates.Contains(date.Date))
-            return "mud-border-primary border-2 mud-border-solid rounded-circle font-weight-bold";
+            return "log-date-has-logs border border-2 border-solid mud-border-primary";
         return string.Empty;
     }
 
@@ -1845,7 +1877,7 @@
         0 => $"{AppLabels.Company} Profile",
         1 => "Document Templates",
         2 => "Project Statuses",
-        3 => "Calendar Categories",
+        3 => "Default Calendar Categories",
         4 => "Backups & Restore",
         5 => "Permission Groups",
         6 => "Email Server",

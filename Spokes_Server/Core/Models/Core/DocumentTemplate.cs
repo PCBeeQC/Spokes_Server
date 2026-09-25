@@ -1,14 +1,6 @@
 namespace Spokes_Server.Core.Models.Core;
 
-using Spokes_Server.Core.Models.Projects;
-using Spokes_Server.Core.Models.Accounting;
-using Spokes_Server.Core.Models.Communication;
-using Spokes_Server.Core.Models.HR;
-
 using Spokes_Server.Core.Data;
-
-
-
 
 public class DocumentTemplate : IDataEntity
 {
@@ -17,22 +9,19 @@ public class DocumentTemplate : IDataEntity
     public override bool Equals(object? obj)
     {
         if (ReferenceEquals(this, obj)) return true;
-        if (obj == null || GetType() != obj.GetType())
-            return false;
-        var other = (DocumentTemplate)obj;
-        return Id == other.Id;
+        return obj is DocumentTemplate other && Id == other.Id;
     }
 
     public override int GetHashCode() => Id?.GetHashCode() ?? base.GetHashCode();
     public string Name { get; set; } = "Standard English";
     public string LanguageCode { get; set; } = "en";
     public string TaskTranslationLanguage { get; set; } = string.Empty;
-    public bool IsDefault { get; set; } = false;
+    public bool IsDefault { get; set; }
 
     // --- FINANCIALS (New) ---
     public decimal TaxRate { get; set; } = 0.14975m; // Default to QC, but editable per template
     public string CurrencySymbol { get; set; } = "$";
-    public bool CurrencySymbolAfter { get; set; } = false;
+    public bool CurrencySymbolAfter { get; set; }
     public string DateFormat { get; set; } = "MM/dd/yyyy";
 
     // Banking / Wire Transfer Info

@@ -9,18 +9,15 @@ public class StandardDocument : IDataEntity
     public override bool Equals(object? obj)
     {
         if (ReferenceEquals(this, obj)) return true;
-        if (obj == null || GetType() != obj.GetType())
-            return false;
-        var other = (StandardDocument)obj;
-        return Id == other.Id;
+        return obj is StandardDocument other && Id == other.Id;
     }
 
     public override int GetHashCode() => Id?.GetHashCode() ?? base.GetHashCode();
     public string Name { get; set; } = string.Empty;
     public string Description { get; set; } = string.Empty;
     public string Body { get; set; } = string.Empty;
-    public bool IsConfidential { get; set; } = false;
-    public List<DocumentBlockInstance> Blocks { get; set; } = new();
+    public bool IsConfidential { get; set; }
+    public List<DocumentBlockInstance> Blocks { get; set; } = [];
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
 }

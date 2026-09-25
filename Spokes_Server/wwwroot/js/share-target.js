@@ -1,5 +1,8 @@
-let _shareTargetDotNetRef = null;
-let _shareListenersInitialized = false;
+(function () {
+    'use strict';
+
+    let _shareTargetDotNetRef = null;
+    let _shareListenersInitialized = false;
 
 // --- Race condition guards ---
 // Set to true while handleSharePayload is routing (showing server selector or navigating).
@@ -29,7 +32,7 @@ window.registerShareTarget = (dotNetRef) => {
         _shareListenersInitialized = true;
 
         // Listen to the Capacitor Share Target plugin while Blazor is running
-        if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.CapacitorShareTarget) {
+        if (window.Capacitor?.Plugins?.CapacitorShareTarget) {
             window.Capacitor.Plugins.CapacitorShareTarget.addListener('shareReceived', async (payload) => {
                 console.log('[ShareTarget] Blazor active WebView received share payload:', payload);
                 // This event is a fallback — checkPendingIntent() handles the primary path.
@@ -44,7 +47,7 @@ window.registerShareTarget = (dotNetRef) => {
         }
 
         // iOS Warm-Start Fix: Listen to App lifecycle events to manually poll for intents
-        if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.App) {
+        if (window.Capacitor?.Plugins?.App) {
             window.Capacitor.Plugins.App.addListener('appUrlOpen', async (data) => {
                 if (data.url && data.url.includes('spokes://share')) {
                     console.log('[ShareTarget] appUrlOpen detected share URL, polling intent...');
@@ -90,7 +93,7 @@ const handleSharePayload = async (payload) => {
     }
 
     // Check if this share was triggered via a Direct Share shortcut
-    if (window.Capacitor.Plugins.ShortcutManager) {
+    if (window.Capacitor?.Plugins?.ShortcutManager) {
         try {
             const pending = await window.Capacitor.Plugins.ShortcutManager.getPendingShortcut();
             if (pending && pending.id) {
@@ -201,7 +204,7 @@ const pollNativePendingIntent = async () => {
     _pollInProgress = true;
     let foundShare = false;
     try {
-        if (window.Capacitor && window.Capacitor.Plugins.BridgeManager && window.Capacitor.Plugins.BridgeManager.checkPendingIntent) {
+        if (window.Capacitor?.Plugins?.BridgeManager?.checkPendingIntent) {
             try {
                 const intentResult = await window.Capacitor.Plugins.BridgeManager.checkPendingIntent();
                 if (intentResult && intentResult.isShareIntent) {
@@ -334,7 +337,7 @@ window.uploadSharedFiles = async (filesArray, uploadUrl) => {
     // Try native upload pipeline first if supported (fixes iOS App Group CORS issue)
     if (window.Capacitor?.isNativePlatform?.() && window.Capacitor?.Plugins?.BridgeManager?.uploadSharedFiles) {
         try {
-            const uris = filesArray.map(f => f.uri).filter(uri => !!uri);
+            const uris = filesArray.map(f => f.uri).filter(Boolean);
             if (uris.length > 0) {
                 const nativeResult = await window.spokesUpload.uploadNativeFiles(uris, uploadUrl, null);
                 if (nativeResult && nativeResult.responseJson) {
@@ -383,7 +386,7 @@ window.uploadSharedFiles = async (filesArray, uploadUrl) => {
 // --- Shortcut Manager Integration ---
 
 window.spokesPushDirectShareShortcut = async (serverUrl, channelId, channelName, iconBase64) => {
-    if (window.Capacitor && window.Capacitor.Plugins.ShortcutManager) {
+    if (window.Capacitor?.Plugins?.ShortcutManager) {
         try {
             await window.Capacitor.Plugins.ShortcutManager.pushDirectShareShortcut({
                 serverUrl: serverUrl,
@@ -398,7 +401,7 @@ window.spokesPushDirectShareShortcut = async (serverUrl, channelId, channelName,
 };
 
 window.spokesPushAppShortcut = async (serverUrl, id, shortLabel, longLabel, iconBase64) => {
-    if (window.Capacitor && window.Capacitor.Plugins.ShortcutManager) {
+    if (window.Capacitor?.Plugins?.ShortcutManager) {
         try {
             await window.Capacitor.Plugins.ShortcutManager.pushAppShortcut({
                 serverUrl: serverUrl,
@@ -414,7 +417,7 @@ window.spokesPushAppShortcut = async (serverUrl, id, shortLabel, longLabel, icon
 };
 
 window.spokesRemoveShortcut = async (serverUrl, id) => {
-    if (window.Capacitor && window.Capacitor.Plugins.ShortcutManager) {
+    if (window.Capacitor?.Plugins?.ShortcutManager) {
         try {
             await window.Capacitor.Plugins.ShortcutManager.removeShortcut({ serverUrl, id });
         } catch (e) {
@@ -424,7 +427,7 @@ window.spokesRemoveShortcut = async (serverUrl, id) => {
 };
 
 window.spokesCheckAppShortcuts = async () => {
-    if (window.Capacitor && window.Capacitor.Plugins.ShortcutManager && _shareTargetDotNetRef) {
+    if (window.Capacitor?.Plugins?.ShortcutManager && _shareTargetDotNetRef) {
         try {
             const pending = await window.Capacitor.Plugins.ShortcutManager.getPendingShortcut();
             if (pending && pending.id) {
@@ -461,3 +464,5 @@ window.spokesCheckAppShortcuts = async () => {
         }
     }
 };
+})();
+

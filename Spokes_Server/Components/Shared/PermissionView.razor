@@ -1,4 +1,3 @@
-@using Spokes_Server.Core.Services
 @inject UserService UserService
 
 @if (IsAuthorized)
@@ -18,26 +17,15 @@ else
     // Support simpler usage: <PermissionView Required="...">Content</PermissionView>
     [Parameter] public RenderFragment? ChildContent { get; set; }
 
-    private bool IsAuthorized = false;
+    private bool IsAuthorized;
 
     protected override async Task OnInitializedAsync()
     {
-        if (string.IsNullOrEmpty(Required))
-        {
-            IsAuthorized = true;
-        }
-        else
-        {
-            IsAuthorized = await UserService.HasPermissionAsync(Required);
-        }
+        IsAuthorized = string.IsNullOrEmpty(Required) || await UserService.HasPermissionAsync(Required);
     }
 
     protected override void OnParametersSet()
     {
-        // If ChildContent is provided but Authorized is not, use ChildContent as Authorized
-        if (ChildContent != null && Authorized == null)
-        {
-            Authorized = ChildContent;
-        }
+        Authorized ??= ChildContent;
     }
 }

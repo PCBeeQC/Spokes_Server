@@ -23,7 +23,8 @@ public interface IWebPushService
         string? channelName = null,
         bool isGroupChat = false,
         int? badge = null,
-        bool isSilent = false);
+        bool isSilent = false,
+        string? sound = null);
     Task SendClearNotificationAsync(string userId, string threadId);
     Task SendNotificationDirectAsync(
         string userId,
@@ -40,7 +41,8 @@ public interface IWebPushService
         string? channelName = null,
         bool isGroupChat = false,
         int? badge = null,
-        bool isSilent = false);
+        bool isSilent = false,
+        string? sound = null);
     Task<bool> SendDeviceTestNotificationAsync(
         string subscriptionId,
         string userId,

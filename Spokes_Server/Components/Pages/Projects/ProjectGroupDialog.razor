@@ -1,12 +1,8 @@
 @using Spokes_Server.Core.Models.Core
 @using Spokes_Server.Core.Models.Projects
-@using Spokes_Server.Core.Models.Accounting
-@using Spokes_Server.Core.Models.Communication
-@using Spokes_Server.Core.Models.HR
 @using Spokes_Server.Core.Data
 @using MudBlazor
 @inject Database Db
-@inject ISnackbar Snackbar
 
 <MudDialog>
     <DialogContent>
@@ -69,9 +65,9 @@
     private bool success;
     private ProjectGroup Group = new();
     private Supplier? selectedClient;
-    private List<Supplier> AllClients = new();
-    private List<Project> AvailableProjects = new();
-    private HashSet<string> SelectedProjectIds = new();
+    private List<Supplier> AllClients = [];
+    private List<Project> AvailableProjects = [];
+    private HashSet<string> SelectedProjectIds = [];
     private bool IsEdit => ExistingGroup != null;
 
     protected override void OnInitialized()
@@ -87,7 +83,7 @@
                 Name = ExistingGroup.Name,
                 Description = ExistingGroup.Description,
                 Client = ExistingGroup.Client,
-                ProjectIds = new List<string>(ExistingGroup.ProjectIds),
+                ProjectIds = [.. ExistingGroup.ProjectIds],
                 CreatedAt = ExistingGroup.CreatedAt
             };
 
@@ -95,7 +91,7 @@
             selectedClient = AllClients.FirstOrDefault(c => 
                 c.Info.BusinessName.Equals(Group.Client.BusinessName, StringComparison.OrdinalIgnoreCase));
 
-            SelectedProjectIds = new HashSet<string>(Group.ProjectIds);
+            SelectedProjectIds = [.. Group.ProjectIds];
             
             if (selectedClient != null)
             {
@@ -104,20 +100,20 @@
         }
     }
 
-    private async Task<IEnumerable<Supplier>> SearchClients(string value, CancellationToken token)
+    private Task<IEnumerable<Supplier>> SearchClients(string value, CancellationToken token)
     {
         if (string.IsNullOrEmpty(value))
-            return AllClients;
+            return Task.FromResult<IEnumerable<Supplier>>(AllClients);
 
-        return AllClients.Where(c => 
-            c.Info.BusinessName.Contains(value, StringComparison.OrdinalIgnoreCase));
+        return Task.FromResult(AllClients.Where(c => 
+            c.Info.BusinessName.Contains(value, StringComparison.OrdinalIgnoreCase)));
     }
 
     private void LoadProjectsForClient()
     {
         if (selectedClient == null)
         {
-            AvailableProjects = new();
+            AvailableProjects = [];
             return;
         }
 
@@ -163,7 +159,7 @@
         }
         else
         {
-            AvailableProjects = new();
+            AvailableProjects = [];
         }
         StateHasChanged();
     }

@@ -1,10 +1,6 @@
-@using Spokes_Server.Core.Data
-@using Microsoft.AspNetCore.Components.Authorization
-@using System.Security.Claims
 @inject IJSRuntime JS
 @inject ISnackbar Snackbar
 @inject Database Db
-@inject AuthenticationStateProvider AuthStateProvider
 
 <MudTooltip Text="@GetTooltipText()">
     <MudIconButton Icon="@GetIcon()" Color="Color.Inherit" OnClick="HandleClick"

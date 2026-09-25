@@ -1,29 +1,17 @@
 @page "/business/accounting"
-@inject Spokes_Server.Core.Services.Accounting.FinancialCalculationEngine CalcEngine
-@implements IDisposable
 @attribute [Authorize(Policy = AppPermissions.Finance.AccessAccounting)]
+@implements IDisposable
 <PageTitle>Accounting Dashboard</PageTitle>
-@using Spokes_Server.Core.Models.Core
-@using Spokes_Server.Core.Models.Projects
-@using Spokes_Server.Core.Models.Accounting
-@using Spokes_Server.Core.Models.Communication
-@using Spokes_Server.Core.Models.HR
-@using Spokes_Server.Core.Data
+@using Spokes_Server.Core.Constants
 @using Spokes_Server.Components.Pages.Expenses
 @using Spokes_Server.Components.Pages.Projects
 @using Spokes_Server.Components.Pages.Business.Tabs
 @using Spokes_Server.Components.Dialogs
 @using Spokes_Server.Components.Shared
-@using MudBlazor
 @inject Database Db
 @inject IDialogService DialogService
 @inject ISnackbar Snackbar
 @inject NavigationManager Nav
-@inject AuthenticationStateProvider AuthStateProvider
-@using Microsoft.AspNetCore.Components.Authorization
-@using Spokes_Server.Core.Constants
-@using Spokes_Server.Core.Services
-@inject IFileService FileService
 
 <div class="d-flex flex-column h-100" style="min-height: 0;">
     <MudText Class="mt-4 flex-shrink-0" Typo="Typo.h4" GutterBottom="true">Accounting Dashboard</MudText>
@@ -362,9 +350,9 @@
         public RecurringBillRecord? RecurringRecord { get; set; }
     }
 
-    private List<AccountingItem> Payables = new(); // Outstanding Bills/Expenses
-    private List<AccountingItem> PaidPayables = new(); // History
-    private List<AccountingItem> Receivables = new(); // Invoices (Sent/Paid/Partial)
+    private List<AccountingItem> Payables = []; // Outstanding Bills/Expenses
+    private List<AccountingItem> PaidPayables = []; // History
+    private List<AccountingItem> Receivables = []; // Invoices (Sent/Paid/Partial)
 
     private IEnumerable<AccountingItem> PayableItems => Payables.OrderBy(i => i.DueDate);
     private IEnumerable<AccountingItem> ReceivableItems => Receivables.OrderByDescending(i => i.Date);
@@ -375,29 +363,25 @@
     private string searchHistory = "";
 
     // --- Dashboard Metrics ---
-    private decimal TotalOutstandingPayable = 0;
-    private decimal DuePastDuePayable = 0;
-    private int DuePastDuePayableCount = 0;
-    private decimal OutstandingReceivable = 0;
+    private decimal TotalOutstandingPayable;
+    private decimal DuePastDuePayable;
+    private int DuePastDuePayableCount;
+    private decimal OutstandingReceivable;
     
-    private decimal OverdueReceivable = 0;
-    private int OverdueReceivableCount = 0;
+    private decimal OverdueReceivable;
+    private int OverdueReceivableCount;
     
-    private decimal NetCashFlow30Days = 0;
+    private decimal NetCashFlow30Days;
 
-    private List<ChartSeries<double>> CashFlowSeries = new List<ChartSeries<double>>();
-    private string[] CashFlowLabels = new string[0];
-    private ChartOptions CashFlowChartOptions = new ChartOptions
+    private List<ChartSeries<double>> CashFlowSeries = [];
+    private string[] CashFlowLabels = [];
+    private ChartOptions CashFlowChartOptions = new()
     {
-        ChartPalette = new[] { Colors.Green.Default, Colors.Red.Default }
+        ChartPalette = [Colors.Green.Default, Colors.Red.Default]
     };
 
-    protected override async Task OnInitializedAsync()
+    protected override void OnInitialized()
     {
-        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
-        var user = authState.User;
-
-        // Permission check handled by [Authorize] attribute
         Refresh();
     }
 
@@ -612,11 +596,11 @@
             apData[i] = (double)apSum;
         }
 
-        CashFlowSeries = new List<ChartSeries<double>>()
-        {
-            new ChartSeries<double>() { Name = "Receivables (AR)", Data = arData },
-            new ChartSeries<double>() { Name = "Payables (AP)", Data = apData }
-        };
+        CashFlowSeries =
+        [
+            new ChartSeries<double> { Name = "Receivables (AR)", Data = arData },
+            new ChartSeries<double> { Name = "Payables (AP)", Data = apData }
+        ];
     }
 
     private Color GetTypeColor(string type) => type switch

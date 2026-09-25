@@ -1,12 +1,8 @@
-using Spokes_Server.Core.Services.Communication;
-using Spokes_Server.Core.Services.Projects;
-using Spokes_Server.Core.Services.Core;
+using System;
 using System.Collections.Concurrent;
+using Spokes_Server.Core.Models.Communication;
 
 namespace Spokes_Server.Core.Services.Communication.Email;
-
-using Spokes_Server.Core.Models.Communication;
-using Spokes_Server.Core.Models.HR;
 
 /// <summary>
 /// Singleton service to track the real-time background sync state of an employee's email.
@@ -21,14 +17,10 @@ public class EmailSyncStateService
     public event Action<string>? OnUnreadCountChanged;
 
     public void NotifyNewEmail(string employeeId, EmailMessage message)
-    {
-        OnNewEmailReceived?.Invoke(employeeId, message);
-    }
+        => OnNewEmailReceived?.Invoke(employeeId, message);
 
     public void NotifyUnreadCountChanged(string employeeId)
-    {
-        OnUnreadCountChanged?.Invoke(employeeId);
-    }
+        => OnUnreadCountChanged?.Invoke(employeeId);
 
     public void SetState(string employeeId, string state)
     {
@@ -37,12 +29,5 @@ public class EmailSyncStateService
     }
 
     public string GetState(string employeeId)
-    {
-        if (_employeeStates.TryGetValue(employeeId, out var state))
-        {
-            return state;
-        }
-        return "Idle";
-    }
+        => _employeeStates.TryGetValue(employeeId, out var state) ? state : "Idle";
 }
-

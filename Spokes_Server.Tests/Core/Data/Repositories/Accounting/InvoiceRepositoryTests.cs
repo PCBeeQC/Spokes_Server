@@ -1,45 +1,43 @@
-using Spokes_Server.Core.Data;
-using Spokes_Server.Core.Data.Repositories.Accounting;
-using Spokes_Server.Core.Models.Accounting;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Moq;
-using System;
-using System.Linq;
+using Spokes_Server.Core.Data;
+using Spokes_Server.Core.Data.Repositories.Accounting;
+using Spokes_Server.Core.Models.Accounting;
 using Xunit;
 
-namespace Spokes_Server.Tests.Core.Data.Repositories.Accounting
+namespace Spokes_Server.Tests.Core.Data.Repositories.Accounting;
+
+public class InvoiceRepositoryTests : IDisposable
 {
-    public class InvoiceRepositoryTests : IDisposable
+    private readonly string _testDataDir;
+    private readonly DiskPersistenceService _writer;
+    private readonly SequenceService _sequenceService;
+    private readonly InvoiceRepository _repo;
+
+    public InvoiceRepositoryTests()
     {
-        private readonly string _testDataDir;
-        private readonly DiskPersistenceService _writer;
-        private readonly SequenceService _sequenceService;
-        private readonly InvoiceRepository _repo;
+        _testDataDir = Path.Combine(Path.GetTempPath(), $"Spokes_Test_Invoices_{Guid.NewGuid()}");
 
-        public InvoiceRepositoryTests()
+        var mockConfig = new Mock<IConfiguration>();
+        mockConfig.Setup(c => c["DataPath"]).Returns(_testDataDir);
+
+        var mockPersistenceLogger = new Mock<ILogger<DiskPersistenceService>>();
+        _writer = new DiskPersistenceService(mockPersistenceLogger.Object);
+
+        _sequenceService = new SequenceService(mockConfig.Object);
+
+        _repo = new InvoiceRepository(_writer, mockConfig.Object, _sequenceService);
+    }
+
+    public void Dispose()
+    {
+        if (Directory.Exists(_testDataDir))
         {
-            _testDataDir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "Spokes_Test_Invoices_" + Guid.NewGuid().ToString());
-
-            var mockConfig = new Mock<IConfiguration>();
-            mockConfig.Setup(c => c["DataPath"]).Returns(_testDataDir);
-
-            var mockPersistenceLogger = new Mock<ILogger<DiskPersistenceService>>();
-            _writer = new DiskPersistenceService(mockPersistenceLogger.Object);
-
-            _sequenceService = new SequenceService(mockConfig.Object);
-
-            _repo = new InvoiceRepository(_writer, mockConfig.Object, _sequenceService);
+            try { Directory.Delete(_testDataDir, true); } catch (Exception ex) { Console.WriteLine($"Cleanup failed: {ex.Message}"); }
         }
-
-        public void Dispose()
-        {
-            if (System.IO.Directory.Exists(_testDataDir))
-            {
-                try { System.IO.Directory.Delete(_testDataDir, true); } catch (Exception ex) { Console.WriteLine($"Cleanup failed: {ex.Message}"); }
-            }
-            _writer.Dispose();
-        }
+        _writer.Dispose();
+    }
 
         [Fact]
         public void GenerateInvoiceNumber_DelegatesToSequenceService()
@@ -87,5 +85,52 @@ namespace Spokes_Server.Tests.Core.Data.Repositories.Accounting
             Assert.Equal("i2", result[0].Id);
             Assert.Equal("i1", result[1].Id);
         }
+
+        [Fact]
+        public void Constructor_WithNullDataPath_InitializesCorrectly()
+        {
+            var mockConfig = new Mock<IConfiguration>();
+            mockConfig.Setup(c => c["DataPath"]).Returns((string?)null);
+
+            var repo = new InvoiceRepository(_writer, mockConfig.Object, _sequenceService);
+
+            Assert.NotNull(repo);
+        }
+
+        [Fact]
+        public void GetFilePath_WritesDirectJsonFileInInvoicesFolder()
+        {
+            var invoice = new Invoice { Id = "inv-100" };
+
+            _repo.Save(invoice);
+            _writer.FlushAll();
+
+            var expectedPath = Path.Combine(_testDataDir, "Invoices", "inv-100.json");
+            Assert.True(File.Exists(expectedPath));
+        }
+
+        [Fact]
+        public void GetByProject_WhenNoMatches_ReturnsEmptyList()
+        {
+            var invoice = new Invoice { Id = "inv-1", ProjectId = "project-1" };
+            _repo.Save(invoice);
+
+            var result = _repo.GetByProject("unknown");
+
+            Assert.NotNull(result);
+            Assert.Empty(result);
+        }
+
+        [Fact]
+        public void GetByProjectGroup_WhenNoMatches_ReturnsEmptyList()
+        {
+            var invoice = new Invoice { Id = "inv-1", ProjectGroupId = "pg-1" };
+            _repo.Save(invoice);
+
+            var result = _repo.GetByProjectGroup("unknown");
+
+            Assert.NotNull(result);
+            Assert.Empty(result);
+        }
     }
-}
+

@@ -1,8 +1,4 @@
-@using Spokes_Server.Core.Models.Core
-@using Spokes_Server.Core.Models.Projects
 @using Spokes_Server.Core.Models.Accounting
-@using Spokes_Server.Core.Models.Communication
-@using Spokes_Server.Core.Models.HR
 @using Spokes_Server.Core.Data
 @using Spokes_Server.Components.Pages.Admin
 @inject Database Db
@@ -44,12 +40,12 @@
 </MudTable>
 
 @code {
-    private List<RateCard> List = new();
+    private List<RateCard> List = [];
     protected override void OnInitialized() => Refresh();
     private void Refresh() => List = Db.RateCards.GetAll().OrderBy(x => x.Name).ToList();
 
-    private async Task OpenCreateDialog() => await OpenDialog(new RateCard(), "New Rate Card");
-    private async Task OpenEditDialog(RateCard item) => await OpenDialog(item, "Edit Rate Card");
+    private Task OpenCreateDialog() => OpenDialog(new RateCard(), "New Rate Card");
+    private Task OpenEditDialog(RateCard item) => OpenDialog(item, "Edit Rate Card");
 
     private async Task OpenDialog(RateCard item, string title)
     {

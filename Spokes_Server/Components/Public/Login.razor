@@ -1,7 +1,6 @@
 @page "/authentication/login"
-@layout Spokes_Server.Components.Layout.LoginLayout
-@using Microsoft.AspNetCore.Authorization
-@using Spokes_Server.Core.Data
+@layout LoginLayout
+@using Spokes_Server.Components.Layout
 @attribute [AllowAnonymous]
 @inject NavigationManager Nav
 @inject Database Db
@@ -20,7 +19,7 @@
             else
             {
                 <MudAvatar Color="Color.Primary" Style="height: 80px; width: 80px; font-size: 2rem;">
-                    @(Profile?.CompanyName?.Substring(0, 1) ?? "M")
+                    @(Profile?.CompanyName?[..1] ?? "M")
                 </MudAvatar>
             }
         </div>

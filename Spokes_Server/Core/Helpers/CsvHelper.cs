@@ -5,7 +5,7 @@ namespace Spokes_Server.Core.Helpers;
 /// </summary>
 public static class CsvHelper
 {
-    private static readonly char[] FormulaTriggers = { '=', '+', '-', '@', '\t', '\r' };
+    private static readonly char[] FormulaTriggers = ['=', '+', '-', '@', '\t', '\r'];
 
     /// <summary>
     /// Escapes a CSV field value per RFC 4180 and sanitizes potential spreadsheet formula injection payloads.

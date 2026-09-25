@@ -6,6 +6,7 @@ using Spokes_Server.Core.Data.Repositories.Accounting;
 using Spokes_Server.Core.Data.Repositories.Communication;
 using Spokes_Server.Core.Data.Repositories.HR;
 using Spokes_Server.Core.Services.Communication;
+using Spokes_Server.Core.Services.Communication.Chat;
 using Spokes_Server.Core.Services.Projects;
 using Spokes_Server.Core.Services.Core;
 using Spokes_Server.Core.Services.HR;
@@ -15,9 +16,10 @@ using Spokes_Server.Core.Services.Documents;
 using Spokes_Server.Core.Services.Security;
 using Spokes_Server.Core.Services.Licensing;
 using Spokes_Server.Core.Services.Accounting;
+using Spokes_Server.Core.Services.Communication.Notifications;
 using Spokes_Server.Core.Services;
 using Microsoft.Extensions.Hosting;
-using Microsoft.Extensions.Configuration;
+using Microsoft.AspNetCore.Components.Server.Circuits;
 
 namespace Microsoft.Extensions.DependencyInjection;
 
@@ -36,6 +38,7 @@ public static class SpokesServiceExtensions
         services.AddSingleton<ProjectGroupRepository>();
         services.AddSingleton<EmployeeRepository>();
         services.AddSingleton<TimesheetRepository>();
+        services.AddSingleton<HourBankAdjustmentRepository>();
         services.AddSingleton<WorkTypeRepository>();
         services.AddSingleton<RateCardRepository>();
         services.AddSingleton<QuoteRepository>();
@@ -67,6 +70,7 @@ public static class SpokesServiceExtensions
         services.AddSingleton<ChatCategoryRepository>();
         services.AddSingleton<ChatMessageRepository>();
         services.AddSingleton<ChatReadStateRepository>();
+        services.AddSingleton<UserClientStateRepository>();
         services.AddSingleton<ReportedMessageRepository>();
         services.AddSingleton<PushSubscriptionRepository>();
         services.AddSingleton<AlbumRepository>();
@@ -83,6 +87,7 @@ public static class SpokesServiceExtensions
         // Services
         services.AddSingleton<ServerEscrowService>();
         services.AddSingleton<AlbumService>();
+        services.AddSingleton<IChatAuthorizationService, ChatAuthorizationService>();
         services.AddSingleton<ChatService>();
         services.AddSingleton<IChatChannelAccessService>(sp => sp.GetRequiredService<ChatService>());
         services.AddSingleton<BoardService>();
@@ -94,7 +99,7 @@ public static class SpokesServiceExtensions
         // Scoped services (per-user session)
         services.AddScoped<ChatNotificationService>();
         services.AddScoped<UserCircuitContext>();
-        services.AddScoped<Microsoft.AspNetCore.Components.Server.Circuits.CircuitHandler, PresenceCircuitHandler>();
+        services.AddScoped<CircuitHandler, PresenceCircuitHandler>();
 
         // 3. The Container
         services.AddSingleton<SequenceService>();
@@ -112,16 +117,20 @@ public static class SpokesServiceExtensions
         services.AddScoped<OvertimeService>();
         services.AddSingleton<PresenceStateService>();
         services.AddSingleton<ChatStateService>();
+        services.AddSingleton<UserClientStateService>();
         services.AddScoped<VoiceChannelService>();
         services.AddScoped<GlobalVoiceService>();
         services.AddHostedService<VoiceStateSyncService>();
         services.AddSingleton<LiveKitService>();
         services.AddSingleton<MarkdownSanitizerService>();
-        services.AddScoped<Microsoft.AspNetCore.Components.Server.Circuits.CircuitHandler, VoiceCircuitHandler>();
+        services.AddScoped<CircuitHandler, VoiceCircuitHandler>();
 
         // Email Sync tracking
         services.AddSingleton<EmailSyncStateService>();
         services.AddScoped<EmailNotificationService>(); // Realtime IMAP
+        services.AddSingleton<CalendarReminderStateService>();
+        services.AddScoped<CalendarNotificationService>();
+        services.AddHostedService<CalendarReminderBackgroundService>();
         services.AddScoped<ShareTargetStateService>();
         services.AddSingleton<SearchService>();
         services.AddSingleton<TimerService>();
@@ -132,7 +141,7 @@ public static class SpokesServiceExtensions
         services.AddHostedService<EmailBackgroundService>();
         services.AddHostedService<BackupService>();
         services.AddHostedService<DemoResetService>();
-        services.AddSingleton<BackupService>(sp => (BackupService)sp.GetServices<IHostedService>().First(s => s is BackupService));
+        services.AddSingleton<BackupService>(sp => sp.GetServices<IHostedService>().OfType<BackupService>().First());
         services.AddSingleton<NotificationQueueService>();
         services.AddSingleton<NotificationRoutingService>();
         services.AddSingleton<AvatarGeneratorService>();
@@ -143,7 +152,7 @@ public static class SpokesServiceExtensions
         services.AddHostedService<TelemetryBackgroundService>();
         services.AddHostedService<NotificationQueueBackgroundService>();
         services.AddHostedService<ServerUpdateService>();
-        services.AddSingleton<ServerUpdateService>(sp => (ServerUpdateService)sp.GetServices<IHostedService>().First(s => s is ServerUpdateService));
+        services.AddSingleton<ServerUpdateService>(sp => sp.GetServices<IHostedService>().OfType<ServerUpdateService>().First());
 
         // Document Rendering
         services.AddSingleton<RenderTokenService>();
@@ -169,9 +178,10 @@ public static class SpokesServiceExtensions
         services.AddScoped<ScopedKeystoreService>();
 
         // 0.7 Domain Services
-        services.AddScoped<Spokes_Server.Core.Services.Accounting.FinancialCalculationEngine>();
+        services.AddScoped<FinancialCalculationEngine>();
         services.AddScoped<AccountingService>();
         services.AddScoped<HRService>();
+        services.AddScoped<Spokes_Server.Core.Services.Integrations.ClockifyMigrationService>();
 
         return services;
     }

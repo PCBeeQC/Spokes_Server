@@ -10,17 +10,16 @@ using Spokes_Server.Core.Data.Repositories.Projects;
 using Spokes_Server.Core.Hubs;
 using Spokes_Server.Core.Models.HR;
 using Spokes_Server.Core.Services;
-using Spokes_Server.Core.Services.Communication;
 using Spokes_Server.Core.Services.Communication.Chat;
 using Spokes_Server.Core.Services.Communication.Notifications;
 using Spokes_Server.Core.Services.Communication.Presence;
 using Spokes_Server.Core.Services.Core;
 using Spokes_Server.Core.Services.Security;
 
-namespace Spokes_Server.Tests.Core.Services.Communication
+namespace Spokes_Server.Tests.Core.Services.Communication;
+
+public class EventRsvpTests : IDisposable
 {
-    public class EventRsvpTests : IDisposable
-    {
         private readonly string _testDataDir;
         private readonly IConfiguration _config;
         private readonly DiskPersistenceService _persistence;
@@ -117,7 +116,7 @@ namespace Spokes_Server.Tests.Core.Services.Communication
                 Title = "Company Picnic",
                 Start = DateTime.Today.AddDays(1),
                 End = DateTime.Today.AddDays(1).AddHours(2),
-                Attendees = new List<string>()
+                Attendees = []
             };
             _calendarEvents.Save(evt);
 
@@ -144,7 +143,7 @@ namespace Spokes_Server.Tests.Core.Services.Communication
                 Title = "Sprint Planning",
                 Start = DateTime.Today.AddDays(2),
                 End = DateTime.Today.AddDays(2).AddHours(1),
-                Attendees = new List<string> { "user-123" }
+                Attendees = ["user-123"]
             };
             _calendarEvents.Save(evt);
 
@@ -168,7 +167,7 @@ namespace Spokes_Server.Tests.Core.Services.Communication
                 Title = "All Hands",
                 Start = DateTime.Today.AddDays(3),
                 End = DateTime.Today.AddDays(3).AddHours(1),
-                Attendees = new List<string> { "user-123", "user-456" }
+                Attendees = ["user-123", "user-456"]
             };
             _calendarEvents.Save(evt);
 
@@ -195,7 +194,7 @@ namespace Spokes_Server.Tests.Core.Services.Communication
                 Title = "Design Review",
                 Start = DateTime.Today.AddDays(4),
                 End = DateTime.Today.AddDays(4).AddHours(1),
-                Attendees = new List<string> { "user-456" }
+                Attendees = ["user-456"]
             };
             _calendarEvents.Save(evt);
 
@@ -215,4 +214,3 @@ namespace Spokes_Server.Tests.Core.Services.Communication
             Assert.False(result);
         }
     }
-}

@@ -7,8 +7,6 @@ using Spokes_Server.Aggregate;
 using System.Security.Cryptography;
 using System.Text;
 
-using System.Linq;
-
 public static class SessionHelper
 {
     public static DeviceSession? GetActiveSession(HttpContext context, Database db)
@@ -40,17 +38,11 @@ public static class SessionHelper
     public static DeviceSession IssueRefreshToken(HttpContext context, Database db, string employeeId, out string? rawToken, string? deviceId = null, bool issueCookie = true, string? idToken = null)
     {
         rawToken = null;
-        var tokenBytes = new byte[64];
-        using (var rng = RandomNumberGenerator.Create())
-        {
-            rng.GetBytes(tokenBytes);
-        }
+        var tokenBytes = RandomNumberGenerator.GetBytes(64);
         var refreshToken = Convert.ToBase64String(tokenBytes);
         if (!issueCookie) rawToken = refreshToken;
 
-        using var sha256 = SHA256.Create();
-        var hashBytes = sha256.ComputeHash(Encoding.UTF8.GetBytes(refreshToken));
-        var tokenHash = Convert.ToBase64String(hashBytes);
+        var tokenHash = Convert.ToBase64String(SHA256.HashData(Encoding.UTF8.GetBytes(refreshToken)));
 
         var userAgent = context.Request.Headers["User-Agent"].ToString();
         var deviceInfo = "Unknown Device";
@@ -59,7 +51,12 @@ public static class SessionHelper
         else if (userAgent.Contains("Android")) deviceInfo = "Android";
         else if (userAgent.Contains("Mac OS")) deviceInfo = "macOS";
 
-        if (userAgent.Contains("Capacitor") || userAgent.Contains("wv")) deviceInfo += " (App)";
+        bool isCapacitor = userAgent.Contains("Capacitor", StringComparison.OrdinalIgnoreCase)
+            || userAgent.Contains("wv", StringComparison.OrdinalIgnoreCase)
+            || context.Request.Query["client"] == "mobile"
+            || context.Request.Headers.ContainsKey("X-Capacitor");
+
+        if (isCapacitor) deviceInfo += " (App)";
 
         if (string.IsNullOrWhiteSpace(deviceId))
         {
@@ -80,9 +77,9 @@ public static class SessionHelper
         // Desktop web sessions (deviceId == null) always create isolated sessions to allow multi-workstation concurrency.
         var matchingSessions = !string.IsNullOrEmpty(deviceId)
             ? employeeSessions.Where(s => !string.IsNullOrEmpty(s.DeviceId) && string.Equals(s.DeviceId, deviceId, StringComparison.OrdinalIgnoreCase)).ToList()
-            : new List<DeviceSession>();
+            : [];
 
-        if (!matchingSessions.Any() && !string.IsNullOrEmpty(deviceId))
+        if (matchingSessions.Count == 0 && !string.IsNullOrEmpty(deviceId))
         {
             // If no exact match, check for a legacy dev_ session to adopt.
             // NEVER adopt unbound desktop sessions (where DeviceId is null or empty).
@@ -94,12 +91,18 @@ public static class SessionHelper
         }
 
         DeviceSession deviceSession;
-        if (matchingSessions.Any())
+        if (matchingSessions.Count > 0)
         {
-            deviceSession = matchingSessions.First();
+            deviceSession = matchingSessions[0];
             deviceSession.TokenHash = tokenHash;
             deviceSession.DeviceInfo = deviceInfo;
             deviceSession.DeviceId = deviceId; // Ensure adopted session receives the modernized device ID
+            if (isCapacitor)
+            {
+                deviceSession.IsCapacitor = true;
+                deviceSession.DeviceType = "Mobile";
+                deviceSession.IsIdleDetectionEnabled = false;
+            }
             deviceSession.ExpiresAt = DateTime.UtcNow.AddDays(90);
             deviceSession.LastSeenAt = DateTime.UtcNow;
             if (!string.IsNullOrEmpty(idToken)) deviceSession.IdToken = idToken;
@@ -122,6 +125,9 @@ public static class SessionHelper
                 TokenHash = tokenHash,
                 DeviceInfo = deviceInfo,
                 DeviceId = deviceId,
+                IsCapacitor = isCapacitor,
+                DeviceType = isCapacitor ? "Mobile" : "Desktop",
+                IsIdleDetectionEnabled = false,
                 CreatedAt = DateTime.UtcNow,
                 ExpiresAt = DateTime.UtcNow.AddDays(90),
                 LastSeenAt = DateTime.UtcNow

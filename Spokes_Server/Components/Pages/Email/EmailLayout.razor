@@ -1,14 +1,13 @@
-@using Spokes_Server.Core.Models.Core
-@using Spokes_Server.Core.Models.Projects
-@using Spokes_Server.Core.Models.Accounting
-@using Spokes_Server.Core.Models.Communication
-@using Spokes_Server.Core.Models.HR
+@page "/email"
+@page "/email/{FolderId}"
+@page "/email/{FolderId}/{MessageId}"
+@using Microsoft.AspNetCore.Components.Authorization
 @using Spokes_Server.Core.Constants
-@using Spokes_Server.Core.Services
 @using Spokes_Server.Components.Dialogs
+@attribute [Authorize(Policy = AppPermissions.Email.Use)]
 @inject EmailService EmailService
 @inject UserService UserService
-@inject Spokes_Server.Aggregate.Database Db
+@inject Database Db
 @inject EmailIdleService EmailIdleService
 @inject EmailNotificationService EmailNotifications
 @inject IDialogService _dialogService
@@ -17,13 +16,6 @@
 @inject ISnackbar Snackbar
 @inject IConfiguration _config
 @implements IDisposable
-
-@page "/email"
-@page "/email/{FolderId}"
-@page "/email/{FolderId}/{MessageId}"
-@using Microsoft.AspNetCore.Components.Authorization
-@using Spokes_Server.Core.Constants
-@attribute [Authorize(Policy = AppPermissions.Email.Use)]
 
 <PageTitle>Email</PageTitle>
 
@@ -111,7 +103,7 @@
 
     private string? _selectedFolderId;
     private string? _selectedMessageId;
-    private bool _showMobileFolders = false;
+    private bool _showMobileFolders;
 
     // Responsive Visibility Logic
     private string SidebarClass
@@ -139,22 +131,22 @@
         (_selectedMessageId == null ? "d-none d-md-block" : "d-block");
 
 
-    private List<EmailFolder> _folders = new();
-    private List<EmailMessage> _messages = new();
+    private List<EmailFolder> _folders = [];
+    private List<EmailMessage> _messages = [];
     private EmailMessage? _selectedMessage;
 
     private Employee? _currentEmployee;
     private string _searchText = "";
-    private bool _searchAllFolders = false;
+    private bool _searchAllFolders;
     private string _messageBody = "";
-    private bool _isLoadingBody = false;
+    private bool _isLoadingBody;
     private string _timeZoneId = "";
-    private bool _canAddToTimeline = false;
+    private bool _canAddToTimeline;
 
     // Search state
-    private bool _isSearching = false;
-    private int _searchProcessedCount = 0;
-    private int _searchTotalCount = 0;
+    private bool _isSearching;
+    private int _searchProcessedCount;
+    private int _searchTotalCount;
     private CancellationTokenSource? _searchCts;
 
     // JS Interop
@@ -344,7 +336,7 @@
         StateHasChanged();
     }
 
-    private bool _isLoadingOlder = false;
+    private bool _isLoadingOlder;
     private bool _hasMoreMessages = true;
 
     private async Task LoadOlderMessages()
@@ -363,7 +355,7 @@
         try
         {
             var oldestDate = _messages.LastOrDefault()?.Date.UtcDateTime ?? DateTime.UtcNow;
-            var olderMessages = new List<EmailMessage>();
+            List<EmailMessage> olderMessages = [];
             await Task.Run(() =>
             {
                 olderMessages = Db.EmailMessages.GetByFolderBeforeDate(_currentEmployee.Id, folder.Path, oldestDate, 30);
@@ -408,7 +400,7 @@
         string? folderPath = _searchAllFolders ? null : folder?.Path;
 
         _isSearching = true;
-        _messages = new List<EmailMessage>(); // Clear previous results IMMEDIATELY
+        _messages = []; // Clear previous results IMMEDIATELY
         _searchProcessedCount = 0;
         _searchTotalCount = 0;
         StateHasChanged(); // Force update to show empty list
@@ -554,7 +546,7 @@
         await JS.InvokeVoidAsync("open", url, "_blank");
     }
 
-    private bool _isRepairing = false;
+    private bool _isRepairing;
     private async Task RepairAttachments()
     {
         if (_currentEmployee == null) return;
@@ -627,7 +619,7 @@
             ? _selectedMessage.Subject
             : $"Re: {_selectedMessage.Subject}";
 
-        var toList = new List<string> { _selectedMessage.FromAddress };
+        List<string> toList = [_selectedMessage.FromAddress];
         toList.AddRange(_selectedMessage.ToAddresses.Where(a => a != _currentEmployee?.Email));
         var to = string.Join(", ", toList);
 
@@ -645,7 +637,7 @@
         var dateStr = FormatDate(_selectedMessage.Date);
         var body = $"---------- Forwarded message ---------<br>From: {_selectedMessage.FromName} &lt;{_selectedMessage.FromAddress}&gt;<br>Date: {dateStr}<br>Subject: {_selectedMessage.Subject}<br><br>{cleanQuote}";
 
-        var preloadedFiles = new List<(string Path, string FileName)>();
+        List<(string Path, string FileName)> preloadedFiles = [];
         if (_selectedMessage.HasAttachments && _currentEmployee != null)
         {
             foreach (var att in _selectedMessage.Attachments)
@@ -834,7 +826,7 @@
         var from = string.IsNullOrWhiteSpace(_selectedMessage.FromName) 
             ? _selectedMessage.FromAddress 
             : $"{_selectedMessage.FromName} <{_selectedMessage.FromAddress}>";
-        var to = string.Join(", ", _selectedMessage.ToAddresses ?? new List<string>());
+        var to = string.Join(", ", _selectedMessage.ToAddresses ?? []);
         var dateStr = FormatDate(_selectedMessage.Date);
 
         await _module.InvokeVoidAsync("printEmail",

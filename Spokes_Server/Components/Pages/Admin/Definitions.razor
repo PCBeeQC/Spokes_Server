@@ -1,12 +1,8 @@
 @page "/admin/definitions"
 @implements IDisposable
 @using Spokes_Server.Components.Pages.Admin.Features
-@attribute [Authorize]
-@inject AuthenticationStateProvider AuthStateProvider
-@inject NavigationManager Nav
-@using Microsoft.AspNetCore.Components.Authorization
 @using Spokes_Server.Core.Constants
-@using System.Security.Claims
+@inject NavigationManager Nav
 @inject UserService UserService
 
 <PageTitle>Definitions</PageTitle>

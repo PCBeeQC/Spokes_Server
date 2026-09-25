@@ -19,34 +19,18 @@ using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Caching.Memory;
 using Spokes_Server.Components;
-using Spokes_Server.Core.Data;
 using Spokes_Server.Aggregate;
-using Spokes_Server.Core.Data.Repositories.Core;
-using Spokes_Server.Core.Data.Repositories.Projects;
-using Spokes_Server.Core.Data.Repositories.Accounting;
-using Spokes_Server.Core.Data.Repositories.Communication;
-using Spokes_Server.Core.Data.Repositories.HR;
 using Spokes_Server.Core.Hubs;
 using Spokes_Server.Core.Models.Core;
-using Spokes_Server.Core.Models.Projects;
-using Spokes_Server.Core.Models.Accounting;
-using Spokes_Server.Core.Models.Communication;
 using Spokes_Server.Core.Models.HR; // Needed for Employee
-using Spokes_Server.Core.Services; // IFileService base
-using Spokes_Server.Core.Services.Communication;
-using Spokes_Server.Core.Services.Projects;
-using Spokes_Server.Core.Services.HR;
 using Spokes_Server.Core.Services.Core;
 using Spokes_Server.Core.Constants; // Permissions
 using MudBlazor.Services;
 using Microsoft.AspNetCore.Components.Authorization;
 using Microsoft.AspNetCore.Authorization;
-using Spokes_Server.Core.Services.Documents;
 using Spokes_Server.Core.Middleware;
 using Spokes_Server.Core.Security;
 using PuppeteerSharp;
-using System.Net;
-using System.Collections.Concurrent;
 using Yarp.ReverseProxy.Transforms;
 
 
@@ -133,12 +117,15 @@ builder.Services.AddCors(options =>
 // Spokes Core Services
 builder.Services.AddSpokesCoreServices();
 builder.Services.AddSingleton<Spokes_Server.Core.Services.Logging.ISystemLogService, Spokes_Server.Core.Services.Logging.SystemLogService>();
+builder.Services.AddSingleton<Spokes_Server.Core.Services.Core.IStorageHealthService, Spokes_Server.Core.Services.Core.StorageHealthService>();
 builder.Services.AddScoped<Spokes_Server.Core.Utilities.SpokesDomInteropService>();
 builder.Services.AddScoped<Spokes_Server.Core.Services.UI.ImageRecoveryService>();
+builder.Services.AddScoped<Spokes_Server.Core.Services.UI.ISoundService, Spokes_Server.Core.Services.UI.SoundService>();
 builder.Services.AddScoped<Spokes_Server.Core.Services.Security.ScopedKeystoreService>();
 builder.Services.AddScoped<Spokes_Server.Core.Services.Core.StartupTimingService>();
 builder.Services.AddSingleton<Spokes_Server.Core.Services.Security.FileTokenService>();
 builder.Services.AddScoped<Spokes_Server.Core.Services.Migrations.LegacyAttachmentMigrationService>();
+builder.Services.AddScoped<Spokes_Server.Core.Services.Reports.ITimesheetReportService, Spokes_Server.Core.Services.Reports.TimesheetReportService>();
 
 // 1. MudBlazor (with snackbar position configured)
 builder.Services.AddMudServices(config =>
@@ -174,12 +161,15 @@ builder.Services.AddRazorComponents()
         options.DetailedErrors = true;
         // Keep idle connections alive for much longer so mobile PWAs can background and resume smoothly
         options.DisconnectedCircuitRetentionPeriod = TimeSpan.FromHours(24);
+        options.DisconnectedCircuitMaxRetained = 500;
+        options.JSInteropDefaultCallTimeout = TimeSpan.FromSeconds(60);
     })
     .AddHubOptions(options =>
     {
         options.MaximumReceiveMessageSize = hubMessageSizeLimit;
         options.ClientTimeoutInterval = TimeSpan.FromSeconds(120);
         options.KeepAliveInterval = TimeSpan.FromSeconds(15);
+        options.HandshakeTimeout = TimeSpan.FromSeconds(60);
     });
 
 // 3. Database & Repositories
@@ -197,6 +187,7 @@ builder.Services.AddSignalR(options =>
     options.MaximumReceiveMessageSize = hubMessageSizeLimit;
     options.ClientTimeoutInterval = TimeSpan.FromSeconds(120);
     options.KeepAliveInterval = TimeSpan.FromSeconds(15);
+    options.HandshakeTimeout = TimeSpan.FromSeconds(60);
 });
 
 // 4. Authentication
@@ -562,18 +553,13 @@ builder.Services.AddAuthentication(options =>
                     if (!newEmp.IsAdmin)
                     {
                         var cmpProfile = db.CompanyProfile.Get();
-                        if (cmpProfile != null && !string.IsNullOrEmpty(cmpProfile.DefaultPermissionGroupId))
+                        var defaultGroup = cmpProfile != null && !string.IsNullOrEmpty(cmpProfile.DefaultPermissionGroupId)
+                            ? cmpProfile.PermissionGroups.FirstOrDefault(g => g.Id == cmpProfile.DefaultPermissionGroupId)
+                            : null;
+
+                        if (defaultGroup != null)
                         {
-                            var defaultGroup = cmpProfile.PermissionGroups.FirstOrDefault(g => g.Id == cmpProfile.DefaultPermissionGroupId);
-                            if (defaultGroup != null)
-                            {
-                                newEmp.PermissionGroupId = defaultGroup.Id;
-                            }
-                            else
-                            {
-                                newEmp.Permissions.Add(AppPermissions.Chat.Use);
-                                newEmp.Permissions.Add(AppPermissions.Calendar.View);
-                            }
+                            newEmp.PermissionGroupId = defaultGroup.Id;
                         }
                         else
                         {
@@ -708,8 +694,6 @@ builder.Services.Configure<ForwardedHeadersOptions>(options =>
     options.KnownProxies.Clear();
 });
 
-builder.Services.AddCascadingAuthenticationState();
-
 // Map the public facing URL natively into the internal Router Security Middleware
 var publicUrl = systemConfig.ServerPublicUrl;
 if (!string.IsNullOrEmpty(publicUrl))
@@ -729,7 +713,7 @@ if (!string.IsNullOrEmpty(publicUrl))
 
 // 6. Casdoor & LiveKit Reverse Proxy
 
-var casdoorUiRoutes = new[] { "login", "signup", "forget", "callback", "organizations", "users", "roles", "permissions", "models", "adapters", "enforcers", "applications", "providers", "resources", "certs", "tokens", "records", "webhooks", "syncers", "swagger" };
+var casdoorUiRoutes = new[] { "login", "signup", "forget", "callback", "organizations", "users", "roles", "permissions", "models", "adapters", "enforcers", "applications", "providers", "resources", "certs", "tokens", "records", "webhooks", "syncers" };
 var yarpRoutes = new List<Yarp.ReverseProxy.Configuration.RouteConfig>
 {
     new Yarp.ReverseProxy.Configuration.RouteConfig
@@ -841,7 +825,7 @@ builder.Services.AddReverseProxy()
 builder.Services.AddHostedService<AvatarMigrationService>();
 var app = builder.Build();
 
-if (args != null && Array.Exists(args, a => a == "--migrate"))
+if (args.Contains("--migrate"))
 {
     var migrationDb = app.Services.GetRequiredService<Database>();
     migrationDb.Initialize();
@@ -923,8 +907,6 @@ app.Use(async (context, next) =>
         var referer = context.Request.Headers["Referer"].ToString();
         var secFetchSite = context.Request.Headers["Sec-Fetch-Site"].ToString();
         var hasCookie = context.Request.Cookies.ContainsKey("Spokes_Session_v3");
-        var isLocalReq = context.Request.Host.Host.Equals("localhost", StringComparison.OrdinalIgnoreCase) || 
-                         context.Request.Host.Host.Equals("127.0.0.1", StringComparison.OrdinalIgnoreCase);
 
         Console.WriteLine($"[DIAGNOSTIC] {context.Request.Method} {path}");
         Console.WriteLine($"[DIAGNOSTIC]   Origin: '{origin}'");
@@ -1273,6 +1255,41 @@ app.UseAuthorization();
 
 app.UseAntiforgery();
 
+// Mobile draft auto-reopen: If an authenticated mobile client loads the root "/" or empty path (cold start)
+// and has an unsent draft in a chat channel, redirect directly via HTTP 302 to that channel.
+// This ensures Blazor boots directly on the drafted channel with zero overhead, zero channel-list flash,
+// and preserves all query string parameters (client=mobile, cb, startup_id, etc.).
+app.Use(async (context, next) =>
+{
+    if (HttpMethods.IsGet(context.Request.Method) &&
+        (context.Request.Path == "/" || string.IsNullOrEmpty(context.Request.Path.Value)))
+    {
+        var isMobile = string.Equals(context.Request.Query["client"].ToString(), "mobile", StringComparison.OrdinalIgnoreCase)
+            || context.Request.Headers.UserAgent.ToString().Contains("Capacitor", StringComparison.OrdinalIgnoreCase);
+
+        if (isMobile && context.User.Identity?.IsAuthenticated == true)
+        {
+            var userService = context.RequestServices.GetRequiredService<Spokes_Server.Core.Services.Core.UserService>();
+            var employee = userService.GetEmployee(context.User);
+            if (employee != null)
+            {
+                var clientStateService = context.RequestServices.GetRequiredService<Spokes_Server.Core.Services.Communication.Chat.UserClientStateService>();
+                var draftChannelId = clientStateService.GetActiveDraftChannel(employee.Id);
+                if (!string.IsNullOrEmpty(draftChannelId))
+                {
+                    clientStateService.MarkDraftAsAutoOpened(employee.Id, draftChannelId);
+                    
+                    var queryString = context.Request.QueryString.HasValue ? context.Request.QueryString.Value : "";
+                    context.Response.Redirect($"/chat/{draftChannelId}{queryString}");
+                    return;
+                }
+            }
+        }
+    }
+
+    await next();
+});
+
 // --- ENDPOINTS ---
 
 app.MapGet("/spokesapi/auth/force-logout", async (HttpContext context, Spokes_Server.Aggregate.Database db, [Microsoft.AspNetCore.Mvc.FromQuery] string? client = null) =>
@@ -1400,7 +1417,7 @@ app.MapGet("/auth/prime-session", [Microsoft.AspNetCore.Authorization.AllowAnony
 
 // Native mobile session refresh: exchanges a refresh token (from Capacitor Preferences body) for a Spokes_Session_v3 cookie.
 // This replaces the cookie-based inline SSO renewal for native apps.
-app.MapPost("/spokesapi/auth/refresh", [Microsoft.AspNetCore.Authorization.AllowAnonymous] async (HttpContext context, Spokes_Server.Aggregate.Database db) =>
+app.MapPost("/spokesapi/auth/refresh", [Microsoft.AspNetCore.Authorization.AllowAnonymous] async (HttpContext context) =>
 {
     Spokes_Server.Controllers.MobileRefreshRequest? body;
     try { body = await context.Request.ReadFromJsonAsync<Spokes_Server.Controllers.MobileRefreshRequest>(); }
@@ -1522,9 +1539,8 @@ app.MapGet("/sso/login/auto", async (HttpContext httpContext, [FromQuery] string
             {
                 var devId = deviceId ?? httpContext.Request.Headers["X-Device-Id"].FirstOrDefault() ?? httpContext.Request.Cookies["Spokes_Device"];
                 
-                string? rawToken;
                 var deviceSession = Spokes_Server.Core.Security.SessionHelper.IssueRefreshToken(
-                    httpContext, db, employee.Id, out rawToken, devId, issueCookie: true);
+                    httpContext, db, employee.Id, out _, devId, issueCookie: true);
                 
                 var sessionService = httpContext.RequestServices.GetRequiredService<Spokes_Server.Core.Security.SessionService>();
                 await sessionService.SignInAndExtendAsync(httpContext, deviceSession, employee);
@@ -1648,9 +1664,8 @@ app.MapGet("/sso/login", async (HttpContext httpContext, string? returnUrl, [Fro
             {
                 var devId = deviceId ?? httpContext.Request.Headers["X-Device-Id"].FirstOrDefault() ?? httpContext.Request.Cookies["Spokes_Device"];
                 
-                string? rawToken;
                 var deviceSession = Spokes_Server.Core.Security.SessionHelper.IssueRefreshToken(
-                    httpContext, db, employee.Id, out rawToken, devId, issueCookie: true);
+                    httpContext, db, employee.Id, out _, devId, issueCookie: true);
                 
                 var sessionService = httpContext.RequestServices.GetRequiredService<Spokes_Server.Core.Security.SessionService>();
                 await sessionService.SignInAndExtendAsync(httpContext, deviceSession, employee);
@@ -1766,6 +1781,15 @@ app.MapPost("/logout", async (HttpContext context) =>
         context.Response.Cookies.Delete("Spokes_Refresh", refreshCookieOptions);
     }
 
+    context.Response.Cookies.Delete("chat_vault_key", new CookieOptions
+    {
+        Path = "/",
+        HttpOnly = true,
+        Secure = true,
+        SameSite = SameSiteMode.Lax
+    });
+
+
     // 2. Extract the id_token to check if we can actually log out of the IdP (Casdoor requires it)
     var authResult = await context.AuthenticateAsync(CookieAuthenticationDefaults.AuthenticationScheme);
     var idToken = authResult?.Properties?.GetTokenValue("id_token") ?? authResult?.Properties?.GetParameter<string>("spokes_id_token");
@@ -1844,7 +1868,7 @@ app.MapPost("/logout", async (HttpContext context) =>
 // Caddy On-Demand TLS Integration
 });
 
-app.MapGet("/api/tls/ask", [Microsoft.AspNetCore.Authorization.AllowAnonymous] (string? domain, Spokes_Server.Aggregate.Database db, HttpContext context) =>
+app.MapGet("/api/tls/ask", [Microsoft.AspNetCore.Authorization.AllowAnonymous] (string? domain, Spokes_Server.Aggregate.Database db) =>
 {
     if (string.IsNullOrWhiteSpace(domain)) return Results.StatusCode(403);
     
@@ -1945,11 +1969,10 @@ if (profileChanged)
 }
 
 // --- LOCALIZATION ---
-var profile = db.CompanyProfile.Get();
-if (!string.IsNullOrEmpty(profile?.CurrencySymbol))
+if (!string.IsNullOrEmpty(activeProfile?.CurrencySymbol))
 {
     var culture = (System.Globalization.CultureInfo)System.Globalization.CultureInfo.CurrentCulture.Clone();
-    culture.NumberFormat.CurrencySymbol = profile.CurrencySymbol;
+    culture.NumberFormat.CurrencySymbol = activeProfile.CurrencySymbol;
     System.Globalization.CultureInfo.DefaultThreadCurrentCulture = culture;
     System.Globalization.CultureInfo.DefaultThreadCurrentUICulture = culture;
 }

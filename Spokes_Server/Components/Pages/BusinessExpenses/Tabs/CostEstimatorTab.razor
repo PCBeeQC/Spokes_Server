@@ -1,7 +1,6 @@
 @using Spokes_Server.Core.Data
 @using Spokes_Server.Core.Models.Accounting
 @using Spokes_Server.Core.Models.HR
-@using MudBlazor
 @inject Database Db
 
 <MudPaper Class="pa-4 mb-4" Elevation="0" Outlined="true">
@@ -74,20 +73,20 @@
 
 @code {
     private string Timeframe { get; set; } = "Monthly";
-    private decimal TotalCost = 0;
+    private decimal TotalCost;
     
-    private double[] ChartData = Array.Empty<double>();
-    private string[] ChartLabels = Array.Empty<string>();
+    private double[] ChartData = [];
+    private string[] ChartLabels = [];
     private int ChartIndex = -1;
     
-    private ChartOptions options = new ChartOptions
+    private ChartOptions options = new()
     {
-        ChartPalette = new[] { "#594AE2", "#FF4081", "#4CAF50", "#FFC107", "#00BCD4", "#E91E63", "#9C27B0" },
+        ChartPalette = ["#594AE2", "#FF4081", "#4CAF50", "#FFC107", "#00BCD4", "#E91E63", "#9C27B0"],
         ShowToolTips = true,
-        ShowLegend=true
+        ShowLegend = true
     };
     
-    private List<CostCategory> CostBreakdown = new();
+    private List<CostCategory> CostBreakdown = [];
     
     public class CostCategory
     {
@@ -95,10 +94,7 @@
         public decimal Cost { get; set; }
     }
 
-    protected override void OnInitialized()
-    {
-        CalculateData();
-    }
+    protected override void OnInitialized() => CalculateData();
 
     private void CalculateData()
     {
@@ -190,8 +186,8 @@
         }
         else
         {
-            ChartLabels = Array.Empty<string>();
-            ChartData = Array.Empty<double>();
+            ChartLabels = [];
+            ChartData = [];
             TotalCost = 0;
         }
         
@@ -205,7 +201,7 @@
         int index = categoryNames.IndexOf(category);
         
         // MudBlazor default palette colors used in charts
-        string[] colors = { "#594AE2", "#FF4081", "#4CAF50", "#FFC107", "#00BCD4", "#E91E63", "#9C27B0" };
+        string[] colors = ["#594AE2", "#FF4081", "#4CAF50", "#FFC107", "#00BCD4", "#E91E63", "#9C27B0"];
         
         if (index >= 0 && index < colors.Length)
             return colors[index];

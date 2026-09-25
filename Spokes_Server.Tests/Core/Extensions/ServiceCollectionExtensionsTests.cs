@@ -1,6 +1,4 @@
-using Spokes_Server.Core.Services.Communication;
 using Spokes_Server.Core.Services.Projects;
-using Spokes_Server.Core.Services.Core;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -13,7 +11,6 @@ using Spokes_Server.Core.Data.Repositories.Accounting;
 using Spokes_Server.Core.Data.Repositories.Communication;
 using Spokes_Server.Core.Data.Repositories.HR;
 using Spokes_Server.Core.Services;
-using System.Linq;
 
 namespace Spokes_Server.Tests.Core.Extensions
 {
@@ -54,5 +51,3 @@ namespace Spokes_Server.Tests.Core.Extensions
         }
     }
 }
-
-

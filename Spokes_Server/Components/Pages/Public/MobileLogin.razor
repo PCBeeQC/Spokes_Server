@@ -1,11 +1,13 @@
 @page "/mobile-login"
-@layout Spokes_Server.Components.Layout.LoginLayout
+@using Spokes_Server.Components.Layout
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Security
 @using Microsoft.AspNetCore.Authorization
 @using Microsoft.AspNetCore.Components.Authorization
+@layout LoginLayout
 @attribute [AllowAnonymous]
-@inject Spokes_Server.Aggregate.Database Db
+@inject Database Db
 @inject NavigationManager Nav
-@inject IJSRuntime JSRuntime
 @inject AuthenticationStateProvider AuthStateProvider
 
 <MudContainer MaxWidth="MaxWidth.False" Class="d-flex align-center justify-center mud-width-full" Style="height: 100vh; background-color: var(--mud-palette-background-grey);">
@@ -120,11 +122,11 @@
         get
         {
             var currentHost = Uri.TryCreate(Nav.BaseUri, UriKind.Absolute, out var baseUri) ? baseUri.Host : "localhost";
-            return Spokes_Server.Core.Security.RedirectHelper.GetSafeRedirectUrl(ReturnUrl, currentHost, "/");
+            return RedirectHelper.GetSafeRedirectUrl(ReturnUrl, currentHost, "/");
         }
     }
 
-    private Spokes_Server.Core.Models.Core.CompanyProfile? Profile;
+    private CompanyProfile? Profile;
 
     protected override async Task OnInitializedAsync()
     {

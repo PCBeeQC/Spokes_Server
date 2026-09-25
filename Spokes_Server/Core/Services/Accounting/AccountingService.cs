@@ -7,12 +7,11 @@ namespace Spokes_Server.Core.Services.Accounting;
 public class AccountingService
 {
     private readonly Database _db;
-    private readonly FinancialCalculationEngine _calcEngine;
 
     public AccountingService(Database db, FinancialCalculationEngine calcEngine)
     {
         _db = db;
-        _calcEngine = calcEngine;
+        _ = calcEngine;
     }
 
     public void ProcessInvoiceStatusChange(Invoice invoice, string oldStatus, string newStatus, string user)

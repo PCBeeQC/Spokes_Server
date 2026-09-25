@@ -1,10 +1,17 @@
-using System.Text.Json;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Net.Http;
+using System.Threading;
+using System.Threading.Tasks;
 using Livekit.Server;
 using Livekit.Server.Sdk.Dotnet;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.DependencyInjection;
-using Spokes_Server.Core.Services;
+using Spokes_Server.Aggregate;
+using Spokes_Server.Core.Services.Communication.Chat;
 
 namespace Spokes_Server.Core.Services.Communication.Voice
 {
@@ -12,9 +19,9 @@ namespace Spokes_Server.Core.Services.Communication.Voice
     {
         private readonly IServiceProvider _serviceProvider;
         private readonly ILogger<VoiceStateSyncService> _logger;
-        private readonly Microsoft.Extensions.Configuration.IConfiguration _config;
+        private readonly IConfiguration _config;
 
-        public VoiceStateSyncService(IServiceProvider serviceProvider, ILogger<VoiceStateSyncService> logger, Microsoft.Extensions.Configuration.IConfiguration config)
+        public VoiceStateSyncService(IServiceProvider serviceProvider, ILogger<VoiceStateSyncService> logger, IConfiguration config)
         {
             _serviceProvider = serviceProvider;
             _logger = logger;
@@ -38,7 +45,7 @@ namespace Spokes_Server.Core.Services.Communication.Voice
                     using var scope = _serviceProvider.CreateScope();
                     var chatState = scope.ServiceProvider.GetRequiredService<ChatStateService>();
                     var chatService = scope.ServiceProvider.GetRequiredService<ChatService>();
-                    var db = scope.ServiceProvider.GetRequiredService<Spokes_Server.Aggregate.Database>();
+                    var db = scope.ServiceProvider.GetRequiredService<Database>();
                     var httpClientFactory = scope.ServiceProvider.GetRequiredService<IHttpClientFactory>();
 
                     var config = db.SystemConfigs.Get();
@@ -61,7 +68,7 @@ namespace Spokes_Server.Core.Services.Communication.Voice
 
                         if (serverParticipants.Count == 0) continue;
 
-                        List<string> livekitParticipantIdentities = new();
+                        List<string> livekitParticipantIdentities = [];
 
                         try
                         {

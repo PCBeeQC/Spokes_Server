@@ -1,7 +1,6 @@
 export function initFileHandlers(elementId, dotNetHelper) {
     // We ignore elementId for the container now, and prefer our specific chat-drop-zone
     const container = document.getElementById('chat-drop-zone');
-    const input = document.getElementById('chat-message-input');
 
     if (!container) return;
 
@@ -50,8 +49,8 @@ async function handleFiles(fileList, dotNetHelper) {
     let totalSize = 0;
     const maxAllowedSize = 268435456; // 256MB
 
-    for (let i = 0; i < fileList.length; i++) {
-        totalSize += fileList[i].size;
+    for (const file of fileList) {
+        totalSize += file.size;
     }
 
     if (totalSize > maxAllowedSize) {
@@ -59,8 +58,7 @@ async function handleFiles(fileList, dotNetHelper) {
         return;
     }
 
-    for (let i = 0; i < fileList.length; i++) {
-        const file = fileList[i];
+    for (const file of fileList) {
         
         await dotNetHelper.invokeMethodAsync('OnPasteUploadStarted');
         try {
@@ -106,7 +104,12 @@ export function initScrollObserver(containerOrId, sentinelOrId, dotNetHelper) {
     currentObserver = new IntersectionObserver((entries) => {
         entries.forEach(entry => {
             if (entry.isIntersecting) {
-                dotNetHelper.invokeMethodAsync('LoadOlderMessagesJS');
+                // Guard: Only trigger lazy load if content actually overflows the container viewport.
+                // If container.scrollHeight <= container.clientHeight, the sentinel is visible simply because
+                // there aren't enough messages to fill the screen, not because the user scrolled to the top.
+                if (container.scrollHeight > container.clientHeight + 10) {
+                    dotNetHelper.invokeMethodAsync('LoadOlderMessagesJS');
+                }
             }
         });
     }, {
@@ -130,11 +133,11 @@ export async function scrollToBottomWhenLoaded(containerOrId) {
     // universally across all browsers (including iOS Safari).
     el.scrollTop = 0;
     
-    // We add a tiny delay just in case of DOM rendering lag, but we no longer need
-    // aggressive polling or abort handlers because native scroll anchoring works perfectly.
-    setTimeout(() => {
+    // Use requestAnimationFrame instead of arbitrary 100ms timeout so the reset
+    // is synchronized with the browser's paint cycle without visual snapping.
+    requestAnimationFrame(() => {
         if (el) el.scrollTop = 0;
-    }, 100);
+    });
 }
 
 let currentlyHighlightedEl = null;
@@ -229,9 +232,7 @@ export function initLongPress(containerOrId, dotNetHelper) {
     });
 }
 
-// ─── IOS VIRTUAL KEYBOARD SCOPED FIX ────────────────────────────────────────
 
-let iosVisualViewportInit = false;
 
 // ─── READ RECEIPTS (INTERSECTION OBSERVER) ──────────────────────────────────
 

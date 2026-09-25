@@ -1,9 +1,5 @@
 @using Spokes_Server.Core.Data
-@using Spokes_Server.Core.Models.Core
-@using Spokes_Server.Core.Models.Projects
 @using Spokes_Server.Core.Models.Accounting
-@using Spokes_Server.Core.Models.Communication
-@using Spokes_Server.Core.Models.HR
 @inject Database Db
 @inject ISnackbar Snackbar
 @inject IDialogService DialogService
@@ -85,12 +81,9 @@
 </MudTable>
 
 @code {
-    private List<RecurringExpense> OneTimeExpenses = new();
+    private List<RecurringExpense> OneTimeExpenses = [];
 
-    protected override void OnInitialized()
-    {
-        RefreshList();
-    }
+    protected override void OnInitialized() => RefreshList();
 
     private void RefreshList()
     {

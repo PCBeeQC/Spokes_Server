@@ -1,6 +1,4 @@
 using SkiaSharp;
-using System;
-using System.IO;
 
 namespace Spokes_Server.Core.Services.Core;
 
@@ -25,7 +23,7 @@ public class ImageProcessingService
             using var bitmap = SKBitmap.Decode(inputStream);
             if (bitmap == null) return false;
 
-            int maxThumbDim = 1280;
+            const int maxThumbDim = 1280;
             int thumbWidth = bitmap.Width;
             int thumbHeight = bitmap.Height;
 
@@ -43,7 +41,7 @@ public class ImageProcessingService
                 }
             }
 
-            using var thumbBitmap = bitmap.Resize(new SKImageInfo(thumbWidth, thumbHeight), SKFilterQuality.Medium);
+            using var thumbBitmap = bitmap.Resize(new SKImageInfo(thumbWidth, thumbHeight), new SKSamplingOptions(SKFilterMode.Linear));
             var ms = new MemoryStream();
             (thumbBitmap ?? bitmap).Encode(SKEncodedImageFormat.Jpeg, 80).SaveTo(ms);
             ms.Position = 0;
@@ -86,7 +84,7 @@ public class ImageProcessingService
                     height = maxDimension;
                 }
 
-                var resized = bitmap.Resize(new SKImageInfo(width, height), SKFilterQuality.High);
+                var resized = bitmap.Resize(new SKImageInfo(width, height), new SKSamplingOptions(new SKCubicResampler(1/3.0f, 1/3.0f)));
                 if (resized != null)
                 {
                     workingBitmap = resized;
@@ -94,7 +92,7 @@ public class ImageProcessingService
                 }
             }
 
-            bool isJpeg = inputBytes.Length > 2 && inputBytes[0] == 0xFF && inputBytes[1] == 0xD8;
+            bool isJpeg = inputBytes is [0xFF, 0xD8, ..];
             SKEncodedImageFormat format = isJpeg ? SKEncodedImageFormat.Jpeg : SKEncodedImageFormat.Png;
             int quality = isJpeg ? 85 : 100;
             mimeType = isJpeg ? "image/jpeg" : "image/png";

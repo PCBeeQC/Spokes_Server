@@ -42,7 +42,7 @@ public class CasdoorProvisioningService
         // 1. Generate app.conf
         var appConf = $@"appname = casdoor
 httpport = 8000
-runmode = dev
+runmode = prod
 SessionOn = true
 copyrequestbody = true
 driverName = sqlite
@@ -317,12 +317,11 @@ isUsernameLowered = true
         return (builtInPassword, spokesPassword, clientId, clientSecret);
     }
 
-    private string GenerateRandomString(int length)
+    private static string GenerateRandomString(int length)
     {
         const string chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-        var random = new Random();
         return new string(Enumerable.Repeat(chars, length)
-            .Select(s => s[random.Next(s.Length)]).ToArray());
+            .Select(s => s[Random.Shared.Next(s.Length)]).ToArray());
     }
 
     private async Task SyncAppConfOriginAsync(string newPublicUrl)
@@ -462,7 +461,7 @@ isUsernameLowered = true
             {
                 try
                 {
-                    using var connection = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={dbPath}");
+                    using var connection = new SqliteConnection($"Data Source={dbPath}");
                     await connection.OpenAsync();
                     var getOrgCmd = connection.CreateCommand();
                     getOrgCmd.CommandText = "SELECT account_items, nav_items, widget_items FROM `organization` WHERE name = 'spokes-org'";
@@ -544,7 +543,7 @@ isUsernameLowered = true
                     // Successfully applied, exit the retry loop
                     break;
                 }
-                catch (Microsoft.Data.Sqlite.SqliteException ex) when (ex.SqliteErrorCode == 5) // SQLITE_BUSY
+                catch (SqliteException ex) when (ex.SqliteErrorCode == 5) // SQLITE_BUSY
                 {
                     if (i == maxRetries - 1)
                     {

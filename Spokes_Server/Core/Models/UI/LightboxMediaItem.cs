@@ -1,5 +1,7 @@
 namespace Spokes_Server.Core.Models.UI;
 
+using System.Text.Json.Serialization;
+
 public class LightboxMediaItem
 {
     public string Id { get; set; } = Guid.NewGuid().ToString();
@@ -10,7 +12,7 @@ public class LightboxMediaItem
     public long FileSizeBytes { get; set; }
     public bool HasServerThumbnail { get; set; }
 
-    [System.Text.Json.Serialization.JsonIgnore]
+    [JsonIgnore]
     public string ThumbnailUrl
     {
         get
@@ -22,7 +24,7 @@ public class LightboxMediaItem
             {
                 return FilePath.Replace("/spokesapi/files/", "/spokesapi/files/thumb/");
             }
-            else if (FilePath.StartsWith("/internal/attachments/"))
+            if (FilePath.StartsWith("/internal/attachments/"))
             {
                 return FilePath.Replace("/internal/attachments/", "/internal/attachments/thumb/");
             }

@@ -1,29 +1,16 @@
-using Spokes_Server.Core.Services.Communication;
-using Spokes_Server.Core.Services.Projects;
-using Spokes_Server.Core.Services.Core;
-using Spokes_Server.Core.Services.HR;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Moq;
 using Spokes_Server.Core.Data;
-using Spokes_Server.Core.Data.Repositories.Core;
-using Spokes_Server.Core.Data.Repositories.Projects;
 using Spokes_Server.Core.Data.Repositories.Accounting;
-using Spokes_Server.Core.Data.Repositories.Communication;
 using Spokes_Server.Core.Data.Repositories.HR;
-using Spokes_Server.Core.Models.Core;
-using Spokes_Server.Core.Models.Projects;
 using Spokes_Server.Core.Models.Accounting;
-using Spokes_Server.Core.Models.Communication;
 using Spokes_Server.Core.Models.HR;
-using Spokes_Server.Core.Services;
-using System.Collections.Generic;
-using System.IO;
-using System.Linq;
+using Spokes_Server.Core.Services.HR;
 
-namespace Spokes_Server.Tests.Core.Services.HR
-{
-    public class OvertimeServiceTests : IDisposable
+namespace Spokes_Server.Tests.Core.Services.HR;
+
+public class OvertimeServiceTests : IDisposable
     {
         private readonly string _testDataDir;
         private readonly IConfiguration _config;
@@ -35,18 +22,20 @@ namespace Spokes_Server.Tests.Core.Services.HR
 
         public OvertimeServiceTests()
         {
-            _testDataDir = Path.Combine(Path.GetTempPath(), "Spokes_Test_Overtime_" + Guid.NewGuid().ToString());
+            _testDataDir = Path.Combine(Path.GetTempPath(), $"Spokes_Test_Overtime_{Guid.NewGuid()}");
             Directory.CreateDirectory(_testDataDir);
 
-            var configDict = new Dictionary<string, string> { { "DataPath", _testDataDir } };
+            Dictionary<string, string?> configDict = new() { { "DataPath", _testDataDir } };
             _config = new ConfigurationBuilder().AddInMemoryCollection(configDict).Build();
 
             _persistence = new DiskPersistenceService(new Mock<ILogger<DiskPersistenceService>>().Object);
 
             _employees = new EmployeeRepository(_persistence, _config);
             _timesheets = new TimesheetRepository(_persistence, _config);
+            var adjustments = new HourBankAdjustmentRepository(_persistence, _config);
+            var profiles = new Spokes_Server.Core.Data.Repositories.Core.CompanyProfileRepository(_persistence, _config);
 
-            _service = new OvertimeService(_employees, _timesheets);
+            _service = new OvertimeService(_employees, _timesheets, adjustments, profiles);
         }
 
         public void Dispose()
@@ -117,6 +106,136 @@ namespace Spokes_Server.Tests.Core.Services.HR
             Assert.True(result.IsOvertime);
         }
 
+        [Fact]
+        public void CalculateHourBank_WhenEmployeeNotFound_ReturnsEmptyResult()
+        {
+            var result = _service.CalculateHourBank("non-existent-employee");
+
+            Assert.NotNull(result);
+            Assert.Equal(0, result.HourBank);
+            Assert.Equal(0, result.WeeksTracked);
+            Assert.Equal(0, result.TotalWorkedHours);
+            Assert.Equal(0, result.TotalExpectedHours);
+            Assert.Equal(default, result.StartDate);
+            Assert.Null(result.EndDate);
+        }
+
+        [Fact]
+        public void CalculateWeeklyOvertime_WhenEmployeeNotFound_ReturnsEmptyResult()
+        {
+            var result = _service.CalculateWeeklyOvertime("non-existent-employee", 2024, 1);
+
+            Assert.NotNull(result);
+            Assert.Equal(0, result.WorkedHours);
+            Assert.Equal(0, result.ExpectedHours);
+            Assert.Equal(0, result.Difference);
+            Assert.False(result.IsOvertime);
+        }
+
+        [Fact]
+        public void CalculateHourBank_WithFutureEmploymentEndDate_ClampsEndDateToToday()
+        {
+            var userId = "emp-future";
+            var today = DateOnly.FromDateTime(DateTime.Today);
+            var futureEndDate = today.AddDays(30);
+            var employee = new Employee
+            {
+                Id = userId,
+                DateOfJoining = today.AddDays(-21),
+                EmploymentEndDate = futureEndDate,
+                WeeklyHours = 40
+            };
+            _employees.Save(employee);
+
+            var result = _service.CalculateHourBank(userId);
+
+            // Clamped to today, so it only tracks past completed weeks (3 weeks), not future weeks
+            Assert.Equal(3, result.WeeksTracked);
+            Assert.Equal(futureEndDate, result.EndDate);
+            Assert.Equal(120, result.TotalExpectedHours);
+        }
+
+        [Fact]
+        public void CalculateHourBank_WithPastEmploymentEndDate_RespectsEndDate()
+        {
+            var userId = "emp-past";
+            var today = DateOnly.FromDateTime(DateTime.Today);
+            var pastEndDate = today.AddDays(-14);
+            var employee = new Employee
+            {
+                Id = userId,
+                DateOfJoining = today.AddDays(-21),
+                EmploymentEndDate = pastEndDate,
+                WeeklyHours = 40
+            };
+            _employees.Save(employee);
+
+            var result = _service.CalculateHourBank(userId);
+
+            // Only completed weeks up to pastEndDate are tracked (2 weeks instead of 3)
+            Assert.Equal(2, result.WeeksTracked);
+            Assert.Equal(pastEndDate, result.EndDate);
+            Assert.Equal(80, result.TotalExpectedHours);
+        }
+
+        [Fact]
+        public void CalculateHourBank_WhenEmployeeJoinedThisWeek_TracksZeroWeeks()
+        {
+            var userId = "emp-new";
+            var today = DateOnly.FromDateTime(DateTime.Today);
+            var employee = new Employee
+            {
+                Id = userId,
+                DateOfJoining = today,
+                WeeklyHours = 40
+            };
+            _employees.Save(employee);
+
+            var result = _service.CalculateHourBank(userId);
+
+            Assert.Equal(0, result.WeeksTracked);
+            Assert.Equal(0, result.HourBank);
+            Assert.Equal(0, result.TotalWorkedHours);
+            Assert.Equal(0, result.TotalExpectedHours);
+            Assert.Equal(today, result.StartDate);
+        }
+
+        [Fact]
+        public void HourBankResult_And_WeeklyOvertimeResult_Properties_CanGetAndSet()
+        {
+            var startDate = new DateOnly(2025, 1, 6);
+            var endDate = new DateOnly(2025, 6, 30);
+            var hourBankResult = new HourBankResult
+            {
+                TotalWorkedHours = 165.5m,
+                TotalExpectedHours = 160m,
+                HourBank = 5.5m,
+                WeeksTracked = 4,
+                StartDate = startDate,
+                EndDate = endDate
+            };
+
+            Assert.Equal(165.5m, hourBankResult.TotalWorkedHours);
+            Assert.Equal(160m, hourBankResult.TotalExpectedHours);
+            Assert.Equal(5.5m, hourBankResult.HourBank);
+            Assert.Equal(4, hourBankResult.WeeksTracked);
+            Assert.Equal(startDate, hourBankResult.StartDate);
+            Assert.Equal(endDate, hourBankResult.EndDate);
+
+            var weeklyResult = new WeeklyOvertimeResult
+            {
+                WorkedHours = 45m,
+                ExpectedHours = 40m,
+                Difference = 5m,
+                IsOvertime = true
+            };
+
+            Assert.Equal(45m, weeklyResult.WorkedHours);
+            Assert.Equal(40m, weeklyResult.ExpectedHours);
+            Assert.Equal(5m, weeklyResult.Difference);
+            Assert.True(weeklyResult.IsOvertime);
+        }
+
         private DateOnly GetMonday(DateOnly date)
         {
             var dt = date.ToDateTime(TimeOnly.MinValue);
@@ -129,7 +248,3 @@ namespace Spokes_Server.Tests.Core.Services.HR
             return System.Globalization.ISOWeek.GetWeekOfYear(date.ToDateTime(TimeOnly.MinValue));
         }
     }
-}
-
-
-

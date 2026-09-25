@@ -1,8 +1,4 @@
-@using Spokes_Server.Core.Models.Core
 @using Spokes_Server.Core.Models.Projects
-@using Spokes_Server.Core.Models.Accounting
-@using Spokes_Server.Core.Models.Communication
-@using Spokes_Server.Core.Models.HR
 @using Spokes_Server.Core.Data
 @using Spokes_Server.Components.Pages.Admin
 @inject Database Db
@@ -44,14 +40,14 @@
 </MudTable>
 
 @code {
-    private List<WorkType> List = new();
+    private List<WorkType> List = [];
 
     protected override void OnInitialized() => Refresh();
 
     private void Refresh() => List = Db.WorkTypes.GetAll().OrderBy(x => x.Name).ToList();
 
-    private async Task OpenCreateDialog() => await OpenDialog(new WorkType(), "New Task");
-    private async Task OpenEditDialog(WorkType item) => await OpenDialog(item, "Edit Task");
+    private Task OpenCreateDialog() => OpenDialog(new WorkType(), "New Task");
+    private Task OpenEditDialog(WorkType item) => OpenDialog(item, "Edit Task");
 
     private async Task DeleteTask(WorkType item)
     {

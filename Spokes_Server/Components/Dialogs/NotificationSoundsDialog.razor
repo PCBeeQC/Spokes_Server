@@ -1,0 +1,250 @@
+@using Spokes_Server.Core.Data
+@using Spokes_Server.Core.Models.Communication.Notifications
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Services.Communication.Notifications
+@using Spokes_Server.Core.Services.Core
+@using Spokes_Server.Core.Services.UI
+@implements IAsyncDisposable
+@inject Database Db
+@inject UserService UserService
+@inject ISoundService SoundService
+@inject ISnackbar Snackbar
+@inject IJSRuntime JS
+
+<MudDialog>
+    <TitleContent>
+        <div class="d-flex align-center gap-2">
+            <MudIcon Icon="@Icons.Material.Filled.VolumeUp" Color="Color.Primary" />
+            <MudText Typo="Typo.h6">Notification Sounds</MudText>
+        </div>
+    </TitleContent>
+    <DialogContent>
+        <div class="d-flex flex-column gap-3 pb-2" style="max-height: 70vh; overflow-y: auto;">
+            @if (_iosSoundDisabled)
+            {
+                <MudAlert Severity="Severity.Warning" Dense="true" Class="mb-1" Elevation="1">
+                    <div class="d-flex align-center justify-space-between flex-wrap gap-2">
+                        <span>Notification sounds are currently disabled for Spokes in your iPhone Settings.</span>
+                        <MudButton Variant="Variant.Filled" Color="Color.Warning" Size="Size.Small" OnClick="OpenIosSettings">
+                            Open iPhone Settings
+                        </MudButton>
+                    </div>
+                </MudAlert>
+            }
+
+            <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-1">
+                Customize sounds played for each notification category on this device and for push notifications.
+            </MudText>
+
+            @foreach (var category in _categories)
+            {
+                var catId = category.Id;
+                var currentSoundId = GetCurrentSoundId(catId);
+                var isPlaying = _playingCategoryId == catId;
+                var isSystemDefault = currentSoundId == NotificationSoundIds.SystemDefault;
+                var availableSounds = NotificationSoundCatalog.GetSoundsForCategory(catId);
+
+                <MudPaper Elevation="0" Outlined="true" Class="rounded-lg overflow-hidden">
+                    <div class="d-flex align-center justify-space-between px-4 py-2">
+                        <div class="d-flex align-center gap-2">
+                            <MudIcon Icon="@category.Icon" Size="Size.Small" Color="Color.Primary" />
+                            <MudText Typo="Typo.subtitle1" Style="font-weight: 600;">@category.DisplayName</MudText>
+                        </div>
+                        @if (isSystemDefault)
+                        {
+                            <MudChip T="string" Size="Size.Small" Color="Color.Default" Variant="Variant.Outlined">System Native</MudChip>
+                        }
+                        else if (currentSoundId == NotificationSoundIds.SpokesDefault)
+                        {
+                            <MudChip T="string" Size="Size.Small" Color="Color.Primary" Variant="Variant.Outlined">Default</MudChip>
+                        }
+                        else
+                        {
+                            <MudChip T="string" Size="Size.Small" Color="Color.Secondary" Variant="Variant.Outlined">Custom</MudChip>
+                        }
+                    </div>
+                    <MudDivider />
+                    <div class="px-4 py-3 d-flex flex-column gap-2">
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">
+                            @category.Description
+                        </MudText>
+
+                        <div class="d-flex align-center gap-2 mt-1">
+                            <MudSelect T="string"
+                                       Value="@currentSoundId"
+                                       ValueChanged="@(v => OnSoundChanged(catId, v))"
+                                       ToStringFunc="@(id => NotificationSoundCatalog.GetSoundDisplayName(catId, id))"
+                                       Variant="Variant.Outlined"
+                                       Margin="Margin.Dense"
+                                       Dense="true"
+                                       FullWidth="true"
+                                       AnchorOrigin="Origin.BottomLeft"
+                                       TransformOrigin="Origin.TopLeft">
+                                @foreach (var sound in availableSounds)
+                                {
+                                    <MudSelectItem T="string" Value="@sound.Id">@sound.DisplayName</MudSelectItem>
+                                }
+                            </MudSelect>
+
+                            <MudTooltip Text="@(isPlaying ? "Stop Preview" : (isSystemDefault ? "System default has no desktop preview" : "Preview Sound"))">
+                                <MudIconButton Icon="@(isPlaying ? Icons.Material.Filled.Stop : Icons.Material.Filled.PlayArrow)"
+                                               Color="@(isPlaying ? Color.Error : Color.Primary)"
+                                               Variant="Variant.Filled"
+                                               Size="Size.Medium"
+                                               Disabled="@isSystemDefault"
+                                               OnClick="@(() => TogglePreview(catId, currentSoundId))" />
+                            </MudTooltip>
+                        </div>
+
+                        @if (isSystemDefault)
+                        {
+                            <MudText Typo="Typo.caption" Color="Color.Secondary" Style="font-style: italic;">
+                                System Default uses your operating system's native ringtone on mobile devices and stays silent on desktop.
+                            </MudText>
+                        }
+                    </div>
+                </MudPaper>
+            }
+        </div>
+    </DialogContent>
+    <DialogActions>
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="Close">Close</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
+    [Parameter] public Employee? Employee { get; set; }
+
+    private Employee? _currentUser;
+    private IReadOnlyList<NotificationCategoryDefinition> _categories = [];
+    private string? _playingCategoryId;
+    private bool _iosSoundDisabled = false;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _categories = NotificationCategoryRegistry.GetAllCategories();
+
+        if (Employee != null)
+        {
+            _currentUser = Db.Employees.GetById(Employee.Id) ?? Employee;
+        }
+        else
+        {
+            _currentUser = await UserService.GetEmployeeAsync();
+        }
+
+        try
+        {
+            var isNative = await JS.InvokeAsync<bool>("pushNotifications.isNativePlatform");
+            if (isNative)
+            {
+                var settings = await JS.InvokeAsync<Dictionary<string, object>>("pushNotifications.getNativeSettings");
+                if (settings != null)
+                {
+                    if (settings.TryGetValue("soundEnabled", out var se) && se?.ToString()?.Equals("False", StringComparison.OrdinalIgnoreCase) == true)
+                    {
+                        _iosSoundDisabled = true;
+                    }
+                }
+            }
+        }
+        catch { }
+    }
+
+    private async Task OpenIosSettings()
+    {
+        try
+        {
+            await JS.InvokeVoidAsync("pushNotifications.openAppSettings");
+        }
+        catch { }
+    }
+
+    private string GetCurrentSoundId(string categoryId)
+    {
+        var soundId = _currentUser?.GetNotificationSound(categoryId);
+        var category = NotificationCategoryRegistry.GetCategory(categoryId);
+        var defaultSound = NotificationSoundCatalog.GetAllSounds()
+            .FirstOrDefault(s => !s.IsSpecial && s.FileName != null && s.FileName.Equals(category?.DefaultSoundFileName, StringComparison.OrdinalIgnoreCase));
+
+        if (string.IsNullOrEmpty(soundId) || soundId == NotificationSoundIds.SpokesDefault || soundId == defaultSound?.Id)
+        {
+            return NotificationSoundIds.SpokesDefault;
+        }
+
+        return soundId;
+    }
+
+    private async Task OnSoundChanged(string categoryId, string soundId)
+    {
+        if (_currentUser == null) return;
+
+        if (_playingCategoryId == categoryId)
+        {
+            await SoundService.StopPreviewAsync();
+            _playingCategoryId = null;
+        }
+
+        var fresh = Db.Employees.GetById(_currentUser.Id);
+        if (fresh != null)
+        {
+            fresh.SetNotificationSound(categoryId, soundId);
+            Db.Employees.Save(fresh);
+            _currentUser = fresh;
+
+            if (Employee != null)
+            {
+                Employee.NotificationSounds = fresh.NotificationSounds;
+            }
+
+            var cat = NotificationCategoryRegistry.GetCategory(categoryId);
+            var soundName = NotificationSoundCatalog.GetSoundDisplayName(categoryId, soundId);
+            var catName = cat?.DisplayName ?? categoryId;
+            Snackbar.Add($"Updated {catName} sound to {soundName}.", Severity.Success);
+        }
+    }
+
+    private async Task TogglePreview(string categoryId, string soundId)
+    {
+        if (_playingCategoryId == categoryId)
+        {
+            await SoundService.StopPreviewAsync();
+            _playingCategoryId = null;
+            return;
+        }
+
+        await SoundService.StopPreviewAsync();
+        _playingCategoryId = categoryId;
+
+        await SoundService.PlayNotificationSoundAsync(categoryId, soundId, isPreview: true);
+
+        var currentCat = categoryId;
+        _ = Task.Run(async () =>
+        {
+            var delayMs = categoryId == NotificationCategories.Call ? 10000 : 3000;
+            await Task.Delay(delayMs);
+            if (_playingCategoryId == currentCat)
+            {
+                _playingCategoryId = null;
+                await InvokeAsync(StateHasChanged);
+            }
+        });
+    }
+
+    private async Task Close()
+    {
+        await SoundService.StopPreviewAsync();
+        _playingCategoryId = null;
+        MudDialog.Close(DialogResult.Ok(true));
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        try
+        {
+            await SoundService.StopPreviewAsync();
+        }
+        catch { }
+    }
+}

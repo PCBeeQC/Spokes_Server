@@ -1,10 +1,3 @@
-@using Spokes_Server.Core.Data
-@using Spokes_Server.Core.Models.Core
-@using Spokes_Server.Core.Models.Projects
-@using Spokes_Server.Core.Models.Accounting
-@using Spokes_Server.Core.Models.Communication
-@using Spokes_Server.Core.Models.HR
-@using MudBlazor
 @using System.Globalization
 @inject Database Db
 
@@ -51,7 +44,7 @@
     <!-- Calendar Grid -->
     <div class="calendar-grid">
         <!-- Headers -->
-        @foreach (var day in new[] { "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun" })
+        @foreach (var day in DayHeaders)
         {
             <div class="calendar-header">@day</div>
         }
@@ -112,6 +105,11 @@
 
     .calendar-cell.today {
         background-color: rgba(var(--mud-palette-primary-rgb), 0.05);
+        border-radius: 8px;
+        outline: 2px solid var(--mud-palette-primary);
+        outline-offset: -2px;
+        position: relative;
+        z-index: 1;
     }
 
     .day-number {
@@ -190,13 +188,15 @@
 </style>
 
 @code {
-    private DateOnly CurrentMonth = DateOnly.FromDateTime(DateTime.Today);
-    private List<CalendarDay> CalendarDays = new();
+    private static readonly string[] DayHeaders = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
-    private List<CalendarEvent> AllEvents = new();
+    private DateOnly CurrentMonth = DateOnly.FromDateTime(DateTime.Today);
+    private List<CalendarDay> CalendarDays = [];
+
+    private List<CalendarEvent> AllEvents = [];
     private IEnumerable<CalendarEvent> FilteredEvents => AllEvents.Where(ShouldShow);
 
-    private bool Loading = false;
+    private bool Loading;
 
     // Filter State
     private bool ShowQuotes = true;

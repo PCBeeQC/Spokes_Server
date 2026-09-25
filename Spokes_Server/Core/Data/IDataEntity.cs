@@ -1,7 +1,6 @@
-namespace Spokes_Server.Core.Data
+namespace Spokes_Server.Core.Data;
+
+public interface IDataEntity
 {
-    public interface IDataEntity
-    {
-        string Id { get; }
-    }
+    string Id { get; }
 }

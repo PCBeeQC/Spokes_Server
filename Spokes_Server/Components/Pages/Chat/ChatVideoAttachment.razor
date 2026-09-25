@@ -1,4 +1,5 @@
-@inject Spokes_Server.Core.Services.Security.FileTokenService FileTokens
+@using Spokes_Server.Core.Services.Security
+@inject FileTokenService FileTokens
 
 <div class="attachment-video" style="position: relative; max-width: 100%; max-height: 500px; display: inline-block;">
     @if (!_isPlaying)
@@ -36,24 +37,21 @@
     public ChatAttachment Attachment { get; set; } = default!;
 
     [Parameter]
-    public string CurrentUserId { get; set; } = string.Empty;
+    public string CurrentUserId { get; set; } = "";
 
     [Parameter]
-    public string ChannelId { get; set; } = string.Empty;
+    public string ChannelId { get; set; } = "";
 
     [Parameter]
     public string? ChannelKey { get; set; }
 
-    private bool _isPlaying = false;
+    private bool _isPlaying;
 
-    private void PlayVideo()
-    {
-        _isPlaying = true;
-    }
+    private void PlayVideo() => _isPlaying = true;
 
     private string GetVideoMimeType()
     {
-        var ext = System.IO.Path.GetExtension(Attachment.FileName).ToLowerInvariant();
+        var ext = Path.GetExtension(Attachment.FileName).ToLowerInvariant();
         return ext switch
         {
             ".mp4" => "video/mp4",

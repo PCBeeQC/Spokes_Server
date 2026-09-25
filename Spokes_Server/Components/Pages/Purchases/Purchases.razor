@@ -1,21 +1,13 @@
 @page "/purchases"
-@inject Spokes_Server.Core.Services.Accounting.FinancialCalculationEngine CalcEngine
 <PageTitle>Purchases</PageTitle>
 @using Spokes_Server.Core.Models.Core
 @using Spokes_Server.Core.Models.Projects
 @using Spokes_Server.Core.Models.Accounting
-@using Spokes_Server.Core.Models.Communication
-@using Spokes_Server.Core.Models.HR
 @using Spokes_Server.Core.Data
-@using Spokes_Server.Components.Pages.Purchases
-@using Spokes_Server.Components.Dialogs
+@using Spokes_Server.Core.Constants
 @inject Database Db
 @inject NavigationManager Nav
 @inject IDialogService DialogService
-@inject IJSRuntime JS
-@inject AuthenticationStateProvider AuthStateProvider
-@using Microsoft.AspNetCore.Components.Authorization
-@using Spokes_Server.Core.Constants
 @inject UserService UserService
 
 <MudText Class="mt-4" Typo="Typo.h4" GutterBottom="true">Purchases (POs)</MudText>
@@ -45,7 +37,7 @@
             </div>
         }
 
-        <MudTable Items="@PoList" Dense="true" Striped="true" Outlined="true" Elevation="0" Hover="true" Filter="new Func<PurchaseOrder, bool>(FilterFuncPO)">
+        <MudTable Items="@PoList" Dense="true" Striped="true" Outlined="true" Elevation="0" Hover="true" Filter="FilterFuncPO">
             <ToolBarContent>
                 <MudText Typo="Typo.h5" Color="Color.Primary">Purchase Orders</MudText>
                 <MudSpacer />
@@ -86,7 +78,7 @@
 </MudPaper>
 
 @code {
-    private List<PurchaseOrder> PoList = new();
+    private List<PurchaseOrder> PoList = [];
 
     [SupplyParameterFromQuery(Name = "q")]
     public string? QuerySearchString { get; set; }
@@ -106,10 +98,10 @@
         }
     }
 
-    private decimal OpenPOsValue = 0;
+    private decimal OpenPOsValue;
 
-    private bool CanManagePOs = false;
-    private bool CanViewPOs = false;
+    private bool CanManagePOs;
+    private bool CanViewPOs;
 
     protected override async Task OnInitializedAsync()
     {
@@ -147,10 +139,7 @@
         OpenPOsValue = PoList.Where(p => p.Date >= recent).Sum(p => p.RemainingBalance);
     }
 
-    private void OpenViewer(PurchaseOrder po)
-    {
-        Nav.NavigateTo($"/purchases/{po.Id}");
-    }
+    private void OpenViewer(PurchaseOrder po) => Nav.NavigateTo($"/purchases/{po.Id}");
 
     private async Task CreateNewPO()
     {

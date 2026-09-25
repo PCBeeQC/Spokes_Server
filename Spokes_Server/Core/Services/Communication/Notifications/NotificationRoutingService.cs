@@ -1,15 +1,21 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Net;
+using System.Threading.Tasks;
+using Microsoft.AspNetCore.DataProtection;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Spokes_Server.Core.Data.Repositories.Communication;
+using Spokes_Server.Core.Data.Repositories.Core;
 using Spokes_Server.Core.Data.Repositories.HR;
 using Spokes_Server.Core.Data.Repositories.Projects;
 using Spokes_Server.Core.Models.Communication;
+using Spokes_Server.Core.Models.Communication.Notifications;
 using Spokes_Server.Core.Models.Core;
 using Spokes_Server.Core.Models.HR;
-using System.Collections.Generic;
-using System.Linq;
-using System.Threading.Tasks;
-using Microsoft.AspNetCore.DataProtection;
-using Spokes_Server.Core.Data.Repositories.Core;
+using Spokes_Server.Core.Services.Communication.Chat;
+using Spokes_Server.Core.Services.Core;
 
 namespace Spokes_Server.Core.Services.Communication.Notifications;
 
@@ -35,9 +41,9 @@ public class NotificationRoutingService
     private readonly ChatMessageRepository _chatMessages;
     private readonly CompanyProfileRepository _companyProfile;
     private readonly ILogger<NotificationRoutingService> _logger;
-    private readonly System.IServiceProvider _serviceProvider;
-    private Spokes_Server.Core.Services.Communication.Chat.IChatChannelAccessService? _chatAccess;
-    private Spokes_Server.Core.Services.Communication.Chat.IChatChannelAccessService ChatAccess => _chatAccess ??= Microsoft.Extensions.DependencyInjection.ServiceProviderServiceExtensions.GetRequiredService<Spokes_Server.Core.Services.Communication.Chat.IChatChannelAccessService>(_serviceProvider);
+    private readonly IServiceProvider _serviceProvider;
+    private IChatChannelAccessService? _chatAccess;
+    private IChatChannelAccessService ChatAccess => _chatAccess ??= _serviceProvider.GetRequiredService<IChatChannelAccessService>();
 
     public NotificationRoutingService(
         EmployeeRepository employees,
@@ -55,7 +61,7 @@ public class NotificationRoutingService
         ChatMessageRepository chatMessages,
         CompanyProfileRepository companyProfile,
         ILogger<NotificationRoutingService> logger,
-        System.IServiceProvider serviceProvider)
+        IServiceProvider serviceProvider)
     {
         _employees = employees;
         _projects = projects;
@@ -75,7 +81,7 @@ public class NotificationRoutingService
         _serviceProvider = serviceProvider;
     }
 
-    public async Task<int> GetTotalBadgeCountAsync(string userId)
+    public virtual async Task<int> GetTotalBadgeCountAsync(string userId)
     {
         int total = 0;
 
@@ -246,8 +252,15 @@ public class NotificationRoutingService
             if (employee.LimitConsecutiveNotificationSounds)
             {
                 var lastReadAt = _readStates.GetLastReadAt(userId, channel.Id);
-                var unreadMessages = await _chatMessages.GetUnreadMessagesSinceAsync(channel.Id, lastReadAt, userId);
-                isSilent = unreadMessages.Count > employee.ConsecutiveNotificationSoundLimit;
+                if (lastReadAt == DateTime.MinValue)
+                {
+                    isSilent = false;
+                }
+                else
+                {
+                    var unreadMessages = await _chatMessages.GetUnreadMessagesSinceAsync(channel.Id, lastReadAt, userId);
+                    isSilent = unreadMessages.Count > employee.ConsecutiveNotificationSoundLimit;
+                }
             }
 
             var tier = _webPush.DetermineNotificationTier(userId);
@@ -288,6 +301,12 @@ public class NotificationRoutingService
 
             var icon = $"/spokesapi/Media/Avatar/{sender.Id}?t={encodedToken}";
             var tag = $"chat-{channel.Id}";
+
+            bool isCall = message.MessageType == "CallInvite";
+            string category = isCall ? NotificationCategories.Call : NotificationCategories.Chat;
+            var userSoundChoice = employee.GetNotificationSound(category);
+            var sound = NotificationSoundCatalog.GetEffectivePushSound(category, userSoundChoice);
+
             var actions = new object[]
             {
                 new { action = "open", title = "Open Chat" }
@@ -301,7 +320,7 @@ public class NotificationRoutingService
             {
                 var badgeCount = await GetTotalBadgeCountAsync(userId);
                 // Send immediate Desktop Push
-                await _webPush.SendNotificationAsync(userId, title, body, url, icon, PresenceTier.DesktopOnly, tag, actions, threadId: channel.Id, serverName: serverName, channelName: channelName, isGroupChat: isGroupChat, badge: badgeCount, isSilent: isSilent);
+                await _webPush.SendNotificationAsync(userId, title, body, url, icon, PresenceTier.DesktopOnly, tag, actions, category: category, threadId: channel.Id, serverName: serverName, channelName: channelName, isGroupChat: isGroupChat, badge: badgeCount, isSilent: isSilent, sound: sound);
 
                 // Queue a Delayed Mobile Push to fire in 1 minute if they don't read it
                 _queue.EnqueueDelayedMobilePush(new DelayedMobileNotification
@@ -319,14 +338,33 @@ public class NotificationRoutingService
                     ServerName = serverName,
                     ChannelName = channelName,
                     IsGroupChat = isGroupChat,
-                    IsSilent = isSilent
+                    IsSilent = isSilent,
+                    Sound = sound,
+                    Badge = badgeCount,
+                    Category = category
                 });
             }
             else
             {
                 var badgeCount = await GetTotalBadgeCountAsync(userId);
                 // Tier is 'All' (no desktop seen in >15m) -> Dispatch immediately to Desktop + Mobile
-                await _webPush.SendNotificationAsync(userId, title, body, url, icon, PresenceTier.All, tag, actions, threadId: channel.Id, serverName: serverName, channelName: channelName, isGroupChat: isGroupChat, badge: badgeCount, isSilent: isSilent);
+                await _webPush.SendNotificationAsync(userId, title, body, url, icon, PresenceTier.All, tag, actions, category: category, threadId: channel.Id, serverName: serverName, channelName: channelName, isGroupChat: isGroupChat, badge: badgeCount, isSilent: isSilent, sound: sound);
+            }
+        }
+    }
+
+    public async Task ClearChannelNotificationsAsync(string channelId)
+    {
+        var participantIds = ChatAccess.GetUsersForChannel(channelId);
+        foreach (var userId in participantIds)
+        {
+            try
+            {
+                await _webPush.SendClearNotificationAsync(userId, channelId);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to send clear notification for channel {ChannelId} to user {UserId}", channelId, userId);
             }
         }
     }
@@ -352,8 +390,15 @@ public class NotificationRoutingService
         if (originalSender.LimitConsecutiveNotificationSounds)
         {
             var lastReadAt = _readStates.GetLastReadAt(originalSender.Id, channel.Id);
-            var unreadMessages = await _chatMessages.GetUnreadMessagesSinceAsync(channel.Id, lastReadAt, originalSender.Id);
-            isSilent = unreadMessages.Count > originalSender.ConsecutiveNotificationSoundLimit;
+            if (lastReadAt == DateTime.MinValue)
+            {
+                isSilent = false;
+            }
+            else
+            {
+                var unreadMessages = await _chatMessages.GetUnreadMessagesSinceAsync(channel.Id, lastReadAt, originalSender.Id);
+                isSilent = unreadMessages.Count > originalSender.ConsecutiveNotificationSoundLimit;
+            }
         }
 
         var truncatedMessage = message.Content;
@@ -418,7 +463,9 @@ public class NotificationRoutingService
                 ServerName = serverName,
                 ChannelName = channelName,
                 IsGroupChat = isGroupChat,
-                IsSilent = isSilent
+                IsSilent = isSilent,
+                Badge = badgeCount,
+                Category = "chat"
             });
         }
         else
@@ -460,7 +507,7 @@ public class NotificationRoutingService
         {
             var badgeCount = await GetTotalBadgeCountAsync(emailObj.EmployeeId);
             // Send immediate Desktop Push
-            await _webPush.SendNotificationAsync(emailObj.EmployeeId, title, body, url, icon, PresenceTier.DesktopOnly, tag, actions, badge: badgeCount);
+            await _webPush.SendNotificationAsync(emailObj.EmployeeId, title, body, url, icon, PresenceTier.DesktopOnly, tag, actions, category: "email", badge: badgeCount);
 
             // Queue a Delayed Mobile Push
             _queue.EnqueueDelayedMobilePush(new DelayedMobileNotification
@@ -474,13 +521,15 @@ public class NotificationRoutingService
                 Icon = icon,
                 Tag = tag,
                 Actions = actions,
-                ProcessAtUtc = System.DateTime.UtcNow.AddMinutes(1)
+                ProcessAtUtc = System.DateTime.UtcNow.AddMinutes(1),
+                Badge = badgeCount,
+                Category = "email"
             });
         }
         else
         {
             var badgeCount = await GetTotalBadgeCountAsync(emailObj.EmployeeId);
-            await _webPush.SendNotificationAsync(emailObj.EmployeeId, title, body, url, icon, PresenceTier.All, tag, actions, badge: badgeCount);
+            await _webPush.SendNotificationAsync(emailObj.EmployeeId, title, body, url, icon, PresenceTier.All, tag, actions, category: "email", badge: badgeCount);
         }
     }
 
@@ -503,8 +552,8 @@ public class NotificationRoutingService
             var url = "/admin/moderation";
 
             var protector = _dataProtection.CreateProtector("AvatarPushToken");
-            var token = protector.Protect($"{mod.Id}|{System.DateTime.UtcNow.AddHours(48).Ticks}");
-            var encodedToken = System.Net.WebUtility.UrlEncode(token);
+            var token = protector.Protect($"{mod.Id}|{DateTime.UtcNow.AddHours(48).Ticks}");
+            var encodedToken = WebUtility.UrlEncode(token);
             var icon = $"/spokesapi/Media/Avatar/{mod.Id}?t={encodedToken}";
             var tag = $"mod-{report.Id}";
             var actions = new object[] { new { action = "open", title = "Review" } };
@@ -512,7 +561,7 @@ public class NotificationRoutingService
             if (tier == PresenceTier.DesktopOnly)
             {
                 var badgeCount = await GetTotalBadgeCountAsync(mod.Id);
-                await _webPush.SendNotificationAsync(mod.Id, title, body, url, icon, PresenceTier.DesktopOnly, tag, actions, badge: badgeCount);
+                await _webPush.SendNotificationAsync(mod.Id, title, body, url, icon, PresenceTier.DesktopOnly, tag, actions, category: "moderation", badge: badgeCount);
 
                 _queue.EnqueueDelayedMobilePush(new DelayedMobileNotification
                 {
@@ -525,15 +574,16 @@ public class NotificationRoutingService
                     Icon = icon,
                     Tag = tag,
                     Actions = actions,
-                    ProcessAtUtc = System.DateTime.UtcNow.AddMinutes(1)
+                    ProcessAtUtc = DateTime.UtcNow.AddMinutes(1),
+                    Badge = badgeCount,
+                    Category = "moderation"
                 });
             }
             else
             {
                 var badgeCount = await GetTotalBadgeCountAsync(mod.Id);
-                await _webPush.SendNotificationAsync(mod.Id, title, body, url, icon, PresenceTier.All, tag, actions, badge: badgeCount);
+                await _webPush.SendNotificationAsync(mod.Id, title, body, url, icon, PresenceTier.All, tag, actions, category: "moderation", badge: badgeCount);
             }
         }
     }
 }
-

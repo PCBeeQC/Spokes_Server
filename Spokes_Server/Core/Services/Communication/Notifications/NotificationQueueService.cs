@@ -1,4 +1,7 @@
+using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
+using System.Linq;
 using Microsoft.Extensions.Logging;
 using Spokes_Server.Core.Models.Core;
 using Spokes_Server.Core.Models.HR;
@@ -24,6 +27,7 @@ public class QueuedNotification
     public string? ChannelName { get; set; }
     public bool IsGroupChat { get; set; }
     public int? Badge { get; set; }
+    public string? Sound { get; set; }
 }
 
 /// <summary>
@@ -48,6 +52,8 @@ public class DelayedMobileNotification
     public bool IsGroupChat { get; set; }
     public bool IsSilent { get; set; }
     public int? Badge { get; set; }
+    public string? Sound { get; set; }
+    public string Category { get; set; } = "chat";
 }
 
 /// <summary>
@@ -112,24 +118,20 @@ public class NotificationQueueService
         {
             return bag.ToList();
         }
-        return new List<QueuedNotification>();
+        return [];
     }
 
     /// <summary>
     /// Get the user IDs that currently have queued notifications.
     /// </summary>
     public IEnumerable<string> GetQueuedUserIds()
-    {
-        return _queue.Keys.ToList();
-    }
+        => _queue.Keys.ToList();
 
     /// <summary>
     /// Get the count of queued notifications for a user (for diagnostics).
     /// </summary>
     public int GetQueuedCount(string userId)
-    {
-        return _queue.TryGetValue(userId, out var bag) ? bag.Count : 0;
-    }
+        => _queue.TryGetValue(userId, out var bag) ? bag.Count : 0;
 
     // --- Delayed Mobile Push Logic ---
 
@@ -150,7 +152,7 @@ public class NotificationQueueService
         var now = DateTime.UtcNow;
         var maturedKeys = _delayedMobileQueue.Where(kvp => kvp.Value.ProcessAtUtc <= now).Select(kvp => kvp.Key).ToList();
 
-        var results = new List<DelayedMobileNotification>();
+        List<DelayedMobileNotification> results = [];
         foreach (var key in maturedKeys)
         {
             if (_delayedMobileQueue.TryRemove(key, out var notif))

@@ -1,12 +1,14 @@
 export function waitForElement(selector, timeout = 2000) {
     return new Promise((resolve) => {
-        if (document.querySelector(selector)) {
-            return resolve(document.querySelector(selector));
+        const existing = document.querySelector(selector);
+        if (existing) {
+            return resolve(existing);
         }
 
-        const observer = new MutationObserver((mutations) => {
-            if (document.querySelector(selector)) {
-                resolve(document.querySelector(selector));
+        const observer = new MutationObserver(() => {
+            const el = document.querySelector(selector);
+            if (el) {
+                resolve(el);
                 observer.disconnect();
             }
         });

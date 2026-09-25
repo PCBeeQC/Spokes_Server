@@ -1,8 +1,3 @@
-@using Spokes_Server.Core.Models.Core
-@using Spokes_Server.Core.Models.Projects
-@using Spokes_Server.Core.Models.Accounting
-@using Spokes_Server.Core.Models.Communication
-@using Spokes_Server.Core.Models.HR
 @using Spokes_Server.Components.Pages.Chat
 
 <MudDialog ContentClass="pa-0">
@@ -38,10 +33,7 @@
         MudDialog.Close(DialogResult.Ok(true));
     }
 
-    private async Task OnChannelUpdatedCb()
-    {
-        await OnChannelUpdatedCallback.InvokeAsync();
-    }
+    private Task OnChannelUpdatedCb() => OnChannelUpdatedCallback.InvokeAsync();
 
     private async Task OnLeaveGroupCb()
     {
@@ -61,8 +53,5 @@
         MudDialog.Close(DialogResult.Ok(true));
     }
 
-    private async Task OnRemoveMemberCb(string memberId)
-    {
-        await OnRemoveMemberCallback.InvokeAsync(memberId);
-    }
+    private Task OnRemoveMemberCb(string memberId) => OnRemoveMemberCallback.InvokeAsync(memberId);
 }

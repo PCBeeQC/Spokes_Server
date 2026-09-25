@@ -54,10 +54,10 @@
     public string AudioUrl { get; set; } = "";
 
     private ElementReference _audioRef;
-    private bool _isPlaying = false;
-    private double _progress = 0;
-    private double _currentTime = 0;
-    private double _duration = 0;
+    private bool _isPlaying;
+    private double _progress;
+    private double _currentTime;
+    private double _duration;
 
     private async Task TogglePlay()
     {
@@ -129,7 +129,7 @@
 
     private string FormatTime(double seconds)
     {
-        if (double.IsNaN(seconds) || double.IsInfinity(seconds) || seconds < 0) seconds = 0;
+        if (!double.IsFinite(seconds) || seconds < 0) seconds = 0;
         var t = TimeSpan.FromSeconds(seconds);
         return $"{(int)t.TotalMinutes}:{t.Seconds:D2}";
     }

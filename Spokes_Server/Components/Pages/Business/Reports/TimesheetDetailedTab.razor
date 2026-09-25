@@ -1,0 +1,148 @@
+@using MudBlazor
+@using Spokes_Server.Core.Helpers
+@using Spokes_Server.Core.Models.Reports
+@using Spokes_Server.Core.Services.Reports
+@inject ITimesheetReportService ReportService
+
+<MudPaper Elevation="0" Outlined="true" Class="rounded-lg" Style="background: var(--mud-palette-surface);">
+    <MudTable Items="@FilteredEntries" Dense="true" Hover="true" Bordered="false" Striped="true" FixedHeader="true" Height="550px">
+        <ToolBarContent>
+            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+                <MudIcon Icon="@Icons.Material.Filled.ListAlt" Color="Color.Primary" />
+                <MudText Typo="Typo.h6">Itemized Time Entries</MudText>
+                <MudChip T="string" Color="Color.Default" Size="Size.Small" Variant="Variant.Outlined">@FilteredEntries.Count() entries</MudChip>
+            </MudStack>
+            <MudSpacer />
+            <MudTextField @bind-Value="_searchString" Placeholder="Filter in table..." Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search" IconSize="Size.Medium" DebounceInterval="500" Class="mt-0" Style="max-width: 300px;" Variant="Variant.Outlined" Margin="Margin.Dense" />
+        </ToolBarContent>
+
+        <HeaderContent>
+            <MudTh><MudTableSortLabel SortBy="new Func<TimesheetReportEntry, object>(x => x.Entry.Date)">Date</MudTableSortLabel></MudTh>
+            <MudTh><MudTableSortLabel SortBy="new Func<TimesheetReportEntry, object>(x => x.EmployeeName)">Employee</MudTableSortLabel></MudTh>
+            <MudTh><MudTableSortLabel SortBy="new Func<TimesheetReportEntry, object>(x => x.ProjectName)">Project</MudTableSortLabel></MudTh>
+            <MudTh><MudTableSortLabel SortBy="new Func<TimesheetReportEntry, object>(x => x.TaskName)">Task</MudTableSortLabel></MudTh>
+            <MudTh>Description</MudTh>
+            <MudTh Style="text-align: center;"><MudTableSortLabel SortBy="new Func<TimesheetReportEntry, object>(x => x.Entry.IsBillable)">Billable</MudTableSortLabel></MudTh>
+            <MudTh Style="text-align: right;"><MudTableSortLabel SortBy="new Func<TimesheetReportEntry, object>(x => x.HourlyRate)">Rate</MudTableSortLabel></MudTh>
+            <MudTh Style="text-align: right;"><MudTableSortLabel SortBy="new Func<TimesheetReportEntry, object>(x => x.Entry.Hours)">Duration</MudTableSortLabel></MudTh>
+            <MudTh Style="text-align: right;"><MudTableSortLabel SortBy="new Func<TimesheetReportEntry, object>(x => x.BillableAmount)">Amount</MudTableSortLabel></MudTh>
+        </HeaderContent>
+
+        <RowTemplate>
+            <MudTd DataLabel="Date" Style="white-space: nowrap;">
+                @context.Entry.Date.ToString("yyyy-MM-dd")
+            </MudTd>
+            <MudTd DataLabel="Employee">
+                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+                    <MudAvatar Color="Color.Primary" Size="Size.Small" Style="font-size: 0.75rem; font-weight: 600;">
+                        @context.EmployeeInitials
+                    </MudAvatar>
+                    <MudText Typo="Typo.body2">@context.EmployeeName</MudText>
+                </MudStack>
+            </MudTd>
+            <MudTd DataLabel="Project">
+                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+                    <div style="width: 8px; height: 8px; border-radius: 50%; background-color: @context.ProjectColor; flex-shrink: 0;"></div>
+                    <div>
+                        <MudText Typo="Typo.body2" Style="font-weight: 500;">@context.ProjectName</MudText>
+                        @if (!string.IsNullOrEmpty(context.ClientId))
+                        {
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">@context.ClientId</MudText>
+                        }
+                    </div>
+                </MudStack>
+            </MudTd>
+            <MudTd DataLabel="Task">
+                <MudChip T="string" Size="Size.Small" Variant="Variant.Text" Color="Color.Default">
+                    @context.TaskName
+                </MudChip>
+            </MudTd>
+            <MudTd DataLabel="Description" Style="max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                <MudTooltip Text="@context.Entry.Description">
+                    <MudText Typo="Typo.body2">@context.Entry.Description</MudText>
+                </MudTooltip>
+            </MudTd>
+            <MudTd DataLabel="Billable" Style="text-align: center;">
+                @if (context.Entry.IsBillable)
+                {
+                    <MudChip T="string" Color="Color.Success" Size="Size.Small" Variant="Variant.Filled" Style="font-weight: 700; min-width: 28px;">$</MudChip>
+                }
+                else
+                {
+                    <span style="color: var(--mud-palette-text-disabled); font-weight: bold;">-</span>
+                }
+            </MudTd>
+            <MudTd DataLabel="Rate" Style="text-align: right; font-size: 0.85rem; opacity: 0.9;">
+                @ReportService.FormatCurrency(context.HourlyRate)
+            </MudTd>
+            <MudTd DataLabel="Duration" Style="text-align: right; font-weight: 700;">
+                @ReportService.FormatDuration(context.Entry.Hours, Format)
+            </MudTd>
+            <MudTd DataLabel="Amount" Style="text-align: right; font-weight: 600;">
+                @if (AmountMode == AmountDisplayMode.CostAmount)
+                {
+                    @ReportService.FormatCurrency(context.CostAmount)
+                }
+                else if (AmountMode == AmountDisplayMode.ProfitMargin)
+                {
+                    <span>@ReportService.FormatCurrency(context.ProfitAmount)</span>
+                }
+                else if (AmountMode == AmountDisplayMode.BillableAmount)
+                {
+                    @ReportService.FormatCurrency(context.BillableAmount)
+                }
+                else
+                {
+                    <span style="opacity: 0.5;">-</span>
+                }
+            </MudTd>
+        </RowTemplate>
+
+        <FooterContent>
+            <MudTFootRow Class="bold-footer" Style="font-weight: bold; background: var(--mud-palette-background-grey);">
+                <MudTd colspan="7">Total for @FilteredEntries.Count() Entries</MudTd>
+                <MudTd Style="text-align: right; font-weight: 700;">
+                    @ReportService.FormatDuration(FilteredEntries.Sum(e => e.Entry.Hours), Format)
+                </MudTd>
+                <MudTd Style="text-align: right; font-weight: 700;">
+                    @if (AmountMode == AmountDisplayMode.CostAmount)
+                    {
+                        @ReportService.FormatCurrency(FilteredEntries.Sum(e => e.CostAmount))
+                    }
+                    else if (AmountMode == AmountDisplayMode.ProfitMargin)
+                    {
+                        @ReportService.FormatCurrency(FilteredEntries.Sum(e => e.ProfitAmount))
+                    }
+                    else if (AmountMode == AmountDisplayMode.BillableAmount)
+                    {
+                        @ReportService.FormatCurrency(FilteredEntries.Sum(e => e.BillableAmount))
+                    }
+                    else
+                    {
+                        <span>-</span>
+                    }
+                </MudTd>
+            </MudTFootRow>
+        </FooterContent>
+
+        <PagerContent>
+            <MudTablePager PageSizeOptions="new int[] { 25, 50, 100 }" />
+        </PagerContent>
+    </MudTable>
+</MudPaper>
+
+@code {
+    [Parameter] public List<TimesheetReportEntry> Entries { get; set; } = [];
+    [Parameter] public TimeDisplayFormat Format { get; set; } = TimeDisplayFormat.Duration_HHMM;
+    [Parameter] public AmountDisplayMode AmountMode { get; set; } = AmountDisplayMode.BillableAmount;
+
+    private string _searchString = "";
+
+    private IEnumerable<TimesheetReportEntry> FilteredEntries => string.IsNullOrWhiteSpace(_searchString)
+        ? Entries
+        : Entries.Where(e => (e.Entry.Description?.Contains(_searchString, StringComparison.OrdinalIgnoreCase) ?? false) ||
+                             (e.EmployeeName?.Contains(_searchString, StringComparison.OrdinalIgnoreCase) ?? false) ||
+                             (e.ProjectName?.Contains(_searchString, StringComparison.OrdinalIgnoreCase) ?? false) ||
+                             (e.TaskName?.Contains(_searchString, StringComparison.OrdinalIgnoreCase) ?? false) ||
+                             (e.ClientId?.Contains(_searchString, StringComparison.OrdinalIgnoreCase) ?? false));
+}

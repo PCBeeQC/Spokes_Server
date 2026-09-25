@@ -1,13 +1,10 @@
-@using Spokes_Server.Core.Models.Communication
-@using Spokes_Server.Aggregate
-@using MudBlazor
 @inject Database Db
 @inject IDialogService DialogService
 
 <MudDialog>
     <DialogContent>
         <div class="d-flex gap-2 align-center mb-4">
-            <MudTextField @bind-Value="_newCategoryName" DebounceInterval="250" Label="New Category Name" Variant="Variant.Outlined" Margin="Margin.Dense" />
+            <MudTextField @bind-Value="_newCategoryName" Immediate="true" Label="New Category Name" Variant="Variant.Outlined" Margin="Margin.Dense" />
             <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="AddCategory" Disabled="@string.IsNullOrWhiteSpace(_newCategoryName)">Add</MudButton>
         </div>
 
@@ -45,13 +42,10 @@
 @code {
     [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
     
-    private List<ChatCategory> Categories = new();
-    private string _newCategoryName = string.Empty;
+    private List<ChatCategory> Categories = [];
+    private string _newCategoryName = "";
 
-    protected override void OnInitialized()
-    {
-        LoadCategories();
-    }
+    protected override void OnInitialized() => LoadCategories();
 
     private void LoadCategories()
     {
@@ -63,10 +57,10 @@
         if (string.IsNullOrWhiteSpace(_newCategoryName)) return;
         
         var publicCat = Categories.FirstOrDefault(c => c.Id == "sys_public");
-        var startOrder = publicCat != null ? publicCat.DisplayOrder : -600;
+        var startOrder = publicCat?.DisplayOrder ?? -600;
         
         var projectsCat = Categories.FirstOrDefault(c => c.Id == "sys_projects");
-        var endOrder = projectsCat != null ? projectsCat.DisplayOrder : -500;
+        var endOrder = projectsCat?.DisplayOrder ?? -500;
 
         var customCatsInSpace = Categories.Where(c => !c.IsSystem && c.DisplayOrder > startOrder && c.DisplayOrder < endOrder).ToList();
         var newOrder = customCatsInSpace.Any() ? customCatsInSpace.Max(c => c.DisplayOrder) + 1 : startOrder + 1;
@@ -87,7 +81,7 @@
         };
         
         Db.ChatCategories.Save(newCat);
-        _newCategoryName = string.Empty;
+        _newCategoryName = "";
         LoadCategories();
     }
 
@@ -139,8 +133,5 @@
         }
     }
 
-    private void Close()
-    {
-        MudDialog.Close(DialogResult.Ok(true));
-    }
+    private void Close() => MudDialog.Close(DialogResult.Ok(true));
 }

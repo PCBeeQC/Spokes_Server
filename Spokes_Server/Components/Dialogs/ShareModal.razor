@@ -1,9 +1,6 @@
-@using Spokes_Server.Core.Models.Communication
-@using Spokes_Server.Aggregate
-@using Spokes_Server.Core.Data
 @using Spokes_Server.Components.Layout
-@using Spokes_Server.Core.Models.HR
-@using Spokes_Server.Core.Helpers
+@using Spokes_Server.Components.Pages.Chat
+@using Spokes_Server.Core.Services.Communication.Chat
 
 <MudDialog>
     <TitleContent>
@@ -12,7 +9,7 @@
     <DialogContent>
         <MudText Typo="Typo.subtitle2" Class="mb-1">Destination Channel</MudText>
         <div style="height: 450px; border: 1px solid var(--mud-palette-lines-default); border-radius: 4px; overflow: hidden; margin-bottom: 8px;">
-            <Spokes_Server.Components.Pages.Chat.ChatSidebar 
+            <ChatSidebar 
                 Channels="Channels" 
                 SelectedChannelId="@SelectedChannelId" 
                 OnChannelSelected="HandleChannelSelected" 
@@ -52,8 +49,8 @@
     [Parameter] public string? PreselectedChannelId { get; set; }
 
     [Inject] private Database Db { get; set; } = default!;
-    [Inject] private Spokes_Server.Core.Services.Core.UserService UserService { get; set; } = default!;
-    [Inject] private Spokes_Server.Core.Services.Communication.Chat.ChatService ChatService { get; set; } = default!;
+    [Inject] private UserService UserService { get; set; } = default!;
+    [Inject] private ChatService ChatService { get; set; } = default!;
 
     private string? SelectedChannelId { get; set; }
     private List<ChatChannel> Channels { get; set; } = new();
@@ -91,10 +88,7 @@
         }
     }
 
-    private void HandleChannelSelected(string channelId)
-    {
-        SelectedChannelId = channelId;
-    }
+    private void HandleChannelSelected(string channelId) => SelectedChannelId = channelId;
 
     private void Close() => MudDialog.Cancel();
 
@@ -104,10 +98,7 @@
         MudDialog.Close(DialogResult.Ok(new ShareResult { ChannelId = SelectedChannelId }));
     }
 
-    private string GetChannelDisplayName(ChatChannel channel)
-    {
-        return ChatChannelFormatter.GetDisplayName(channel, _currentUserId, _employees);
-    }
+    private string GetChannelDisplayName(ChatChannel channel) => ChatChannelFormatter.GetDisplayName(channel, _currentUserId, _employees);
 
     public class ShareResult
     {

@@ -1,6 +1,4 @@
 using Spokes_Server.Core.Models.Core;
-using Microsoft.Extensions.Configuration;
-using System.IO;
 
 namespace Spokes_Server.Core.Data.Repositories.Core;
 
@@ -11,10 +9,8 @@ public class DemoConfigRepository : JsonRepository<DemoConfig>
     {
     }
 
-    protected override string GetFilePath(DemoConfig item)
-    {
-        return Path.Combine(_basePath, $"{item.Id}.json");
-    }
+    protected override string GetFilePath(DemoConfig item) =>
+        Path.Combine(_basePath, $"{item.Id}.json");
 
     public DemoConfig Get()
     {

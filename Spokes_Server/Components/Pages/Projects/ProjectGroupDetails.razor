@@ -3,16 +3,15 @@
 <PageTitle>@Group?.Name - Project Group</PageTitle>
 @using Spokes_Server.Core.Models.Core
 @using Spokes_Server.Core.Models.Projects
-@using Spokes_Server.Core.Models.Accounting
-@using Spokes_Server.Core.Models.Communication
 @using Spokes_Server.Core.Models.HR
 @using Spokes_Server.Core.Data
 @using Spokes_Server.Core.Constants
+@using Spokes_Server.Core.Services
+@using Spokes_Server.Components.Pages.Projects.Tabs
 @inject Database Db
 @inject ISnackbar Snackbar
 @inject IDialogService DialogService
 @inject NavigationManager Nav
-@using Spokes_Server.Core.Services
 @inject UserService UserService
 
 @if (Group == null)
@@ -93,7 +92,7 @@ else
         </MudTabPanel>
 
         <MudTabPanel Text="Invoices" Icon="@Icons.Material.Filled.Receipt">
-            <Spokes_Server.Components.Pages.Projects.Tabs.GroupInvoiceList ProjectGroupId="@Id" />
+            <GroupInvoiceList ProjectGroupId="@Id" />
         </MudTabPanel>
 
         <MudTabPanel Text="Settings" Icon="@Icons.Material.Filled.Settings">
@@ -126,10 +125,10 @@ else
     [Parameter] public string Id { get; set; } = string.Empty;
 
     private ProjectGroup? Group;
-    private List<Project> GroupedProjects = new();
-    private int activeTabIndex = 0;
-    private bool CanEdit = false;
-    private List<ProjectStatusConfig> AvailableStatuses = new();
+    private List<Project> GroupedProjects = [];
+    private int activeTabIndex;
+    private bool CanEdit;
+    private List<ProjectStatusConfig> AvailableStatuses = [];
 
     protected override async Task OnInitializedAsync()
     {
@@ -165,7 +164,7 @@ else
             .OrderBy(p => p.DisplayName)
             .ToList();
 
-        GroupedProjects = new List<Project>();
+        GroupedProjects = [];
         foreach (var p in allProjects)
         {
             if (await UserService.CanViewProjectAsync(p))
@@ -182,7 +181,7 @@ else
         }
 
         var profile = Db.CompanyProfile.Get();
-        AvailableStatuses = profile?.ProjectStatuses ?? new();
+        AvailableStatuses = profile?.ProjectStatuses ?? [];
     }
 
     private Color GetStatusColor(string status)

@@ -1,17 +1,9 @@
-using Spokes_Server.Core.Services.Core;
-using Spokes_Server.Core.Services.Communication;
-using Microsoft.AspNetCore.Mvc;
-using Spokes_Server.Core.Data.Repositories.Core;
-using Spokes_Server.Core.Data.Repositories.Projects;
-using Spokes_Server.Core.Data.Repositories.Accounting;
-using Spokes_Server.Core.Data.Repositories.Communication;
-using Spokes_Server.Core.Data.Repositories.HR;
 using Microsoft.AspNetCore.Authorization;
-using Spokes_Server.Core.Models.Core;
-using Spokes_Server.Core.Models.Projects;
-using Spokes_Server.Core.Models.Accounting;
+using Microsoft.AspNetCore.Mvc;
+using Spokes_Server.Core.Data.Repositories.Communication;
 using Spokes_Server.Core.Models.Communication;
-using Spokes_Server.Core.Models.HR;
+using Spokes_Server.Core.Services.Core;
+using Spokes_Server.Core.Utilities;
 
 namespace Spokes_Server.Controllers;
 
@@ -24,6 +16,30 @@ public class AttachmentController : SpokesControllerBase
     private static readonly HashSet<string> ForceDownloadExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
         ".html", ".htm", ".svg", ".xml", ".xhtml"
+    };
+
+    private static readonly HashSet<string> SafeInlineContentTypes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "image/jpeg", "image/png", "image/gif", "image/webp", "image/bmp", "application/pdf"
+    };
+
+    private static readonly Dictionary<string, string> MimeTypes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        {".txt", "text/plain"},
+        {".pdf", "application/pdf"},
+        {".doc", "application/vnd.ms-word"},
+        {".docx", "application/vnd.ms-word"},
+        {".xls", "application/vnd.ms-excel"},
+        {".xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"},
+        {".png", "image/png"},
+        {".jpg", "image/jpeg"},
+        {".jpeg", "image/jpeg"},
+        {".gif", "image/gif"},
+        {".webp", "image/webp"},
+        {".csv", "text/csv"},
+        {".bmp", "image/bmp"},
+        {".mp4", "video/mp4"},
+        {".webm", "video/webm"}
     };
 
     private readonly IConfiguration _configuration;
@@ -61,7 +77,7 @@ public class AttachmentController : SpokesControllerBase
         if (string.IsNullOrWhiteSpace(channelId) || channelId.Contains("..") || channelId.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0 ||
             string.IsNullOrWhiteSpace(fileName) || fileName.Contains("..") || fileName.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
         {
-            return BadRequest(Spokes_Server.Core.Utilities.SpokesResult.Failure("Invalid path parameters"));
+            return BadRequest(SpokesResult.Failure("Invalid path parameters"));
         }
 
         // 1. Validate User Access to Channel
@@ -74,7 +90,7 @@ public class AttachmentController : SpokesControllerBase
         var channel = _channels.GetById(channelId);
         if (channel == null)
         {
-            return NotFound(Spokes_Server.Core.Utilities.SpokesResult.Failure("Channel not found"));
+            return NotFound(SpokesResult.Failure("Channel not found"));
         }
 
         var provider = _providers.FirstOrDefault(p => p.Category.Equals("chat", StringComparison.OrdinalIgnoreCase));
@@ -86,7 +102,14 @@ public class AttachmentController : SpokesControllerBase
         else
         {
             // Check participation fallback
-            if (channel.ChannelType != ChatChannelType.General && !channel.ParticipantIds.Contains(user.Id))
+            if (channel.ChannelType == ChatChannelType.Direct || channel.ChannelType == ChatChannelType.Group)
+            {
+                if (!channel.ParticipantIds.Contains(user.Id) && channel.CreatedById != user.Id)
+                {
+                    return Forbid();
+                }
+            }
+            else if (channel.ChannelType != ChatChannelType.General && !user.IsAdmin && !channel.ParticipantIds.Contains(user.Id))
             {
                 return Forbid();
             }
@@ -111,15 +134,10 @@ public class AttachmentController : SpokesControllerBase
         // 3. Serve File
         var contentType = GetContentType(targetFileName);
         var extension = Path.GetExtension(targetFileName);
-        
-        var safeInlineContentTypes = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-        {
-            "image/jpeg", "image/png", "image/gif", "image/webp", "image/bmp", "application/pdf"
-        };
-        
+
         bool forceDownload = Request.Query.ContainsKey("download") || 
                              ForceDownloadExtensions.Contains(extension) || 
-                             !safeInlineContentTypes.Contains(contentType);
+                             !SafeInlineContentTypes.Contains(contentType);
 
         if (forceDownload)
         {
@@ -132,33 +150,9 @@ public class AttachmentController : SpokesControllerBase
         return PhysicalFile(filePath, contentType, enableRangeProcessing: true);
     }
 
-    private string GetContentType(string path)
+    private static string GetContentType(string path)
     {
-        var types = GetMimeTypes();
-        var ext = Path.GetExtension(path).ToLowerInvariant();
-        return types.ContainsKey(ext) ? types[ext] : "application/octet-stream";
-    }
-
-    private Dictionary<string, string> GetMimeTypes()
-    {
-        return new Dictionary<string, string>
-        {
-            {".txt", "text/plain"},
-            {".pdf", "application/pdf"},
-            {".doc", "application/vnd.ms-word"},
-            {".docx", "application/vnd.ms-word"},
-            {".xls", "application/vnd.ms-excel"},
-            {".xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"},
-            {".png", "image/png"},
-            {".jpg", "image/jpeg"},
-            {".jpeg", "image/jpeg"},
-            {".gif", "image/gif"},
-            {".webp", "image/webp"},
-            {".csv", "text/csv"},
-            {".bmp", "image/bmp"},
-            {".mp4", "video/mp4"},
-            {".webm", "video/webm"}
-        };
+        return MimeTypes.GetValueOrDefault(Path.GetExtension(path), "application/octet-stream");
     }
 
     [HttpGet("email/{messageId}/{attachmentId}")]
@@ -174,7 +168,7 @@ public class AttachmentController : SpokesControllerBase
 
         if (string.IsNullOrEmpty(employeeId))
         {
-            return BadRequest(Spokes_Server.Core.Utilities.SpokesResult.Failure("employeeId is required"));
+            return BadRequest(SpokesResult.Failure("employeeId is required"));
         }
 
         var requestingEmployeeId = user.Id;
@@ -191,7 +185,7 @@ public class AttachmentController : SpokesControllerBase
             string.IsNullOrWhiteSpace(attachmentId) || attachmentId.Contains("..") || attachmentId.Contains("/") || attachmentId.Contains("\\") ||
             employeeId.Contains("..") || employeeId.Contains("/") || employeeId.Contains("\\"))
         {
-            return BadRequest(Spokes_Server.Core.Utilities.SpokesResult.Failure("Invalid path parameters"));
+            return BadRequest(SpokesResult.Failure("Invalid path parameters"));
         }
 
         var dataPath = _configuration["DataPath"] ?? "Data";
@@ -209,15 +203,10 @@ public class AttachmentController : SpokesControllerBase
         var originalFileName = !string.IsNullOrEmpty(fn) ? fn : attachmentId;
 
         var extension = Path.GetExtension(originalFileName);
-        
-        var safeInlineContentTypes = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-        {
-            "image/jpeg", "image/png", "image/gif", "image/webp", "image/bmp", "application/pdf"
-        };
-        
+
         bool forceDownload = Request.Query.ContainsKey("download") || 
                              ForceDownloadExtensions.Contains(extension) || 
-                             !safeInlineContentTypes.Contains(contentType);
+                             !SafeInlineContentTypes.Contains(contentType);
 
         // Support download mode or force download for dangerous types
         if (forceDownload)
@@ -233,7 +222,3 @@ public class AttachmentController : SpokesControllerBase
         return PhysicalFile(filePath, contentType, enableRangeProcessing: true);
     }
 }
-
-
-
-

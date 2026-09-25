@@ -1,10 +1,3 @@
-@using Spokes_Server.Core.Models.Core
-@using Spokes_Server.Core.Models.Projects
-@using Spokes_Server.Core.Models.Accounting
-@using Spokes_Server.Core.Models.Communication
-@using Spokes_Server.Core.Models.HR
-@using Spokes_Server.Core.Data
-@using MudBlazor
 @inject Database Db
 
 <MudDialog>
@@ -57,7 +50,7 @@
 
     private MudForm form = default!;
     private bool success;
-    private List<WorkType> AllWorkTypes = new();
+    private List<WorkType> AllWorkTypes = [];
 
     private decimal MarkupPercent
     {
@@ -70,10 +63,8 @@
         AllWorkTypes = Db.WorkTypes.GetAll().Where(x => x.IsActive).OrderBy(x => x.Name).ToList();
     }
 
-    private decimal? GetRate(string workTypeId)
-    {
-        return RateCard.Rates.ContainsKey(workTypeId) ? RateCard.Rates[workTypeId] : null;
-    }
+    private decimal? GetRate(string workTypeId) =>
+        RateCard.Rates.TryGetValue(workTypeId, out var rate) ? rate : null;
 
     private void SetRate(string workTypeId, decimal? value)
     {
@@ -84,5 +75,12 @@
     }
 
     private void Cancel() => MudDialog.Cancel();
-    private void Submit() { form.Validate(); if (success) MudDialog.Close(DialogResult.Ok(RateCard)); }
+    private void Submit()
+    {
+        form.Validate();
+        if (success)
+        {
+            MudDialog.Close(DialogResult.Ok(RateCard));
+        }
+    }
 }

@@ -1,10 +1,3 @@
-@using Spokes_Server.Core.Models.Core
-@using Spokes_Server.Core.Models.Projects
-@using Spokes_Server.Core.Models.Accounting
-@using Spokes_Server.Core.Models.Communication
-@using Spokes_Server.Core.Models.HR
-@using Spokes_Server.Core.Data
-@using MudBlazor
 @inject Database Db
 
 <MudDialog>
@@ -311,12 +304,12 @@
     [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
     [Parameter] public DocumentTemplate Template { get; set; } = default!;
     
-    private List<string> TaskLanguages = new();
+    private List<string> TaskLanguages = [];
 
     protected override void OnInitialized()
     {
         var profile = Db.CompanyProfile.Get();
-        TaskLanguages = profile?.TaskTranslationLanguages ?? new List<string>();
+        TaskLanguages = profile?.TaskTranslationLanguages ?? [];
     }
 
     private void Cancel() => MudDialog.Cancel();

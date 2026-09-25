@@ -1,11 +1,5 @@
-@* Searchable emoji and GIF picker with category tabs *@
-@using System.Net.Http.Json
 @using System.Text.Json.Nodes
 @using System.Timers
-@using Microsoft.AspNetCore.Components.Web.Virtualization
-@using Spokes_Server.Core.Data
-@using Spokes_Server.Core.Models.HR
-@using Spokes_Server.Core.Services.Core
 @using Spokes_Server.Core.Constants
 @inject IJSRuntime JSRuntime
 @inject Database Db
@@ -36,7 +30,7 @@
         @* Unified Search *@
         <MudTextField @ref="_sharedSearchField" T="string" Value="@_sharedSearchText" ValueChanged="OnSharedSearchChanged"
             Placeholder="@(ActiveTab == "Emoji" ? "Search emoji..." : (_activeGifProvider == "Klipy" ? "Search KLIPY" : "Search GIFs..."))" Variant="Variant.Outlined"
-            Margin="Margin.Dense" Immediate="true" Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search"
+            Margin="Margin.Dense" DebounceInterval="500" Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search"
             Class="mb-2 flex-shrink-0" Style="font-size: 0.85rem;" />
 
         @if (ActiveTab == "Emoji")
@@ -273,12 +267,12 @@
     [Parameter] public string ContainerStyle { get; set; } = "position: absolute; bottom: 100%; right: 0;";
     [Parameter] public string Class { get; set; } = "";
     [Parameter] public bool AutoFocusSearch { get; set; } = true;
-    [Parameter] public bool DisableGifs { get; set; } = false;
+    [Parameter] public bool DisableGifs { get; set; }
 
     private string ActiveTab { get; set; } = "Emoji";
     private string _sharedSearchText = "";
     private string _selectedCategory = "Smileys & Emotion";
-    private List<string> _recentEmojis = new();
+    private List<string> _recentEmojis = [];
     private Employee? _currentEmployee;
     
     private MudTextField<string>? _sharedSearchField;
@@ -286,19 +280,19 @@
     private string _previousTab = "Emoji";
 
     // GIF Integration
-    private bool _hasGifConfig = false;
+    private bool _hasGifConfig;
     private string _activeGifProvider = "";
-    private List<string> _recentGifs = new();
+    private List<string> _recentGifs = [];
     private bool _isSearchingGifs;
     private string _gifError = "";
-    private List<GifModel> _gifResults = new();
+    private List<GifModel> _gifResults = [];
     private Timer? _searchDebounceTimer;
     private bool _hasMoreGifs = true;
-    private int _gifOffset = 0;
+    private int _gifOffset;
     private string _nextCursor = "";
     private DotNetObjectReference<EmojiPicker>? _objRef;
-    private bool _scriptInjected = false;
-    private static readonly HttpClient Http = new HttpClient();
+    private bool _scriptInjected;
+    private static readonly HttpClient Http = new();
     private Guid _currentSearchId = Guid.Empty;
     private class GifModel {
         public string Url { get; set; } = "";
@@ -585,10 +579,10 @@
 
                     var root = JsonNode.Parse(json);
                     
-                    JsonArray results = root as JsonArray;
-                    if (results == null) results = root?["data"] as JsonArray;
-                    if (results == null) results = root?["data"]?["data"] as JsonArray;
-                    if (results == null) results = root?["results"] as JsonArray;
+                    var results = root as JsonArray
+                               ?? root?["data"] as JsonArray
+                               ?? root?["data"]?["data"] as JsonArray
+                               ?? root?["results"] as JsonArray;
 
                     var returnedCount = results?.Count ?? 0;
                     if (returnedCount < 20) _hasMoreGifs = false;
@@ -740,12 +734,12 @@
     {
         public bool IsHeader { get; set; }
         public string HeaderText { get; set; } = "";
-        public List<string> Emojis { get; set; } = new();
+        public List<string> Emojis { get; set; } = [];
     }
 
     private List<VirtualizeItem> GetVirtualizedItems()
     {
-        var items = new List<VirtualizeItem>();
+        List<VirtualizeItem> items = [];
         var emojisToShow = GetFilteredEmojis();
         int itemsPerRow = 8;
 
@@ -774,7 +768,7 @@
         if (!string.IsNullOrWhiteSpace(_sharedSearchText))
         {
             // Flat list of matching results
-            var matchedEmojis = new List<string>();
+            List<string> matchedEmojis = [];
             foreach (var cat in EmojiData.Categories)
             {
                 var matched = cat.Value.Where(e =>
@@ -784,14 +778,14 @@
                 if (matched.Any())
                     matchedEmojis.AddRange(matched);
             }
-            var results = new Dictionary<string, List<string>>();
+            Dictionary<string, List<string>> results = [];
             if (matchedEmojis.Any())
                 results["Search Results"] = matchedEmojis;
             return results;
         }
 
         // Show all categories
-        var result = new Dictionary<string, List<string>>();
+        Dictionary<string, List<string>> result = [];
         
         if (_recentEmojis.Any())
         {

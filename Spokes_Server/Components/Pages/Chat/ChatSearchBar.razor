@@ -1,17 +1,10 @@
-@using Spokes_Server.Core.Models.Core
-@using Spokes_Server.Core.Models.Projects
-@using Spokes_Server.Core.Models.Accounting
-@using Spokes_Server.Core.Models.Communication
-@using Spokes_Server.Core.Models.HR
-@using Spokes_Server.Core.Models.HR
-@using Spokes_Server.Core.Services.Communication
 @inject ChatService ChatService
 @inject ScopedKeystoreService ScopedKeystore
 
 <div style="position: relative;">
     <MudTextField @bind-Value="_searchQuery" Placeholder="Search messages..." Variant="Variant.Outlined"
         Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search"
-        Immediate="true" DebounceInterval="300" Margin="Margin.Dense"
+        DebounceInterval="500" Margin="Margin.Dense"
         OnDebounceIntervalElapsed="OnSearchChanged"
         Clearable="true" OnClearButtonClick="ClearSearch"
         Class="my-n2"
@@ -33,7 +26,7 @@
                         ? "[Attachment]"
                         : msg.Content;
                     content = System.Text.RegularExpressions.Regex.Replace(content, @"!\[gif\]\([^)]+\)|\[gif\]", "Sent a GIF", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-                    content = content.Length > 80 ? content.Substring(0, 77) + "..." : content;
+                    content = content.Length > 80 ? content[..77] + "..." : content;
 
                     <MudListItem T="string" Dense="true" OnClick="@(() => SelectResult(msg.Id))">
                         <div>
@@ -63,7 +56,7 @@
 @code {
     [Parameter] public string? ChannelId { get; set; }
     [Parameter] public string? CurrentUserId { get; set; }
-    [Parameter] public List<Employee> Employees { get; set; } = new();
+    [Parameter] public List<Employee> Employees { get; set; } = [];
     [Parameter] public EventCallback<string> OnResultSelected { get; set; }
 
     private string _searchQuery = "";
@@ -71,11 +64,11 @@
 
     private Dictionary<string, object> _inputAttributes = new()
     {
-        { "autocomplete", "off" },
-        { "data-lpignore", "true" },
-        { "data-1p-ignore", "true" },
-        { "data-bwignore", "true" },
-        { "data-form-type", "other" }
+        ["autocomplete"] = "off",
+        ["data-lpignore"] = "true",
+        ["data-1p-ignore"] = "true",
+        ["data-bwignore"] = "true",
+        ["data-form-type"] = "other"
     };
 
     private async Task OnSearchChanged(string query)
@@ -115,9 +108,9 @@
         var idx = escaped.IndexOf(escapedQuery, StringComparison.OrdinalIgnoreCase);
         if (idx >= 0)
         {
-            var before = escaped.Substring(0, idx);
+            var before = escaped[..idx];
             var match = escaped.Substring(idx, escapedQuery.Length);
-            var after = escaped.Substring(idx + escapedQuery.Length);
+            var after = escaped[(idx + escapedQuery.Length)..];
             return new MarkupString($"{before}<mark style=\"background: var(--mud-palette-warning-lighten); padding: 0 2px; border-radius: 2px;\">{match}</mark>{after}");
         }
 

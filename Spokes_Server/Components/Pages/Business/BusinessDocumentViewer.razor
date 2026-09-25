@@ -1,12 +1,8 @@
 @page "/business/documents/{DocumentId}"
-@using Spokes_Server.Core.Models.Core
-@using Spokes_Server.Core.Models.Projects
-@using Spokes_Server.Core.Data
-@using Spokes_Server.Core.Services.Core
-@using Spokes_Server.Components.Shared
-@using MudBlazor
 @using Markdig
 @using Spokes_Server.Core.Constants
+@using Spokes_Server.Core.Services.Documents
+@using Spokes_Server.Core.Services.Projects
 @inject Database Db
 @inject ISnackbar Snackbar
 @inject IDialogService DialogService
@@ -14,10 +10,9 @@
 @inject IJSRuntime JS
 @inject ILogger<BusinessDocumentViewer> Logger
 @inject UserService UserService
-@implements IAsyncDisposable
-@using Spokes_Server.Core.Services.Documents
 @inject DocumentPdfService PdfService
 @inject MarkdownSanitizerService MarkdownSanitizer
+@implements IAsyncDisposable
 
 <style>
     .markdown-content h1,
@@ -162,10 +157,10 @@ else
     private ProjectDocument? _document;
     private CompanyProfile? _profile;
 
-    private bool _isAdmin = false;
-    private bool _isEditing = false;
+    private bool _isAdmin;
+    private bool _isEditing;
     private string _editingBody = string.Empty;
-    private bool _needsPagination = false;
+    private bool _needsPagination;
 
     private const int PageHeight = 940;
 
@@ -254,7 +249,7 @@ else
         
         text = text.Replace("\r\n", "\n").Replace("\r", "\n");
         text = System.Text.RegularExpressions.Regex.Replace(text, @"\n{3,}", match => 
-            "\n\n" + string.Join("", System.Linq.Enumerable.Repeat("<div style=\"height: 1rem;\"></div>\n\n", match.Length - 2)));
+            "\n\n" + string.Join("", Enumerable.Repeat("<div style=\"height: 1rem;\"></div>\n\n", match.Length - 2)));
 
         text = text.Replace("<!-- pagebreak -->", "\n\n<div class=\"force-break\"></div>\n\n");
         return new MarkupString(MarkdownSanitizer.RenderSanitizedHtml(text));
@@ -298,7 +293,7 @@ else
         _document.Status = newStatus;
         _document.UpdatedAt = DateTime.UtcNow;
         Db.ProjectDocuments.Save(_document);
-        Spokes_Server.Core.Services.Projects.TimelineEventHelper.ProcessDocumentStatusChange(Db, _document, oldStatus, newStatus, null);
+        TimelineEventHelper.ProcessDocumentStatusChange(Db, _document, oldStatus, newStatus, null);
         Snackbar.Add($"Status updated to {newStatus}", Severity.Success);
         
         await InvokeAsync(StateHasChanged);

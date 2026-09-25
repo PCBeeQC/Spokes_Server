@@ -1,17 +1,9 @@
 namespace Spokes_Server.Core.Models.Core;
 
-using Spokes_Server.Core.Models.Projects;
-using Spokes_Server.Core.Models.Accounting;
-using Spokes_Server.Core.Models.Communication;
-using Spokes_Server.Core.Models.HR;
-
-// Moved TextModerationAction to its own file or keep it simple. Actually, we can just put TextModerationAction inside Spokes_Server.Core.Models.Core namespace or next to ModerationSettings.
-
-
-using Spokes_Server.Core.Data;
-using Spokes_Server.Core.Models;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Spokes_Server.Core.Data;
+using Spokes_Server.Core.Models.Projects;
 
 public class CompanyProfile : IDataEntity
 {
@@ -44,7 +36,7 @@ public class CompanyProfile : IDataEntity
     public string InvoicePrefix { get; set; } = "INV";
 
     // Task Translations
-    public List<string> TaskTranslationLanguages { get; set; } = new();
+    public List<string> TaskTranslationLanguages { get; set; } = [];
 
     // Contact (Physical Location)
     public string AddressStreet { get; set; } = string.Empty;
@@ -64,23 +56,23 @@ public class CompanyProfile : IDataEntity
     public decimal KilometrageRate { get; set; } = 0.55m; // $/km
     public decimal DefaultTaxRate { get; set; } = 0.14975m;
     public string CurrencySymbol { get; set; } = "$";
-    public List<string> SupportedCurrencies { get; set; } = new() { "CAD", "USD", "EUR" };
+    public List<string> SupportedCurrencies { get; set; } = ["CAD", "USD", "EUR"];
 
 
     // REMOVED: Banking and Tax ID fields (Now in Template)
 
     // Project Status Configuration
-    public List<ProjectStatusConfig> ProjectStatuses { get; set; } = new();
+    public List<ProjectStatusConfig> ProjectStatuses { get; set; } = [];
 
-    // Calendar Category Configuration
-    public List<CalendarCategory> CalendarCategories { get; set; } = new();
+    // Default Calendar Category Configuration (Server template for new users & resets)
+    public List<CalendarCategory> CalendarCategories { get; set; } = [];
 
     // Email Server Settings (Global)
     public EmailServerSettings EmailSettings { get; set; } = new();
     public string TimeZoneId { get; set; } = string.Empty;
 
     // Permissions & Roles
-    public List<PermissionGroup> PermissionGroups { get; set; } = new();
+    public List<PermissionGroup> PermissionGroups { get; set; } = [];
     public string DefaultPermissionGroupId { get; set; } = string.Empty;
 
     // Push Notifications (VAPID Keys)
@@ -104,10 +96,10 @@ public class CompanyProfile : IDataEntity
     public string GifApiKey { get; set; } = string.Empty;
 
     // Backup Settings
-    public bool BackupsEnabled { get; set; } = false;
+    public bool BackupsEnabled { get; set; }
     public int BackupRetentionCount { get; set; } = 5;
     public string BackupTimeLocal { get; set; } = "03:00"; // HH:mm Local
-    public bool BackupEmployeeEmails { get; set; } = false;
+    public bool BackupEmployeeEmails { get; set; }
 
     // Licensing Settings
     public string LicensePayload { get; set; } = string.Empty;
@@ -119,14 +111,17 @@ public class CompanyProfile : IDataEntity
     // Timesheet Settings
     public TimesheetSettings TimesheetConfig { get; set; } = new();
 
+    // HR & Overtime Settings
+    public HRSettings HRConfig { get; set; } = new();
+
     public CompanyProfile()
     {
         // Initialize Defaults if empty (Constructor runs on new object, JSON deserialization might overwrite this if property exists)
         // We will also check this on load in the Service/Repository if needed, but a constructor init is safe for new profiles.
         if (ProjectStatuses == null || !ProjectStatuses.Any())
         {
-            ProjectStatuses = new List<ProjectStatusConfig>
-            {
+            ProjectStatuses =
+            [
                 new ProjectStatusConfig { Id = "draft", Name = ProjectStatus.Draft, Color = "Default", IsSystemDefault = false },
                 new ProjectStatusConfig { Id = "quoted", Name = ProjectStatus.Quoted, Color = "Info", IsSystemDefault = false },
                 new ProjectStatusConfig { Id = "production", Name = ProjectStatus.InProduction, Color = "Primary", IsSystemDefault = false },
@@ -135,19 +130,12 @@ public class CompanyProfile : IDataEntity
                 new ProjectStatusConfig { Id = "on_hold", Name = ProjectStatus.OnHold, Color = "Error", IsSystemDefault = false },
                 new ProjectStatusConfig { Id = "completed", Name = ProjectStatus.Completed, Color = "Success", IsSystemDefault = false },
                 new ProjectStatusConfig { Id = "archived", Name = ProjectStatus.Archived, Color = "Dark", IsSystemDefault = false }
-            };
+            ];
         }
 
         if (CalendarCategories == null || !CalendarCategories.Any())
         {
-            CalendarCategories = new List<CalendarCategory>
-            {
-                new CalendarCategory { Id = "work", Name = "Work", Color = "Info" },
-                new CalendarCategory { Id = "meeting", Name = "Meeting", Color = "Primary" },
-                new CalendarCategory { Id = "holiday", Name = "Holiday", Color = "Success" },
-                new CalendarCategory { Id = "personal", Name = "Personal", Color = "Warning" },
-                new CalendarCategory { Id = "important", Name = "Important", Color = "Error" }
-            };
+            CalendarCategories = CalendarCategoryDefaults.GetSystemDefaults();
         }
     }
 }
@@ -160,14 +148,7 @@ public class EmailServerSettings
 
     public string SmtpHost { get; set; } = "";
     public int SmtpPort { get; set; } = 587;
-    public bool SmtpSsl { get; set; } = false; // StartTLS usually
-}
-
-public class CalendarCategory
-{
-    public string Id { get; set; } = Guid.NewGuid().ToString();
-    public string Name { get; set; } = string.Empty;
-    public string Color { get; set; } = "Default"; // MudBlazor Color Enum as string
+    public bool SmtpSsl { get; set; } // StartTLS usually
 }
 
 public enum TextModerationAction
@@ -178,9 +159,9 @@ public enum TextModerationAction
 
 public class ModerationSettings
 {
-    public bool EnableTextFilter { get; set; } = false;
+    public bool EnableTextFilter { get; set; }
     public TextModerationAction TextAction { get; set; } = TextModerationAction.Block;
-    public List<string> BlockedWords { get; set; } = new();
+    public List<string> BlockedWords { get; set; } = [];
 }
 
 public class TimesheetSettings
@@ -189,25 +170,27 @@ public class TimesheetSettings
     public bool EnableWeeklyPlan { get; set; } = true;
     
     // Approval Workflow
-    public bool RequireApproval { get; set; } = false;
+    public bool RequireApproval { get; set; }
     
     // Timesheet Locking
-    public bool EnableTimesheetLocking { get; set; } = false;
+    public bool EnableTimesheetLocking { get; set; }
     public int LockTimesheetsOlderThanDays { get; set; } = 30;
     
     // Required Fields
     public bool RequireProject { get; set; } = true;
     public bool RequireTask { get; set; } = true;
-    public bool RequireNote { get; set; } = false;
+    public bool RequireNote { get; set; }
     
     // Rounding (applied to reports/exports only)
-    public bool EnableRounding { get; set; } = false;
+    public bool EnableRounding { get; set; }
     public int RoundingIntervalMinutes { get; set; } = 15;     // 5, 6, 15, or 30
     public string RoundingDirection { get; set; } = "Nearest"; // "Up", "Down", "Nearest"
 }
 
 public class LegacyEditionConverter : JsonConverter<string>
 {
+    public override bool HandleNull => true;
+
     public override string Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
     {
         if (reader.TokenType == JsonTokenType.Number)
@@ -223,10 +206,14 @@ public class LegacyEditionConverter : JsonConverter<string>
         return "Business";
     }
 
-    public override void Write(Utf8JsonWriter writer, string value, JsonSerializerOptions options)
-    {
+    public override void Write(Utf8JsonWriter writer, string value, JsonSerializerOptions options) =>
         writer.WriteStringValue(value);
-    }
 }
 
-
+public class HRSettings
+{
+    public bool EnableHourBank { get; set; } = true;
+    public string OvertimeCalculationMode { get; set; } = "Weekly"; // "Weekly", "Daily", "None"
+    public decimal DailyOvertimeThreshold { get; set; } = 8m; 
+    public decimal MaxBankableHours { get; set; } = 0; // 0 = unlimited
+}

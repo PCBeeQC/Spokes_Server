@@ -1,8 +1,4 @@
-@using Spokes_Server.Core.Models.Core
-@using Spokes_Server.Core.Models.Projects
 @using Spokes_Server.Core.Models.Accounting
-@using Spokes_Server.Core.Models.Communication
-@using Spokes_Server.Core.Models.HR
 @using Spokes_Server.Core.Data
 @inject Database Db
 
@@ -39,9 +35,9 @@
 </MudTable>
 
 @code {
-    [Parameter] public string ProjectId { get; set; }
+    [Parameter] public string ProjectId { get; set; } = string.Empty;
 
-    private List<ExpenseItemViewModel> ProjectExpenses = new();
+    private List<ExpenseItemViewModel> ProjectExpenses = [];
 
     protected override void OnInitialized()
     {
@@ -66,13 +62,13 @@
     class ExpenseItemViewModel
     {
         public DateTime Date { get; set; }
-        public string EmployeeName { get; set; }
-        public string ReportNumber { get; set; }
-        public string Description { get; set; }
+        public string EmployeeName { get; set; } = "";
+        public string ReportNumber { get; set; } = "";
+        public string Description { get; set; } = "";
         public bool IsKilometrage { get; set; }
         public decimal Total { get; set; }
-        public string ReceiptPath { get; set; }
-        public string ProjectId { get; set; }
+        public string? ReceiptPath { get; set; }
+        public string? ProjectId { get; set; }
     }
 }
 

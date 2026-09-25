@@ -1,23 +1,14 @@
-using Spokes_Server.Core.Services.Communication;
-using Spokes_Server.Core.Services.Projects;
-using Spokes_Server.Core.Services.Core;
-using Spokes_Server.Core.Data.Repositories.Core;
-using Spokes_Server.Core.Data.Repositories.Projects;
-using Spokes_Server.Core.Data.Repositories.Accounting;
-using Spokes_Server.Core.Data.Repositories.Communication;
-using Spokes_Server.Core.Data.Repositories.HR;
-using Spokes_Server.Core.Models.Core;
-using Spokes_Server.Core.Models.Projects;
-using Spokes_Server.Core.Models.Accounting;
-using Spokes_Server.Core.Models.Communication;
-using Spokes_Server.Core.Models.HR;
-using Microsoft.Extensions.Hosting;
-using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.DependencyInjection;
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+using Spokes_Server.Core.Data.Repositories.Communication;
+using Spokes_Server.Core.Data.Repositories.HR;
+using Spokes_Server.Core.Models.HR;
 
 namespace Spokes_Server.Core.Services.Communication.Email;
 
@@ -85,14 +76,10 @@ public class EmailBackgroundService : BackgroundService
     }
 
     protected virtual Task WaitBeforeNextPollAsync(CancellationToken stoppingToken)
-    {
-        return Task.Delay(TimeSpan.FromMinutes(5), stoppingToken);
-    }
+        => Task.Delay(TimeSpan.FromMinutes(5), stoppingToken);
 
     protected virtual Task WaitOnStartupAsync(CancellationToken stoppingToken)
-    {
-        return Task.Delay(TimeSpan.FromSeconds(30), stoppingToken);
-    }
+        => Task.Delay(TimeSpan.FromSeconds(30), stoppingToken);
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -167,6 +154,3 @@ public class EmailBackgroundService : BackgroundService
         }
     }
 }
-
-
-

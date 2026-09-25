@@ -1,7 +1,6 @@
 @using Spokes_Server.Core.Models.Core
 @using Spokes_Server.Core.Data
 @inject Database Db
-@using MudBlazor
 
 <MudDialog>
     <TitleContent>
@@ -33,13 +32,11 @@
 @code {
     [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
 
-    private List<StandardDocument> _templates = new();
+    private List<StandardDocument> _templates = [];
     private StandardDocument? _selectedTemplate;
 
-    protected override void OnInitialized()
-    {
+    protected override void OnInitialized() =>
         _templates = Db.StandardDocuments.GetAll().OrderBy(t => t.Name).ToList();
-    }
 
     private void Cancel() => MudDialog.Cancel();
 

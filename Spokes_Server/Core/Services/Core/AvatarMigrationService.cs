@@ -3,12 +3,6 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Spokes_Server.Core.Data.Repositories.HR;
-using Spokes_Server.Core.Models.HR;
-using System;
-using System.IO;
-using System.Linq;
-using System.Threading;
-using System.Threading.Tasks;
 
 namespace Spokes_Server.Core.Services.Core;
 
@@ -43,42 +37,46 @@ public class AvatarMigrationService : BackgroundService
                 if (stoppingToken.IsCancellationRequested) break;
 
                 // Check if there is an unmigrated Base64 avatar
-                if (!string.IsNullOrEmpty(employee.AvatarBase64) && employee.AvatarBase64.Contains(","))
+                if (!string.IsNullOrEmpty(employee.AvatarBase64))
                 {
-                    try
+                    var commaIndex = employee.AvatarBase64.IndexOf(',');
+                    if (commaIndex >= 0)
                     {
-                        var base64Data = employee.AvatarBase64.Substring(employee.AvatarBase64.IndexOf(",") + 1);
-                        var bytes = Convert.FromBase64String(base64Data);
-                        
-                        var dataPath = _config["DataPath"] ?? "Data";
-                        var empPath = Path.Combine(dataPath, "Employees", employee.Id);
-                        
-                        if (!Directory.Exists(empPath))
+                        try
                         {
-                            Directory.CreateDirectory(empPath);
+                            var base64Data = employee.AvatarBase64[(commaIndex + 1)..];
+                            var bytes = Convert.FromBase64String(base64Data);
+                            
+                            var dataPath = _config["DataPath"] ?? "Data";
+                            var empPath = Path.Combine(dataPath, "Employees", employee.Id);
+                            
+                            if (!Directory.Exists(empPath))
+                            {
+                                Directory.CreateDirectory(empPath);
+                            }
+
+                            var filePath = Path.Combine(empPath, "avatar.png");
+                            await File.WriteAllBytesAsync(filePath, bytes, stoppingToken);
+
+                            employee.AvatarFile = "avatar.png";
+                            employee.AvatarBase64 = null;
+                            employee.AvatarVersion++;
+
+                            employeeRepo.Save(employee);
+                            migratedCount++;
+                            
+                            _logger.LogInformation("[AvatarMigrationService] Successfully migrated avatar for employee {EmployeeId}", employee.Id);
                         }
-
-                        var filePath = Path.Combine(empPath, "avatar.png");
-                        await File.WriteAllBytesAsync(filePath, bytes, stoppingToken);
-
-                        employee.AvatarFile = "avatar.png";
-                        employee.AvatarBase64 = null;
-                        employee.AvatarVersion++;
-
-                        employeeRepo.Save(employee);
-                        migratedCount++;
-                        
-                        _logger.LogInformation($"[AvatarMigrationService] Successfully migrated avatar for employee {employee.Id}");
-                    }
-                    catch (Exception ex)
-                    {
-                        failedCount++;
-                        _logger.LogError(ex, $"[AvatarMigrationService] Failed to migrate avatar for employee {employee.Id}");
+                        catch (Exception ex)
+                        {
+                            failedCount++;
+                            _logger.LogError(ex, "[AvatarMigrationService] Failed to migrate avatar for employee {EmployeeId}", employee.Id);
+                        }
                     }
                 }
             }
 
-            _logger.LogInformation($"[AvatarMigrationService] Migration completed. Migrated: {migratedCount}, Failed: {failedCount}.");
+            _logger.LogInformation("[AvatarMigrationService] Migration completed. Migrated: {MigratedCount}, Failed: {FailedCount}.", migratedCount, failedCount);
         }
         catch (Exception ex)
         {

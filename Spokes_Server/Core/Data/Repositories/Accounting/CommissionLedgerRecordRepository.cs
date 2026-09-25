@@ -9,24 +9,18 @@ public class CommissionLedgerRecordRepository : JsonRepository<CommissionLedgerR
     {
     }
 
-    protected override string GetFilePath(CommissionLedgerRecord item)
-    {
-        return Path.Combine(_basePath, $"{item.Id}.json");
-    }
+    protected override string GetFilePath(CommissionLedgerRecord item) =>
+        Path.Combine(_basePath, $"{item.Id}.json");
 
-    public List<CommissionLedgerRecord> GetByProject(string projectId)
-    {
-        return _cache.Values
+    public List<CommissionLedgerRecord> GetByProject(string projectId) =>
+        _cache.Values
             .Where(r => r.ProjectId == projectId)
             .OrderByDescending(r => r.DateGenerated)
             .ToList();
-    }
 
-    public List<CommissionLedgerRecord> GetByBeneficiary(string beneficiaryId)
-    {
-        return _cache.Values
+    public List<CommissionLedgerRecord> GetByBeneficiary(string beneficiaryId) =>
+        _cache.Values
             .Where(r => r.BeneficiaryId == beneficiaryId)
             .OrderByDescending(r => r.DateGenerated)
             .ToList();
-    }
 }

@@ -1,11 +1,4 @@
-@using Spokes_Server.Core.Models.Core
-@using Spokes_Server.Core.Models.Projects
-@using Spokes_Server.Core.Models.Accounting
-@using Spokes_Server.Core.Models.Communication
-@using Spokes_Server.Core.Models.HR
-@using Spokes_Server.Core.Data
 @using Spokes_Server.Components.Dialogs
-@using MudBlazor
 @inject Database Db
 @inject IDialogService DialogService
 @inject ISnackbar Snackbar
@@ -34,7 +27,7 @@
         </MudItem>
     }
 
-    @if (selectedCompany != null && selectedCompany.Contacts.Any())
+    @if (selectedCompany != null && selectedCompany.Contacts.Count > 0)
     {
         <MudItem xs="12">
             <MudSelect T="ContactPerson" Label="@ContactLabel" Value="selectedContact" ValueChanged="OnContactSelected"
@@ -91,20 +84,16 @@
         }
     }
 
-    private async Task<IEnumerable<Supplier>> SearchCompanies(string value, CancellationToken token)
+    private Task<IEnumerable<Supplier>> SearchCompanies(string value, CancellationToken token)
     {
-        if (string.IsNullOrEmpty(value)) return AllCompanies;
-        return AllCompanies.Where(x => x.Info.BusinessName.Contains(value, StringComparison.InvariantCultureIgnoreCase));
+        if (string.IsNullOrEmpty(value)) return Task.FromResult<IEnumerable<Supplier>>(AllCompanies);
+        return Task.FromResult(AllCompanies.Where(x => x.Info.BusinessName.Contains(value, StringComparison.InvariantCultureIgnoreCase)));
     }
 
-    private string GetCompanyHelperText()
-    {
-        if (selectedCompany != null)
-        {
-            return $"{selectedCompany.Info.BusinessAdressStreet}, {selectedCompany.Info.BusinessAdressCity}";
-        }
-        return HelperText;
-    }
+    private string GetCompanyHelperText() =>
+        selectedCompany != null
+            ? $"{selectedCompany.Info.BusinessAdressStreet}, {selectedCompany.Info.BusinessAdressCity}"
+            : HelperText;
 
     private async Task OnCompanySelected(Supplier s)
     {

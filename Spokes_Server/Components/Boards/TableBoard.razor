@@ -1,10 +1,3 @@
-@using Spokes_Server.Core.Data
-@using Spokes_Server.Core.Models.Core
-@using Spokes_Server.Core.Models.Projects
-@using Spokes_Server.Core.Models.Accounting
-@using Spokes_Server.Core.Models.Communication
-@using Spokes_Server.Core.Models.HR
-@using Spokes_Server.Core.Services
 @inject Database Db
 @inject BoardService BoardService
 @inject IDialogService DialogService
@@ -192,21 +185,9 @@
         _employees = Db.Employees.GetAll();
         _projects = Db.Projects.GetAll();
     }
-    protected override void OnParametersSet()
-    {
-        // No local data fetch needed anymore
-    }
-
     void SetCalculation(string propId, string type)
     {
-        if (View.ColumnCalculations.ContainsKey(propId))
-        {
-            View.ColumnCalculations[propId] = type;
-        }
-        else
-        {
-            View.ColumnCalculations.Add(propId, type);
-        }
+        View.ColumnCalculations[propId] = type;
         BoardService.UpdateBoard(Board);
         StateHasChanged();
     }

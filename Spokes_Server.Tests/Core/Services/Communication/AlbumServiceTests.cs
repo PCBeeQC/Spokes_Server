@@ -1,20 +1,19 @@
-using Spokes_Server.Core.Data;
-using Spokes_Server.Core.Data.Repositories.Communication;
-using Spokes_Server.Core.Models.Communication;
-using Spokes_Server.Core.Services.Communication.Chat;
+namespace Spokes_Server.Tests.Core.Services.Communication;
+
+using System.Collections.Generic;
+using System.IO;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Moq;
-using System;
-using System.Collections.Generic;
-using System.IO;
-using System.Threading.Tasks;
-using Xunit;
+using Spokes_Server.Core.Data;
+using Spokes_Server.Core.Data.Repositories.Communication;
+using Spokes_Server.Core.Data.Repositories.HR;
+using Spokes_Server.Core.Models.Communication;
+using Spokes_Server.Core.Services.Communication.Chat;
+using Spokes_Server.Core.Services.Security;
 
-namespace Spokes_Server.Tests.Core.Services.Communication
+public class AlbumServiceTests : IDisposable
 {
-    public class AlbumServiceTests : IDisposable
-    {
         private readonly string _testDataDir;
         private readonly DiskPersistenceService _persistence;
         private readonly AlbumRepository _albums;
@@ -34,10 +33,9 @@ namespace Spokes_Server.Tests.Core.Services.Communication
             
             _albums = new AlbumRepository(_persistence, config);
             _channels = new ChatChannelRepository(_persistence, config);
-            var employees = new Spokes_Server.Core.Data.Repositories.HR.EmployeeRepository(_persistence, config);
-            var crypto = new Mock<Spokes_Server.Core.Services.Security.ICryptoService>().Object;
-            var systemConfig = new Spokes_Server.Core.Data.Repositories.Core.SystemConfigRepository(_persistence, config);
-            var escrow = new Spokes_Server.Core.Services.Security.ServerEscrowService(null!, crypto);
+            var employees = new EmployeeRepository(_persistence, config);
+            var crypto = new Mock<ICryptoService>().Object;
+            var escrow = new ServerEscrowService(null!, crypto);
             
             _albumService = new AlbumService(_albums, _channels, crypto, escrow, employees);
         }
@@ -56,7 +54,7 @@ namespace Spokes_Server.Tests.Core.Services.Communication
         public async Task ShareAlbumWithChannel_ConcurrentUpdates_AreThreadSafe()
         {
             // Create an album
-            var album = new Spokes_Server.Core.Models.Communication.Album 
+            var album = new Album 
             { 
                 Id = "album-concurrent", 
                 OwnerId = "user-owner" 
@@ -68,7 +66,7 @@ namespace Spokes_Server.Tests.Core.Services.Communication
             for (int i = 0; i < 10; i++)
             {
                 int channelId = i;
-                _channels.Save(new Spokes_Server.Core.Models.Communication.ChatChannel { Id = $"channel-{channelId}" });
+                _channels.Save(new ChatChannel { Id = $"channel-{channelId}" });
                 tasks.Add(Task.Run(() => 
                 {
                     _albumService.ShareAlbumWithChannel("album-concurrent", "user-owner", $"channel-{channelId}", null);
@@ -224,4 +222,3 @@ namespace Spokes_Server.Tests.Core.Services.Communication
             Assert.Equal("album-event-test", triggeredAlbumId);
         }
     }
-}

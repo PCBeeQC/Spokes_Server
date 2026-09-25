@@ -1,7 +1,4 @@
-using System;
-using System.IO;
 using System.Security.Claims;
-using System.Threading.Tasks;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.Extensions.Configuration;
@@ -15,7 +12,6 @@ using Spokes_Server.Core.Data.Repositories.HR;
 using Spokes_Server.Core.Models.Core;
 using Spokes_Server.Core.Models.HR;
 using Spokes_Server.Core.Security;
-using Xunit;
 
 namespace Spokes_Server.Tests.Core.Security;
 
@@ -272,5 +268,83 @@ public class DeviceSessionTicketStoreTests : IDisposable
     {
         var ticket = CreateSampleTicket("dummy");
         await _store.RenewAsync(key!, ticket);
+    }
+
+    [Fact]
+    public async Task RetrieveAsync_KeyWithoutPrefix_ReturnsTicket()
+    {
+        var sessionId = "sess_raw_key";
+        var session = new DeviceSession
+        {
+            Id = sessionId,
+            EmployeeId = "emp_1",
+            ExpiresAt = DateTime.UtcNow.AddDays(7)
+        };
+        _sessionRepo.Save(session);
+
+        var ticket = CreateSampleTicket(sessionId);
+        await _store.StoreAsync(ticket);
+
+        // Retrieve using raw session ID without "session-" prefix
+        var retrieved = await _store.RetrieveAsync(sessionId);
+        Assert.NotNull(retrieved);
+        Assert.Equal("Alice", retrieved.Principal.Identity?.Name);
+        Assert.Equal(sessionId, retrieved.Principal.FindFirst("SessionId")?.Value);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    public async Task RetrieveAsync_SessionTicketDataNullOrEmpty_ReturnsNull(string? ticketData)
+    {
+        var sessionId = "sess_empty_ticket_" + (ticketData == null ? "null" : "empty");
+        var session = new DeviceSession
+        {
+            Id = sessionId,
+            EmployeeId = "emp_1",
+            TicketData = ticketData,
+            ExpiresAt = DateTime.UtcNow.AddDays(7)
+        };
+        _sessionRepo.Save(session);
+
+        var retrieved = await _store.RetrieveAsync("session-" + sessionId);
+        Assert.Null(retrieved);
+    }
+
+    [Fact]
+    public async Task RetrieveAsync_SessionNotFound_ReturnsNull()
+    {
+        var retrieved = await _store.RetrieveAsync("session-non_existent_session");
+        Assert.Null(retrieved);
+    }
+
+    [Fact]
+    public async Task StoreAsync_SessionNotInDatabase_ReturnsKeyWithoutThrowing()
+    {
+        var sessionId = "sess_missing_from_db";
+        var ticket = CreateSampleTicket(sessionId);
+
+        var key = await _store.StoreAsync(ticket);
+
+        Assert.Equal("session-" + sessionId, key);
+        var session = _sessionRepo.GetById(sessionId);
+        Assert.Null(session);
+    }
+
+    [Fact]
+    public async Task RenewAsync_SessionNotInDatabase_DoesNotThrow()
+    {
+        var sessionId = "sess_renew_missing";
+        var ticket = CreateSampleTicket(sessionId);
+
+        var exception = await Record.ExceptionAsync(() => _store.RenewAsync("session-" + sessionId, ticket));
+        Assert.Null(exception);
+    }
+
+    [Fact]
+    public async Task RemoveAsync_SessionNotInDatabase_DoesNotThrow()
+    {
+        var exception = await Record.ExceptionAsync(() => _store.RemoveAsync("session-sess_remove_missing"));
+        Assert.Null(exception);
     }
 }

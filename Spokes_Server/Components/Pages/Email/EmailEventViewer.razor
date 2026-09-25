@@ -1,12 +1,5 @@
-@using Spokes_Server.Core.Models.Communication
-@using Spokes_Server.Core.Models.HR
-@using Spokes_Server.Core.Services
 @using Spokes_Server.Components.Dialogs
-@using Spokes_Server.Aggregate
-@using MudBlazor
-@using System.IO
 @using Ical.Net
-@using Ical.Net.CalendarComponents
 @inject EmailService EmailService
 @inject IDialogService DialogService
 @inject Database Db
@@ -77,10 +70,10 @@
 
 @code {
     [Parameter] public EmailAttachmentMeta Attachment { get; set; } = default!;
-    [Parameter] public string MessageId { get; set; } = string.Empty;
-    [Parameter] public string EmployeeId { get; set; } = string.Empty;
+    [Parameter] public string MessageId { get; set; } = "";
+    [Parameter] public string EmployeeId { get; set; } = "";
 
-    private Spokes_Server.Core.Models.HR.CalendarEvent? _event;
+    private CalendarEvent? _event;
     private string? _organizer;
     private bool _hasError;
     private string? _lastAttachmentId;
@@ -106,11 +99,11 @@
 
                 if (vEvent != null)
                 {
-                    _event = new Spokes_Server.Core.Models.HR.CalendarEvent
+                    _event = new CalendarEvent
                     {
                         Title = vEvent.Summary ?? "Untitled Event",
-                        Location = vEvent.Location ?? string.Empty,
-                        Description = vEvent.Description ?? string.Empty,
+                        Location = vEvent.Location ?? "",
+                        Description = vEvent.Description ?? "",
                         Start = vEvent.DtStart?.Value ?? DateTime.Today,
                         End = vEvent.DtEnd?.Value ?? DateTime.Today.AddHours(1),
                         IsAllDay = vEvent.IsAllDay,
@@ -124,7 +117,7 @@
                         _organizer = org;
                     }
 
-                    _event.ExternalParticipant = _organizer ?? string.Empty;
+                    _event.ExternalParticipant = _organizer ?? "";
 
                     // Convert to local time if it's UTC
                     if (_event.Start.Kind == DateTimeKind.Utc)
@@ -153,10 +146,17 @@
         if (_event == null) return;
 
         var parameters = new DialogParameters { ["Event"] = _event, ["IsNew"] = true };
-        var dialog = await DialogService.ShowAsync<CalendarEventDialog>("New Event", parameters);
+        var options = new DialogOptions
+        {
+            MaxWidth = MaxWidth.Small,
+            FullWidth = true,
+            CloseButton = true,
+            CloseOnEscapeKey = true
+        };
+        var dialog = await DialogService.ShowAsync<CalendarEventDialog>("New Event", parameters, options);
         var result = await dialog.Result;
 
-        if (result != null && !result.Canceled && result.Data is Spokes_Server.Core.Models.HR.CalendarEvent resultEvent)
+        if (result != null && !result.Canceled && result.Data is CalendarEvent resultEvent)
         {
             Db.CalendarEvents.Save(resultEvent);
             Snackbar.Add("Event added to calendar", Severity.Success);

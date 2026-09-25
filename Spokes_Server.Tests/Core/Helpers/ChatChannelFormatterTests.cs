@@ -1,8 +1,6 @@
-using System.Collections.Generic;
 using Spokes_Server.Core.Helpers;
 using Spokes_Server.Core.Models.Communication;
 using Spokes_Server.Core.Models.HR;
-using Xunit;
 
 namespace Spokes_Server.Tests.Core.Helpers;
 
@@ -257,5 +255,144 @@ public class ChatChannelFormatterTests
         var displayName = ChatChannelFormatter.GetDisplayName(channel, "user1", employees);
 
         Assert.Equal("Mats Larsson (you)", displayName);
+    }
+
+    [Theory]
+    [InlineData(true, null)]
+    [InlineData(true, "")]
+    [InlineData(false, "user1")]
+    public void IsSelfDirectMessage_ReturnsFalse_WhenChannelIsNull_OrUserIdIsEmpty(bool channelExists, string? userId)
+    {
+        var channel = channelExists
+            ? new ChatChannel
+            {
+                ChannelType = ChatChannelType.Direct,
+                ParticipantIds = new List<string> { "user1" }
+            }
+            : null;
+
+        Assert.False(ChatChannelFormatter.IsSelfDirectMessage(channel, userId));
+    }
+
+    [Fact]
+    public void IsSelfDirectMessage_ReturnsFalse_WhenParticipantIdsNullOrEmpty()
+    {
+        var channelWithNull = new ChatChannel
+        {
+            ChannelType = ChatChannelType.Direct,
+            ParticipantIds = null!
+        };
+        var channelWithEmpty = new ChatChannel
+        {
+            ChannelType = ChatChannelType.Direct,
+            ParticipantIds = new List<string>()
+        };
+
+        Assert.False(ChatChannelFormatter.IsSelfDirectMessage(channelWithNull, "user1"));
+        Assert.False(ChatChannelFormatter.IsSelfDirectMessage(channelWithEmpty, "user1"));
+    }
+
+    [Fact]
+    public void GetDisplayName_WhenEmployeesCollectionIsNull_FallsBackGracefully()
+    {
+        var channel = new ChatChannel
+        {
+            Name = "Direct Message",
+            ChannelType = ChatChannelType.Direct,
+            ParticipantIds = new List<string> { "user1", "user2" }
+        };
+
+        var displayName = ChatChannelFormatter.GetDisplayName(channel, "user1", (IEnumerable<Employee>?)null);
+
+        Assert.Equal("Unknown User", displayName);
+    }
+
+    [Fact]
+    public void GetDisplayName_LegacyGroupDirectMessage_MoreThanTwoParticipants()
+    {
+        var channel = new ChatChannel
+        {
+            Name = "Direct Message",
+            ChannelType = ChatChannelType.Direct,
+            ParticipantIds = new List<string> { "user1", "user2", "user3", "user4" }
+        };
+
+        var displayName = ChatChannelFormatter.GetDisplayName(channel, "user1", LookupEmployee);
+
+        Assert.Equal("Jane, Bob, Alice", displayName);
+    }
+
+    [Fact]
+    public void GetDisplayName_LegacyGroupDirectMessage_WithCustomName_ReturnsCustomName()
+    {
+        var channel = new ChatChannel
+        {
+            Name = "Legacy Team Chat",
+            ChannelType = ChatChannelType.Direct,
+            ParticipantIds = new List<string> { "user1", "user2", "user3" }
+        };
+
+        var displayName = ChatChannelFormatter.GetDisplayName(channel, "user1", LookupEmployee);
+
+        Assert.Equal("Legacy Team Chat", displayName);
+    }
+
+    [Fact]
+    public void GetDisplayName_LegacyGroupDirectMessage_WhenNoEmployeesMatch_ReturnsDirectMessage()
+    {
+        var channel = new ChatChannel
+        {
+            Name = "",
+            ChannelType = ChatChannelType.Direct,
+            ParticipantIds = new List<string> { "user1", "unknown1", "unknown2" }
+        };
+
+        var displayName = ChatChannelFormatter.GetDisplayName(channel, "user1", LookupEmployee);
+
+        Assert.Equal("Direct Message", displayName);
+    }
+
+    [Fact]
+    public void GetDisplayName_GroupChat_WithoutName_WhenNoEmployeesMatch_ReturnsGroupChat()
+    {
+        var channel = new ChatChannel
+        {
+            Name = "",
+            ChannelType = ChatChannelType.Group,
+            ParticipantIds = new List<string> { "user1", "unknown1" }
+        };
+
+        var displayName = ChatChannelFormatter.GetDisplayName(channel, "user1", LookupEmployee);
+
+        Assert.Equal("Group Chat", displayName);
+    }
+
+    [Fact]
+    public void GetDisplayName_GeneralChannel_WithoutName_ReturnsUnnamedChannel()
+    {
+        var channel = new ChatChannel
+        {
+            Name = "   ",
+            ChannelType = ChatChannelType.General
+        };
+
+        var displayName = ChatChannelFormatter.GetDisplayName(channel, "user1", LookupEmployee);
+
+        Assert.Equal("Unnamed Channel", displayName);
+    }
+
+    [Fact]
+    public void GetDisplayName_DirectMessage_WithNoParticipants_ReturnsUnknownUser()
+    {
+        var channel = new ChatChannel
+        {
+            Name = "Direct Message",
+            ChannelType = ChatChannelType.Direct,
+            ParticipantIds = new List<string>()
+        };
+
+        var displayName = ChatChannelFormatter.GetDisplayName(channel, "user1", LookupEmployee);
+
+        Assert.Equal("Unknown User", displayName);
     }
 }

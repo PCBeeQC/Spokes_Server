@@ -1,15 +1,8 @@
-using Spokes_Server.Core.Services.Communication;
-using Spokes_Server.Core.Services.Projects;
-using Spokes_Server.Core.Services.Core;
-using Spokes_Server.Core.Data.Repositories.Core;
+using Spokes_Server.Core.Services.Communication.Chat;
 using Spokes_Server.Core.Data.Repositories.Projects;
 using Spokes_Server.Core.Data.Repositories.Accounting;
 using Spokes_Server.Core.Data.Repositories.Communication;
 using Spokes_Server.Core.Data.Repositories.HR;
-using Spokes_Server.Core.Models.Core;
-using Spokes_Server.Core.Models.Projects;
-using Spokes_Server.Core.Models.Accounting;
-using Spokes_Server.Core.Models.Communication;
 using Spokes_Server.Core.Models.HR;
 using Spokes_Server.Core.Constants;
 
@@ -112,7 +105,10 @@ public class ChatFileAccessProvider : IFileAccessProvider
 
     public Task<bool> CanAccessAsync(Employee user, string contextId)
     {
-        if (user.IsAdmin) return Task.FromResult(true);
+        if (user == null || !user.IsActive || user.IsSuspended || user.IsBanned || string.IsNullOrEmpty(contextId))
+        {
+            return Task.FromResult(false);
+        }
 
         var userChannels = _chatService.GetChannelsForUser(user.Id);
         return Task.FromResult(userChannels.Any(c => c.Id == contextId));
@@ -176,10 +172,10 @@ public class SignatureFileAccessProvider : IFileAccessProvider
 public class AlbumFileAccessProvider : IFileAccessProvider
 {
     private readonly AlbumRepository _albums;
-    private readonly Spokes_Server.Core.Services.Communication.Chat.IChatChannelAccessService _chatAccess;
+    private readonly IChatChannelAccessService _chatAccess;
     public string Category => "albums";
 
-    public AlbumFileAccessProvider(AlbumRepository albums, Spokes_Server.Core.Services.Communication.Chat.IChatChannelAccessService chatAccess)
+    public AlbumFileAccessProvider(AlbumRepository albums, IChatChannelAccessService chatAccess)
     {
         _albums = albums;
         _chatAccess = chatAccess;
@@ -211,11 +207,6 @@ public class TempFileAccessProvider : IFileAccessProvider
     public Task<bool> CanAccessAsync(Employee user, string contextId)
     {
         // Any active, non-suspended, non-banned authenticated employee can use temp staging
-        if (user == null || !user.IsActive || user.IsSuspended || user.IsBanned)
-        {
-            return Task.FromResult(false);
-        }
-
-        return Task.FromResult(true);
+        return Task.FromResult(user is { IsActive: true, IsSuspended: false, IsBanned: false });
     }
 }

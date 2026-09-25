@@ -1,11 +1,7 @@
 namespace Spokes_Server.Tests.Core.Helpers;
 
-using System;
-using System.Collections.Generic;
-using System.Linq;
 using Spokes_Server.Core.Helpers;
 using Spokes_Server.Core.Models.HR;
-using Xunit;
 
 public class TimesheetReportFilterHelperTests
 {
@@ -189,5 +185,186 @@ public class TimesheetReportFilterHelperTests
 
         Assert.Single(results);
         Assert.Equal("emp-alice", results[0].EmployeeId);
+    }
+
+    [Fact]
+    public void Filter_WhenOnlyStartDateProvided_FiltersEntriesBeforeStartDate()
+    {
+        var criteria = new TimesheetReportFilterCriteria
+        {
+            StartDate = new DateTime(2026, 8, 20)
+        };
+
+        var results = TimesheetReportFilterHelper.Filter(_sampleEntries, criteria);
+
+        Assert.Equal(2, results.Count);
+        Assert.DoesNotContain(results, e => e.EmployeeId == "emp-mats");
+        Assert.Contains(results, e => e.EmployeeId == "emp-alice");
+        Assert.Contains(results, e => e.EmployeeId == "emp-bob");
+    }
+
+    [Fact]
+    public void Filter_WhenOnlyEndDateProvided_FiltersEntriesAfterEndDate()
+    {
+        var criteria = new TimesheetReportFilterCriteria
+        {
+            EndDate = new DateTime(2026, 8, 20)
+        };
+
+        var results = TimesheetReportFilterHelper.Filter(_sampleEntries, criteria);
+
+        Assert.Equal(2, results.Count);
+        Assert.Contains(results, e => e.EmployeeId == "emp-mats");
+        Assert.Contains(results, e => e.EmployeeId == "emp-alice");
+        Assert.DoesNotContain(results, e => e.EmployeeId == "emp-bob");
+    }
+
+    [Fact]
+    public void Filter_WhenEntriesHaveTimeComponents_ComparesDatesByCalendarDateOnly()
+    {
+        var entriesWithTimes = new List<TimesheetReportEntry>
+        {
+            new()
+            {
+                EmployeeId = "emp-1",
+                Entry = new TimeEntry { Date = new DateTime(2026, 8, 20, 23, 59, 59) }
+            },
+            new()
+            {
+                EmployeeId = "emp-2",
+                Entry = new TimeEntry { Date = new DateTime(2026, 8, 21, 0, 0, 1) }
+            }
+        };
+
+        var criteria = new TimesheetReportFilterCriteria
+        {
+            StartDate = new DateTime(2026, 8, 20, 12, 0, 0),
+            EndDate = new DateTime(2026, 8, 20, 15, 0, 0)
+        };
+
+        var results = TimesheetReportFilterHelper.Filter(entriesWithTimes, criteria);
+
+        Assert.Single(results);
+        Assert.Equal("emp-1", results[0].EmployeeId);
+    }
+
+    [Fact]
+    public void Filter_Always_OrdersResultsByDescendingDate()
+    {
+        var criteria = new TimesheetReportFilterCriteria();
+
+        var results = TimesheetReportFilterHelper.Filter(_sampleEntries, criteria);
+
+        Assert.Equal(3, results.Count);
+        Assert.Equal("emp-bob", results[0].EmployeeId);    // 2026-08-25
+        Assert.Equal("emp-alice", results[1].EmployeeId);  // 2026-08-20
+        Assert.Equal("emp-mats", results[2].EmployeeId);   // 2026-08-15
+    }
+
+    [Fact]
+    public void Filter_WhenEntriesListIsEmpty_ReturnsEmptyList()
+    {
+        var criteria = new TimesheetReportFilterCriteria
+        {
+            StartDate = new DateTime(2026, 8, 1),
+            EndDate = new DateTime(2026, 8, 31)
+        };
+
+        var results = TimesheetReportFilterHelper.Filter(new List<TimesheetReportEntry>(), criteria);
+
+        Assert.NotNull(results);
+        Assert.Empty(results);
+    }
+
+    [Fact]
+    public void Filter_WithDifferentCasing_MatchesCaseInsensitively()
+    {
+        var criteria = new TimesheetReportFilterCriteria
+        {
+            SelectedEmployees = new[] { "EMP-ALICE" },
+            TotalEmployeesCount = 3,
+            SelectedTeams = new[] { "TEAM-A" },
+            TotalTeamsCount = 2,
+            SelectedProjectGroups = new[] { "GROUP-WEB" },
+            TotalProjectGroupsCount = 2,
+            SelectedClients = new[] { "acme corp" },
+            TotalClientsCount = 2,
+            SelectedProjects = new[] { "PROJ-CLIENT1" },
+            TotalProjectsCount = 3,
+            SelectedTasks = new[] { "TASK-DEV" },
+            TotalTasksCount = 3
+        };
+
+        var results = TimesheetReportFilterHelper.Filter(_sampleEntries, criteria);
+
+        Assert.Single(results);
+        Assert.Equal("emp-alice", results[0].EmployeeId);
+    }
+
+    [Fact]
+    public void Filter_WhenTotalCountIsZeroOrSelectedCountNotStrictlyLessThanTotal_DoesNotFilter()
+    {
+        var criteria = new TimesheetReportFilterCriteria
+        {
+            // TotalEmployeesCount is 0, so SelectedEmployees filter is ignored
+            SelectedEmployees = new[] { "emp-mats" },
+            TotalEmployeesCount = 0,
+            // SelectedTeams count equals TotalTeamsCount, so filter is ignored
+            SelectedTeams = new[] { "team-a" },
+            TotalTeamsCount = 1
+        };
+
+        var results = TimesheetReportFilterHelper.Filter(_sampleEntries, criteria);
+
+        Assert.Equal(3, results.Count);
+    }
+
+    [Fact]
+    public void Filter_WhenMultipleFiltersApplied_IntersectsAllCriteria()
+    {
+        var criteria = new TimesheetReportFilterCriteria
+        {
+            StartDate = new DateTime(2026, 8, 18),
+            EndDate = new DateTime(2026, 8, 31),
+            SelectedEmployees = new[] { "emp-alice", "emp-bob" },
+            TotalEmployeesCount = 3,
+            SelectedProjects = new[] { "proj-client1" },
+            TotalProjectsCount = 3
+        };
+
+        var results = TimesheetReportFilterHelper.Filter(_sampleEntries, criteria);
+
+        Assert.Single(results);
+        Assert.Equal("emp-alice", results[0].EmployeeId);
+    }
+
+    [Fact]
+    public void Filter_WhenNoEntriesMatchCriteria_ReturnsEmptyList()
+    {
+        var criteria = new TimesheetReportFilterCriteria
+        {
+            StartDate = new DateTime(2025, 1, 1),
+            EndDate = new DateTime(2025, 1, 31)
+        };
+
+        var results = TimesheetReportFilterHelper.Filter(_sampleEntries, criteria);
+
+        Assert.Empty(results);
+    }
+
+    [Fact]
+    public void Filter_WhenEntryHasEmptyTeamOrClientOrGroup_ExcludedWhenFilteringThoseFields()
+    {
+        // Mats has empty TeamId, ProjectGroupId, ClientId
+        var criteria = new TimesheetReportFilterCriteria
+        {
+            SelectedTeams = new[] { "" }, // even if empty string is passed in SelectedTeams
+            TotalTeamsCount = 2
+        };
+
+        var results = TimesheetReportFilterHelper.Filter(_sampleEntries, criteria);
+
+        // Mats should not match because of !string.IsNullOrEmpty(e.TeamId) check
+        Assert.Empty(results);
     }
 }

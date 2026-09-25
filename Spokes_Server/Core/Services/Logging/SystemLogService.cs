@@ -1,14 +1,16 @@
+using System.Globalization;
 using System.Text.Json;
+using Microsoft.Extensions.Configuration;
 
 namespace Spokes_Server.Core.Services.Logging;
 
 public class SystemLogService : ISystemLogService
 {
     private readonly string _logDirectory;
-    private readonly SemaphoreSlim _lock = new SemaphoreSlim(1, 1);
+    private readonly SemaphoreSlim _lock = new(1, 1);
     private readonly JsonSerializerOptions _jsonOptions;
 
-    public SystemLogService(Microsoft.Extensions.Configuration.IConfiguration config)
+    public SystemLogService(IConfiguration config)
     {
         string dataPath = config["DataPath"] ?? "Data";
         _logDirectory = Path.Combine(dataPath, "Logs");
@@ -65,10 +67,10 @@ public class SystemLogService : ISystemLogService
 
         if (!File.Exists(filePath))
         {
-            return new List<SystemLogEntry>();
+            return [];
         }
 
-        var results = new List<SystemLogEntry>();
+        List<SystemLogEntry> results = [];
         await _lock.WaitAsync();
         try
         {
@@ -100,20 +102,23 @@ public class SystemLogService : ISystemLogService
 
     public List<DateTime> GetAvailableLogDates()
     {
-        if (!Directory.Exists(_logDirectory)) return new List<DateTime>();
+        if (!Directory.Exists(_logDirectory)) return [];
 
         var files = Directory.GetFiles(_logDirectory, "log_*.jsonl");
-        var dates = new List<DateTime>();
+        List<DateTime> dates = [];
 
         foreach (var file in files)
         {
+            var fileInfo = new FileInfo(file);
+            if (fileInfo.Length == 0) continue;
+
             var fileName = Path.GetFileNameWithoutExtension(file); // log_2026-08-20
             if (fileName.StartsWith("log_") && fileName.Length == 14)
             {
-                var datePart = fileName.Substring(4); // 2026-08-20
-                if (DateTime.TryParseExact(datePart, "yyyy-MM-dd", null, System.Globalization.DateTimeStyles.None, out var date))
+                var datePart = fileName[4..]; // 2026-08-20
+                if (DateTime.TryParseExact(datePart, "yyyy-MM-dd", null, DateTimeStyles.None, out var date))
                 {
-                    dates.Add(date);
+                    dates.Add(date.Date);
                 }
             }
         }

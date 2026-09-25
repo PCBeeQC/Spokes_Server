@@ -1,4 +1,3 @@
-@using MudBlazor
 @using System.Reflection
 
 <MudDialog>
@@ -84,10 +83,10 @@
             if (field.IsLiteral && !field.IsInitOnly && field.FieldType == typeof(string))
             {
                 var val = field.GetValue(null) as string;
-                var key = field.Name + " " + suffix;
-                if (!string.IsNullOrEmpty(val) && !dict.ContainsKey(key))
+                var key = $"{field.Name} {suffix}";
+                if (!string.IsNullOrEmpty(val))
                 {
-                    dict.Add(key, val);
+                    dict.TryAdd(key, val);
                 }
             }
         }
@@ -107,8 +106,5 @@
 
     private void Close() => MudDialog.Cancel();
 
-    private void SelectIcon(string icon)
-    {
-        MudDialog.Close(DialogResult.Ok(icon));
-    }
+    private void SelectIcon(string icon) => MudDialog.Close(DialogResult.Ok(icon));
 }

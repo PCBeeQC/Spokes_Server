@@ -1,14 +1,6 @@
 namespace Spokes_Server.Core.Models.HR;
 
-using Spokes_Server.Core.Models.Core;
-using Spokes_Server.Core.Models.Projects;
-using Spokes_Server.Core.Models.Accounting;
-using Spokes_Server.Core.Models.Communication;
-
 using Spokes_Server.Core.Data;
-
-
-
 
 public class WeeklyPlan : IDataEntity
 {
@@ -17,10 +9,7 @@ public class WeeklyPlan : IDataEntity
     public override bool Equals(object? obj)
     {
         if (ReferenceEquals(this, obj)) return true;
-        if (obj == null || GetType() != obj.GetType())
-            return false;
-        var other = (WeeklyPlan)obj;
-        return Id == other.Id;
+        return obj is WeeklyPlan other && Id == other.Id;
     }
 
     public override int GetHashCode() => Id?.GetHashCode() ?? base.GetHashCode();
@@ -32,7 +21,7 @@ public class WeeklyPlan : IDataEntity
     public int WeekNumber { get; set; }
 
     // The user's flexible plan
-    public List<PlanEntry> Entries { get; set; } = new();
+    public List<PlanEntry> Entries { get; set; } = [];
 
     public decimal TotalHours => Entries.Sum(e => e.Hours);
 }

@@ -1,7 +1,4 @@
-namespace Spokes_Server.Core.Services.Licensing
-{
-    public class LicenseExpiredException : Exception
-    {
-        public LicenseExpiredException(string message) : base(message) { }
-    }
-}
+namespace Spokes_Server.Core.Services.Licensing;
+
+public class LicenseExpiredException(string message) : Exception(message);
+

@@ -1,5 +1,3 @@
-using System;
-using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -10,9 +8,9 @@ namespace Spokes_Server.Core.Services.Security;
 
 public class FileTokenPayload
 {
-    public string Category { get; set; } = "";
-    public string ContextId { get; set; } = "";
-    public string FileName { get; set; } = "";
+    public string Category { get; set; } = string.Empty;
+    public string ContextId { get; set; } = string.Empty;
+    public string FileName { get; set; } = string.Empty;
     public string? EncryptionKeyBase64 { get; set; }
     public long ExpiryTicks { get; set; }
 }
@@ -35,15 +33,14 @@ public class FileTokenService
     /// </summary>
     public string GenerateAccessToken(string category, string contextId, string filePath, string? encryptionKeyBase64 = null)
     {
-        string safeName = filePath;
-        var parts = filePath.Split('/');
-        if (parts.Length > 0) safeName = parts.Last();
+        int lastSlash = filePath.LastIndexOf('/');
+        string safeName = lastSlash >= 0 ? filePath[(lastSlash + 1)..] : filePath;
 
         // Dedup cache: same file + same key = same token within the cache window.
         // This is a performance optimization (prevents generating a new token for every
         // Blazor re-render of the same message), not a correctness requirement.
         var keyHash = string.IsNullOrEmpty(encryptionKeyBase64)
-            ? ""
+            ? string.Empty
             : Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(encryptionKeyBase64)))[..16];
             
         string generationCacheKey = $"FileTokenId_{category}_{contextId}_{safeName}_{keyHash}";

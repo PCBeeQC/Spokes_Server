@@ -1,14 +1,6 @@
 namespace Spokes_Server.Core.Models.HR;
 
-using Spokes_Server.Core.Models.Core;
-using Spokes_Server.Core.Models.Projects;
-using Spokes_Server.Core.Models.Accounting;
-using Spokes_Server.Core.Models.Communication;
-
 using Spokes_Server.Core.Data;
-
-
-
 
 public class Team : IDataEntity
 {
@@ -17,10 +9,7 @@ public class Team : IDataEntity
     public override bool Equals(object? obj)
     {
         if (ReferenceEquals(this, obj)) return true;
-        if (obj == null || GetType() != obj.GetType())
-            return false;
-        var other = (Team)obj;
-        return Id == other.Id;
+        return obj is Team other && Id == other.Id;
     }
 
     public override int GetHashCode() => Id?.GetHashCode() ?? base.GetHashCode();

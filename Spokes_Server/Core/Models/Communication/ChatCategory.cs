@@ -1,7 +1,6 @@
 namespace Spokes_Server.Core.Models.Communication;
 
 using Spokes_Server.Core.Data;
-using System;
 
 public class ChatCategory : IDataEntity
 {
@@ -10,10 +9,7 @@ public class ChatCategory : IDataEntity
     public override bool Equals(object? obj)
     {
         if (ReferenceEquals(this, obj)) return true;
-        if (obj == null || GetType() != obj.GetType())
-            return false;
-        var other = (ChatCategory)obj;
-        return Id == other.Id;
+        return obj is ChatCategory other && Id == other.Id;
     }
 
     public override int GetHashCode() => Id?.GetHashCode() ?? base.GetHashCode();
@@ -26,10 +22,10 @@ public class ChatCategory : IDataEntity
     /// <summary>
     /// Global display order for organizing custom categories in the sidebar.
     /// </summary>
-    public int DisplayOrder { get; set; } = 0;
+    public int DisplayOrder { get; set; }
 
     /// <summary>
     /// Determines if this is an undeletable system category.
     /// </summary>
-    public bool IsSystem { get; set; } = false;
+    public bool IsSystem { get; set; }
 }

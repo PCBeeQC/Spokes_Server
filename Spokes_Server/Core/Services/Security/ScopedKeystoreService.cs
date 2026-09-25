@@ -1,7 +1,7 @@
-using System;
-using System.Threading.Tasks;
-using Microsoft.JSInterop;
+using System.Text.Json;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.DataProtection;
+using Microsoft.JSInterop;
 
 namespace Spokes_Server.Core.Services.Security;
 
@@ -12,9 +12,9 @@ namespace Spokes_Server.Core.Services.Security;
 /// </summary>
 public class ScopedKeystoreService
 {
-    private readonly Microsoft.AspNetCore.DataProtection.IDataProtectionProvider _dataProtection;
+    private readonly IDataProtectionProvider _dataProtection;
 
-    public ScopedKeystoreService(Microsoft.AspNetCore.DataProtection.IDataProtectionProvider dataProtection)
+    public ScopedKeystoreService(IDataProtectionProvider dataProtection)
     {
         _dataProtection = dataProtection;
     }
@@ -47,7 +47,7 @@ public class ScopedKeystoreService
     /// while HttpContext is still available (before the circuit switches to WebSocket).
     /// </summary>
     public bool TryInitializeFromVaultCookie(
-        Microsoft.AspNetCore.Http.HttpContext? httpContext,
+        HttpContext? httpContext,
         string employeeId,
         string encryptedPrivateKey,
         ICryptoService crypto,
@@ -103,8 +103,8 @@ public class ScopedKeystoreService
 
         try
         {
-            var response = await js.InvokeAsync<System.Text.Json.JsonElement>("spokesVault.getStoredVaultKey");
-            if (response.ValueKind != System.Text.Json.JsonValueKind.Null && response.TryGetProperty("key", out var keyProp))
+            var response = await js.InvokeAsync<JsonElement>("spokesVault.getStoredVaultKey");
+            if (response.ValueKind != JsonValueKind.Null && response.TryGetProperty("key", out var keyProp))
             {
                 var encryptedPwd = keyProp.GetString();
                 if (!string.IsNullOrEmpty(encryptedPwd))
@@ -136,7 +136,7 @@ public class ScopedKeystoreService
         }
     }
 
-    public async Task ClearDeviceCookieAsync(Microsoft.JSInterop.IJSRuntime js, string employeeId)
+    public async Task ClearDeviceCookieAsync(IJSRuntime js, string employeeId)
     {
         try
         {

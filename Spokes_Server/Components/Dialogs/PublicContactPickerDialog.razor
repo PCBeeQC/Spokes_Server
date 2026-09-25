@@ -1,16 +1,9 @@
-@using Spokes_Server.Core.Data
-@using Spokes_Server.Core.Models.Core
-@using Spokes_Server.Core.Models.Projects
-@using Spokes_Server.Core.Models.Accounting
-@using Spokes_Server.Core.Models.Communication
-@using Spokes_Server.Core.Models.HR
-@using MudBlazor
 @inject Database Db
-
-<MudDialog>
-    <DialogContent>
-        <MudTable Items="@_publicContacts" MultiSelection="true" @bind-SelectedItems="_selectedContacts" Hover="true"
-            Striped="true" Filter="new Func<ContactPerson,bool>(FilterFunc)">
+ 
+ <MudDialog>
+     <DialogContent>
+         <MudTable Items="@_publicContacts" MultiSelection="true" @bind-SelectedItems="_selectedContacts" Hover="true"
+             Striped="true" Filter="FilterFunc">
             <ToolBarContent>
                 <MudText Typo="Typo.h6">Select Public Contacts</MudText>
                 <MudSpacer />
@@ -56,9 +49,8 @@
     private bool FilterFunc(ContactPerson element)
     {
         if (string.IsNullOrWhiteSpace(_searchString)) return true;
-        if (element.Name.Contains(_searchString, StringComparison.OrdinalIgnoreCase)) return true;
-        if (element.Email.Contains(_searchString, StringComparison.OrdinalIgnoreCase)) return true;
-        return false;
+        return element.Name.Contains(_searchString, StringComparison.OrdinalIgnoreCase)
+            || element.Email.Contains(_searchString, StringComparison.OrdinalIgnoreCase);
     }
 
     private void Submit() => MudDialog.Close(DialogResult.Ok(_selectedContacts.ToList()));

@@ -1,11 +1,8 @@
-@using MudBlazor
-@using Spokes_Server.Core.Models.Accounting
-
 <MudDialog>
     <DialogContent>
         <MudText Typo="Typo.body1" Class="mb-4">@Message</MudText>
 
-        @if (ExistingPayments != null && ExistingPayments.Any())
+        @if (ExistingPayments is { Count: > 0 })
         {
             <MudPaper Class="mb-4 pa-3" Elevation="0" Outlined="true" Style="background-color: var(--mud-palette-background-grey);">
                 <MudText Typo="Typo.subtitle2" Class="mb-2">Previous Payments</MudText>
@@ -70,7 +67,7 @@
 
     protected override void OnInitialized()
     {
-        Payment.Amount = MaxAmount > 0 ? MaxAmount : 0;
+        Payment.Amount = Math.Max(0, MaxAmount);
         Payment.Date = DateTime.Today;
     }
 

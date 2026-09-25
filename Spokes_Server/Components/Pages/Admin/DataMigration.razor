@@ -1,0 +1,285 @@
+@page "/admin/data-migration"
+@using Spokes_Server.Core.Constants
+@using Spokes_Server.Core.Services.Core
+@using Spokes_Server.Core.Services.Integrations
+@using Microsoft.AspNetCore.Components.Forms
+@inject ClockifyMigrationService MigrationService
+@inject Spokes_Server.Aggregate.Database Db
+@inject ISnackbar Snackbar
+@inject UserService UserService
+@inject NavigationManager Nav
+@attribute [Authorize(Policy = AppPermissions.Admin.ManageSettings)]
+
+<MudText Typo="Typo.h5" Class="mb-4">Data Migration</MudText>
+
+<MudPaper Elevation="0" Outlined="true" Class="pa-4 mx-6 mb-4">
+    <MudText Typo="Typo.body1">
+        Welcome to the Data Migration tool. Currently, we support importing historical time entries and projects from Clockify via their Detailed Report CSV export.
+    </MudText>
+</MudPaper>
+
+<MudStepper ActiveIndex="_index" ActiveIndexChanged="OnActiveIndexChanged" ShowResetButton>
+    <MudStep Title="Upload CSV Data">
+        <MudStack Spacing="4">
+            <MudAlert Severity="Severity.Info" Variant="Variant.Outlined">
+                <MudText Typo="Typo.subtitle2" Class="mb-1">How to export your data from Clockify:</MudText>
+                <MudText Typo="Typo.body2">
+                    1. Go to <strong>Reports</strong> -> <strong>Detailed</strong> in Clockify.<br/>
+                    2. Select the specific <strong>year</strong> (Clockify free tier limits exports to 1 year at a time).<br/>
+                    3. Click <strong>Export</strong> and choose <strong>CSV</strong>.<br/>
+                    4. Repeat for all the years you want to migrate, and upload all the CSVs here at once.
+                </MudText>
+            </MudAlert>
+
+            <MudFileUpload T="IReadOnlyList<IBrowserFile>" Accept=".csv" FilesChanged="HandleFilesUploaded" MaximumFileCount="100">
+                <ActivatorContent>
+                    <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.CloudUpload">
+                        Upload Clockify CSV(s)
+                    </MudButton>
+                </ActivatorContent>
+            </MudFileUpload>
+
+            @if (_parsedFiles.Any())
+            {
+                <MudTable Items="_parsedFiles" Dense="true" Hover="true">
+                    <HeaderContent>
+                        <MudTh>File Name</MudTh>
+                        <MudTh>Records</MudTh>
+                        <MudTh>Date Range</MudTh>
+                        <MudTh>Action</MudTh>
+                    </HeaderContent>
+                    <RowTemplate Context="file">
+                        <MudTd>@file.FileName</MudTd>
+                        <MudTd>@file.Records.Count</MudTd>
+                        <MudTd>@file.DateRangeDisplay</MudTd>
+                        <MudTd>
+                            <MudIconButton Icon="@Icons.Material.Filled.Delete" Color="Color.Error" Size="Size.Small" OnClick="@(() => RemoveFile(file))" />
+                        </MudTd>
+                    </RowTemplate>
+                </MudTable>
+            }
+            else
+            {
+                <MudAlert Severity="Severity.Info">No files uploaded yet.</MudAlert>
+            }
+        </MudStack>
+    </MudStep>
+
+    <MudStep Title="Map Employees" Disabled="@(!_parsedFiles.Any())">
+        <MudStack Spacing="4">
+            <MudText>Review the users extracted from your Clockify data and map them to existing Spokes Employees, or choose to create new placeholder accounts.</MudText>
+            
+            <MudTable Items="_userMaps" Dense="true" Hover="true">
+                <HeaderContent>
+                    <MudTh>Clockify User</MudTh>
+                    <MudTh>Clockify Email</MudTh>
+                    <MudTh>Action</MudTh>
+                </HeaderContent>
+                <RowTemplate Context="map">
+                    <MudTd>@map.ClockifyName</MudTd>
+                    <MudTd>@map.ClockifyEmail</MudTd>
+                    <MudTd>
+                        <MudStack Row="true" AlignItems="AlignItems.Center">
+                            <MudSelect @bind-Value="map.SpokesEmployeeId" Disabled="map.CreateNew" Clearable="true" Label="Match to Spokes Employee" Dense="true" Style="min-width: 200px;">
+                                @foreach(var emp in _allEmployees)
+                                {
+                                    <MudSelectItem Value="@((string?)emp.Id)">@emp.FullName</MudSelectItem>
+                                }
+                            </MudSelect>
+                            <MudSwitch @bind-Value="map.CreateNew" Color="Color.Primary" Label="Create new placeholder" />
+                        </MudStack>
+                    </MudTd>
+                </RowTemplate>
+            </MudTable>
+        </MudStack>
+    </MudStep>
+
+    <MudStep Title="Review Projects" Disabled="@(!_parsedFiles.Any())">
+        <MudStack Spacing="4">
+            <MudText>Review the projects extracted from your Clockify data. Projects missing in Spokes will be created automatically.</MudText>
+            
+            <MudTable Items="_projectMaps" Dense="true" Hover="true">
+                <HeaderContent>
+                    <MudTh>Clockify Project Name</MudTh>
+                    <MudTh>Extracted Code</MudTh>
+                    <MudTh>Status in Spokes</MudTh>
+                </HeaderContent>
+                <RowTemplate Context="map">
+                    <MudTd>@map.OriginalName</MudTd>
+                    <MudTd>@map.ExtractedCode</MudTd>
+                    <MudTd>
+                        <MudStack Row="true" AlignItems="AlignItems.Center">
+                            <MudSelect @bind-Value="map.SpokesProjectId" Disabled="map.IsNew" Clearable="true" Label="Match to Spokes Project" Dense="true" Style="min-width: 250px;">
+                                @foreach(var proj in _allProjects)
+                                {
+                                    <MudSelectItem Value="@((string?)proj.Id)">@proj.DisplayName</MudSelectItem>
+                                }
+                            </MudSelect>
+                            <MudSwitch @bind-Value="map.IsNew" Color="Color.Primary" Label="Create New" />
+                        </MudStack>
+                    </MudTd>
+                </RowTemplate>
+            </MudTable>
+        </MudStack>
+    </MudStep>
+
+    <MudStep Title="Execute Migration" Disabled="@(!_parsedFiles.Any())">
+        <MudStack Spacing="4">
+            <MudText>You are ready to begin the migration. This process will create any missing projects, users, and generate historical timesheets. This operation cannot be undone.</MudText>
+            
+            @if (_isMigrating)
+            {
+                <MudProgressLinear Color="Color.Primary" Indeterminate="true" Class="my-4" />
+                <MudText>Migrating data, please wait...</MudText>
+            }
+            else if (_migrationComplete)
+            {
+                <MudAlert Severity="Severity.Success">Migration completed successfully!</MudAlert>
+            }
+            else
+            {
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Large" OnClick="ExecuteMigration" StartIcon="@Icons.Material.Filled.PlayArrow">Start Migration</MudButton>
+            }
+        </MudStack>
+    </MudStep>
+</MudStepper>
+
+@code {
+    private int _index;
+    private List<MigrationParsedFile> _parsedFiles = new();
+    private List<ClockifyUserMap> _userMaps = new();
+    private List<ClockifyProjectMap> _projectMaps = new();
+    
+    private List<Spokes_Server.Core.Models.HR.Employee> _allEmployees = new();
+    private List<Spokes_Server.Core.Models.Projects.Project> _allProjects = new();
+
+    private bool _isMigrating = false;
+    private bool _migrationComplete = false;
+
+    private Spokes_Server.Core.Models.HR.Employee? _currentEmployee;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _currentEmployee = await UserService.GetEmployeeAsync();
+        var hasAccess = _currentEmployee != null && (_currentEmployee.IsAdmin || _currentEmployee.HasPermission(AppPermissions.Admin.ManageSettings));
+
+        if (!hasAccess)
+        {
+            Nav.NavigateTo("/", true);
+            return;
+        }
+
+        _allEmployees = Db.Employees.GetAll().OrderBy(e => e.FullName).ToList();
+        _allProjects = Db.Projects.GetAll().OrderBy(p => p.ProjectNumber).ToList();
+    }
+
+    private async Task HandleFilesUploaded(IReadOnlyList<IBrowserFile> files)
+    {
+        try
+        {
+            foreach (var file in files)
+            {
+                using var stream = file.OpenReadStream(maxAllowedSize: 50 * 1024 * 1024); // 50MB limit
+                var parsed = await MigrationService.ParseCsvAsync(stream, file.Name);
+                _parsedFiles.Add(parsed);
+            }
+            
+            Snackbar.Add($"Successfully parsed {files.Count} file(s).", Severity.Success);
+            
+            RefreshMappings();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Error parsing files: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private void RemoveFile(MigrationParsedFile file)
+    {
+        _parsedFiles.Remove(file);
+        RefreshMappings();
+    }
+
+    private void RefreshMappings()
+    {
+        var allRecords = _parsedFiles.SelectMany(f => f.Records).ToList();
+        _userMaps = MigrationService.MapUsers(allRecords);
+        _projectMaps = MigrationService.MapProjects(allRecords);
+    }
+
+    private void OnActiveIndexChanged(int newIndex)
+    {
+        _index = newIndex;
+        if (_index == 2) // Step 3: Review Projects
+        {
+            RefreshProjectMappingsBasedOnUsers();
+        }
+    }
+
+    private void RefreshProjectMappingsBasedOnUsers()
+    {
+        var allRecords = _parsedFiles.SelectMany(f => f.Records).ToList();
+        
+        var validUserKeys = _userMaps
+            .Where(u => u.CreateNew || !string.IsNullOrEmpty(u.SpokesEmployeeId))
+            .Select(u => new { Email = u.ClockifyEmail?.Trim().ToLower() ?? "", Name = u.ClockifyName?.Trim().ToLower() ?? "" })
+            .ToList();
+
+        var filteredRecords = allRecords.Where(r => 
+        {
+            var e = r.Email?.Trim().ToLower() ?? "";
+            var n = r.User?.Trim().ToLower() ?? "";
+            return validUserKeys.Any(v => v.Email == e && v.Name == n);
+        }).ToList();
+
+        var newProjectMaps = MigrationService.MapProjects(filteredRecords);
+        
+        // Preserve manual selections from previous mappings
+        foreach (var newMap in newProjectMaps)
+        {
+            var oldMap = _projectMaps.FirstOrDefault(p => p.OriginalName == newMap.OriginalName);
+            if (oldMap != null)
+            {
+                newMap.SpokesProjectId = oldMap.SpokesProjectId;
+                newMap.IsNew = oldMap.IsNew;
+            }
+        }
+        
+        _projectMaps = newProjectMaps;
+    }
+
+    private async Task ExecuteMigration()
+    {
+        if (_currentEmployee == null)
+        {
+            _currentEmployee = await UserService.GetEmployeeAsync();
+        }
+
+        if (_currentEmployee == null || (!_currentEmployee.IsAdmin && !_currentEmployee.HasPermission(AppPermissions.Admin.ManageSettings)))
+        {
+            Snackbar.Add("Unauthorized to execute migration.", Severity.Error);
+            return;
+        }
+
+        _isMigrating = true;
+        StateHasChanged();
+        
+        try
+        {
+            var allRecords = _parsedFiles.SelectMany(f => f.Records).ToList();
+            await MigrationService.ExecuteMigrationAsync(allRecords, _userMaps, _projectMaps, _currentEmployee);
+            
+            _migrationComplete = true;
+            Snackbar.Add("Data migrated successfully!", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Migration failed: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _isMigrating = false;
+            StateHasChanged();
+        }
+    }
+}

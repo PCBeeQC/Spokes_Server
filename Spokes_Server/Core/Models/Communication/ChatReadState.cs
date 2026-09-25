@@ -1,14 +1,6 @@
 namespace Spokes_Server.Core.Models.Communication;
 
-using Spokes_Server.Core.Models.Core;
-using Spokes_Server.Core.Models.Projects;
-using Spokes_Server.Core.Models.Accounting;
-using Spokes_Server.Core.Models.HR;
-
 using Spokes_Server.Core.Data;
-
-
-
 
 /// <summary>
 /// Tracks when a user last read each chat channel.
@@ -20,8 +12,6 @@ public class ChatReadState : IDataEntity
     /// Composite ID: "{UserId}_{ChannelId}"
     /// </summary>
     public string Id { get; set; } = string.Empty;
-
-    
 
     public string UserId { get; set; } = string.Empty;
     public string ChannelId { get; set; } = string.Empty;
@@ -55,6 +45,3 @@ public class ChatReadState : IDataEntity
         return "All";
     }
 }
-
-
-

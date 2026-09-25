@@ -1,6 +1,5 @@
-@using Spokes_Server.Core.Models.HR
-@using MudBlazor
-@inject Spokes_Server.Aggregate.Database Db
+@inject Database Db
+@using Spokes_Server.Core.Services.Core
 
 <MudAutocomplete @ref="_autocomplete"
                  T="Employee"
@@ -41,6 +40,8 @@
     [Parameter] public IEnumerable<Employee>? Employees { get; set; }
     [Parameter] public IEnumerable<string>? ExcludedIds { get; set; }
     [Parameter] public Func<string, CancellationToken, Task<IEnumerable<Employee>>>? SearchFunc { get; set; }
+    [Parameter] public bool IncludeInactive { get; set; } = false;
+    [Parameter] public bool IncludeSystemUsers { get; set; } = false;
     [Parameter] public bool ResetOnSelect { get; set; } = false;
     [Parameter] public string Label { get; set; } = "Add User";
     [Parameter] public string? Placeholder { get; set; }
@@ -54,13 +55,7 @@
     [Parameter] public string Class { get; set; } = "";
     [Parameter] public string Style { get; set; } = "";
 
-    public async Task ClearAsync()
-    {
-        if (_autocomplete != null)
-        {
-            await _autocomplete.ClearAsync();
-        }
-    }
+    public Task ClearAsync() => _autocomplete != null ? _autocomplete.ClearAsync() : Task.CompletedTask;
 
     private async Task HandleValueChanged(Employee? emp)
     {
@@ -86,7 +81,17 @@
             return SearchFunc(value, ct);
         }
 
-        var source = Employees ?? Db.Employees.GetAll();
+        var source = Employees ?? (IncludeInactive ? Db.Employees.GetAll() : Db.Employees.GetActiveEmployees());
+
+        if (!IncludeInactive)
+        {
+            source = source.Where(e => e.IsActive && !e.IsSuspended && !e.IsBanned);
+        }
+
+        if (!IncludeSystemUsers)
+        {
+            source = source.Where(e => !e.IsSystem && e.Id != AccountDeletionService.SystemDeletedUserId);
+        }
 
         if (ExcludedIds != null && ExcludedIds.Any())
         {

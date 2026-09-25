@@ -1,8 +1,3 @@
-@using Spokes_Server.Core.Models.Core
-@using Spokes_Server.Core.Models.Projects
-@using Spokes_Server.Core.Models.Accounting
-@using Spokes_Server.Core.Models.Communication
-@using Spokes_Server.Core.Models.HR
 
 <MudPaper Width="100%" Elevation="0" Class="d-flex flex-column border-r mud-theme-border-color custom-scrollbar"
     Style="flex: none; height: 100%;">
@@ -42,14 +37,6 @@
         </MudToggleGroup>
     </div>
 
-    @* <div class="pa-2 border-b mud-theme-border-color">
-        <MudToggleGroup T="string" SelectionMode="SelectionMode.MultiSelection" Values="_selectedFilters"
-            ValuesChanged="OnFilterChanged" Color="Color.Primary" CheckMark="true" Delimiters="true"
-             Outlined="true">
-             <MudToggleItem Value="@("Unread")" Text="Unread" />
-             <MudToggleItem Value="@("Important")" Text="Important" />
-         </MudToggleGroup>
-     </div> *@
 
     @if (Messages == null)
     {
@@ -146,10 +133,10 @@
     [Parameter] public string SearchText { get; set; } = "";
     [Parameter] public bool HasMoreMessages { get; set; }
     [Parameter] public bool IsLoadingOlder { get; set; }
-    [Parameter] public bool SearchAllFolders { get; set; } = false;
-    [Parameter] public bool IsSearching { get; set; } = false;
-    [Parameter] public int SearchProcessedCount { get; set; } = 0;
-    [Parameter] public int SearchTotalCount { get; set; } = 0;
+    [Parameter] public bool SearchAllFolders { get; set; }
+    [Parameter] public bool IsSearching { get; set; }
+    [Parameter] public int SearchProcessedCount { get; set; }
+    [Parameter] public int SearchTotalCount { get; set; }
     [Parameter] public string? TimeZoneId { get; set; }
     [Parameter] public EventCallback<EmailMessage> OnSelectMessage { get; set; }
     [Parameter] public EventCallback<string> OnSearch { get; set; }
@@ -162,20 +149,7 @@
 
     private IEnumerable<string> _selectedFilters = new HashSet<string>();
 
-    //private string _localSearchText = "";
-
-    // protected override void OnParametersSet()
-    // {
-    //     if (_localSearchText != SearchText)
-    //     {
-    //         _localSearchText = SearchText ?? "";
-    //     }
-    // }
-
-    private async Task HandleSearchDebounce(string value)
-    {
-        await OnSearch.InvokeAsync(value);
-    }
+    private Task HandleSearchDebounce(string value) => OnSearch.InvokeAsync(value);
 
     private void OnFilterChanged(IEnumerable<string> values)
     {
@@ -187,7 +161,7 @@
     {
         get
         {
-            if (Messages == null) return Enumerable.Empty<EmailMessage>();
+            if (Messages == null) return [];
             if (_selectedFilters == null || !_selectedFilters.Any()) return Messages;
 
             return Messages.Where(m =>

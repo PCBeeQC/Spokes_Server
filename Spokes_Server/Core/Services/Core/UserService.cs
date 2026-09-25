@@ -1,17 +1,9 @@
-using Spokes_Server.Core.Services.Communication;
-using Spokes_Server.Core.Services.Projects;
-using Spokes_Server.Core.Services.Core;
 using Microsoft.AspNetCore.Components.Authorization;
 using Spokes_Server.Core.Data.Repositories.Core;
-using Spokes_Server.Core.Data.Repositories.Projects;
-using Spokes_Server.Core.Data.Repositories.Accounting;
-using Spokes_Server.Core.Data.Repositories.Communication;
 using Spokes_Server.Core.Data.Repositories.HR;
 using Spokes_Server.Core.Models.Core;
-using Spokes_Server.Core.Models.Projects;
-using Spokes_Server.Core.Models.Accounting;
-using Spokes_Server.Core.Models.Communication;
 using Spokes_Server.Core.Models.HR;
+using Spokes_Server.Core.Models.Projects;
 using System.Security.Claims;
 using Spokes_Server.Core.Constants;
 
@@ -47,7 +39,7 @@ public class UserService
 
         // Provide a virtual employee for the PDF generation headless browser
         // This prevents MainLayout from constantly redirecting it to /access-pending
-        if (sub == "headless-renderer")
+        if (sub == "headless-renderer" && user.HasClaim("Spokes_InternalRenderer", "true"))
         {
             _cachedEmployee = new Employee
             {
@@ -77,6 +69,22 @@ public class UserService
     public Employee? GetEmployee(ClaimsPrincipal user)
     {
         if (user.Identity == null || !user.Identity.IsAuthenticated) return null;
+
+        if (user.HasClaim("Spokes_InternalRenderer", "true") &&
+            (user.FindFirst("EmployeeId")?.Value == "system-renderer" ||
+             user.FindFirst("sub")?.Value == "headless-renderer" ||
+             user.FindFirst(ClaimTypes.NameIdentifier)?.Value == "headless-renderer"))
+        {
+            return new Employee
+            {
+                Id = "system-renderer",
+                FirstName = "System",
+                LastName = "Renderer",
+                Email = "renderer@system.local",
+                IsActive = true,
+                IsAdmin = true
+            };
+        }
 
         var employeeIdClaim = user.FindFirst("EmployeeId")?.Value;
         if (!string.IsNullOrEmpty(employeeIdClaim))
@@ -179,11 +187,5 @@ public class UserService
         return false;
     }
 
-    public void ClearCache()
-    {
-        _cachedEmployee = null;
-    }
+    public void ClearCache() => _cachedEmployee = null;
 }
-
-
-

@@ -4,22 +4,19 @@ using Spokes_Server.Core.Models.Accounting;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Moq;
-using System;
-using System.IO;
-using System.Linq;
 using Xunit;
 
-namespace Spokes_Server.Tests.Core.Data.Repositories.Accounting
-{
-    public class BillRepositoryTests : IDisposable
-    {
-        private readonly string _testDataDir;
-        private readonly DiskPersistenceService _writer;
-        private readonly BillRepository _repo;
+namespace Spokes_Server.Tests.Core.Data.Repositories.Accounting;
 
-        public BillRepositoryTests()
-        {
-            _testDataDir = Path.Combine(Path.GetTempPath(), "Spokes_Test_Bills_" + Guid.NewGuid().ToString());
+public class BillRepositoryTests : IDisposable
+{
+    private readonly string _testDataDir;
+    private readonly DiskPersistenceService _writer;
+    private readonly BillRepository _repo;
+
+    public BillRepositoryTests()
+    {
+        _testDataDir = Path.Combine(Path.GetTempPath(), $"Spokes_Test_Bills_{Guid.NewGuid()}");
 
             var mockConfig = new Mock<IConfiguration>();
             mockConfig.Setup(c => c["DataPath"]).Returns(_testDataDir);
@@ -79,5 +76,55 @@ namespace Spokes_Server.Tests.Core.Data.Repositories.Accounting
             Assert.DoesNotContain(result, b => b.Id == "b2");
             Assert.DoesNotContain(result, b => b.Id == "b3");
         }
+
+        [Fact]
+        public void Constructor_WithNullDataPath_UsesEmptyBasePath()
+        {
+            var mockConfig = new Mock<IConfiguration>();
+            mockConfig.Setup(c => c["DataPath"]).Returns((string?)null);
+
+            var repo = new BillRepository(_writer, mockConfig.Object);
+
+            Assert.NotNull(repo);
+        }
+
+        [Fact]
+        public void GetFilePath_UsesItemIdAsJsonFilename()
+        {
+            var bill = new Bill { Id = "bill-42" };
+
+            _repo.Save(bill);
+            _writer.FlushAll();
+
+            var expectedPath = Path.Combine(_testDataDir, "Bills", "bill-42.json");
+            Assert.True(File.Exists(expectedPath));
+        }
+
+        [Fact]
+        public void GetByPo_WhenNoMatchingPo_ReturnsEmptyList()
+        {
+            var b1 = new Bill { Id = "b1", PurchaseOrderId = "po1" };
+            _repo.Save(b1);
+
+            var result = _repo.GetByPo("non-existent");
+
+            Assert.NotNull(result);
+            Assert.Empty(result);
+        }
+
+        [Fact]
+        public void GetUnpaid_WhenAllBillsPaidOrVoid_ReturnsEmptyList()
+        {
+            var b1 = new Bill { Id = "b1", Status = "Paid" };
+            var b2 = new Bill { Id = "b2", Status = "Void" };
+
+            _repo.Save(b1);
+            _repo.Save(b2);
+
+            var result = _repo.GetUnpaid();
+
+            Assert.NotNull(result);
+            Assert.Empty(result);
+        }
     }
-}
+

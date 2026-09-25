@@ -1,7 +1,7 @@
 @using Spokes_Server.Core.Models.UI
-@using MudBlazor
 @implements IAsyncDisposable
 @inject IJSRuntime JS
+@inject ISnackbar Snackbar
 
 <style>
     .album-media-dialog-container .mud-dialog-content {
@@ -55,7 +55,7 @@
                     }
                     @if (CurrentMedia.ContentType.StartsWith("image/"))
                     {
-                        <img id="lightbox-image" src="@CurrentMedia.FilePath" @onload="OnImageLoaded" alt="@CurrentMedia.FileName" class="lightbox-img-base @(_isImageLoading ? "lightbox-img-loading" : "lightbox-img-loaded")" />
+                        <img id="lightbox-image" src="@CurrentMedia.FilePath" @onload="OnImageLoaded" @onerror="OnImageError" alt="@CurrentMedia.FileName" class="lightbox-img-base @(_isImageLoading ? "lightbox-img-loading" : "lightbox-img-loaded")" />
                     }
                     else if (CurrentMedia.ContentType.StartsWith("video/"))
                     {
@@ -140,7 +140,7 @@
                 _objRef = DotNetObjectReference.Create(this);
                 
                 await _module.InvokeVoidAsync("initLightboxState", _objRef);
-                await _module.InvokeVoidAsync("initGestureHandler", "lightbox-image-area", _objRef);
+                await _module.InvokeVoidAsync("initGestureHandler", "lightbox-image-area", _objRef, MediaList.Count > 1);
                 await DialogContainer.FocusAsync();
             }
             catch (Exception ex)
@@ -151,7 +151,7 @@
 
         if (_module != null)
         {
-            await _module.InvokeVoidAsync("updateImage", "lightbox-image");
+            await _module.InvokeVoidAsync("updateImage", "lightbox-image", MediaList.Count > 1);
         }
     }
 
@@ -217,17 +217,15 @@
     [JSInvokable]
     public void ChangeImage(string direction)
     {
-        if (MediaList.Count == 0) return;
+        if (MediaList.Count <= 1) return;
         
-        if (direction == "left")
-        {
-            CurrentIndex = (CurrentIndex + 1) % MediaList.Count;
-        }
-        else if (direction == "right")
-        {
-            CurrentIndex = (CurrentIndex - 1 + MediaList.Count) % MediaList.Count;
-        }
-        
+        var nextIndex = direction == "left"
+            ? (CurrentIndex + 1) % MediaList.Count
+            : (CurrentIndex - 1 + MediaList.Count) % MediaList.Count;
+
+        if (nextIndex == CurrentIndex) return;
+
+        CurrentIndex = nextIndex;
         _isImageLoading = true;
         StateHasChanged();
     }
@@ -237,19 +235,27 @@
         _isImageLoading = false;
         StateHasChanged();
     }
+
+    private void OnImageError()
+    {
+        _isImageLoading = false;
+        StateHasChanged();
+    }
     
     private void OnPrevClick()
     {
-        ChangeImage("right");
+        if (MediaList.Count > 1) ChangeImage("right");
     }
 
     private void OnNextClick()
     {
-        ChangeImage("left");
+        if (MediaList.Count > 1) ChangeImage("left");
     }
 
-    private async Task HandleKeyDown(KeyboardEventArgs e)
+    private void HandleKeyDown(KeyboardEventArgs e)
     {
+        if (MediaList.Count <= 1) return;
+
         switch (e.Key)
         {
             case "ArrowLeft":
@@ -265,7 +271,15 @@
     {
         if (CurrentMedia != null)
         {
-            await JS.InvokeVoidAsync("downloadMediaFromUrl", CurrentMedia.FileName, CurrentMedia.FilePath);
+            try
+            {
+                await JS.InvokeVoidAsync("downloadMediaFromUrl", CurrentMedia.FileName, CurrentMedia.FilePath);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[MediaViewerDialog] Download error: {ex.Message}");
+                Snackbar.Add("Failed to download media.", Severity.Warning);
+            }
         }
     }
 
@@ -273,7 +287,15 @@
     {
         if (CurrentMedia != null)
         {
-            await JS.InvokeVoidAsync("shareFileFromUrl", CurrentMedia.FileName, CurrentMedia.FilePath);
+            try
+            {
+                await JS.InvokeVoidAsync("shareFileFromUrl", CurrentMedia.FileName, CurrentMedia.FilePath);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[MediaViewerDialog] Share error: {ex.Message}");
+                Snackbar.Add("Failed to share media.", Severity.Warning);
+            }
         }
     }
 

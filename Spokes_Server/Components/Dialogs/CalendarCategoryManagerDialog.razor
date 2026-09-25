@@ -1,0 +1,284 @@
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Models.HR
+@inject Database Db
+@inject UserService UserService
+@inject ISnackbar Snackbar
+@inject IDialogService DialogService
+
+<MudDialog>
+    <TitleContent>
+        <div class="d-flex align-center gap-2">
+            <MudIcon Icon="@Icons.Material.Filled.Palette" Color="Color.Primary" />
+            <MudText Typo="Typo.h6">My Calendar Categories</MudText>
+        </div>
+    </TitleContent>
+    <DialogContent>
+        <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-3">
+            Personalize your calendar categories and colors. These categories are unique to your account and do not affect other users.
+        </MudText>
+
+        @if (_categories == null)
+        {
+            <MudProgressLinear Indeterminate="true" Class="my-2" />
+        }
+        else
+        {
+            <!-- Desktop Layout (Breakpoint.SmAndUp) -->
+            <MudHidden Breakpoint="Breakpoint.Xs">
+                <div style="max-height: 60vh; overflow-y: auto;">
+                    <MudTable Items="@_categories" Elevation="0" Outlined="true" Dense="true" Hover="true" Breakpoint="Breakpoint.None">
+                        <HeaderContent>
+                            <MudTh Style="min-width: 180px;">Category Name</MudTh>
+                            <MudTh Style="min-width: 140px;">Color</MudTh>
+                            <MudTh Style="width: 100px;">Preview</MudTh>
+                            <MudTh Style="width: 60px; text-align: center;">Actions</MudTh>
+                        </HeaderContent>
+                        <RowTemplate>
+                            <MudTd>
+                                <MudTextField @bind-Value="context.Name"
+                                              Margin="Margin.Dense"
+                                              Variant="Variant.Outlined"
+                                              Placeholder="e.g., Deep Work"
+                                              Required="true" />
+                            </MudTd>
+                            <MudTd>
+                                <MudSelect @bind-Value="context.Color"
+                                           Margin="Margin.Dense"
+                                           Dense="true"
+                                           Variant="Variant.Outlined"
+                                           AnchorOrigin="Origin.BottomCenter">
+                                    @foreach (var colorName in AvailableColors)
+                                    {
+                                        Color c = Color.Default;
+                                        Enum.TryParse(colorName, out c);
+                                        <MudSelectItem Value="@colorName">
+                                            <div class="d-flex align-center gap-2">
+                                                <MudIcon Icon="@Icons.Material.Filled.Circle" Color="@c" Size="Size.Small" />
+                                                <span>@colorName</span>
+                                            </div>
+                                        </MudSelectItem>
+                                    }
+                                </MudSelect>
+                            </MudTd>
+                            <MudTd>
+                                @{
+                                    Color chipColor = Color.Default;
+                                    Enum.TryParse(context.Color, out chipColor);
+                                }
+                                <MudChip T="string" Color="@chipColor" Size="Size.Small" Variant="Variant.Filled">
+                                    @(string.IsNullOrWhiteSpace(context.Name) ? "Preview" : context.Name)
+                                </MudChip>
+                            </MudTd>
+                            <MudTd Style="text-align: center;">
+                                <MudIconButton Icon="@Icons.Material.Filled.Delete"
+                                               Color="Color.Error"
+                                               Size="Size.Small"
+                                               OnClick="@(() => RemoveCategory(context))" />
+                            </MudTd>
+                        </RowTemplate>
+                        <FooterContent>
+                            <MudTd ColSpan="4">
+                                <div class="d-flex justify-space-between align-center">
+                                    <MudButton StartIcon="@Icons.Material.Filled.Add"
+                                               Color="Color.Primary"
+                                               OnClick="AddCategory"
+                                               Size="Size.Small">
+                                        Add Category
+                                    </MudButton>
+                                    <MudButton StartIcon="@Icons.Material.Filled.RestartAlt"
+                                               Color="Color.Secondary"
+                                               Variant="Variant.Text"
+                                               OnClick="ResetToDefaultsAsync"
+                                               Size="Size.Small">
+                                        Reset to Server Defaults
+                                    </MudButton>
+                                </div>
+                            </MudTd>
+                        </FooterContent>
+                    </MudTable>
+                </div>
+            </MudHidden>
+
+            <!-- Mobile Layout (Breakpoint.Xs) -->
+            <MudHidden Breakpoint="Breakpoint.Xs" Invert="true">
+                <div class="d-flex justify-space-between align-center mb-3">
+                    <MudButton StartIcon="@Icons.Material.Filled.Add"
+                               Color="Color.Primary"
+                               Variant="Variant.Filled"
+                               OnClick="AddCategory"
+                               Size="Size.Small">
+                        Add Category
+                    </MudButton>
+                    <MudButton StartIcon="@Icons.Material.Filled.RestartAlt"
+                               Color="Color.Secondary"
+                               Variant="Variant.Text"
+                               OnClick="ResetToDefaultsAsync"
+                               Size="Size.Small">
+                        Reset Defaults
+                    </MudButton>
+                </div>
+
+                <div class="d-flex flex-column gap-2" style="max-height: 55vh; overflow-y: auto; overflow-x: hidden;">
+                    @if (_categories.Count == 0)
+                    {
+                        <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true">
+                            No categories defined. Tap "Add Category" to create one.
+                        </MudAlert>
+                    }
+                    @foreach (var cat in _categories)
+                    {
+                        Color chipColor = Color.Default;
+                        Enum.TryParse(cat.Color, out chipColor);
+
+                        <MudPaper Elevation="0" Outlined="true" Class="pa-3 rounded-lg">
+                            <!-- Top Row: Name and Delete -->
+                            <div class="d-flex align-center gap-2 mb-2">
+                                <MudTextField @bind-Value="cat.Name"
+                                              Margin="Margin.Dense"
+                                              Variant="Variant.Outlined"
+                                              Placeholder="Category Name"
+                                              Label="Category Name"
+                                              Required="true"
+                                              Class="flex-grow-1" />
+                                <MudIconButton Icon="@Icons.Material.Filled.Delete"
+                                               Color="Color.Error"
+                                               Size="Size.Small"
+                                               OnClick="@(() => RemoveCategory(cat))"
+                                               Title="Delete Category" />
+                            </div>
+                            <!-- Bottom Row: Color and Live Preview -->
+                            <div class="d-flex align-center justify-space-between gap-2">
+                                <div style="flex: 1; max-width: 160px;">
+                                    <MudSelect @bind-Value="cat.Color"
+                                               Margin="Margin.Dense"
+                                               Dense="true"
+                                               Variant="Variant.Outlined"
+                                               Label="Color"
+                                               AnchorOrigin="Origin.BottomCenter">
+                                        @foreach (var colorName in AvailableColors)
+                                        {
+                                            Color c = Color.Default;
+                                            Enum.TryParse(colorName, out c);
+                                            <MudSelectItem Value="@colorName">
+                                                <div class="d-flex align-center gap-2">
+                                                    <MudIcon Icon="@Icons.Material.Filled.Circle" Color="@c" Size="Size.Small" />
+                                                    <span>@colorName</span>
+                                                </div>
+                                            </MudSelectItem>
+                                        }
+                                    </MudSelect>
+                                </div>
+                                <div class="d-flex align-center justify-end" style="flex: 1;">
+                                    <MudChip T="string" Color="@chipColor" Size="Size.Small" Variant="Variant.Filled">
+                                        @(string.IsNullOrWhiteSpace(cat.Name) ? "Preview" : cat.Name)
+                                    </MudChip>
+                                </div>
+                            </div>
+                        </MudPaper>
+                    }
+                </div>
+            </MudHidden>
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+        <MudButton Color="Color.Primary"
+                   Variant="Variant.Filled"
+                   OnClick="SaveAsync"
+                   StartIcon="@Icons.Material.Filled.Save">
+            Save Changes
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
+
+    private Employee? _currentUser;
+    private List<CalendarCategory> _categories = [];
+
+    private static readonly string[] AvailableColors =
+    [
+        nameof(Color.Primary),
+        nameof(Color.Secondary),
+        nameof(Color.Tertiary),
+        nameof(Color.Info),
+        nameof(Color.Success),
+        nameof(Color.Warning),
+        nameof(Color.Error),
+        nameof(Color.Dark),
+        nameof(Color.Default)
+    ];
+
+    protected override async Task OnInitializedAsync()
+    {
+        _currentUser = await UserService.GetEmployeeAsync();
+        if (_currentUser != null)
+        {
+            var serverProfile = Db.CompanyProfile.Get();
+            var cats = _currentUser.EnsureCalendarCategories(serverProfile);
+            // Clone working copy so canceling doesn't mutate employee in-memory
+            _categories = cats.Select(c => new CalendarCategory
+            {
+                Id = c.Id,
+                Name = c.Name,
+                Color = c.Color
+            }).ToList();
+        }
+    }
+
+    private void AddCategory()
+    {
+        _categories.Add(new CalendarCategory
+        {
+            Id = Guid.NewGuid().ToString(),
+            Name = "New Category",
+            Color = "Info"
+        });
+    }
+
+    private void RemoveCategory(CalendarCategory category)
+    {
+        _categories.Remove(category);
+    }
+
+    private async Task ResetToDefaultsAsync()
+    {
+        var confirmed = await DialogService.ShowMessageBoxAsync(
+            "Reset Categories?",
+            "This will reset your categories to the server default template. Your current category customizations will be overwritten. Continue?",
+            yesText: "Reset",
+            cancelText: "Cancel");
+
+        if (confirmed == true)
+        {
+            var serverProfile = Db.CompanyProfile.Get();
+            _categories = CalendarCategoryDefaults.CloneList(serverProfile?.CalendarCategories);
+            StateHasChanged();
+        }
+    }
+
+    private async Task SaveAsync()
+    {
+        if (_currentUser == null) return;
+
+        // Ensure names are trimmed and valid
+        foreach (var c in _categories)
+        {
+            c.Name = (c.Name ?? "").Trim();
+            if (string.IsNullOrWhiteSpace(c.Name))
+            {
+                Snackbar.Add("All categories must have a name.", Severity.Warning);
+                return;
+            }
+        }
+
+        _currentUser.CalendarCategories = _categories;
+        Db.Employees.Save(_currentUser);
+
+        Snackbar.Add("Calendar categories updated successfully.", Severity.Success);
+        MudDialog.Close(DialogResult.Ok(true));
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+}

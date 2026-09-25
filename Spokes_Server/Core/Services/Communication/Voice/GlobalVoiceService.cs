@@ -1,9 +1,12 @@
-using Microsoft.JSInterop;
-using Spokes_Server.Core.Services;
-using Spokes_Server.Core.Data;
+using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
-using System.Threading.Tasks;
 using System.Text.Json.Serialization;
+using System.Threading.Tasks;
+using Microsoft.Extensions.Logging;
+using Microsoft.JSInterop;
+using MudBlazor;
+using Spokes_Server.Core.Services.Communication.Chat;
 
 namespace Spokes_Server.Core.Services.Communication.Voice;
 
@@ -19,7 +22,7 @@ public class CameraDevice
 public class CameraInitResult
 {
     [JsonPropertyName("cameras")]
-    public List<CameraDevice> Cameras { get; set; } = new();
+    public List<CameraDevice> Cameras { get; set; } = [];
 
     [JsonPropertyName("activeCameraDeviceId")]
     public string ActiveCameraDeviceId { get; set; } = "";
@@ -39,7 +42,8 @@ public class GlobalVoiceService : IAsyncDisposable
     private readonly IJSRuntime _js;
     private readonly ChatService _chatService;
     private readonly ChatStateService _chatState;
-    private readonly MudBlazor.ISnackbar _snackbar;
+    private readonly ISnackbar _snackbar;
+    private readonly Spokes_Server.Core.Services.UI.ISoundService _soundService;
 
     private IJSObjectReference? _voiceModule;
     private DotNetObjectReference<GlobalVoiceService>? _objRef;
@@ -53,13 +57,13 @@ public class GlobalVoiceService : IAsyncDisposable
     public string? CurrentUserId { get; private set; }
     public bool IsMuted { get; private set; }
     public bool IsVideoOn { get; private set; }
-    public List<CameraDevice> AvailableCameras { get; private set; } = new();
+    public List<CameraDevice> AvailableCameras { get; private set; } = [];
     public string ActiveCameraDeviceId { get; set; } = "";
     
-    public List<AudioDevice> AvailableMicrophones { get; private set; } = new();
+    public List<AudioDevice> AvailableMicrophones { get; private set; } = [];
     public string ActiveMicrophoneDeviceId { get; set; } = "";
     
-    public List<AudioDevice> AvailableSpeakers { get; private set; } = new();
+    public List<AudioDevice> AvailableSpeakers { get; private set; } = [];
     public string ActiveSpeakerDeviceId { get; set; } = "";
 
     public string CurrentNoiseSuppression { get; private set; } = "webrtc";
@@ -72,8 +76,8 @@ public class GlobalVoiceService : IAsyncDisposable
     public int MaxScreenHeight { get; private set; } = 2160;
     public int MaxScreenFps { get; private set; } = 30;
 
-    public System.Collections.Concurrent.ConcurrentDictionary<string, int> RemoteVideoHeights { get; } = new();
-    public System.Collections.Concurrent.ConcurrentDictionary<string, int> RemoteVideoFps { get; } = new();
+    public ConcurrentDictionary<string, int> RemoteVideoHeights { get; } = new();
+    public ConcurrentDictionary<string, int> RemoteVideoFps { get; } = new();
 
     public string MaxVideoSendQuality { get; set; } = "Auto";
     public int MaxVideoSendFps { get; set; } = 30;
@@ -81,18 +85,72 @@ public class GlobalVoiceService : IAsyncDisposable
     public string MaxScreenShareQuality { get; set; } = "Auto";
     public int MaxScreenShareFps { get; set; } = 30;
 
-    public HashSet<string> CallParticipants { get; } = new();
-    public HashSet<string> ActiveSpeakers { get; } = new();
+    public HashSet<string> CallParticipants { get; } = [];
+    public HashSet<string> ActiveSpeakers { get; } = [];
+    public HashSet<string> MutedParticipants { get; } = [];
+
+    public Spokes_Server.Core.Models.HR.VoiceUserSettings VoiceSettings { get; private set; } = new();
 
     private readonly ILogger<GlobalVoiceService> _logger;
 
-    public GlobalVoiceService(IJSRuntime js, ChatService chatService, ChatStateService chatState, MudBlazor.ISnackbar snackbar, ILogger<GlobalVoiceService> logger)
+    public GlobalVoiceService(IJSRuntime js, ChatService chatService, ChatStateService chatState, ISnackbar snackbar, ILogger<GlobalVoiceService> logger, Spokes_Server.Core.Services.UI.ISoundService soundService)
     {
         _js = js;
         _chatService = chatService;
         _chatState = chatState;
         _snackbar = snackbar;
         _logger = logger;
+        _soundService = soundService;
+
+        if (_chatState != null)
+        {
+            _chatState.VoiceMemberJoined += OnServerVoiceMemberJoined;
+            _chatState.VoiceMemberLeft += OnServerVoiceMemberLeft;
+            _chatState.VoiceUserMutedChanged += OnServerVoiceUserMutedChanged;
+        }
+    }
+
+    private void OnServerVoiceUserMutedChanged(string channelId, string userId, bool isMuted)
+    {
+        if (IsInVoiceCall && CurrentChannelId == channelId && !string.IsNullOrEmpty(userId))
+        {
+            bool changed = isMuted ? MutedParticipants.Add(userId) : MutedParticipants.Remove(userId);
+            if (isMuted) ActiveSpeakers.Remove(userId);
+            if (changed)
+            {
+                NotifyStateChanged();
+            }
+        }
+    }
+
+    private void OnServerVoiceMemberJoined(string channelId, string userId)
+    {
+        if (IsInVoiceCall && CurrentChannelId == channelId && !string.IsNullOrEmpty(userId))
+        {
+            if (CallParticipants.Add(userId))
+            {
+                NotifyStateChanged();
+            }
+        }
+    }
+
+    private void OnServerVoiceMemberLeft(string channelId, string userId)
+    {
+        if (IsInVoiceCall && CurrentChannelId == channelId && !string.IsNullOrEmpty(userId))
+        {
+            if (userId != CurrentUserId)
+            {
+                bool removed = CallParticipants.Remove(userId);
+                ActiveSpeakers.Remove(userId);
+                MutedParticipants.Remove(userId);
+                RemoteVideoHeights.TryRemove(userId, out _);
+                RemoteVideoFps.TryRemove(userId, out _);
+                if (removed)
+                {
+                    NotifyStateChanged();
+                }
+            }
+        }
     }
 
     public bool IsAndroid { get; private set; }
@@ -150,9 +208,43 @@ public class GlobalVoiceService : IAsyncDisposable
         NotifyStateChanged();
     }
 
+    public async Task LoadDeviceVoiceSettingsAsync()
+    {
+        try
+        {
+            var json = await _js.InvokeAsync<string?>("localStorage.getItem", "spokes_voice_settings_v1");
+            if (!string.IsNullOrEmpty(json))
+            {
+                VoiceSettings = System.Text.Json.JsonSerializer.Deserialize<Spokes_Server.Core.Models.HR.VoiceUserSettings>(json) ?? new();
+            }
+            else
+            {
+                VoiceSettings = new();
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to load device voice settings from localStorage");
+            VoiceSettings = new();
+        }
+    }
+
     public async Task ConnectAsync(string token, string url, string channelId, string userId, int audioBitrateKbps = 64, string noiseSuppression = "rnnoise")
     {
+        if (IsConnecting)
+        {
+            _logger.LogInformation("ConnectAsync called while already connecting. Ignoring duplicate attempt.");
+            return;
+        }
+
+        if (IsInVoiceCall && CurrentChannelId == channelId)
+        {
+            _logger.LogInformation("ConnectAsync called while already connected to channel {ChannelId}. Ignoring duplicate attempt.", channelId);
+            return;
+        }
+
         IsConnecting = true;
+        RequiresIntegrityCheck = false;
         NotifyStateChanged();
 
         try
@@ -176,6 +268,7 @@ public class GlobalVoiceService : IAsyncDisposable
             CurrentUserId = userId;
             CallParticipants.Clear();
             ActiveSpeakers.Clear();
+            MutedParticipants.Clear();
             CallParticipants.Add(userId);
 
             var serverParticipants = _chatState.GetVoiceParticipants(channelId);
@@ -183,6 +276,14 @@ public class GlobalVoiceService : IAsyncDisposable
             {
                 CallParticipants.Add(spId);
             }
+
+            var serverMuted = _chatState.GetMutedUsers(channelId);
+            foreach (var smId in serverMuted)
+            {
+                MutedParticipants.Add(smId);
+            }
+
+            await LoadDeviceVoiceSettingsAsync();
 
             IsMuted = false;
             IsVideoOn = false;
@@ -201,6 +302,16 @@ public class GlobalVoiceService : IAsyncDisposable
             if (IsInVoiceCall)
             {
                 await _chatService.JoinVoiceAsync(userId, channelId);
+                _ = _chatService.SetUserMutedAsync(channelId, userId, IsMuted);
+                try
+                {
+                    var settingsJson = System.Text.Json.JsonSerializer.Serialize(VoiceSettings);
+                    await _voiceModule.InvokeVoidAsync("initVoiceSettings", settingsJson);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to initialize voice settings in JS");
+                }
             }
         }
         finally
@@ -214,6 +325,7 @@ public class GlobalVoiceService : IAsyncDisposable
     {
         var uid = CurrentUserId;
         var cid = CurrentChannelId;
+        var wasInCall = IsInVoiceCall;
 
         if (_voiceModule != null)
         {
@@ -247,6 +359,11 @@ public class GlobalVoiceService : IAsyncDisposable
             }
         }
 
+        if (wasInCall)
+        {
+            _ = _soundService.PlayChannelLeaveAsync();
+        }
+
         ResetState();
         NotifyStateChanged();
     }
@@ -256,11 +373,38 @@ public class GlobalVoiceService : IAsyncDisposable
         try
         {
             bool newMuteState = !IsMuted;
+            IsMuted = newMuteState;
+            if (newMuteState)
+            {
+                if (CurrentUserId != null)
+                {
+                    ActiveSpeakers.Remove(CurrentUserId);
+                    MutedParticipants.Add(CurrentUserId);
+                }
+                _wasISpeaking = false;
+                if (CurrentChannelId != null && CurrentUserId != null)
+                {
+                    _ = _chatService.SetUserSpeakingAsync(CurrentChannelId, CurrentUserId, false);
+                    _ = _chatService.SetUserMutedAsync(CurrentChannelId, CurrentUserId, true);
+                }
+            }
+            else
+            {
+                if (CurrentUserId != null)
+                {
+                    MutedParticipants.Remove(CurrentUserId);
+                }
+                if (CurrentChannelId != null && CurrentUserId != null)
+                {
+                    _ = _chatService.SetUserMutedAsync(CurrentChannelId, CurrentUserId, false);
+                }
+            }
+            NotifyStateChanged();
+
             if (_voiceModule != null)
             {
                 await _voiceModule.InvokeVoidAsync("setMicrophoneEnabled", !newMuteState);
             }
-            IsMuted = newMuteState;
         }
         catch (Exception ex)
         {
@@ -320,12 +464,13 @@ public class GlobalVoiceService : IAsyncDisposable
     {
         try
         {
-            if (_voiceModule != null && IsInVoiceCall)
+            ActiveMicrophoneDeviceId = deviceId;
+            if (_voiceModule == null) await InitializeModuleAsync();
+            if (_voiceModule != null)
             {
                 await _voiceModule.InvokeVoidAsync("switchActiveMicrophone", deviceId);
-                ActiveMicrophoneDeviceId = deviceId;
-                NotifyStateChanged();
             }
+            NotifyStateChanged();
         }
         catch (Exception ex)
         {
@@ -337,16 +482,33 @@ public class GlobalVoiceService : IAsyncDisposable
     {
         try
         {
-            if (_voiceModule != null && IsInVoiceCall)
+            ActiveSpeakerDeviceId = deviceId;
+            if (_voiceModule == null) await InitializeModuleAsync();
+            if (_voiceModule != null)
             {
                 await _voiceModule.InvokeVoidAsync("switchActiveSpeaker", deviceId);
-                ActiveSpeakerDeviceId = deviceId;
-                NotifyStateChanged();
             }
+            NotifyStateChanged();
         }
         catch (Exception ex)
         {
             Console.WriteLine($"[Voice] SwitchSpeaker failed: {ex.Message}");
+        }
+    }
+
+    public async Task RefreshAudioDevicesAsync()
+    {
+        try
+        {
+            if (_voiceModule == null) await InitializeModuleAsync();
+            if (_voiceModule != null)
+            {
+                await _voiceModule.InvokeVoidAsync("updateAudioDevices");
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to refresh audio devices");
         }
     }
 
@@ -378,6 +540,115 @@ public class GlobalVoiceService : IAsyncDisposable
             await ToggleMute(); // turn on with new processor
         }
         NotifyStateChanged();
+    }
+
+    public async Task SetMasterVolumeAsync(double volumePercent)
+    {
+        VoiceSettings.MasterVolume = volumePercent;
+        if (_voiceModule != null && IsInVoiceCall)
+        {
+            try
+            {
+                await _voiceModule.InvokeVoidAsync("setMasterVolume", volumePercent);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to set master volume in JS");
+            }
+        }
+        NotifyStateChanged();
+    }
+
+    public async Task SetParticipantVolumeAsync(string participantId, double volumePercent)
+    {
+        if (string.IsNullOrEmpty(participantId)) return;
+        VoiceSettings.ParticipantVolumes[participantId] = volumePercent;
+        if (_voiceModule != null && IsInVoiceCall)
+        {
+            try
+            {
+                await _voiceModule.InvokeVoidAsync("setParticipantVolume", participantId, volumePercent);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to set participant volume in JS");
+            }
+        }
+        NotifyStateChanged();
+    }
+
+    public async Task SetVoiceSensitivityAsync(double sensitivity)
+    {
+        VoiceSettings.VoiceSensitivity = Math.Clamp(sensitivity, 0.0, 100.0);
+        if (_voiceModule != null && IsInVoiceCall)
+        {
+            try
+            {
+                await _voiceModule.InvokeVoidAsync("setVoiceSensitivity", VoiceSettings.VoiceSensitivity);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to set voice sensitivity in JS");
+            }
+        }
+        NotifyStateChanged();
+    }
+
+    public async Task UpdateVoiceSettingsAsync(Spokes_Server.Core.Models.HR.VoiceUserSettings settings)
+    {
+        VoiceSettings = settings ?? new();
+        if (_voiceModule != null && IsInVoiceCall)
+        {
+            try
+            {
+                var json = System.Text.Json.JsonSerializer.Serialize(VoiceSettings);
+                await _voiceModule.InvokeVoidAsync("initVoiceSettings", json);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to update voice settings in JS");
+            }
+        }
+        NotifyStateChanged();
+    }
+
+    public async Task PlayTestSpeakerSoundAsync(string? deviceId = null)
+    {
+        var targetDevice = !string.IsNullOrEmpty(deviceId) ? deviceId : ActiveSpeakerDeviceId;
+        try
+        {
+            if (_voiceModule == null) await InitializeModuleAsync();
+            if (_voiceModule != null)
+            {
+                await _voiceModule.InvokeVoidAsync("playTestSpeakerSound", targetDevice);
+                return;
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to play test sound via voice module, falling back to sound service");
+        }
+
+        try
+        {
+            await _soundService.PlaySoundAsync("spokesnotif1", true);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to play test sound");
+        }
+    }
+
+    [JSInvokable]
+    public void OnParticipantMuteChanged(string identity, bool isMuted)
+    {
+        if (string.IsNullOrEmpty(identity)) return;
+        bool changed = isMuted ? MutedParticipants.Add(identity) : MutedParticipants.Remove(identity);
+        if (isMuted) ActiveSpeakers.Remove(identity);
+        if (changed)
+        {
+            NotifyStateChanged();
+        }
     }
 
 
@@ -469,6 +740,7 @@ public class GlobalVoiceService : IAsyncDisposable
     {
         IsInVoiceCall = false;
         IsConnecting = false;
+        RequiresIntegrityCheck = false;
         CurrentChannelId = null;
         CurrentUserId = null;
         IsMuted = false;
@@ -478,6 +750,7 @@ public class GlobalVoiceService : IAsyncDisposable
         IsScreenSharing = false;
         CallParticipants.Clear();
         ActiveSpeakers.Clear();
+        MutedParticipants.Clear();
         RemoteVideoHeights.Clear();
         RemoteVideoFps.Clear();
         MaxCameraHeight = 2160;
@@ -510,24 +783,44 @@ public class GlobalVoiceService : IAsyncDisposable
         }
         // ---------------------------------------------
 
+        _ = _soundService.PlayChannelJoinAsync();
+
         NotifyStateChanged();
     }
 
     [JSInvokable]
     public void OnParticipantConnected(string identity)
     {
-        // --- SECONDARY SYNC GUARD ---
+        if (string.IsNullOrEmpty(identity)) return;
+
+        bool isNew = CallParticipants.Add(identity);
+
         if (!string.IsNullOrEmpty(CurrentChannelId))
         {
             var serverParticipants = _chatState.GetVoiceParticipants(CurrentChannelId);
-            if (serverParticipants.Contains(identity))
+            foreach (var spId in serverParticipants)
             {
-                CallParticipants.Add(identity);
+                CallParticipants.Add(spId);
             }
         }
 
+        if (isNew)
+        {
+            _ = _soundService.PlayChannelJoinAsync();
+        }
 
         NotifyStateChanged();
+    }
+
+    [JSInvokable]
+    public void EnsureParticipantSlot(string identity)
+    {
+        if (string.IsNullOrEmpty(identity)) return;
+
+        if (CallParticipants.Add(identity))
+        {
+            NotifyStateChanged();
+        }
     }
 
     [JSInvokable]
@@ -537,6 +830,9 @@ public class GlobalVoiceService : IAsyncDisposable
         ActiveSpeakers.Remove(identity);
         RemoteVideoHeights.TryRemove(identity, out _);
         RemoteVideoFps.TryRemove(identity, out _);
+        
+        _ = _soundService.PlayChannelLeaveAsync();
+        
         NotifyStateChanged();
     }
 
@@ -546,15 +842,19 @@ public class GlobalVoiceService : IAsyncDisposable
     public void OnActiveSpeakersChanged(string[] speakerSids)
     {
         ActiveSpeakers.Clear();
-        foreach (var id in speakerSids) ActiveSpeakers.Add(id);
+        foreach (var id in speakerSids)
+        {
+            if (id == CurrentUserId && IsMuted) continue;
+            ActiveSpeakers.Add(id);
+        }
 
         if (CurrentChannelId != null && CurrentUserId != null)
         {
-            bool amISpeaking = ActiveSpeakers.Contains(CurrentUserId);
+            bool amISpeaking = ActiveSpeakers.Contains(CurrentUserId) && !IsMuted;
             if (amISpeaking != _wasISpeaking)
             {
                 _wasISpeaking = amISpeaking;
-                _ = _chatService.UpdateActiveSpeakersAsync(CurrentChannelId, amISpeaking ? new[] { CurrentUserId } : Array.Empty<string>());
+                _ = _chatService.SetUserSpeakingAsync(CurrentChannelId, CurrentUserId, amISpeaking);
             }
         }
         NotifyStateChanged();
@@ -563,6 +863,8 @@ public class GlobalVoiceService : IAsyncDisposable
     [JSInvokable]
     public async Task OnRoomDisconnected()
     {
+        var wasInCall = IsInVoiceCall;
+
         if (!string.IsNullOrEmpty(CurrentUserId) && !string.IsNullOrEmpty(CurrentChannelId))
         {
             try
@@ -574,6 +876,12 @@ public class GlobalVoiceService : IAsyncDisposable
                 Console.WriteLine($"[VoiceService] Failed to leave voice channel on room disconnect: {ex.Message}");
             }
         }
+
+        if (wasInCall)
+        {
+            _ = _soundService.PlayChannelLeaveAsync();
+        }
+
         ResetState();
         NotifyStateChanged();
     }
@@ -582,12 +890,28 @@ public class GlobalVoiceService : IAsyncDisposable
     public void OnLocalMuted(bool isMuted)
     {
         IsMuted = isMuted;
+        if (isMuted)
+        {
+            if (CurrentUserId != null) ActiveSpeakers.Remove(CurrentUserId);
+            _wasISpeaking = false;
+            if (CurrentChannelId != null && CurrentUserId != null)
+            {
+                _ = _chatService.SetUserSpeakingAsync(CurrentChannelId, CurrentUserId, false);
+            }
+        }
         NotifyStateChanged();
     }
 
 
     public async ValueTask DisposeAsync()
     {
+        if (_chatState != null)
+        {
+            _chatState.VoiceMemberJoined -= OnServerVoiceMemberJoined;
+            _chatState.VoiceMemberLeft -= OnServerVoiceMemberLeft;
+            _chatState.VoiceUserMutedChanged -= OnServerVoiceUserMutedChanged;
+        }
+
         if (IsInVoiceCall)
         {
             try
@@ -693,7 +1017,7 @@ public class GlobalVoiceService : IAsyncDisposable
         _logCount++;
 
         if (string.IsNullOrWhiteSpace(message)) return;
-        if (message.Length > 500) message = message.Substring(0, 500) + "...[TRUNCATED]";
+        if (message.Length > 500) message = message[..500] + "...[TRUNCATED]";
         
         // Prevent log injection/forging
         message = message.Replace("\r", "").Replace("\n", " ");
@@ -713,11 +1037,11 @@ public class GlobalVoiceService : IAsyncDisposable
     {
         var severity = severityStr.ToLower() switch
         {
-            "success" => MudBlazor.Severity.Success,
-            "error" => MudBlazor.Severity.Error,
-            "warning" => MudBlazor.Severity.Warning,
-            "info" => MudBlazor.Severity.Info,
-            _ => MudBlazor.Severity.Normal
+            "success" => Severity.Success,
+            "error" => Severity.Error,
+            "warning" => Severity.Warning,
+            "info" => Severity.Info,
+            _ => Severity.Normal
         };
         
         _snackbar.Add(message, severity);

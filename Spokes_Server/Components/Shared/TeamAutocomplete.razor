@@ -1,6 +1,4 @@
-@using Spokes_Server.Core.Models.HR
-@using MudBlazor
-@inject Spokes_Server.Aggregate.Database Db
+@inject Database Db
 
 <MudAutocomplete @ref="_autocomplete"
                  T="Team"
@@ -50,13 +48,7 @@
     [Parameter] public string Class { get; set; } = "";
     [Parameter] public string Style { get; set; } = "";
 
-    public async Task ClearAsync()
-    {
-        if (_autocomplete != null)
-        {
-            await _autocomplete.ClearAsync();
-        }
-    }
+    public Task ClearAsync() => _autocomplete != null ? _autocomplete.ClearAsync() : Task.CompletedTask;
 
     private async Task HandleValueChanged(Team? team)
     {

@@ -1,7 +1,6 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Authorization;
 using Spokes_Server.Core.Services.Core;
-using Spokes_Server.Core.Services;
 using Spokes_Server.Core.Constants;
 
 namespace Spokes_Server.Controllers;
@@ -23,7 +22,7 @@ public class BackupController : SpokesControllerBase
     [HttpGet("{fileName}")]
     public IActionResult DownloadBackup(string fileName)
     {
-        var config = HttpContext.RequestServices.GetRequiredService<Microsoft.Extensions.Configuration.IConfiguration>();
+        var config = HttpContext.RequestServices.GetRequiredService<IConfiguration>();
         if (config.GetValue<bool>("Spokes_DemoMode"))
         {
             return Forbid();

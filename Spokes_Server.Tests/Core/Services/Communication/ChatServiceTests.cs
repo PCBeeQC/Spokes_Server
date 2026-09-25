@@ -1,33 +1,27 @@
-using Spokes_Server.Core.Services.Communication;
-using Spokes_Server.Core.Services.Projects;
-using Spokes_Server.Core.Services.Core;
+namespace Spokes_Server.Tests.Core.Services.Communication;
+
+using System.Collections.Generic;
+using System.IO;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Moq;
 using Spokes_Server.Core.Data;
-using Spokes_Server.Core.Data.Repositories.Core;
-using Spokes_Server.Core.Data.Repositories.Projects;
-using Spokes_Server.Core.Data.Repositories.Accounting;
 using Spokes_Server.Core.Data.Repositories.Communication;
+using Spokes_Server.Core.Data.Repositories.Core;
 using Spokes_Server.Core.Data.Repositories.HR;
+using Spokes_Server.Core.Data.Repositories.Projects;
 using Spokes_Server.Core.Hubs;
-using Spokes_Server.Core.Models.Core;
-using Spokes_Server.Core.Models.Projects;
-using Spokes_Server.Core.Models.Accounting;
 using Spokes_Server.Core.Models.Communication;
+using Spokes_Server.Core.Models.Core;
 using Spokes_Server.Core.Models.HR;
-using Spokes_Server.Core.Services;
-using System.Collections.Generic;
-using System.IO;
-using System.Linq;
-using System.Threading.Tasks;
+using Spokes_Server.Core.Models.Projects;
+using Spokes_Server.Core.Services.Communication;
+using Spokes_Server.Core.Services.Core;
 
-namespace Spokes_Server.Tests.Core.Services.Communication
+public class ChatServiceTests : IDisposable
 {
-    public class ChatServiceTests : IDisposable
-    {
         private readonly string _testDataDir;
         private readonly IConfiguration _config;
         private readonly DiskPersistenceService _persistence;
@@ -51,6 +45,7 @@ namespace Spokes_Server.Tests.Core.Services.Communication
         private readonly NotificationRoutingService _notificationRouting;
         private readonly Mock<PresenceStateService> _mockPresence;
         private readonly Mock<IFileService> _mockFileService;
+        private readonly Mock<IContentModerationService> _mockModeration;
 
         public ChatServiceTests()
         {
@@ -120,9 +115,9 @@ namespace Spokes_Server.Tests.Core.Services.Communication
 
             _mockFileService = new Mock<IFileService>();
 
-            var mockModeration = new Mock<IContentModerationService>();
-            mockModeration.Setup(m => m.EvaluateTextAsync(It.IsAny<string>()))
-                .ReturnsAsync((string text) => (false, text, TextModerationAction.Block));
+            _mockModeration = new Mock<IContentModerationService>();
+            _mockModeration.Setup(m => m.EvaluateTextAsync(It.IsAny<string>()))
+                           .ReturnsAsync((false, string.Empty, Spokes_Server.Core.Models.Core.TextModerationAction.Sanitize));
 
             _service = new ChatService(
                 _employees,
@@ -141,7 +136,7 @@ namespace Spokes_Server.Tests.Core.Services.Communication
                 new Mock<ICryptoService>().Object,
                 new GlobalKeystoreService(),
                 null!,
-                mockModeration.Object,
+                _mockModeration.Object,
                 systemConfigRepo,
                 _companyProfile,
                 new AlbumService(_albums, _channels, new Mock<ICryptoService>().Object, null!, _employees),
@@ -297,6 +292,11 @@ namespace Spokes_Server.Tests.Core.Services.Communication
         [Fact]
         public async Task EditMessageAsync_UpdatesContentAndNotifies()
         {
+            var sender = new Employee { Id = "user-1", FirstName = "User", LastName = "One" };
+            _employees.Save(sender);
+            var channel = new ChatChannel { Id = "chan-1", ChannelType = ChatChannelType.General, IsDefaultGeneral = true };
+            _channels.Save(channel);
+
             var msg = new ChatMessage { Id = "msg-1", SenderId = "user-1", Content = "Old", ChannelId = "chan-1" };
             _messages.Save(msg);
 
@@ -310,8 +310,85 @@ namespace Spokes_Server.Tests.Core.Services.Communication
         }
 
         [Fact]
+        public async Task EditMessageAsync_WithModerationBlock_DoesNotUpdateContent()
+        {
+            var sender = new Employee { Id = "user-1", FirstName = "User", LastName = "One" };
+            _employees.Save(sender);
+            var channel = new ChatChannel { Id = "chan-1", ChannelType = ChatChannelType.General, IsDefaultGeneral = true };
+            _channels.Save(channel);
+
+            var msg = new ChatMessage { Id = "msg-block-test", SenderId = "user-1", Content = "Old Safe", ChannelId = "chan-1" };
+            _messages.Save(msg);
+
+            _mockModeration.Setup(m => m.EvaluateTextAsync("Bad Content"))
+                           .ReturnsAsync((true, "Bad Content", Spokes_Server.Core.Models.Core.TextModerationAction.Block));
+
+            await _service.EditMessageAsync("user-1", "msg-block-test", "Bad Content");
+
+            var unedited = _messages.GetById("msg-block-test");
+            Assert.NotNull(unedited);
+            Assert.Equal("Old Safe", unedited.Content);
+            Assert.Null(unedited.EditedAt);
+        }
+
+        [Fact]
+        public async Task EditMessageAsync_WithModerationSanitize_UpdatesToSanitizedContent()
+        {
+            var sender = new Employee { Id = "user-1", FirstName = "User", LastName = "One" };
+            _employees.Save(sender);
+            var channel = new ChatChannel { Id = "chan-1", ChannelType = ChatChannelType.General, IsDefaultGeneral = true };
+            _channels.Save(channel);
+
+            var msg = new ChatMessage { Id = "msg-sanitize-test", SenderId = "user-1", Content = "Old Safe", ChannelId = "chan-1" };
+            _messages.Save(msg);
+
+            _mockModeration.Setup(m => m.EvaluateTextAsync("Bad Content"))
+                           .ReturnsAsync((true, "Xkpw Content", Spokes_Server.Core.Models.Core.TextModerationAction.Sanitize));
+
+            await _service.EditMessageAsync("user-1", "msg-sanitize-test", "Bad Content");
+
+            var updated = _messages.GetById("msg-sanitize-test");
+            Assert.NotNull(updated);
+            Assert.Equal("Xkpw Content", updated.Content);
+            Assert.NotNull(updated.EditedAt);
+
+            _mockClientProxy.Verify(p => p.SendCoreAsync("MessageEdited", It.IsAny<object[]>(), default), Times.Once);
+        }
+
+        [Fact]
+        public async Task EditMessageAsync_RevokedUser_DoesNotUpdateContent()
+        {
+            var sender = new Employee { Id = "user-revoked", FirstName = "User", LastName = "Revoked" };
+            _employees.Save(sender);
+            // Group channel where user is not in ParticipantIds
+            var channel = new ChatChannel
+            {
+                Id = "chan-revoked",
+                ChannelType = ChatChannelType.Group,
+                CreatedById = "other-user",
+                ParticipantIds = new List<string> { "other-user" }
+            };
+            _channels.Save(channel);
+
+            var msg = new ChatMessage { Id = "msg-rev", SenderId = "user-revoked", Content = "Original", ChannelId = channel.Id };
+            _messages.Save(msg);
+
+            await _service.EditMessageAsync("user-revoked", "msg-rev", "Hacked Update");
+
+            var unchanged = _messages.GetById("msg-rev");
+            Assert.NotNull(unchanged);
+            Assert.Equal("Original", unchanged.Content);
+            _mockClientProxy.Verify(p => p.SendCoreAsync("MessageEdited", It.IsAny<object[]>(), default), Times.Never);
+        }
+
+        [Fact]
         public async Task DeleteMessageAsync_MarksAsDeleted()
         {
+            var sender = new Employee { Id = "user-1", FirstName = "User", LastName = "One" };
+            _employees.Save(sender);
+            var channel = new ChatChannel { Id = "chan-1", ChannelType = ChatChannelType.General, IsDefaultGeneral = true };
+            _channels.Save(channel);
+
             var msg = new ChatMessage { Id = "msg-1", SenderId = "user-1", Content = "To Delete", ChannelId = "chan-1" };
             _messages.Save(msg);
 
@@ -324,10 +401,37 @@ namespace Spokes_Server.Tests.Core.Services.Communication
         }
 
         [Fact]
+        public async Task DeleteMessageAsync_RevokedUser_DoesNotDelete()
+        {
+            var sender = new Employee { Id = "user-del-rev", FirstName = "User", LastName = "Revoked" };
+            _employees.Save(sender);
+            var channel = new ChatChannel
+            {
+                Id = "chan-del-rev",
+                ChannelType = ChatChannelType.Group,
+                CreatedById = "other-user",
+                ParticipantIds = new List<string> { "other-user" }
+            };
+            _channels.Save(channel);
+
+            var msg = new ChatMessage { Id = "msg-del-rev", SenderId = "user-del-rev", Content = "Keep me", ChannelId = channel.Id };
+            _messages.Save(msg);
+
+            await _service.DeleteMessageAsync("user-del-rev", "msg-del-rev");
+
+            var unchanged = _messages.GetById("msg-del-rev");
+            Assert.NotNull(unchanged);
+            Assert.False(unchanged.IsDeleted);
+            _mockClientProxy.Verify(p => p.SendCoreAsync("MessageDeleted", It.IsAny<object[]>(), default), Times.Never);
+        }
+
+        [Fact]
         public async Task ToggleReactionAsync_AddsAndRemoves()
         {
             var sender = new Employee { Id = "user-1", FirstName = "User", LastName = "One" };
             _employees.Save(sender);
+            var channel = new ChatChannel { Id = "chan-1", ChannelType = ChatChannelType.General, IsDefaultGeneral = true };
+            _channels.Save(channel);
             var msg = new ChatMessage { Id = "msg-1", SenderId = "user-2", Content = "React", ChannelId = "chan-1" };
             _messages.Save(msg);
 
@@ -502,8 +606,72 @@ namespace Spokes_Server.Tests.Core.Services.Communication
             Assert.Contains("user-2", updatedM1!.ReadBy);
             Assert.Contains("user-2", updatedM2!.ReadBy);
         }
+
+        [Fact]
+        public async Task LeaveVoiceAsync_WhenActiveInviteIsJoined_TransitionsToEndedWhenLastUserLeaves()
+        {
+            var user1 = new Employee { Id = "user-1", FirstName = "Alice", LastName = "Smith" };
+            _employees.Save(user1);
+
+            var channel = new ChatChannel
+            {
+                Id = "call_channel_joined",
+                Name = "Direct Call",
+                ChannelType = ChatChannelType.Direct,
+                ParticipantIds = new List<string> { "user-1", "user-2" }
+            };
+            _channels.Save(channel);
+
+            var invite = new ChatMessage
+            {
+                ChannelId = channel.Id,
+                SenderId = "user-1",
+                MessageType = "CallInvite",
+                CallStatus = "Joined",
+                SentAt = DateTime.UtcNow
+            };
+            _messages.Save(invite);
+
+            _chatState.NotifyVoiceMemberJoined(channel.Id, "user-1");
+
+            await _service.LeaveVoiceAsync("user-1", channel.Id);
+
+            var updatedInvite = _messages.GetById(invite.Id);
+            Assert.NotNull(updatedInvite);
+            Assert.Equal("Ended", updatedInvite.CallStatus);
+        }
+
+        [Fact]
+        public async Task LeaveVoiceAsync_WhenActiveInviteIsActive_TransitionsToEndedWhenLastUserLeaves()
+        {
+            var user1 = new Employee { Id = "user-1", FirstName = "Alice", LastName = "Smith" };
+            _employees.Save(user1);
+
+            var channel = new ChatChannel
+            {
+                Id = "call_channel_active",
+                Name = "Direct Call",
+                ChannelType = ChatChannelType.Direct,
+                ParticipantIds = new List<string> { "user-1", "user-2" }
+            };
+            _channels.Save(channel);
+
+            var invite = new ChatMessage
+            {
+                ChannelId = channel.Id,
+                SenderId = "user-1",
+                MessageType = "CallInvite",
+                CallStatus = "Active",
+                SentAt = DateTime.UtcNow
+            };
+            _messages.Save(invite);
+
+            _chatState.NotifyVoiceMemberJoined(channel.Id, "user-1");
+
+            await _service.LeaveVoiceAsync("user-1", channel.Id);
+
+            var updatedInvite = _messages.GetById(invite.Id);
+            Assert.NotNull(updatedInvite);
+            Assert.Equal("Ended", updatedInvite.CallStatus);
+        }
     }
-}
-
-
-

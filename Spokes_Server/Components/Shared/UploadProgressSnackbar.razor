@@ -1,4 +1,3 @@
-@using Spokes_Server.Core.Models.Core
 @implements IDisposable
 
 <div class="d-flex align-center gap-3 py-1">
@@ -26,10 +25,7 @@
         }
     }
 
-    private void HandleStateChanged()
-    {
-        InvokeAsync(StateHasChanged);
-    }
+    private void HandleStateChanged() => InvokeAsync(StateHasChanged);
 
     public void Dispose()
     {

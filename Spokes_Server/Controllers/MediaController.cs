@@ -1,11 +1,7 @@
 using Spokes_Server.Core.Services.Communication;
-using Spokes_Server.Core.Services.Projects;
 using Spokes_Server.Core.Services.Core;
 using Microsoft.AspNetCore.Mvc;
 using Spokes_Server.Core.Data.Repositories.Core;
-using Spokes_Server.Core.Data.Repositories.Projects;
-using Spokes_Server.Core.Data.Repositories.Accounting;
-using Spokes_Server.Core.Data.Repositories.Communication;
 using Spokes_Server.Core.Data.Repositories.HR;
 using Spokes_Server.Core.Models.HR;
 using Microsoft.AspNetCore.DataProtection;
@@ -51,7 +47,6 @@ namespace Spokes_Server.Controllers
         public IActionResult GetIcon([FromQuery] string? t = null)
         {
             var profile = _companyProfile.Get();
-
             var parsed = TryParseDataUri(profile?.IconBase64);
             if (parsed.HasValue)
             {
@@ -71,11 +66,10 @@ namespace Spokes_Server.Controllers
 
         [HttpGet("Logo")]
         [Microsoft.AspNetCore.Authorization.AllowAnonymous]
-        [ResponseCache(Duration = 3600, Location = ResponseCacheLocation.Client)] // Cache for 1 hour locally
-        public IActionResult GetLogo()
+        [ResponseCache(Duration = 3600, Location = ResponseCacheLocation.Client)]
+        public IActionResult GetLogo([FromQuery] string? t = null)
         {
             var profile = _companyProfile.Get();
-
             var parsed = TryParseDataUri(profile?.LogoBase64);
             if (parsed.HasValue)
             {
@@ -189,17 +183,14 @@ namespace Spokes_Server.Controllers
                 }
             }
 
-            if (employee != null)
+            try
             {
-                try
-                {
-                    var bytes = _avatarGenerator.GenerateAvatar(employee.FirstName, employee.LastName, employee.ProfileColor);
-                    return File(bytes, "image/png");
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"[MediaController] Failed to generate dynamic avatar: {ex.Message}");
-                }
+                var bytes = _avatarGenerator.GenerateAvatar(employee.FirstName, employee.LastName, employee.ProfileColor);
+                return File(bytes, "image/png");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[MediaController] Failed to generate dynamic avatar: {ex.Message}");
             }
 
             // Fallback to company icon if no avatar found
@@ -207,5 +198,3 @@ namespace Spokes_Server.Controllers
         }
     }
 }
-
-

@@ -1,6 +1,3 @@
-@using Spokes_Server.Core.Models.Communication
-@using MudBlazor
-
 <MudDialog>
     <DialogContent>
         <MudTextField @bind-Value="FolderName" Label="Folder Name" Variant="Variant.Outlined" AutoFocus="true" Immediate="true"
@@ -26,10 +23,7 @@
         FolderName = CurrentFolderName;
     }
 
-    private void Close()
-    {
-        MudDialog.Cancel();
-    }
+    private void Close() => MudDialog.Cancel();
 
     private void Submit()
     {

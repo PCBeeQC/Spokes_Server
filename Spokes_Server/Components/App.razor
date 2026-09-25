@@ -1,16 +1,8 @@
-@using Spokes_Server.Aggregate
-@using Spokes_Server.Core.Models.Core
-@using Spokes_Server.Core.Models.Projects
-@using Spokes_Server.Core.Models.Accounting
-@using Spokes_Server.Core.Models.Communication
-@using Spokes_Server.Core.Models.HR
 @inject Database Db
 @inject Spokes_Server.Core.Services.Security.ScopedKeystoreService ScopedKeystore
 @inject Spokes_Server.Core.Services.Security.GlobalKeystoreService GlobalKeystore
 @inject ICryptoService Crypto
 @{
-    var profile = Db.CompanyProfile.Get();
-    
     // Auto-unlock vault on HTTP request start if cookie is present
     if (HttpContext != null && HttpContext.Request.Cookies.ContainsKey("chat_vault_key"))
     {
@@ -18,7 +10,7 @@
         if (!string.IsNullOrEmpty(sub))
         {
             var openIdAccount = Db.OpenIdAccounts.GetBySub(sub);
-            var user = (openIdAccount != null && !string.IsNullOrEmpty(openIdAccount.LinkedEmployeeId))
+            var user = !string.IsNullOrEmpty(openIdAccount?.LinkedEmployeeId)
                 ? Db.Employees.GetById(openIdAccount.LinkedEmployeeId)
                 : Db.Employees.GetAll().FirstOrDefault(e => e.Email == HttpContext.User.FindFirst("email")?.Value);
             var empId = user?.Id ?? HttpContext.User.FindFirst("EmployeeId")?.Value;
@@ -32,13 +24,6 @@
             }
         }
     }
-
-
-
-
-
-
-
 
     var isMobile = string.Equals(HttpContext?.Request.Query["client"].ToString(), "mobile", StringComparison.OrdinalIgnoreCase) 
         || (HttpContext?.Request.Headers.UserAgent.ToString().Contains("Capacitor") == true);
@@ -77,6 +62,7 @@
     <ImportMap />
     <link href="@Assets["css/app.css"]" rel="stylesheet" />
     <script src="@Assets["js/capacitor-init.js"]"></script>
+    <script src="@Assets["js/soundManager.js"]"></script>
     <script src="@Assets["js/spokes-auth.js"]"></script>
     <script src="@Assets["js/spokes-vault.js"]" defer></script>
 </head>
@@ -257,6 +243,9 @@
                 window._nativeAppActive = isActive;
                 console.log(`[Mobile Resume] appStateChange - isActive: ${isActive}`);
                 if (isActive) {
+                    if (typeof window.reapplyCapacitorStatusBarStyle === 'function') {
+                        window.reapplyCapacitorStatusBarStyle();
+                    }
                     window.checkCookieHealthAsync().catch(() => {});
                     if (typeof window._blazorVisHandler === 'function') {
                         window._blazorVisHandler();
@@ -270,6 +259,9 @@
         // checkCookieHealthAsync always fires on resume regardless of Capacitor plugin lifecycle.
         document.addEventListener('visibilitychange', () => {
             if (document.visibilityState === 'visible' && window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) {
+                if (typeof window.reapplyCapacitorStatusBarStyle === 'function') {
+                    window.reapplyCapacitorStatusBarStyle();
+                }
                 window.checkCookieHealthAsync().catch(() => {});
             }
         });
@@ -451,6 +443,10 @@
             }
         }
 
+        window.checkIsCapacitorNative = () => typeof window.isCapacitorNative === 'function' 
+            ? window.isCapacitorNative() 
+            : (navigator.userAgent.includes("Capacitor") || Boolean(window.Capacitor?.isNativePlatform?.()));
+
         window.spokesTriggerServerRestart = function(targetUrl) {
             window._isServerRestarting = true;
             const splash = document.getElementById('startup-splash');
@@ -464,8 +460,10 @@
             let destination = targetUrl || window.location.href;
             try {
                 const urlObj = new URL(destination, window.location.href);
-                if (window.location.search.includes('client=mobile')) {
+                if (window.checkIsCapacitorNative()) {
                     urlObj.searchParams.set('client', 'mobile');
+                } else {
+                    urlObj.searchParams.delete('client');
                 }
                 destination = urlObj.toString();
             } catch (e) {}
@@ -488,8 +486,6 @@
                 }, 1500);
             }, 2500);
         };
-
-        window.checkIsCapacitorNative = () => typeof window.isCapacitorNative === 'function' ? window.isCapacitorNative() : !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
 
         window.checkIsAuthRecoverable = async () => {
             try {
@@ -515,6 +511,10 @@
                 Blazor.start({
                 circuit: {
                     configureSignalR: function (builder) {
+                        // Align client timeout with server (120s) so client does not abort during cellular latency spikes
+                        builder.withServerTimeout(120000);
+                        builder.withKeepAliveInterval(15000);
+
                         if (window.__signalRLogLevel) {
                             const levelStr = window.__signalRLogLevel.toLowerCase();
                             let level = 0; // Default to Trace (0) if configured but invalid string
@@ -555,35 +555,39 @@
                             if (splash) splash.style.display = 'flex';
 
                             const checkCookiesAndReload = async (forceImmediate = false) => {
-                                console.log('[Mobile Resume] checkCookiesAndReload started.');
-                                const reloadWithMobile = async () => {
+                                console.log('[Resume] checkCookiesAndReload started.');
+                                const isCapacitor = window.checkIsCapacitorNative();
+                                const reloadTarget = async () => {
                                     let targetHref = window.spokesPendingNav ? (location.origin + window.spokesPendingNav) : location.href;
                                     let url = new URL(targetHref);
-                                    url.searchParams.set('client', 'mobile');
+                                    if (isCapacitor) {
+                                        url.searchParams.set('client', 'mobile');
+                                    } else {
+                                        url.searchParams.delete('client');
+                                    }
                                     if (window.flushAppLogs) { await window.flushAppLogs(); }
                                     location.replace(url.toString());
                                 };
                                 if (!forceImmediate) {
                                     // Refresh session cookie via Capacitor Preferences refresh token.
                                     // With ITicketStore, the cookie value is stable so no sync issues.
-                                    const isNativeResume = typeof window.isCapacitorNative === 'function' ? window.isCapacitorNative() : isNative;
-                                    if (isNativeResume && window.spokesAuth && window.spokesAuth.refreshSessionAsync) {
+                                    if (isCapacitor && window.spokesAuth && window.spokesAuth.refreshSessionAsync) {
                                         const refreshed = await window.spokesAuth.refreshSessionAsync();
                                         if (refreshed) {
                                             console.log('[Mobile Resume] Session refreshed.');
                                         } else {
                                             console.warn('[Mobile Resume] No valid refresh token for reload.');
                                         }
-                                    } else if (!isNativeResume) {
+                                    } else if (!isCapacitor) {
                                         // Web: trigger inline SSO renewal by fetching a page URL
                                         try {
-                                            await fetch(location.origin + '/?client=mobile', { cache: 'no-store' });
+                                            await fetch(location.origin + '/', { cache: 'no-store' });
                                         } catch(e) {
-                                            console.warn('[Mobile Resume] Inline SSO renewal fetch failed:', e);
+                                            console.warn('[Web Resume] Inline SSO renewal fetch failed:', e);
                                         }
                                     }
                                 }
-                                await reloadWithMobile();
+                                await reloadTarget();
                             };
 
 
@@ -764,9 +768,9 @@
 
                                 _blazorReconnectInProgress = false;
 
-                                // 20 attempts * 500ms = ~10s total wait before giving up and reloading.
-                                // If the server can't be reached in 10s, a reload provides better UX.
-                                if (attempt >= 20) {
+                                // Gradual backoff schedule: 10 attempts at 500ms (5s) + 20 attempts at 1000ms (20s) + 20 attempts at 2000ms (40s) = ~65s total window
+                                // Gives cellular handoffs and brief dead spots time to recover before falling back to full reload.
+                                if (attempt >= 50) {
                                     console.log('[App.razor] Max reconnect attempts reached.');
                                     if (!isAppVisible()) {
                                         console.log('[App.razor] App is backgrounded. Deferring reload until visible.');
@@ -777,7 +781,8 @@
                                     return;
                                 }
 
-                                _tryReconnectTimeout = setTimeout(tryReconnect, 500);
+                                const retryDelay = attempt <= 10 ? 500 : (attempt <= 30 ? 1000 : 2000);
+                                _tryReconnectTimeout = setTimeout(tryReconnect, retryDelay);
                             };
 
                             // Start priming cookies and then try reconnect immediately (no artificial delay)
@@ -848,6 +853,11 @@
                             // Re-sync focus state after reconnect (fixes Android issue where JS focus event was dropped during circuit disconnect)
                             if (window._forceUpdateFocusState) {
                                 setTimeout(() => window._forceUpdateFocusState(), 500);
+                            }
+
+                            // Re-apply native status bar style upon circuit restoration
+                            if (typeof window.reapplyCapacitorStatusBarStyle === 'function') {
+                                window.reapplyCapacitorStatusBarStyle();
                             }
                         }
                     }
@@ -1014,7 +1024,6 @@
             const quillReady = loadScript('https://cdn.quilljs.com/2.0.3/quill.js');
             const cropperReady = loadScript('https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.1/cropper.min.js');
             loadScript('https://cdn.jsdelivr.net/npm/livekit-client@@2/dist/livekit-client.umd.min.js');
-            loadScript('@Assets["js/download.js"]');
             loadScript('@Assets["js/voice-recorder.js"]');
 
             // Group 2: depends on quill.js and cropperjs — load after they're ready
@@ -1030,6 +1039,15 @@
         }
 
         const runStartup = async () => {
+            // Step 0: Ensure desktop/web clients do not retain an accidental client=mobile query param
+            if (!isNative && window.location.search.includes('client=mobile')) {
+                try {
+                    const cleanUrl = new URL(window.location.href);
+                    cleanUrl.searchParams.delete('client');
+                    window.history.replaceState(null, '', cleanUrl.toString());
+                } catch(e) {}
+            }
+
             // Step 1: Check for pending notification URL (critical — may redirect before anything else)
             // This runs BEFORE initDeviceId to avoid wasting bridge calls if we're redirecting.
             // Sets a flag so initCapacitorEnv() skips the redundant check later.
@@ -1080,10 +1098,11 @@
     </script>
     <script src="@Assets["_content/MudBlazor/MudBlazor.min.js"]" defer></script>
     <script src="@Assets["js/upload.js"]" defer></script>
+    <script src="@Assets["js/download.js"]" defer></script>
     <script src="@Assets["js/push-notifications.js"]" defer></script>
     <script src="@Assets["js/share-router.js"]" defer></script>
     <script src="@Assets["js/share-target.js"]" defer></script>
-    <!-- Non-critical scripts (livekit, quill, cropperjs, download) are eager-lazy loaded
+    <!-- Non-critical scripts (livekit, quill, cropperjs) are eager-lazy loaded
          by loadDeferredScripts() immediately after the app becomes interactive.
          Removing them from defer unblocks DOMContentLoaded and saves ~80-120ms on Android. -->
     <script>

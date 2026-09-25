@@ -1,6 +1,3 @@
-using System;
-using System.IO;
-using System.Linq;
 using Microsoft.AspNetCore.Hosting;
 using SkiaSharp;
 
@@ -62,8 +59,8 @@ public class AvatarGeneratorService
         };
         canvas.DrawCircle(size / 2f, size / 2f, size / 2f, bgPaint);
 
-        string f = string.IsNullOrEmpty(firstName) ? "" : firstName.Substring(0, 1);
-        string l = string.IsNullOrEmpty(lastName) ? "" : lastName.Substring(0, 1);
+        string f = string.IsNullOrEmpty(firstName) ? "" : firstName[..1];
+        string l = string.IsNullOrEmpty(lastName) ? "" : lastName[..1];
         string initials = $"{f}{l}".ToUpperInvariant();
         if (string.IsNullOrEmpty(initials))
         {
@@ -71,21 +68,27 @@ public class AvatarGeneratorService
         }
 
         // Draw text
+        using var font = new SKFont
+        {
+            Typeface = _typeface ?? SKTypeface.Default,
+            Size = size * 0.45f
+        };
+
         using var textPaint = new SKPaint
         {
             Color = SKColors.White,
-            IsAntialias = true,
-            Typeface = _typeface ?? SKTypeface.Default,
-            TextSize = size * 0.45f,
-            TextAlign = SKTextAlign.Center
+            IsAntialias = true
         };
 
-        // Center vertically
-        var fontMetrics = textPaint.FontMetrics;
+        font.GetFontMetrics(out SKFontMetrics fontMetrics);
         float textHeight = fontMetrics.Descent - fontMetrics.Ascent;
         float textOffset = (textHeight / 2) - fontMetrics.Descent;
 
-        canvas.DrawText(initials, size / 2f, (size / 2f) + textOffset, textPaint);
+        float textWidth = font.MeasureText(initials);
+        float x = (size / 2f) - (textWidth / 2f);
+        float y = (size / 2f) + textOffset;
+
+        canvas.DrawText(initials, x, y, font, textPaint);
 
         using var image = SKImage.FromBitmap(bitmap);
         using var data = image.Encode(SKEncodedImageFormat.Png, 100);

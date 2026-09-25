@@ -10,10 +10,7 @@ public class ProjectDocument : IDataEntity
     public override bool Equals(object? obj)
     {
         if (ReferenceEquals(this, obj)) return true;
-        if (obj == null || GetType() != obj.GetType())
-            return false;
-        var other = (ProjectDocument)obj;
-        return Id == other.Id;
+        return obj is ProjectDocument other && Id == other.Id;
     }
 
     public override int GetHashCode() => Id?.GetHashCode() ?? base.GetHashCode();
@@ -22,10 +19,10 @@ public class ProjectDocument : IDataEntity
     public string Name { get; set; } = string.Empty;
     public string ResolvedBody { get; set; } = string.Empty;
     public string Status { get; set; } = ProjectDocumentStatus.Draft;
-    public bool IsManualEdit { get; set; } = false;
-    public bool IsConfidential { get; set; } = false;
-    public bool IsLongFooter { get; set; } = false;
-    public List<DocumentBlockInstance> Blocks { get; set; } = new();
+    public bool IsManualEdit { get; set; }
+    public bool IsConfidential { get; set; }
+    public bool IsLongFooter { get; set; }
+    public List<DocumentBlockInstance> Blocks { get; set; } = [];
     public string PdfPath { get; set; } = string.Empty;
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;

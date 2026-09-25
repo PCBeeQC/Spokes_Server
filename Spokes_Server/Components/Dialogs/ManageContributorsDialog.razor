@@ -1,7 +1,5 @@
-@using Spokes_Server.Core.Models.HR
-@using MudBlazor
 @using Spokes_Server.Components.Shared
-@inject Spokes_Server.Core.Services.Core.AppLabelService AppLabels
+@inject AppLabelService AppLabels
 
 <MudDialog>
     <TitleContent>
@@ -107,8 +105,7 @@
     private string searchString = "";
 
     private IEnumerable<Employee> ActiveEmployees => Employees.Where(e => 
-        (e.IsActive && !e.IsBanned && !e.IsSuspended && !e.FullName.Equals("Deleted User", StringComparison.OrdinalIgnoreCase)) 
-        || InitialSelectedUserIds.Contains(e.Id)
+        e.IsSelectable || InitialSelectedUserIds.Contains(e.Id)
     );
 
     private IEnumerable<Employee> FilteredEmployees
@@ -143,8 +140,5 @@
 
     private void Close() => MudDialog.Cancel();
     
-    private void Save()
-    {
-        MudDialog.Close(DialogResult.Ok(SelectedUserIds.ToList()));
-    }
+    private void Save() => MudDialog.Close(DialogResult.Ok(SelectedUserIds.ToList()));
 }

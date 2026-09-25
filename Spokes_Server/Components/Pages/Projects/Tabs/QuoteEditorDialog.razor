@@ -1,13 +1,10 @@
 @using Spokes_Server.Core.Models.Core
 @using Spokes_Server.Core.Models.Projects
 @using Spokes_Server.Core.Models.Accounting
-@using Spokes_Server.Core.Models.Communication
 @using Spokes_Server.Core.Models.HR
 @using Spokes_Server.Core.Data
-@using MudBlazor
 @inject ISnackbar Snackbar
 @inject Database Db
-@inject Spokes_Server.Core.Services.Accounting.FinancialCalculationEngine CalcEngine
 
 <MudDialog>
     <DialogContent>
@@ -422,9 +419,9 @@
     [Parameter] public Quote Quote { get; set; }
     [Parameter] public string ProjectId { get; set; }
 
-    private List<WorkType> WorkTypes = new();
-    private List<WorkTypeSearchItem> SearchItems = new();
-    private List<DocumentTemplate> Templates = new();
+    private List<WorkType> WorkTypes = [];
+    private List<WorkTypeSearchItem> SearchItems = [];
+    private List<DocumentTemplate> Templates = [];
     private Project Project;
     private RateCard? ProjectRateCard;
 

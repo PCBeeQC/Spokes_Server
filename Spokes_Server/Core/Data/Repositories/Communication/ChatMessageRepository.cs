@@ -1,15 +1,6 @@
-using Spokes_Server.Core.Models.Core;
-using Spokes_Server.Core.Models.Projects;
-using Spokes_Server.Core.Models.Accounting;
 using Spokes_Server.Core.Models.Communication;
-using Spokes_Server.Core.Models.HR;
 using System.Collections.Concurrent;
 using System.Text.Json;
-using System.IO;
-using Microsoft.Extensions.Configuration;
-using System.Linq;
-using System.Collections.Generic;
-using System;
 using Spokes_Server.Core.Data.Repositories.Core;
 using Spokes_Server.Core.Helpers;
 
@@ -347,9 +338,29 @@ public class ChatMessageRepository : JsonRepository<ChatMessage>
         return null;
     }
 
-    public List<ChatIndexEntry> GetIndexForChannel(string channelId)
+    public List<ChatIndexEntry> GetIndexForChannel(string channelId) =>
+        _channelIndexes.TryGetValue(channelId, out var idx) ? idx : [];
+
+    /// <summary>
+    /// Gets the timestamp of the latest non-deleted message in a channel, if any.
+    /// </summary>
+    public virtual DateTime? GetLatestMessageTimestamp(string channelId)
     {
-        return _channelIndexes.TryGetValue(channelId, out var idx) ? idx : new List<ChatIndexEntry>();
+        if (_channelPreviews.TryGetValue(channelId, out var preview))
+        {
+            return preview.SentAt;
+        }
+
+        if (_channelIndexes.TryGetValue(channelId, out var channelIndex))
+        {
+            var latest = channelIndex
+                .Where(e => !e.IsDeleted)
+                .OrderByDescending(e => e.SentAt)
+                .FirstOrDefault();
+            return latest?.SentAt;
+        }
+
+        return null;
     }
 
     /// <summary>
@@ -861,10 +872,9 @@ public class ChatMessageRepository : JsonRepository<ChatMessage>
     /// <summary>
     /// Get message count for a channel (for statistics).
     /// </summary>
-    public int GetMessageCount(string channelId)
-    {
-        return _channelIndexes.TryGetValue(channelId, out var idx) ? idx.Count(e => !e.IsDeleted) : 0;
-    }
+    public int GetMessageCount(string channelId) =>
+        _channelIndexes.TryGetValue(channelId, out var idx) ? idx.Count(e => !e.IsDeleted) : 0;
+
 
     /// <summary>
     /// Get accurate message count.

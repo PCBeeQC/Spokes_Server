@@ -7,5 +7,5 @@ public class DocumentBlockInstance
     public string Name { get; set; } = string.Empty; // e.g., "Client Signature"
 
     // Key-value pairs matching the IDocumentBlock's expected Fields
-    public Dictionary<string, string> Properties { get; set; } = new();
+    public Dictionary<string, string> Properties { get; set; } = [];
 }

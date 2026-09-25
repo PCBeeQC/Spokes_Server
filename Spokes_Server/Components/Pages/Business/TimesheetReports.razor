@@ -1,418 +1,371 @@
 @page "/business/timesheet-reports"
 @attribute [Authorize(Policy = AppPermissions.Timesheets.ViewReport)]
-@using Spokes_Server.Core.Data
 @using Spokes_Server.Core.Constants
+@using Spokes_Server.Core.Helpers
+@using Spokes_Server.Core.Models.Accounting
 @using Spokes_Server.Core.Models.HR
 @using Spokes_Server.Core.Models.Projects
-@using Spokes_Server.Core.Models.Core
-@using Spokes_Server.Core.Services.HR
-@using Spokes_Server.Core.Helpers
-@using Microsoft.AspNetCore.Components.Authorization
+@using Spokes_Server.Core.Models.Reports
+@using Spokes_Server.Core.Services.Reports
+@using Spokes_Server.Components.Dialogs
+@using Spokes_Server.Components.Pages.Business.Reports
+
 @inject Database Db
-@inject NavigationManager NavManager
+@inject ITimesheetReportService ReportService
 @inject ISnackbar Snackbar
 @inject IJSRuntime JS
+@inject IDialogService DialogService
+@inject NavigationManager NavManager
 @inject AuthenticationStateProvider AuthStateProvider
 
-<MudContainer MaxWidth="MaxWidth.ExtraLarge" Class="mt-6">
-    <MudText Typo="Typo.h4" Class="mb-4">Timesheet Reports</MudText>
+<style>
+    @@media print {
+        .d-print-none,
+        .mud-tabs-tabbar,
+        .mud-table-pagination,
+        .mud-table-toolbar {
+            display: none !important;
+        }
 
+        #printable-area {
+            padding: 10mm 12mm !important;
+            background: white !important;
+            color: black !important;
+        }
+
+        #printable-area .mud-table-container {
+            height: auto !important;
+            max-height: none !important;
+            overflow: visible !important;
+        }
+
+        #printable-area .mud-paper {
+            border: 1px solid #ddd !important;
+            box-shadow: none !important;
+            background: white !important;
+            color: black !important;
+        }
+
+        #printable-area .border-r {
+            border-right: 1px solid #ccc !important;
+        }
+    }
+</style>
+
+<MudContainer MaxWidth="MaxWidth.ExtraLarge" Class="mt-6 mb-16 pb-16">
     @if (_loading)
     {
-        <MudProgressCircular Color="Color.Primary" Indeterminate="true" />
+        <div class="d-flex justify-center align-center py-16">
+            <MudProgressCircular Color="Color.Primary" Indeterminate="true" Size="Size.Large" />
+        </div>
     }
     else
     {
-        <!-- Filters Section -->
-        <MudPaper Elevation="0" Outlined="true" Class="pa-4 mb-6 rounded-lg" Style="background: var(--mud-palette-surface);">
-            <MudGrid>
-                <MudItem xs="12" md="4" lg="3">
-                    <MudDateRangePicker @bind-DateRange="_dateRange" @bind-DateRange:after="ApplyFilters" Label="Date Range" PickerVariant="PickerVariant.Dialog" Color="Color.Primary" DateFormat="dd MMM yyyy" Clearable="true" PickerClosed="ApplyFilters" />
-                </MudItem>
-                <MudItem xs="12" md="4" lg="3">
-                    <MudSelect T="string" Label="Employee" MultiSelection="true" SelectAll="true" SelectAllText="Select All" MultiSelectionTextFunc="@GetEmployeeSelectionText" SelectedValues="_selectedEmployees" SelectedValuesChanged="@(v => { _selectedEmployees = v; ApplyFilters(); })" OnClose="ApplyFilters" Clearable="true">
-                        @foreach (var emp in _allEmployees)
-                        {
-                            <MudSelectItem Value="@emp.Id">@emp.FullName</MudSelectItem>
-                        }
-                    </MudSelect>
-                </MudItem>
-                <MudItem xs="12" md="4" lg="3">
-                    <MudSelect T="string" Label="Team" MultiSelection="true" SelectAll="true" SelectAllText="Select All" MultiSelectionTextFunc="@GetTeamSelectionText" SelectedValues="_selectedTeams" SelectedValuesChanged="@(v => { _selectedTeams = v; ApplyFilters(); })" OnClose="ApplyFilters" Clearable="true">
-                        @foreach (var team in _allTeams)
-                        {
-                            <MudSelectItem Value="@team.Id">@team.Name</MudSelectItem>
-                        }
-                    </MudSelect>
-                </MudItem>
-                <MudItem xs="12" md="4" lg="3">
-                    <MudSelect T="string" Label="Project Group" MultiSelection="true" SelectAll="true" SelectAllText="Select All" MultiSelectionTextFunc="@GetProjectGroupSelectionText" SelectedValues="_selectedProjectGroups" SelectedValuesChanged="@(v => { _selectedProjectGroups = v; ApplyFilters(); })" OnClose="ApplyFilters" Clearable="true">
-                        @foreach (var pg in _allProjectGroups)
-                        {
-                            <MudSelectItem Value="@pg.Id">@pg.Name</MudSelectItem>
-                        }
-                    </MudSelect>
-                </MudItem>
-                <MudItem xs="12" md="4" lg="3">
-                    <MudSelect T="string" Label="Client" MultiSelection="true" SelectAll="true" SelectAllText="Select All" MultiSelectionTextFunc="@GetClientSelectionText" SelectedValues="_selectedClients" SelectedValuesChanged="@(v => { _selectedClients = v; ApplyFilters(); })" OnClose="ApplyFilters" Clearable="true">
-                        @foreach (var client in _allClients)
-                        {
-                            <MudSelectItem Value="@client">@client</MudSelectItem>
-                        }
-                    </MudSelect>
-                </MudItem>
-                <MudItem xs="12" md="4" lg="3">
-                    <MudSelect T="string" Label="Project" MultiSelection="true" SelectAll="true" SelectAllText="Select All" MultiSelectionTextFunc="@GetProjectSelectionText" SelectedValues="_selectedProjects" SelectedValuesChanged="@(v => { _selectedProjects = v; ApplyFilters(); })" OnClose="ApplyFilters" Clearable="true">
-                        @foreach (var proj in _allProjects)
-                        {
-                            <MudSelectItem Value="@proj.Id">@proj.DisplayName</MudSelectItem>
-                        }
-                    </MudSelect>
-                </MudItem>
-                <MudItem xs="12" md="4" lg="3">
-                    <MudSelect T="string" Label="Task" MultiSelection="true" SelectAll="true" SelectAllText="Select All" MultiSelectionTextFunc="@GetTaskSelectionText" SelectedValues="_selectedTasks" SelectedValuesChanged="@(v => { _selectedTasks = v; ApplyFilters(); })" OnClose="ApplyFilters" Clearable="true">
-                        @foreach (var task in _allTasks)
-                        {
-                            <MudSelectItem Value="@task.Id">@task.Name</MudSelectItem>
-                        }
-                    </MudSelect>
-                </MudItem>
-            </MudGrid>
-        </MudPaper>
+        <!-- Page Header & Global Report Toolbar -->
+        <MudStack Row="true" Justify="Justify.SpaceBetween" AlignItems="AlignItems.Center" Class="mb-4 flex-wrap gap-4 d-print-none">
+            <div>
+                <MudText Typo="Typo.h4" Style="font-weight: 700;">Timesheet Reports</MudText>
+                <MudText Typo="Typo.body2" Color="Color.Secondary">Track team productivity, billability, project allocation, and financial performance.</MudText>
+            </div>
 
-        <!-- Summary Section -->
-        <MudGrid Class="mb-6">
-            <MudItem xs="12" sm="4">
-                <MudPaper Elevation="0" Outlined="true" Class="pa-4 text-center rounded-lg" Style="background: linear-gradient(135deg, var(--mud-palette-primary) 0%, var(--mud-palette-primary-darken) 100%); color: white;">
-                    <MudText Typo="Typo.subtitle1" Style="opacity: 0.9;">Total Hours</MudText>
-                    <MudText Typo="Typo.h3" Style="font-weight: 700;">@_filteredEntries.Sum(e => e.Entry.Hours).ToString("0.00")</MudText>
-                </MudPaper>
-            </MudItem>
-            <MudItem xs="12" sm="4">
-                <MudPaper Elevation="0" Outlined="true" Class="pa-4 text-center rounded-lg" Style="background: linear-gradient(135deg, var(--mud-palette-success) 0%, var(--mud-palette-success-darken) 100%); color: white;">
-                    <MudText Typo="Typo.subtitle1" Style="opacity: 0.9;">Time Entries</MudText>
-                    <MudText Typo="Typo.h3" Style="font-weight: 700;">@_filteredEntries.Count</MudText>
-                </MudPaper>
-            </MudItem>
-            <MudItem xs="12" sm="4">
-                <MudPaper Elevation="0" Outlined="true" Class="pa-4 text-center rounded-lg" Style="background: linear-gradient(135deg, var(--mud-palette-info) 0%, var(--mud-palette-info-darken) 100%); color: white;">
-                    <MudText Typo="Typo.subtitle1" Style="opacity: 0.9;">Active Projects</MudText>
-                    <MudText Typo="Typo.h3" Style="font-weight: 700;">@_filteredEntries.Select(e => e.ProjectId).Where(id => !string.IsNullOrEmpty(id)).Distinct().Count()</MudText>
-                </MudPaper>
-            </MudItem>
-        </MudGrid>
+            <!-- Action Controls Matching Clockify Toolbar -->
+            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Class="flex-wrap">
+                <MudIconButton Icon="@Icons.Material.Filled.Print" Variant="Variant.Outlined" Title="Print Report" OnClick="PrintReport" Size="Size.Small" />
 
-        <!-- Charts Section -->
-        <MudGrid Class="mb-6">
-            <MudItem xs="12" md="6">
-                <MudPaper Elevation="0" Outlined="true" Class="pa-4 rounded-lg">
-                    <MudText Typo="Typo.h6" Class="mb-4">Hours by Project</MudText>
-                    @if (_projectChartData.Length > 0)
-                    {
-                        <MudChart T="double" ChartType="ChartType.Donut" Width="100%" Height="300px" InputData="@_projectChartData" InputLabels="@_projectChartLabels" />
-                    }
-                    else
-                    {
-                        <MudText Color="Color.Default" Class="py-8 text-center" Style="opacity: 0.5;">No data available for the selected filters.</MudText>
-                    }
-                </MudPaper>
-            </MudItem>
-            <MudItem xs="12" md="6">
-                <MudPaper Elevation="0" Outlined="true" Class="pa-4 rounded-lg">
-                    <MudText Typo="Typo.h6" Class="mb-4">Hours by Task</MudText>
-                    @if (_taskChartLabels.Length > 0)
-                    {
-                        <MudChart T="double" ChartType="ChartType.Bar" Width="100%" Height="300px" ChartSeries="@_taskBarSeries" XAxisLabels="@_taskChartLabels" />
-                    }
-                    else
-                    {
-                        <MudText Color="Color.Default" Class="py-8 text-center" Style="opacity: 0.5;">No data available for the selected filters.</MudText>
-                    }
-                </MudPaper>
-            </MudItem>
-        </MudGrid>
+                <MudMenu Icon="@Icons.Material.Filled.FileDownload" Variant="Variant.Outlined" Title="Export" Size="Size.Small" Dense="true">
+                    <MudMenuItem Icon="@Icons.Material.Filled.TableChart" OnClick="ExportSummaryCsv">Export Summary (CSV)</MudMenuItem>
+                    <MudMenuItem Icon="@Icons.Material.Filled.ListAlt" OnClick="ExportDetailedCsv">Export Detailed (CSV)</MudMenuItem>
+                    <MudMenuItem Icon="@Icons.Material.Filled.CalendarViewWeek" OnClick="ExportWeeklyCsv">Export Weekly Matrix (CSV)</MudMenuItem>
+                </MudMenu>
 
-        <!-- Detailed List Section -->
-        <MudPaper Elevation="0" Outlined="true" Class="rounded-lg">
-            <MudTable Items="@_tableData" Dense="true" Hover="true" Bordered="false" Striped="true" FixedHeader="true" Height="400px">
-                <ToolBarContent>
-                    <MudText Typo="Typo.h6">Time Entries Breakdown</MudText>
-                    <MudSpacer />
-                    <MudTextField @bind-Value="_searchString" Placeholder="Search description..." Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search" IconSize="Size.Medium" Class="mt-0" />
-                    <MudButton StartIcon="@Icons.Material.Filled.FileDownload" Variant="Variant.Outlined" Color="Color.Primary" Class="ml-2" OnClick="ExportCsv" Disabled="@(!_filteredEntries.Any())">CSV</MudButton>
-                </ToolBarContent>
-                <HeaderContent>
-                    <MudTh>Date</MudTh>
-                    <MudTh>Employee</MudTh>
-                    <MudTh>Project</MudTh>
-                    <MudTh>Task</MudTh>
-                    <MudTh>Description</MudTh>
-                    <MudTh Style="text-align: right;">Hours</MudTh>
-                </HeaderContent>
-                <RowTemplate>
-                    <MudTd DataLabel="Date">@context.Entry.Date.ToString("yyyy-MM-dd")</MudTd>
-                    <MudTd DataLabel="Employee">@context.EmployeeName</MudTd>
-                    <MudTd DataLabel="Project">@context.ProjectName</MudTd>
-                    <MudTd DataLabel="Task">@context.TaskName</MudTd>
-                    <MudTd DataLabel="Description">@context.Entry.Description</MudTd>
-                    <MudTd DataLabel="Hours" Style="text-align: right; font-weight: bold;">@context.Entry.Hours.ToString("0.00")</MudTd>
-                </RowTemplate>
-                <PagerContent>
-                    <MudTablePager />
-                </PagerContent>
-            </MudTable>
-        </MudPaper>
+                <MudDivider Vertical="true" FlexItem="true" Class="mx-1 my-2" />
+
+                <!-- Dynamic Rounding Toggle -->
+                <MudTooltip Text="Dynamically round logged hours based on company timesheet settings">
+                    <MudSwitch T="bool" Value="_applyRounding" ValueChanged="OnRoundingToggled" Label="Rounding" Color="Color.Primary" />
+                </MudTooltip>
+
+                <!-- Duration Format Toggle (hh:mm vs 0.00h) -->
+                <MudButton Variant="Variant.Outlined" Color="Color.Default" Size="Size.Small" OnClick="ToggleFormat">
+                    @(_format == TimeDisplayFormat.Duration_HHMM ? "hh:mm" : "0.00h")
+                </MudButton>
+
+                <!-- Amount Display Dropdown -->
+                <MudMenu Label="@GetAmountModeLabel()" Variant="Variant.Outlined" Size="Size.Small" EndIcon="@Icons.Material.Filled.ArrowDropDown">
+                    <MudMenuItem OnClick="@(() => SetAmountMode(AmountDisplayMode.BillableAmount))">Billable Amount ($)</MudMenuItem>
+                    <MudMenuItem OnClick="@(() => SetAmountMode(AmountDisplayMode.CostAmount))">Labor Cost ($)</MudMenuItem>
+                    <MudMenuItem OnClick="@(() => SetAmountMode(AmountDisplayMode.ProfitMargin))">Profit Margin ($)</MudMenuItem>
+                    <MudMenuItem OnClick="@(() => SetAmountMode(AmountDisplayMode.HideAmounts))">Hide Financials</MudMenuItem>
+                </MudMenu>
+            </MudStack>
+        </MudStack>
+
+        <!-- Filter Bar -->
+        <TimesheetFilterBar Criteria="@_criteria" DateRange="@_dateRange" DateRangeChanged="@(r => _dateRange = r)" OnFiltersApplied="ApplyFilters" OnPresetSelected="HandlePresetSelected" OnShiftDate="HandleShiftDate" AllEmployees="@_allEmployees" AllTeams="@_allTeams" AllProjects="@_allProjects" AllProjectGroups="@_allProjectGroups" AllClients="@_allClients" AllTasks="@_allTasks" />
+
+        <div id="printable-area">
+            <!-- Print-Only Header -->
+            <div class="d-none d-print-block mb-4">
+                <div class="d-flex justify-space-between align-center mb-2">
+                    <div>
+                        @if (_companyProfile?.HasCustomLogo == true)
+                        {
+                            <img src="/spokesapi/Media/Logo?v=@_companyProfile.LogoVersion" style="max-height: 48px; object-fit: contain; margin-bottom: 6px; display: block;" />
+                        }
+                        <MudText Typo="Typo.h5" Style="font-weight: 700; color: #111;">@(_companyProfile?.CompanyName ?? "Spokes")</MudText>
+                        <MudText Typo="Typo.subtitle1" Style="font-weight: 600; color: #444;">Timesheet Report &mdash; @GetActiveTabTitle()</MudText>
+                    </div>
+                    <div style="text-align: right;">
+                        <MudText Typo="Typo.body2" Style="color: #222;"><b>Period:</b> @(_dateRange.Start?.ToString("dd MMM yyyy") ?? "-") &ndash; @(_dateRange.End?.ToString("dd MMM yyyy") ?? "-")</MudText>
+                        <MudText Typo="Typo.caption" Style="color: #666;">Generated on @DateTime.Now.ToString("yyyy-MM-dd HH:mm")</MudText>
+                    </div>
+                </div>
+                <hr style="border: 0; border-top: 2px solid #222; margin: 8px 0 16px 0;" />
+            </div>
+
+            <!-- KPI Metrics Banner (Matching Clockify Summary Row) -->
+            <MudPaper Elevation="0" Outlined="true" Class="pa-4 mb-4 rounded-lg" Style="background: var(--mud-palette-surface);">
+                <MudGrid Class="align-center">
+                    <MudItem xs="12" sm="6" md="3" Class="border-r">
+                        <MudText Typo="Typo.caption" Color="Color.Secondary" Style="text-transform: uppercase; font-weight: 600;">Total Duration</MudText>
+                        <MudText Typo="Typo.h4" Style="font-weight: 800; color: var(--mud-palette-text-primary);">
+                            @ReportService.FormatDuration(_kpiSummary.TotalHours, _format)
+                        </MudText>
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">Across @_kpiSummary.EntriesCount entries</MudText>
+                    </MudItem>
+
+                    <MudItem xs="12" sm="6" md="3" Class="border-r">
+                        <MudText Typo="Typo.caption" Color="Color.Secondary" Style="text-transform: uppercase; font-weight: 600;">Billable Duration</MudText>
+                        <MudStack Row="true" AlignItems="AlignItems.Baseline" Spacing="2">
+                            <MudText Typo="Typo.h4" Style="font-weight: 800; color: #10B981;">
+                                @ReportService.FormatDuration(_kpiSummary.BillableHours, _format)
+                            </MudText>
+                            <MudChip T="string" Color="Color.Success" Size="Size.Small" Variant="Variant.Text" Style="font-weight: 700;">
+                                @_kpiSummary.BillablePercentage%
+                            </MudChip>
+                        </MudStack>
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">Non-billable: @ReportService.FormatDuration(_kpiSummary.NonBillableHours, _format)</MudText>
+                    </MudItem>
+
+                    <MudItem xs="12" sm="6" md="3" Class="border-r">
+                        <MudText Typo="Typo.caption" Color="Color.Secondary" Style="text-transform: uppercase; font-weight: 600;">
+                            @(_amountMode == AmountDisplayMode.CostAmount ? "Total Labor Cost" : _amountMode == AmountDisplayMode.ProfitMargin ? "Net Profit" : "Billable Revenue")
+                        </MudText>
+                        <MudText Typo="Typo.h4" Style="font-weight: 800; color: var(--mud-palette-primary);">
+                            @if (_amountMode == AmountDisplayMode.CostAmount)
+                            {
+                                @ReportService.FormatCurrency(_kpiSummary.CostAmount)
+                            }
+                            else if (_amountMode == AmountDisplayMode.ProfitMargin)
+                            {
+                                <span>@ReportService.FormatCurrency(_kpiSummary.ProfitAmount)</span>
+                            }
+                            else
+                            {
+                                @ReportService.FormatCurrency(_kpiSummary.BillableAmount)
+                            }
+                        </MudText>
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">
+                            @if (_amountMode == AmountDisplayMode.ProfitMargin)
+                            {
+                                <span>Margin: @_kpiSummary.ProfitMarginPercentage%</span>
+                            }
+                            else
+                            {
+                                <span>Based on project & work type rates</span>
+                            }
+                        </MudText>
+                    </MudItem>
+
+                    <MudItem xs="12" sm="6" md="3">
+                        <MudText Typo="Typo.caption" Color="Color.Secondary" Style="text-transform: uppercase; font-weight: 600;">Active Scopes</MudText>
+                        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="3" Class="mt-1">
+                            <div>
+                                <MudText Typo="Typo.h5" Style="font-weight: 700;">@_kpiSummary.ActiveProjectsCount</MudText>
+                                <MudText Typo="Typo.caption" Color="Color.Secondary">Projects</MudText>
+                            </div>
+                            <MudDivider Vertical="true" FlexItem="true" Style="height: 28px;" />
+                            <div>
+                                <MudText Typo="Typo.h5" Style="font-weight: 700;">@_kpiSummary.ActiveEmployeesCount</MudText>
+                                <MudText Typo="Typo.caption" Color="Color.Secondary">Employees</MudText>
+                            </div>
+                        </MudStack>
+                    </MudItem>
+                </MudGrid>
+            </MudPaper>
+
+            <!-- Report Tabs: Summary, Detailed, Weekly -->
+            <MudTabs @bind-ActivePanelIndex="_activeTabIndex" ApplyEffectsToContainer="true" Elevation="0" Rounded="true" PanelClass="pt-4" HeaderClass="d-print-none">
+                <MudTabPanel Text="Summary" Icon="@Icons.Material.Filled.PieChart">
+                    <TimesheetSummaryTab Entries="@_filteredEntries" Format="@_format" AmountMode="@_amountMode" ApplyRounding="@_applyRounding" />
+                </MudTabPanel>
+
+                <MudTabPanel Text="Detailed" Icon="@Icons.Material.Filled.List">
+                    <TimesheetDetailedTab Entries="@_filteredEntries" Format="@_format" AmountMode="@_amountMode" />
+                </MudTabPanel>
+
+                <MudTabPanel Text="Weekly" Icon="@Icons.Material.Filled.CalendarViewWeek">
+                    <TimesheetWeeklyTab Entries="@_filteredEntries" Format="@_format" AmountMode="@_amountMode" CurrentWeekDate="@(_dateRange.Start ?? DateTime.Now)" />
+                </MudTabPanel>
+            </MudTabs>
+        </div>
     }
 </MudContainer>
 
 @code {
     private bool _loading = true;
+    private int _activeTabIndex = 0;
+    private CompanyProfile? _companyProfile;
 
-    // Filters
-    private DateRange _dateRange = new DateRange(
-        new DateTime(DateTime.Now.Year, DateTime.Now.Month, 1), 
-        new DateTime(DateTime.Now.Year, DateTime.Now.Month, DateTime.DaysInMonth(DateTime.Now.Year, DateTime.Now.Month))
-    );
-    private IReadOnlyCollection<string> _selectedEmployees = new HashSet<string>();
-    private IReadOnlyCollection<string> _selectedTeams = new HashSet<string>();
-    private IReadOnlyCollection<string> _selectedProjects = new HashSet<string>();
-    private IReadOnlyCollection<string> _selectedProjectGroups = new HashSet<string>();
-    private IReadOnlyCollection<string> _selectedClients = new HashSet<string>();
-    private IReadOnlyCollection<string> _selectedTasks = new HashSet<string>();
+    private DateRange _dateRange = new();
+    private TimesheetReportFilterCriteria _criteria = new();
+    private bool _applyRounding = false;
+    private TimeDisplayFormat _format = TimeDisplayFormat.Duration_HHMM;
+    private AmountDisplayMode _amountMode = AmountDisplayMode.BillableAmount;
 
-    // Data sources
-    private List<Employee> _allEmployees = new();
-    private List<Team> _allTeams = new();
-    private List<Project> _allProjects = new();
-    private List<ProjectGroup> _allProjectGroups = new();
-    private List<string> _allClients = new();
-    private List<WorkType> _allTasks = new();
-    private List<Timesheet> _allTimesheets = new();
+    private List<TimesheetReportEntry> _allEntries = [];
+    private List<TimesheetReportEntry> _filteredEntries = [];
+    private TimesheetKPISummary _kpiSummary = new();
 
-    // Data shapes for UI
-    private List<TimesheetReportEntry> _allEntries = new();
-    private List<TimesheetReportEntry> _filteredEntries = new();
-
-    // Table Data
-    private string _searchString = "";
-    private IEnumerable<TimesheetReportEntry> _tableData => string.IsNullOrWhiteSpace(_searchString) 
-        ? _filteredEntries 
-        : _filteredEntries.Where(e => e.Entry.Description.Contains(_searchString, StringComparison.OrdinalIgnoreCase) || 
-                                     e.EmployeeName.Contains(_searchString, StringComparison.OrdinalIgnoreCase) ||
-                                     e.ProjectName.Contains(_searchString, StringComparison.OrdinalIgnoreCase));
-
-    // Chart Data
-    private double[] _projectChartData = Array.Empty<double>();
-    private string[] _projectChartLabels = Array.Empty<string>();
-    
-    // Bar Chart
-    private List<ChartSeries<double>> _taskBarSeries = new();
-    private string[] _taskChartLabels = Array.Empty<string>();
+    private List<Employee> _allEmployees = [];
+    private List<Team> _allTeams = [];
+    private List<Project> _allProjects = [];
+    private List<ProjectGroup> _allProjectGroups = [];
+    private List<string> _allClients = [];
+    private List<WorkType> _allTasks = [];
 
     protected override async Task OnInitializedAsync()
     {
         var authState = await AuthStateProvider.GetAuthenticationStateAsync();
-        var user = authState.User;
-
-        // Optionally enforce access checks here
-        if (!user.Identity?.IsAuthenticated ?? false)
+        if (!authState.User.Identity?.IsAuthenticated ?? false)
         {
             NavManager.NavigateTo("/", true);
             return;
         }
 
-        await LoadDataAsync();
-        
-        // Select all by default
-        _selectedEmployees = _allEmployees.Select(e => e.Id).ToList();
-        _selectedTeams = _allTeams.Select(t => t.Id).ToList();
-        _selectedProjects = _allProjects.Select(p => p.Id).ToList();
-        _selectedProjectGroups = _allProjectGroups.Select(p => p.Id).ToList();
-        _selectedClients = _allClients.ToList();
-        _selectedTasks = _allTasks.Select(t => t.Id).ToList();
-        
-        ApplyFilters();
-        _loading = false;
-    }
-
-    private async Task LoadDataAsync()
-    {
+        _companyProfile = Db.CompanyProfile.Get();
         _allEmployees = Db.Employees.GetAll();
         _allTeams = Db.Teams.GetAll();
         _allProjects = Db.Projects.GetAll();
         _allProjectGroups = Db.ProjectGroups.GetAll();
         _allTasks = Db.WorkTypes.GetAll();
-        _allTimesheets = Db.Timesheets.GetAll();
 
-        // Extract Clients from Projects
-        _allClients = _allProjects.Where(p => p.Client != null && !string.IsNullOrWhiteSpace(p.Client.BusinessName))
-                                  .Select(p => p.Client!.BusinessName)
-                                  .Distinct(StringComparer.OrdinalIgnoreCase)
-                                  .ToList();
+        _allClients = _allProjects
+            .Where(p => p.Client != null && !string.IsNullOrWhiteSpace(p.Client.BusinessName))
+            .Select(p => p.Client!.BusinessName)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
 
-        // Flatten all time entries manually
-        _allEntries = new List<TimesheetReportEntry>();
-        
-        foreach (var ts in _allTimesheets)
-        {
-            var emp = _allEmployees.FirstOrDefault(e => string.Equals(e.Id, ts.EmployeeId, StringComparison.OrdinalIgnoreCase));
-            var empName = emp?.FullName ?? (!string.IsNullOrWhiteSpace(ts.EmployeeName) ? ts.EmployeeName : "Unknown Employee");
-            var empId = emp?.Id ?? ts.EmployeeId ?? "";
-            var teamId = emp?.TeamId ?? "";
+        // Default to current month
+        _dateRange = ReportService.GetPresetDateRange("This Month");
+        _criteria.StartDate = _dateRange.Start;
+        _criteria.EndDate = _dateRange.End;
 
-            if (ts.Entries == null) continue;
+        // Select all entities by default
+        _criteria.SelectedEmployees = _allEmployees.Select(e => e.Id).ToList();
+        _criteria.TotalEmployeesCount = _allEmployees.Count;
+        _criteria.SelectedTeams = _allTeams.Select(t => t.Id).ToList();
+        _criteria.TotalTeamsCount = _allTeams.Count;
+        _criteria.SelectedProjects = _allProjects.Select(p => p.Id).ToList();
+        _criteria.TotalProjectsCount = _allProjects.Count;
+        _criteria.SelectedClients = _allClients.ToList();
+        _criteria.TotalClientsCount = _allClients.Count;
+        _criteria.SelectedTasks = _allTasks.Select(t => t.Id).ToList();
+        _criteria.TotalTasksCount = _allTasks.Count;
+        _criteria.BillableStatus = BillableFilterStatus.All;
 
-            foreach (var entry in ts.Entries)
-            {
-                var proj = _allProjects.FirstOrDefault(p => string.Equals(p.Id, entry.ProjectId, StringComparison.OrdinalIgnoreCase));
-                var task = _allTasks.FirstOrDefault(t => string.Equals(t.Id, entry.WorkTypeId, StringComparison.OrdinalIgnoreCase));
+        _allEntries = await ReportService.LoadAllEntriesAsync();
+        ApplyFilters();
 
-                _allEntries.Add(new TimesheetReportEntry
-                {
-                    Entry = entry,
-                    EmployeeId = empId,
-                    EmployeeName = empName,
-                    TeamId = teamId,
-                    ProjectId = proj?.Id ?? entry.ProjectId ?? "",
-                    ProjectName = proj?.DisplayName ?? (!string.IsNullOrWhiteSpace(entry.ProjectId) ? entry.ProjectId : "Unknown Project"),
-                    ProjectGroupId = proj?.ProjectGroupId ?? "",
-                    ClientId = proj?.Client?.BusinessName ?? "",
-                    TaskId = task?.Id ?? entry.WorkTypeId ?? "",
-                    TaskName = task?.Name ?? (!string.IsNullOrWhiteSpace(entry.WorkTypeId) ? entry.WorkTypeId : "Unknown Task")
-                });
-            }
-        }
+        _loading = false;
     }
 
     private void ApplyFilters()
     {
-        var criteria = new TimesheetReportFilterCriteria
-        {
-            StartDate = _dateRange?.Start,
-            EndDate = _dateRange?.End,
-            SelectedEmployees = _selectedEmployees,
-            TotalEmployeesCount = _allEmployees.Count,
-            SelectedTeams = _selectedTeams,
-            TotalTeamsCount = _allTeams.Count,
-            SelectedProjectGroups = _selectedProjectGroups,
-            TotalProjectGroupsCount = _allProjectGroups.Count,
-            SelectedClients = _selectedClients,
-            TotalClientsCount = _allClients.Count,
-            SelectedProjects = _selectedProjects,
-            TotalProjectsCount = _allProjects.Count,
-            SelectedTasks = _selectedTasks,
-            TotalTasksCount = _allTasks.Count
-        };
+        _criteria.StartDate = _dateRange.Start;
+        _criteria.EndDate = _dateRange.End;
 
-        _filteredEntries = TimesheetReportFilterHelper.Filter(_allEntries, criteria);
-        
-        UpdateCharts();
-    }
+        _filteredEntries = ReportService.ApplyFiltersAndRounding(_allEntries, _criteria, _applyRounding);
+        _kpiSummary = ReportService.CalculateKPISummary(_filteredEntries);
 
-    private string GetEmployeeSelectionText(IReadOnlyList<string> selectedIds)
-    {
-        if (selectedIds == null || selectedIds.Count == 0) return "None selected";
-        if (_allEmployees.Count > 0 && selectedIds.Count >= _allEmployees.Count) return "Select All";
-        return string.Join(", ", _allEmployees.Where(x => selectedIds.Contains(x.Id)).Select(x => x.FullName));
-    }
-    private string GetTeamSelectionText(IReadOnlyList<string> selectedIds)
-    {
-        if (selectedIds == null || selectedIds.Count == 0) return "None selected";
-        if (_allTeams.Count > 0 && selectedIds.Count >= _allTeams.Count) return "Select All";
-        return string.Join(", ", _allTeams.Where(x => selectedIds.Contains(x.Id)).Select(x => x.Name));
-    }
-    private string GetProjectGroupSelectionText(IReadOnlyList<string> selectedIds)
-    {
-        if (selectedIds == null || selectedIds.Count == 0) return "None selected";
-        if (_allProjectGroups.Count > 0 && selectedIds.Count >= _allProjectGroups.Count) return "Select All";
-        return string.Join(", ", _allProjectGroups.Where(x => selectedIds.Contains(x.Id)).Select(x => x.Name));
-    }
-    private string GetClientSelectionText(IReadOnlyList<string> selectedIds)
-    {
-        if (selectedIds == null || selectedIds.Count == 0) return "None selected";
-        if (_allClients.Count > 0 && selectedIds.Count >= _allClients.Count) return "Select All";
-        return string.Join(", ", selectedIds);
-    }
-    private string GetProjectSelectionText(IReadOnlyList<string> selectedIds)
-    {
-        if (selectedIds == null || selectedIds.Count == 0) return "None selected";
-        if (_allProjects.Count > 0 && selectedIds.Count >= _allProjects.Count) return "Select All";
-        return string.Join(", ", _allProjects.Where(x => selectedIds.Contains(x.Id)).Select(x => x.DisplayName));
-    }
-    private string GetTaskSelectionText(IReadOnlyList<string> selectedIds)
-    {
-        if (selectedIds == null || selectedIds.Count == 0) return "None selected";
-        if (_allTasks.Count > 0 && selectedIds.Count >= _allTasks.Count) return "Select All";
-        return string.Join(", ", _allTasks.Where(x => selectedIds.Contains(x.Id)).Select(x => x.Name));
-    }
-
-    private void UpdateCharts()
-    {
-        // Hours by Project (Donut)
-        var projectGroupsList = _filteredEntries
-            .GroupBy(e => e.ProjectName)
-            .Select(g => new { Name = g.Key, Total = (double)g.Sum(e => e.Entry.Hours) })
-            .Where(x => x.Total > 0)
-            .OrderByDescending(x => x.Total)
-            .Take(10) // Top 10 to keep donut clean
-            .ToList();
-
-        _projectChartLabels = projectGroupsList.Select(x => x.Name).ToArray();
-        _projectChartData = projectGroupsList.Select(x => x.Total).ToArray();
-
-        // Hours by Task (Bar Chart)
-        var taskGroupsList = _filteredEntries
-            .GroupBy(e => e.TaskName)
-            .Select(g => new { Name = g.Key, Total = (double)g.Sum(e => e.Entry.Hours) })
-            .Where(x => x.Total > 0)
-            .OrderByDescending(x => x.Total)
-            .Take(10)
-            .ToList();
-
-        _taskChartLabels = taskGroupsList.Select(x => x.Name).ToArray();
-        _taskBarSeries = new List<ChartSeries<double>>
-        {
-            new ChartSeries<double> { Name = "Hours", Data = taskGroupsList.Select(x => x.Total).ToArray() }
-        };
-        
         StateHasChanged();
     }
 
-    private async Task ExportCsv()
+    private void HandlePresetSelected(string preset)
     {
-        var sb = new System.Text.StringBuilder();
-        
-        // Header
-        sb.AppendLine("Date,Employee,Project,Task,Description,Hours");
+        _dateRange = ReportService.GetPresetDateRange(preset);
+        ApplyFilters();
+    }
 
-        // Check if rounding is enabled
-        var profile = Db.CompanyProfile.Get();
-        var roundingEnabled = profile.TimesheetConfig.EnableRounding;
-        var roundingInterval = profile.TimesheetConfig.RoundingIntervalMinutes;
-        var roundingDirection = profile.TimesheetConfig.RoundingDirection;
-        
-        // Data rows (use the search-filtered data)
-        foreach (var entry in _tableData.OrderByDescending(e => e.Entry.Date))
-        {
-            var hours = entry.Entry.Hours;
-            if (roundingEnabled)
-            {
-                hours = HRService.RoundHours(hours, roundingInterval, roundingDirection);
-            }
+    private void HandleShiftDate(int direction)
+    {
+        _dateRange = ReportService.ShiftDateRange(_dateRange, direction);
+        ApplyFilters();
+    }
 
-            var date = entry.Entry.Date.ToString("yyyy-MM-dd");
-            var employee = CsvHelper.EscapeCsv(entry.EmployeeName);
-            var project = CsvHelper.EscapeCsv(entry.ProjectName);
-            var task = CsvHelper.EscapeCsv(entry.TaskName);
-            var description = CsvHelper.EscapeCsv(entry.Entry.Description);
-            sb.AppendLine($"{date},{employee},{project},{task},{description},{hours:0.00}");
-        }
+    private void OnRoundingToggled(bool value)
+    {
+        _applyRounding = value;
+        ApplyFilters();
+    }
 
-        // Trigger download via existing JS helper
-        var csvContent = sb.ToString();
-        var fileName = $"timesheet_report_{DateTime.Now:yyyyMMdd_HHmmss}.csv";
-        
-        await JS.InvokeVoidAsync("downloadFile", fileName, "text/csv", csvContent);
-        Snackbar.Add("CSV exported successfully", Severity.Success);
+    private void ToggleFormat()
+    {
+        _format = _format == TimeDisplayFormat.Duration_HHMM
+            ? TimeDisplayFormat.Decimal_Hours
+            : TimeDisplayFormat.Duration_HHMM;
+    }
+
+    private void SetAmountMode(AmountDisplayMode mode)
+    {
+        _amountMode = mode;
+    }
+
+    private string GetAmountModeLabel() => _amountMode switch
+    {
+        AmountDisplayMode.BillableAmount => "Billable Amount",
+        AmountDisplayMode.CostAmount => "Labor Cost",
+        AmountDisplayMode.ProfitMargin => "Profit Margin",
+        AmountDisplayMode.HideAmounts => "Hide Financials",
+        _ => "Amount"
+    };
+
+    private string GetActiveTabTitle() => _activeTabIndex switch
+    {
+        0 => "Summary",
+        1 => "Detailed",
+        2 => "Weekly Matrix",
+        _ => "Summary"
+    };
+
+    private async Task PrintReport()
+    {
+        await JS.InvokeVoidAsync("window.print");
+    }
+
+    private async Task ExportSummaryCsv()
+    {
+        var groups = ReportService.BuildSummaryGroups(_filteredEntries, ReportGroupBy.Project, ReportSubGroupBy.Description);
+        var csv = ReportService.GenerateSummaryCsv(groups, _format);
+        var fileName = $"timesheet_summary_{DateTime.Now:yyyyMMdd_HHmmss}.csv";
+        await JS.InvokeVoidAsync("downloadFile", fileName, "text/csv", csv);
+        Snackbar.Add("Summary CSV exported", Severity.Success);
+    }
+
+    private async Task ExportDetailedCsv()
+    {
+        var csv = ReportService.GenerateDetailedCsv(_filteredEntries, _format);
+        var fileName = $"timesheet_detailed_{DateTime.Now:yyyyMMdd_HHmmss}.csv";
+        await JS.InvokeVoidAsync("downloadFile", fileName, "text/csv", csv);
+        Snackbar.Add("Detailed CSV exported", Severity.Success);
+    }
+
+    private async Task ExportWeeklyCsv()
+    {
+        var matrix = ReportService.BuildWeeklyMatrix(_filteredEntries, _dateRange.Start ?? DateTime.Now, WeeklyGroupBy.Employee);
+        var csv = ReportService.GenerateWeeklyCsv(matrix, _format);
+        var fileName = $"timesheet_weekly_{DateTime.Now:yyyyMMdd_HHmmss}.csv";
+        await JS.InvokeVoidAsync("downloadFile", fileName, "text/csv", csv);
+        Snackbar.Add("Weekly matrix CSV exported", Severity.Success);
     }
 }

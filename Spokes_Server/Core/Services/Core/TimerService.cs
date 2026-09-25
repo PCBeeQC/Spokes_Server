@@ -1,17 +1,8 @@
-using Spokes_Server.Core.Services.Communication;
-using Spokes_Server.Core.Services.Projects;
-using Spokes_Server.Core.Services.Core;
 using System.Collections.Concurrent;
 using System.Globalization;
-using Spokes_Server.Core.Data.Repositories.Core;
-using Spokes_Server.Core.Data.Repositories.Projects;
-using Spokes_Server.Core.Data.Repositories.Accounting;
-using Spokes_Server.Core.Data.Repositories.Communication;
+using Microsoft.Extensions.Configuration;
 using Spokes_Server.Core.Data.Repositories.HR;
 using Spokes_Server.Core.Models.Core;
-using Spokes_Server.Core.Models.Projects;
-using Spokes_Server.Core.Models.Accounting;
-using Spokes_Server.Core.Models.Communication;
 using Spokes_Server.Core.Models.HR;
 
 namespace Spokes_Server.Core.Services.Core;
@@ -25,7 +16,7 @@ public class TimerService
 
     public event Action? OnTimerChanged;
 
-    public TimerService(TimesheetRepository timesheets, EmployeeRepository employees, Microsoft.Extensions.Configuration.IConfiguration config)
+    public TimerService(TimesheetRepository timesheets, EmployeeRepository employees, IConfiguration config)
     {
         _timesheets = timesheets;
         _employees = employees;
@@ -150,9 +141,9 @@ public class TimerService
 
     private void PersistTimerState(TimerState state)
     {
+        var path = GetTimerStatePath(state.EmployeeId);
         try
         {
-            var path = GetTimerStatePath(state.EmployeeId);
             var dir = Path.GetDirectoryName(path);
             if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
                 Directory.CreateDirectory(dir);
@@ -220,6 +211,3 @@ public class TimerService
         }
     }
 }
-
-
-

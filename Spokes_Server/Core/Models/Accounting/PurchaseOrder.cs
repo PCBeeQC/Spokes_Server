@@ -1,14 +1,7 @@
 namespace Spokes_Server.Core.Models.Accounting;
 
-using Spokes_Server.Core.Models.Core;
 using Spokes_Server.Core.Models.Projects;
-using Spokes_Server.Core.Models.Communication;
-using Spokes_Server.Core.Models.HR;
-
 using Spokes_Server.Core.Data;
-
-
-
 
 public class PurchaseOrder : IDataEntity
 {
@@ -17,10 +10,7 @@ public class PurchaseOrder : IDataEntity
     public override bool Equals(object? obj)
     {
         if (ReferenceEquals(this, obj)) return true;
-        if (obj == null || GetType() != obj.GetType())
-            return false;
-        var other = (PurchaseOrder)obj;
-        return Id == other.Id;
+        return obj is PurchaseOrder other && Id == other.Id;
     }
 
     public override int GetHashCode() => Id?.GetHashCode() ?? base.GetHashCode();
@@ -35,7 +25,7 @@ public class PurchaseOrder : IDataEntity
     public string SupplierRepName { get; set; } = string.Empty;
 
     // Re-using ClientInfo for Supplier details (Address, etc)
-    public ClientInfo Supplier { get; set; } = new ClientInfo();
+    public ClientInfo Supplier { get; set; } = new();
 
     // Optional Custom Recipient details (if null, use default SpokesSettings main company)
     public ClientInfo? Recipient { get; set; }
@@ -45,11 +35,11 @@ public class PurchaseOrder : IDataEntity
     public decimal TaxRate { get; set; } = 0.14975m; // Default Quebec Tax (adjust as needed)
 
     // The Content
-    public List<PoItem> Items { get; set; } = new();
+    public List<PoItem> Items { get; set; } = [];
 
     // Custom Columns Definitions (e.g. ["Color", "Size"])
     // We store the HEADERS here so we know what keys to look for in the items
-    public List<string> CustomHeaders { get; set; } = new();
+    public List<string> CustomHeaders { get; set; } = [];
 
     // NEW: Template Override
     public string? TemplateId { get; set; }
@@ -75,10 +65,7 @@ public class PoItem
     public override bool Equals(object? obj)
     {
         if (ReferenceEquals(this, obj)) return true;
-        if (obj == null || GetType() != obj.GetType())
-            return false;
-        var other = (PoItem)obj;
-        return Id == other.Id;
+        return obj is PoItem other && Id == other.Id;
     }
 
     public override int GetHashCode() => Id?.GetHashCode() ?? base.GetHashCode();
@@ -95,8 +82,5 @@ public class PoItem
     public decimal Total => Quantity * UnitPrice;
 
     // Custom Data (Key = Header Name, Value = Cell Content)
-    public Dictionary<string, string> CustomData { get; set; } = new();
+    public Dictionary<string, string> CustomData { get; set; } = [];
 }
-
-
-

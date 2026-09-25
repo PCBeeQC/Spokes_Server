@@ -1,15 +1,6 @@
-@using Spokes_Server.Core.Models.Core
-@using Spokes_Server.Core.Models.Projects
-@using Spokes_Server.Core.Models.Accounting
-@using Spokes_Server.Core.Models.Communication
-@using Spokes_Server.Core.Models.HR
-@using Spokes_Server.Core.Data
-@using Spokes_Server.Core.Services
-@using MudBlazor
 @inject Database Db
 @inject ISnackbar Snackbar
-@inject IJSRuntime JS
-@inject IFileService FileService
+
 
 <MudDialog>
     <DialogContent>
@@ -217,10 +208,7 @@
         StateHasChanged();
     }
 
-    private void RemoveAttachment(NoteAttachment att)
-    {
-        Note.Attachments.Remove(att);
-    }
+    private void RemoveAttachment(NoteAttachment att) => Note.Attachments.Remove(att);
 
     private void Close() => MudDialog.Cancel();
     private void Submit() => MudDialog.Close(DialogResult.Ok(Note));

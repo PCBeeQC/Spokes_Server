@@ -1,8 +1,5 @@
 namespace Spokes_Server.Core.Helpers;
 
-using System;
-using System.Collections.Generic;
-using System.Linq;
 using Spokes_Server.Core.Models.Communication;
 
 /// <summary>
@@ -32,7 +29,7 @@ public static class ChatReadReceiptHelper
         var distinctParticipants = channel?.ParticipantIds?
             .Where(id => !string.IsNullOrEmpty(id))
             .Distinct()
-            .ToList() ?? new List<string>();
+            .ToList() ?? [];
 
         if (distinctParticipants.Count < 2)
         {
@@ -69,7 +66,7 @@ public static class ChatReadReceiptHelper
             if (latestSentByASeenByB != null)
             {
                 if (!latestReceipts.ContainsKey(latestSentByASeenByB.Id))
-                    latestReceipts[latestSentByASeenByB.Id] = new List<string>();
+                    latestReceipts[latestSentByASeenByB.Id] = [];
                 latestReceipts[latestSentByASeenByB.Id].Add(userB);
             }
 
@@ -82,7 +79,7 @@ public static class ChatReadReceiptHelper
             if (latestSentByBSeenByA != null)
             {
                 if (!latestReceipts.ContainsKey(latestSentByBSeenByA.Id))
-                    latestReceipts[latestSentByBSeenByA.Id] = new List<string>();
+                    latestReceipts[latestSentByBSeenByA.Id] = [];
                 latestReceipts[latestSentByBSeenByA.Id].Add(userA);
             }
 
@@ -95,7 +92,7 @@ public static class ChatReadReceiptHelper
                 {
                     cumulativeReaders.Add(otherUser);
                 }
-                if (cumulativeReaders.Any())
+                if (cumulativeReaders.Count > 0)
                 {
                     cumulativeReceipts[msg.Id] = cumulativeReaders;
                 }
@@ -140,7 +137,7 @@ public static class ChatReadReceiptHelper
 
                 if (!latestReceipts.ContainsKey(latestMsg.Id))
                 {
-                    latestReceipts[latestMsg.Id] = new List<string>();
+                    latestReceipts[latestMsg.Id] = [];
                 }
 
                 latestReceipts[latestMsg.Id].Add(userId);
@@ -163,7 +160,7 @@ public static class ChatReadReceiptHelper
                         cumulativeReaders.Add(userId);
                     }
                 }
-                if (cumulativeReaders.Any())
+                if (cumulativeReaders.Count > 0)
                 {
                     cumulativeReceipts[msg.Id] = cumulativeReaders;
                 }

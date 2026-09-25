@@ -133,6 +133,11 @@ window.spokesUpload = {
                     return; // Gracefully exit, leaving UI untouched
                 }
                 
+                // Re-prime cookies to repair Capacitor wiping the WebView cookie jar
+                if (window.spokesAuth && typeof window.spokesAuth.refreshSessionAsync === 'function') {
+                    await window.spokesAuth.refreshSessionAsync();
+                }
+                
                 const activeId = window.spokesUpload.activeInputId;
                 const dynamicRef = window.spokesUpload.dotNetRefs?.[activeId] || window.spokesUpload.activeDotNetRef;
 
@@ -239,6 +244,11 @@ window.spokesUpload = {
                     return;
                 }
                 
+                // Re-prime cookies to repair Capacitor wiping the WebView cookie jar
+                if (window.spokesAuth && typeof window.spokesAuth.refreshSessionAsync === 'function') {
+                    await window.spokesAuth.refreshSessionAsync();
+                }
+                
                 if (dotNetRef) {
                     if (!window.spokesUpload.uploadStartConfirmed) {
                         try {
@@ -296,7 +306,7 @@ window.spokesUpload = {
             // Notify Blazor that we are starting
             dotNetRef.invokeMethodAsync('OnUploadStartedCallback', input.files.length).catch(() => {});
 
-            spokesUpload.executeUploadFromInput(input, uploadUrl, dotNetRef, maxAllowedSize, compressionMaxDim, compressionQuality)
+            window.spokesUpload.executeUploadFromInput(input, uploadUrl, dotNetRef, maxAllowedSize, compressionMaxDim, compressionQuality)
                 .then(results => {
                     const jsonStr = typeof results === 'string' ? results : JSON.stringify(results);
                     dotNetRef.invokeMethodAsync('OnUploadCompletedCallback', jsonStr).catch(() => {});
@@ -364,7 +374,7 @@ window.spokesUpload = {
                     if (file.type && file.type.startsWith('image/') && file.type !== 'image/gif') {
                         try {
                             console.log(`[spokesUpload] Compressing image: ${file.name}`);
-                            const compressedBlob = await spokesUpload.compressImage(file, compressionMaxDim, compressionQuality);
+                            const compressedBlob = await window.spokesUpload.compressImage(file, compressionMaxDim, compressionQuality);
                             formData.append('files', compressedBlob, file.name);
                         } catch (e) {
                             console.warn(`[spokesUpload] Compression failed for ${file.name}, using original.`, e);
@@ -376,14 +386,14 @@ window.spokesUpload = {
                     
                     if (file.type && file.type.startsWith('video/')) {
                         thumbnailPromises.push(
-                            spokesUpload.extractVideoThumbnail(file).then(blob => ({ fileName: file.name, blob: blob }))
+                            window.spokesUpload.extractVideoThumbnail(file).then(blob => ({ fileName: file.name, blob: blob }))
                             .catch(() => null)
                         );
                     }
                 }
                 
                 console.log('[spokesUpload] Payload constructed, beginning upload request...');
-                spokesUpload.performUpload(formData, uploadUrl, dotNetRef, resolve, reject, thumbnailPromises);
+                window.spokesUpload.performUpload(formData, uploadUrl, dotNetRef, resolve, reject, thumbnailPromises);
             };
             
             processFiles();
@@ -401,7 +411,7 @@ window.spokesUpload = {
             if (file.type && file.type.startsWith('image/') && file.type !== 'image/gif') {
                 try {
                     console.log(`[spokesUpload] Compressing image: ${file.name}`);
-                    const compressedBlob = await spokesUpload.compressImage(file, compressionMaxDim, compressionQuality);
+                    const compressedBlob = await window.spokesUpload.compressImage(file, compressionMaxDim, compressionQuality);
                     formData.append('files', compressedBlob, file.name);
                 } catch (e) {
                     console.warn(`[spokesUpload] Compression failed for ${file.name}, using original.`, e);
@@ -414,12 +424,12 @@ window.spokesUpload = {
             const thumbnailPromises = [];
             if (file.type && file.type.startsWith('video/')) {
                 thumbnailPromises.push(
-                    spokesUpload.extractVideoThumbnail(file).then(blob => ({ fileName: file.name, blob: blob }))
+                    window.spokesUpload.extractVideoThumbnail(file).then(blob => ({ fileName: file.name, blob: blob }))
                     .catch(() => null)
                 );
             }
             
-            this.performUpload(formData, uploadUrl, dotNetRef, resolve, reject, thumbnailPromises);
+            window.spokesUpload.performUpload(formData, uploadUrl, dotNetRef, resolve, reject, thumbnailPromises);
         });
     },
 
@@ -593,7 +603,7 @@ window.spokesUpload = {
                     }
                 };
 
-                video.onerror = (e) => {
+                video.onerror = () => {
                     cleanup();
                     resolve(null); // Resolve with null instead of reject to not break Promise.all
                 };

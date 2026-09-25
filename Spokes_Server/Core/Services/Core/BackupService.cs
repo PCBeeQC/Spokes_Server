@@ -1,10 +1,7 @@
 using System.IO.Compression;
 using Spokes_Server.Core.Models.Core;
-using Spokes_Server.Core.Models.Projects;
-using Spokes_Server.Core.Models.Accounting;
-using Spokes_Server.Core.Models.Communication;
-using Spokes_Server.Core.Models.HR;
 using Spokes_Server.Core.Data.Repositories.Core;
+using Spokes_Server.Core.Services.Logging;
 
 namespace Spokes_Server.Core.Services.Core;
 
@@ -13,16 +10,22 @@ public class BackupService : BackgroundService
     private readonly ILogger<BackupService> _logger;
     private readonly CompanyProfileRepository _companyProfiles;
     private readonly string _dataPath;
+    private readonly ISystemLogService? _systemLog;
 
     public DateTime? LastBackupAt { get; private set; }
     public string LastBackupStatus { get; private set; } = "Never run";
     public bool IsRunning { get; private set; }
 
-    public BackupService(ILogger<BackupService> logger, CompanyProfileRepository companyProfiles, IConfiguration config)
+    public BackupService(
+        ILogger<BackupService> logger,
+        CompanyProfileRepository companyProfiles,
+        IConfiguration config,
+        ISystemLogService? systemLog = null)
     {
         _logger = logger;
         _companyProfiles = companyProfiles;
         _dataPath = config["DataPath"] ?? "Data";
+        _systemLog = systemLog;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -58,10 +61,7 @@ public class BackupService : BackgroundService
         }
     }
 
-    public async Task<string> RunBackupNow()
-    {
-        return await RunBackupInternal(isManual: true);
-    }
+    public Task<string> RunBackupNow() => RunBackupInternal(isManual: true);
 
     private async Task<string> RunBackupInternal(bool isManual)
     {
@@ -120,12 +120,22 @@ public class BackupService : BackgroundService
             LastBackupStatus = "Success";
             _logger.LogInformation("Backup created successfully: {Path}", zipPath);
 
+            var zipFileInfo = new FileInfo(zipPath);
+            var sizeFormatted = zipFileInfo.Length < 1024 * 1024
+                ? $"{zipFileInfo.Length / 1024.0:F1} KB"
+                : $"{zipFileInfo.Length / (1024.0 * 1024.0):F1} MB";
+
+            _systemLog?.LogInfo("Backup",
+                $"Backup created successfully: {Path.GetFileName(zipPath)}",
+                $"Type: {(isManual ? "Manual" : "Scheduled")}\nFile: {Path.GetFileName(zipPath)}\nPath: {zipPath}\nSize: {sizeFormatted} ({zipFileInfo.Length:N0} bytes)");
+
             return zipPath;
         }
         catch (Exception ex)
         {
             LastBackupStatus = $"Failed: {ex.Message}";
             _logger.LogError(ex, "Backup failed");
+            _systemLog?.LogError("Backup", $"Backup failed: {ex.Message}", ex.ToString());
             return $"Error: {ex.Message}";
         }
         finally
@@ -150,12 +160,14 @@ public class BackupService : BackgroundService
                 {
                     old.Delete();
                     _logger.LogInformation("Pruned old backup: {Name}", old.Name);
+                    _systemLog?.LogInfo("Backup", $"Pruned old backup: {old.Name}");
                 }
             }
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Failed to prune old backups");
+            _systemLog?.LogError("Backup", $"Failed to prune old backups: {ex.Message}", ex.ToString());
         }
     }
 
@@ -163,7 +175,7 @@ public class BackupService : BackgroundService
     {
         var backupDir = Path.Combine(_dataPath, "Backups");
         if (!Directory.Exists(backupDir))
-            return new List<BackupFileInfo>();
+            return [];
 
         return new DirectoryInfo(backupDir)
             .GetFiles("Spokes_Backup_*.zip")
@@ -189,6 +201,7 @@ public class BackupService : BackgroundService
         if (File.Exists(fullPath) && fullPath.StartsWith(backupDir, StringComparison.OrdinalIgnoreCase))
         {
             File.Delete(fullPath);
+            _systemLog?.LogInfo("Backup", $"Deleted backup: {Path.GetFileName(fullPath)}");
         }
     }
 
@@ -230,5 +243,3 @@ public class BackupFileInfo
         }
     }
 }
-
-

@@ -1,14 +1,6 @@
-@using Spokes_Server.Core.Models.Core
-@using Spokes_Server.Core.Models.Projects
-@using Spokes_Server.Core.Models.Accounting
-@using Spokes_Server.Core.Models.Communication
-@using Spokes_Server.Core.Models.HR
-@using Spokes_Server.Core.Data
-@using MudBlazor
 @inject Database Db
 @inject ISnackbar Snackbar
-@inject EncryptionService EncryptionService
-@inject Spokes_Server.Core.Services.Core.AppLabelService AppLabels
+@inject AppLabelService AppLabels
 @inject IDialogService DialogService
 @inject IConfiguration Config
 
@@ -315,15 +307,6 @@
     }
 
     private void Close() => MudDialog.Cancel();
-
-    private async Task OpenSecureChatSettings()
-    {
-        var parameters = new DialogParameters<SecureChatSettingsDialog> { { x => x.Employee, Employee } };
-        var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Small, FullWidth = true };
-        var dialog = await DialogService.ShowAsync<SecureChatSettingsDialog>("Secure Chat Settings", parameters);
-        await dialog.Result;
-        StateHasChanged(); // Refresh UI in case they enabled it
-    }
 }
 
 

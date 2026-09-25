@@ -1,9 +1,4 @@
-using Spokes_Server.Core.Models.Core;
-using Spokes_Server.Core.Models.Projects;
-using Spokes_Server.Core.Models.Accounting;
 using Spokes_Server.Core.Models.Communication;
-using Spokes_Server.Core.Models.HR;
-
 using Spokes_Server.Core.Data.Repositories.Core;
 
 namespace Spokes_Server.Core.Data.Repositories.Communication;
@@ -18,19 +13,14 @@ public class ChatReadStateRepository : JsonRepository<ChatReadState>
         _companyProfile = companyProfile;
     }
 
-    protected override string GetFilePath(ChatReadState item)
-    {
-        return Path.Combine(_basePath, $"{item.Id}.json");
-    }
+    protected override string GetFilePath(ChatReadState item) =>
+        Path.Combine(_basePath, $"{item.Id}.json");
 
     /// <summary>
     /// Get the read state for a specific user and channel.
     /// </summary>
-    public ChatReadState? GetReadState(string userId, string channelId)
-    {
-        var id = ChatReadState.CreateId(userId, channelId);
-        return GetById(id);
-    }
+    public ChatReadState? GetReadState(string userId, string channelId) =>
+        GetById(ChatReadState.CreateId(userId, channelId));
 
     /// <summary>
     /// Mark a channel as read for a user (updates LastReadAt to now).
@@ -63,20 +53,15 @@ public class ChatReadStateRepository : JsonRepository<ChatReadState>
     /// <summary>
     /// Get all read states for a user.
     /// </summary>
-    public List<ChatReadState> GetReadStatesForUser(string userId)
-    {
-        return _cache.Values.Where(rs => rs.UserId == userId).ToList();
-    }
+    public List<ChatReadState> GetReadStatesForUser(string userId) =>
+        _cache.Values.Where(rs => rs.UserId == userId).ToList();
 
     /// <summary>
     /// Get the last read timestamp for a user on a channel.
     /// Returns DateTime.MinValue if never read.
     /// </summary>
-    public DateTime GetLastReadAt(string userId, string channelId)
-    {
-        var state = GetReadState(userId, channelId);
-        return state?.LastReadAt ?? DateTime.MinValue;
-    }
+    public DateTime GetLastReadAt(string userId, string channelId) =>
+        GetReadState(userId, channelId)?.LastReadAt ?? DateTime.MinValue;
 
     /// <summary>
     /// Set the notification level for a user on a channel.
@@ -122,5 +107,3 @@ public class ChatReadStateRepository : JsonRepository<ChatReadState>
         return ChatReadState.DefaultNotificationLevel(channelType, isVoiceChannel, defaultPublicSub);
     }
 }
-
-
