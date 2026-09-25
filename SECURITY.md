@@ -16,10 +16,12 @@ We will acknowledge receipt within **48 hours** and aim to release a patch withi
 
 ## Supported Versions
 
-| Version | Supported          |
-|---------|--------------------|
-| Latest  | ✅ Full support    |
-| < Latest | Security patches only (tagged `-security`) |
+Spokes follows a continuous release model. Only the latest version receives updates and security patches; older versions are never backported or patched. To ensure your server remains secure, always run the latest version.
+
+| Version | Supported |
+|---------|-----------|
+| Latest  | ✅ Supported |
+| < Latest | ❌ Not supported |
 
 ## Responsible Disclosure
 
