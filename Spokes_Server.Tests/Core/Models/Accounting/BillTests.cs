@@ -68,6 +68,31 @@ public class BillTests
     }
 
     [Fact]
+    public void BalanceDue_WhenStatusIsVoid_ReturnsZeroEvenIfAmountPositive()
+    {
+        var bill = new Bill
+        {
+            Amount = 500m,
+            Status = BillStatus.Void,
+            DatePaid = null,
+            VoidReason = "Returned to vendor",
+            VoidedBy = "Admin",
+            VoidedAt = DateTime.UtcNow
+        };
+
+        Assert.Equal(0m, bill.AmountPaid);
+        Assert.Equal(0m, bill.BalanceDue);
+        Assert.True(bill.IsVoid);
+    }
+
+    [Fact]
+    public void IsVoid_WhenStatusIsNotVoid_ReturnsFalse()
+    {
+        var bill = new Bill { Status = BillStatus.Unpaid };
+        Assert.False(bill.IsVoid);
+    }
+
+    [Fact]
     public void BillLineItem_Total_CalculatesQuantityTimesUnitPrice()
     {
         var lineItem = new BillLineItem

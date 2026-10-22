@@ -1,4 +1,5 @@
 @page "/business/documents/{DocumentId}"
+@attribute [Authorize(Policy = AppPermissions.BusinessDocuments.View)]
 @using Markdig
 @using Spokes_Server.Core.Constants
 @using Spokes_Server.Core.Services.Documents
@@ -12,7 +13,13 @@
 @inject UserService UserService
 @inject DocumentPdfService PdfService
 @inject MarkdownSanitizerService MarkdownSanitizer
+@inject ITimelineEventService TimelineEventService
 @implements IAsyncDisposable
+
+@if (_document != null)
+{
+    <PageTitle>@_document.Name</PageTitle>
+}
 
 <style>
     .markdown-content h1,
@@ -61,11 +68,11 @@ else
 {
     <PageTitle>@_document.Name</PageTitle>
 
-    <MudGrid Spacing="0" Class="py-2 px-4 mb-4 d-print-none align-center" Style="position: sticky; top: 0; z-index: 99; background-color: var(--mud-palette-background);">
-        <MudItem xs="3">
+    <div class="d-flex justify-space-between align-center flex-wrap gap-2 py-2 px-4 mb-4 d-print-none" Style="position: sticky; top: 0; z-index: 99; background-color: var(--mud-palette-background);">
+        <div>
             <MudButton StartIcon="@Icons.Material.Filled.ArrowBack" OnClick="GoBack">Back</MudButton>
-        </MudItem>
-        <MudItem xs="9" Class="d-flex justify-end align-center gap-2">
+        </div>
+        <div class="d-flex align-center gap-2 flex-wrap">
             @if (_isEditing)
             {
                 <MudButton Variant="Variant.Outlined" OnClick="CancelEditing">Cancel</MudButton>
@@ -73,28 +80,29 @@ else
             }
             else
             {
-                <MudSelect T="string" Value="@_document.Status" ValueChanged="UpdateStatus" Dense="true" Margin="Margin.Dense"
-                    Variant="Variant.Outlined" Style="width: 150px;">
-                    <MudSelectItem Value="@("Draft")">Draft</MudSelectItem>
-                    <MudSelectItem Value="@("Final")">Final</MudSelectItem>
+                <MudSelect T="string" Value="@_document.Status" ValueChanged="UpdateStatusAsync" Dense="true" Margin="Margin.Dense"
+                    Variant="Variant.Outlined" Style="width: 160px; min-width: 160px; flex-shrink: 0;">
+                    <MudSelectItem Value="@(ProjectDocumentStatus.Draft)">Draft</MudSelectItem>
+                    <MudSelectItem Value="@(ProjectDocumentStatus.Final)">Final</MudSelectItem>
                 </MudSelect>
+                <MudDivider Vertical="true" FlexItem="true" Class="mx-1" />
 
                 <MudButton Variant="Variant.Outlined" Color="Color.Secondary" StartIcon="@Icons.Material.Filled.Print"
                     OnClick="Print">Print / PDF</MudButton>
 
-                @if (_document.Status == "Final" && !string.IsNullOrEmpty(_document.PdfPath))
+                @if (_document.Status == ProjectDocumentStatus.Final)
                 {
                     <MudButton Variant="Variant.Outlined" Color="Color.Secondary" StartIcon="@Icons.Material.Filled.OpenInNew" OnClick="OpenPdf">Open PDF</MudButton>
                 }
 
-                @if (_document.Status != "Final")
+                @if (_document.Status != ProjectDocumentStatus.Final)
                 {
                     <MudButton Variant="Variant.Outlined" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Edit"
                         OnClick="StartEditing" Class="mr-2">Edit Content</MudButton>
                 }
             }
-        </MudItem>
-    </MudGrid>
+        </div>
+    </div>
 
     <MudPaper Class="mx-auto overflow-hidden mb-10" Style="max-width: 8.5in; width: 100%; min-height: 11in;" Elevation="3"
         id="printable-area">
@@ -205,7 +213,7 @@ else
     {
         if (_document == null || _profile == null) return string.Empty;
 
-        if (_document.Status == "Final")
+        if (_document.Status == ProjectDocumentStatus.Final)
         {
             return _document.ResolvedBody;
         }
@@ -255,16 +263,11 @@ else
         return new MarkupString(MarkdownSanitizer.RenderSanitizedHtml(text));
     }
 
-    private void UpdateStatus(string newStatus)
-    {
-        _ = UpdateStatusAsync(newStatus);
-    }
-
     private async Task UpdateStatusAsync(string newStatus)
     {
         if (_document == null) return;
 
-        if (_document.Status == "Final" && newStatus == "Draft" && !_isAdmin)
+        if (_document.Status == ProjectDocumentStatus.Final && newStatus == ProjectDocumentStatus.Draft && !_isAdmin)
         {
             Snackbar.Add("Only administrators can revert a finalized document to draft.", Severity.Warning);
             return;
@@ -272,7 +275,7 @@ else
 
         var oldStatus = _document.Status;
 
-        if (oldStatus == "Final" && newStatus == "Draft")
+        if (oldStatus == ProjectDocumentStatus.Final && newStatus == ProjectDocumentStatus.Draft)
         {
             if (!string.IsNullOrEmpty(_document.PdfPath) && System.IO.File.Exists(_document.PdfPath))
             {
@@ -280,7 +283,7 @@ else
             }
             _document.PdfPath = string.Empty;
         }
-        else if (newStatus == "Final" && oldStatus == "Draft")
+        else if (newStatus == ProjectDocumentStatus.Final && oldStatus == ProjectDocumentStatus.Draft)
         {
             _document.ResolvedBody = GetResolvedBody();
             _document.Status = newStatus;
@@ -293,7 +296,7 @@ else
         _document.Status = newStatus;
         _document.UpdatedAt = DateTime.UtcNow;
         Db.ProjectDocuments.Save(_document);
-        TimelineEventHelper.ProcessDocumentStatusChange(Db, _document, oldStatus, newStatus, null);
+        TimelineEventService.SyncDocumentStatusTimelineEvent(_document, oldStatus, newStatus, null);
         Snackbar.Add($"Status updated to {newStatus}", Severity.Success);
         
         await InvokeAsync(StateHasChanged);
@@ -366,11 +369,39 @@ else
 
     private void GoBack() => Nav.NavigateTo($"/business/documents");
 
+    private async Task<bool> EnsurePdfExistsAsync()
+    {
+        if (_document == null) return false;
+        if (PdfService.IsValidCachedPdf(_document.PdfPath))
+        {
+            return true;
+        }
+
+        try
+        {
+            if (string.IsNullOrEmpty(_document.ResolvedBody))
+            {
+                _document.ResolvedBody = GetResolvedBody();
+            }
+            Snackbar.Add("Generating PDF document...", Severity.Info);
+            _document.PdfPath = await PdfService.GenerateBusinessDocumentPdfAsync(_document, Nav.BaseUri);
+            Db.ProjectDocuments.Save(_document);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to generate business document PDF on demand");
+            Snackbar.Add("Failed to generate PDF document", Severity.Error);
+            return false;
+        }
+    }
+
     private async Task OpenPdf()
     {
-        if (string.IsNullOrEmpty(_document?.PdfPath) || !System.IO.File.Exists(_document.PdfPath))
+        if (_document == null) return;
+
+        if (!await EnsurePdfExistsAsync())
         {
-            Snackbar.Add("PDF file not found.", Severity.Warning);
             return;
         }
 

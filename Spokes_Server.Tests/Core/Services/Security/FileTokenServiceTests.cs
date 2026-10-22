@@ -179,4 +179,163 @@ public class FileTokenServiceTests
             Assert.Equal("c2VjcmV0", payload.EncryptionKeyBase64);
             Assert.Equal(nowTicks, payload.ExpiryTicks);
         }
+
+        [Fact]
+        public void ValidateAccessToken_NullOrEmptyToken_ReturnsNone()
+        {
+            var service = new FileTokenService(_dataProtection, _memoryCache);
+
+            var nullResult = service.ValidateAccessToken("chat", "ch1", "file.png", null);
+            var emptyResult = service.ValidateAccessToken("chat", "ch1", "file.png", string.Empty);
+
+            Assert.Equal(FileTokenStatus.None, nullResult.Status);
+            Assert.True(nullResult.IsSuccess);
+            Assert.Null(nullResult.EncryptionKey);
+
+            Assert.Equal(FileTokenStatus.None, emptyResult.Status);
+            Assert.True(emptyResult.IsSuccess);
+        }
+
+        [Fact]
+        public void ValidateAccessToken_ValidToken_ReturnsSuccessWithKey()
+        {
+            var service = new FileTokenService(_dataProtection, _memoryCache);
+            string token = service.GenerateAccessToken("chat", "ch1", "file.png", "aesKey123");
+
+            var result = service.ValidateAccessToken("chat", "ch1", "file.png", token);
+
+            Assert.Equal(FileTokenStatus.Valid, result.Status);
+            Assert.True(result.IsSuccess);
+            Assert.Equal("aesKey123", result.EncryptionKey);
+        }
+
+        [Fact]
+        public void ValidateAccessToken_MismatchedContextOrCategory_ReturnsInvalid()
+        {
+            var service = new FileTokenService(_dataProtection, _memoryCache);
+            string token = service.GenerateAccessToken("chat", "ch1", "file.png", "key");
+
+            var categoryMismatch = service.ValidateAccessToken("albums", "ch1", "file.png", token);
+            var contextMismatch = service.ValidateAccessToken("chat", "ch2", "file.png", token);
+            var fileMismatch = service.ValidateAccessToken("chat", "ch1", "other.png", token);
+
+            Assert.Equal(FileTokenStatus.Invalid, categoryMismatch.Status);
+            Assert.False(categoryMismatch.IsSuccess);
+            Assert.Equal(FileTokenStatus.Invalid, contextMismatch.Status);
+            Assert.False(contextMismatch.IsSuccess);
+            Assert.Equal(FileTokenStatus.Invalid, fileMismatch.Status);
+            Assert.False(fileMismatch.IsSuccess);
+        }
+
+        [Fact]
+        public void ValidateAccessToken_WildcardFileName_SucceedsForUploadPrelude()
+        {
+            var service = new FileTokenService(_dataProtection, _memoryCache);
+            string token = service.GenerateAccessToken("chat", "ch1", "*", "uploadKey");
+
+            var result = service.ValidateAccessToken("chat", "ch1", "any_uploaded_file.png", token);
+
+            Assert.Equal(FileTokenStatus.Valid, result.Status);
+            Assert.True(result.IsSuccess);
+            Assert.Equal("uploadKey", result.EncryptionKey);
+        }
+
+        [Fact]
+        public void ValidateAccessToken_WithMatchingUserIdAndSessionId_ReturnsSuccess()
+        {
+            var service = new FileTokenService(_dataProtection, _memoryCache);
+            string token = service.GenerateAccessToken("chat", "ch1", "file.png", "aesKey123", "user-123", "sess-456");
+
+            var result = service.ValidateAccessToken("chat", "ch1", "file.png", token, "user-123", "sess-456");
+
+            Assert.Equal(FileTokenStatus.Valid, result.Status);
+            Assert.True(result.IsSuccess);
+            Assert.Equal("aesKey123", result.EncryptionKey);
+        }
+
+        [Fact]
+        public void ValidateAccessToken_WithMismatchedUserId_ReturnsInvalid()
+        {
+            var service = new FileTokenService(_dataProtection, _memoryCache);
+            string token = service.GenerateAccessToken("chat", "ch1", "file.png", "aesKey123", "user-123", "sess-456");
+
+            var result = service.ValidateAccessToken("chat", "ch1", "file.png", token, "user-imposter", "sess-456");
+
+            Assert.Equal(FileTokenStatus.Invalid, result.Status);
+            Assert.False(result.IsSuccess);
+            Assert.Null(result.EncryptionKey);
+        }
+
+        [Fact]
+        public void ValidateAccessToken_WithMismatchedSessionId_ReturnsInvalid()
+        {
+            var service = new FileTokenService(_dataProtection, _memoryCache);
+            string token = service.GenerateAccessToken("chat", "ch1", "file.png", "aesKey123", "user-123", "sess-456");
+
+            var result = service.ValidateAccessToken("chat", "ch1", "file.png", token, "user-123", "sess-other");
+
+            Assert.Equal(FileTokenStatus.Invalid, result.Status);
+            Assert.False(result.IsSuccess);
+            Assert.Null(result.EncryptionKey);
+        }
+
+        [Fact]
+        public void ValidateAccessToken_TokenWithoutUserOrSession_SucceedsForAnyUser()
+        {
+            var service = new FileTokenService(_dataProtection, _memoryCache);
+            string token = service.GenerateAccessToken("chat", "ch1", "file.png", "aesKey123");
+
+            var result = service.ValidateAccessToken("chat", "ch1", "file.png", token, "user-any", "sess-any");
+
+            Assert.Equal(FileTokenStatus.Valid, result.Status);
+            Assert.True(result.IsSuccess);
+            Assert.Equal("aesKey123", result.EncryptionKey);
+        }
+
+        [Fact]
+        public void GenerateAccessToken_WithUserAndSession_PayloadContainsThem()
+        {
+            var service = new FileTokenService(_dataProtection, _memoryCache);
+            string token = service.GenerateAccessToken("albums", "alb-1", "pic.jpg", "key", "u-1", "s-1");
+
+            var payload = service.UnprotectToken(token);
+
+            Assert.NotNull(payload);
+            Assert.Equal("u-1", payload.UserId);
+            Assert.Equal("s-1", payload.SessionId);
+        }
+
+        [Fact]
+        public void InvalidateUserEncryptedTokens_InvalidatesEncryptedTokensForUser_PreservesOtherUsersAndUnencryptedTokens()
+        {
+            var service = new FileTokenService(_dataProtection, _memoryCache);
+
+            string user1EncryptedToken = service.GenerateAccessToken("albums", "alb-1", "pic.jpg", "aesKey123", "user-1", "sess-1");
+            string user1UnencryptedToken = service.GenerateAccessToken("albums", "alb-pub", "pub.jpg", null, "user-1", "sess-1");
+            string user2EncryptedToken = service.GenerateAccessToken("albums", "alb-2", "pic2.jpg", "aesKey456", "user-2", "sess-2");
+
+            // Before invalidation, all tokens are valid
+            Assert.True(service.ValidateAccessToken("albums", "alb-1", "pic.jpg", user1EncryptedToken, "user-1", "sess-1").IsSuccess);
+            Assert.True(service.ValidateAccessToken("albums", "alb-pub", "pub.jpg", user1UnencryptedToken, "user-1", "sess-1").IsSuccess);
+            Assert.True(service.ValidateAccessToken("albums", "alb-2", "pic2.jpg", user2EncryptedToken, "user-2", "sess-2").IsSuccess);
+
+            // Lock user-1's vault
+            service.InvalidateUserEncryptedTokens("user-1");
+
+            // user-1's previously issued encrypted token is now invalid
+            var afterLockUser1 = service.ValidateAccessToken("albums", "alb-1", "pic.jpg", user1EncryptedToken, "user-1", "sess-1");
+            Assert.False(afterLockUser1.IsSuccess);
+            Assert.Equal(FileTokenStatus.Invalid, afterLockUser1.Status);
+
+            // user-1's unencrypted token and user-2's encrypted token remain valid
+            Assert.True(service.ValidateAccessToken("albums", "alb-pub", "pub.jpg", user1UnencryptedToken, "user-1", "sess-1").IsSuccess);
+            Assert.True(service.ValidateAccessToken("albums", "alb-2", "pic2.jpg", user2EncryptedToken, "user-2", "sess-2").IsSuccess);
+
+            // When user-1 unlocks their vault again, newly generated tokens succeed (and bypass the old dedup cache entry)
+            string newUser1Token = service.GenerateAccessToken("albums", "alb-1", "pic.jpg", "aesKey123", "user-1", "sess-1");
+            Assert.NotEqual(user1EncryptedToken, newUser1Token);
+            var afterReunlock = service.ValidateAccessToken("albums", "alb-1", "pic.jpg", newUser1Token, "user-1", "sess-1");
+            Assert.True(afterReunlock.IsSuccess);
+            Assert.Equal("aesKey123", afterReunlock.EncryptionKey);
+        }
     }

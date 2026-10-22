@@ -1,56 +1,16 @@
-using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.Logging;
-using Moq;
-using Spokes_Server.Core.Data;
 using Spokes_Server.Core.Data.Repositories.Core;
 using Spokes_Server.Core.Models.Core;
+using Spokes_Server.Tests.Helpers;
 using Xunit;
 
 namespace Spokes_Server.Tests.Core.Data.Repositories.Core;
 
-public class SystemConfigRepositoryTests : IDisposable
+public class SystemConfigRepositoryTests : RepositoryTestFixture<SystemConfigRepository>
 {
-    private readonly string _testDataDir;
-    private readonly DiskPersistenceService _writer;
-    private readonly SystemConfigRepository _repo;
-
-    public SystemConfigRepositoryTests()
-    {
-        _testDataDir = Path.Combine(Path.GetTempPath(), $"Spokes_Test_SysConfig_{Guid.NewGuid()}");
-
-        var mockConfig = new Mock<IConfiguration>();
-        mockConfig.Setup(c => c["DataPath"]).Returns(_testDataDir);
-
-        var mockPersistenceLogger = new Mock<ILogger<DiskPersistenceService>>();
-        _writer = new DiskPersistenceService(mockPersistenceLogger.Object);
-
-        _repo = new SystemConfigRepository(_writer, mockConfig.Object);
-    }
-
-    public void Dispose()
-    {
-        if (Directory.Exists(_testDataDir))
-        {
-            try { Directory.Delete(_testDataDir, true); } catch (Exception ex) { Console.WriteLine($"Cleanup failed: {ex.Message}"); }
-        }
-        _writer.Dispose();
-    }
-
     [Fact]
-    public void Constructor_WithNullDataPath_UsesDefaultPath()
+    public void GetOrCreate_WhenEmpty_CreatesAndSavesDefaultConfig()
     {
-        var mockConfig = new Mock<IConfiguration>();
-        mockConfig.Setup(c => c["DataPath"]).Returns((string?)null);
-
-        var repo = new SystemConfigRepository(_writer, mockConfig.Object);
-
-        Assert.NotNull(repo);
-    }
-
-    [Fact]
-    public void Get_WhenEmpty_CreatesAndSavesDefaultConfig()
-    {
-        var config = _repo.Get();
+        var config = _repo.GetOrCreate();
 
         Assert.NotNull(config);
         Assert.Equal("system_config", config.Id);
@@ -58,6 +18,18 @@ public class SystemConfigRepositoryTests : IDisposable
 
         var inRepo = _repo.GetById("system_config");
         Assert.NotNull(inRepo);
+    }
+
+    [Fact]
+    public void Get_WhenEmpty_ReturnsDefaultMemoryInstanceWithoutSaving()
+    {
+        var config = _repo.Get();
+
+        Assert.NotNull(config);
+        Assert.Equal("system_config", config.Id);
+        Assert.False(config.IsSetupComplete);
+        Assert.Null(_repo.GetById("system_config"));
+        Assert.Empty(_repo.GetAll());
     }
 
     [Fact]
@@ -92,7 +64,7 @@ public class SystemConfigRepositoryTests : IDisposable
     [Fact]
     public void Delete_RemovesConfig()
     {
-        var config = _repo.Get();
+        var config = _repo.GetOrCreate();
         _writer.FlushAll();
 
         var expectedPath = Path.Combine(_testDataDir, "Settings", "system_config.json");
@@ -114,10 +86,7 @@ public class SystemConfigRepositoryTests : IDisposable
         var cfg = new SystemConfig { Id = "disk_cfg", ServerPublicUrl = "https://loaded.from.disk" };
         File.WriteAllText(Path.Combine(dir, "system_config.json"), System.Text.Json.JsonSerializer.Serialize(cfg));
 
-        var mockConfig = new Mock<IConfiguration>();
-        mockConfig.Setup(c => c["DataPath"]).Returns(_testDataDir);
-
-        var newRepo = new SystemConfigRepository(_writer, mockConfig.Object);
+        var newRepo = new SystemConfigRepository(_writer, Config);
         newRepo.LoadFromDisk();
 
         var loaded = newRepo.Get();

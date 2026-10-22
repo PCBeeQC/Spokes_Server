@@ -1,88 +1,74 @@
+using System;
+using System.IO;
+using System.Linq;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Spokes_Server.Core.Models.Accounting;
+using Spokes_Server.Core.Models.Communication;
 using Spokes_Server.Core.Models.Core;
-using Spokes_Server.Core.Services.Core;
+using Spokes_Server.Core.Models.HR;
 
 namespace Spokes_Server.Core.Data.Repositories.Core;
 
 public class CompanyProfileRepository : JsonRepository<CompanyProfile>
 {
-    private bool _hasCheckedOptimization;
+    [ActivatorUtilitiesConstructor]
+    public CompanyProfileRepository(
+        DiskPersistenceService writer,
+        IConfiguration config,
+        ILogger<CompanyProfileRepository>? logger = null)
+        : base(writer, Path.Combine(config["DataPath"] ?? "Data", "Settings"), "company.json", logger)
+    {
+    }
 
     public CompanyProfileRepository(DiskPersistenceService writer, IConfiguration config)
-        : base(writer, Path.Combine(config["DataPath"] ?? "Data", "Settings"), "company.json")
+        : this(writer, config, null)
     {
     }
 
     protected override string GetFilePath(CompanyProfile item) =>
         Path.Combine(_basePath, "company.json");
 
-    // Helper to get the ONE profile (creates default if missing)
-    public CompanyProfile Get()
+    /// <summary>
+    /// Bootstraps the company profile: creates and persists a default profile if missing from disk.
+    /// Pure bootstrap method: does not execute image processing or mutate branding on read.
+    /// </summary>
+    public virtual CompanyProfile GetOrCreate()
     {
+        EnsureLoaded();
         var profile = _cache.Values.FirstOrDefault();
         if (profile == null)
         {
             profile = new CompanyProfile();
             Save(profile);
         }
-        else if (!_hasCheckedOptimization)
-        {
-            EnsureOptimizedBranding(profile);
-        }
+
         return profile;
     }
 
-    private void EnsureOptimizedBranding(CompanyProfile profile)
+    /// <summary>
+    /// Pure query accessor to retrieve the active company profile from memory without mutating disk state.
+    /// Returns the cached profile or a default in-memory instance if not yet initialized.
+    /// </summary>
+    public virtual CompanyProfile Get()
     {
-        _hasCheckedOptimization = true;
-        bool changed = false;
-
-        // Auto-downsample oversized legacy icon (> 50KB base64) to max 256px
-        if (!string.IsNullOrEmpty(profile.IconBase64) && profile.IconBase64.Length > 50_000)
-        {
-            if (TryOptimizeBase64(profile.IconBase64, 256, out var optimizedIcon))
-            {
-                profile.IconBase64 = optimizedIcon;
-                profile.IconVersion = Math.Max(1, profile.IconVersion + 1);
-                changed = true;
-            }
-        }
-
-        // Auto-downsample oversized legacy logo (> 500KB base64) to max 1024px
-        if (!string.IsNullOrEmpty(profile.LogoBase64) && profile.LogoBase64.Length > 500_000)
-        {
-            if (TryOptimizeBase64(profile.LogoBase64, 1024, out var optimizedLogo))
-            {
-                profile.LogoBase64 = optimizedLogo;
-                profile.LogoVersion = Math.Max(1, profile.LogoVersion + 1);
-                changed = true;
-            }
-        }
-
-        if (changed)
-        {
-            Save(profile);
-        }
+        EnsureLoaded();
+        return _cache.Values.FirstOrDefault() ?? new CompanyProfile();
     }
 
-    private static bool TryOptimizeBase64(string dataUri, int maxDimension, out string optimizedUri)
-    {
-        optimizedUri = dataUri;
-        try
-        {
-            var commaIdx = dataUri.IndexOf(',');
-            if (commaIdx == -1) return false;
-
-            var base64Data = dataUri[(commaIdx + 1)..];
-            var rawBytes = Convert.FromBase64String(base64Data);
-
-            var imageService = new ImageProcessingService();
-            var optimizedBytes = imageService.OptimizeImage(rawBytes, maxDimension, out var mimeType);
-            optimizedUri = $"data:{mimeType};base64," + Convert.ToBase64String(optimizedBytes);
-            return true;
-        }
-        catch
-        {
-            return false;
-        }
-    }
+    // Domain-owned configuration accessors
+    public BrandingConfig GetBranding() => Get().Branding;
+    public ContactConfig GetContact() => Get().Contact;
+    public DocumentNumberingConfig GetDocumentNumbering() => Get().DocumentNumbering;
+    public AccountingConfig GetAccounting() => Get().Accounting;
+    public ChatConfig GetChat() => Get().Chat;
+    public PushConfig GetPush() => Get().Push;
+    public BackupConfig GetBackup() => Get().Backup;
+    public LicensingConfig GetLicensing() => Get().Licensing;
+    public StorageConfig GetStorage() => Get().Storage;
+    public AuthConfig GetAuth() => Get().Auth;
+    public EmailServerSettings GetEmailSettings() => Get().EmailSettings;
+    public TimesheetSettings GetTimesheetSettings() => Get().TimesheetConfig;
+    public HRSettings GetHRSettings() => Get().HRConfig;
 }

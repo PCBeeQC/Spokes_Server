@@ -7,106 +7,83 @@
         <!-- Action Toolbar -->
         <MudStack Row="true" AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween" Class="px-3 border-b mud-theme-border-color flex-wrap gap-y-2 gap-x-0" Spacing="2">
             <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" Class="flex-wrap gap-y-2">
-                <MudHidden Breakpoint="Breakpoint.MdAndUp">
-                    <MudTooltip Text="Back">
-                        <MudIconButton Icon="@Icons.Material.Filled.ArrowBack" Size="Size.Small" OnClick="OnClose" />
-                    </MudTooltip>
-                </MudHidden>
-
-                @* #23 — Previous/Next navigation *@
-                <MudTooltip Text="Previous">
-                    <MudIconButton Icon="@Icons.Material.Filled.ChevronLeft" Size="Size.Medium" OnClick="OnPreviousMessage"
-                        Disabled="@(!HasPreviousMessage)" />
-                </MudTooltip>
-                <MudTooltip Text="Next">
-                    <MudIconButton Icon="@Icons.Material.Filled.ChevronRight" Size="Size.Medium" OnClick="OnNextMessage"
-                        Disabled="@(!HasNextMessage)" />
-                </MudTooltip>
-
-                <MudHidden Breakpoint="Breakpoint.Xs">
-                    <MudDivider Vertical="true" FlexItem="true" Class="mx-2 my-2" />
-                </MudHidden>
-
-                @* #17 — Reply / Reply All / Forward *@
-                <MudTooltip Text="Reply">
-                    <MudIconButton Icon="@Icons.Material.Filled.Reply" Size="Size.Medium" Color="Color.Primary" OnClick="OnReply" />
-                </MudTooltip>
-                <MudHidden Breakpoint="Breakpoint.SmAndDown">
-                    <MudTooltip Text="Reply All">
-                        <MudIconButton Icon="@Icons.Material.Filled.ReplyAll" Size="Size.Medium" Color="Color.Primary" OnClick="OnReplyAll" />
-                    </MudTooltip>
-                    <MudTooltip Text="Forward">
-                        <MudIconButton Icon="@Icons.Material.Filled.Forward" Size="Size.Medium" Color="Color.Primary" OnClick="OnForward" />
-                    </MudTooltip>
-                </MudHidden>
-
-                <MudHidden Breakpoint="Breakpoint.Xs">
-                    <MudDivider Vertical="true" FlexItem="true" Class="mx-2 my-2" />
-                </MudHidden>
-
-                <MudHidden Breakpoint="Breakpoint.SmAndDown">
-                    <MudTooltip Text="Mark as Unread">
-                        <MudIconButton Icon="@Icons.Material.Filled.MarkEmailUnread" Size="Size.Medium" OnClick="OnMarkAsUnread" />
-                    </MudTooltip>
-                    <MudMenu Icon="@Icons.Material.Filled.DriveFileMove" Title="Move to Folder" Size="Size.Medium" AnchorOrigin="Origin.BottomLeft"
-                        TransformOrigin="Origin.TopLeft">
-                        <div style="min-width: 280px; max-height: 400px; overflow-y: auto;" class="pa-2">
-                            <MudText Typo="Typo.subtitle2" Class="px-2 pb-2">Move to...</MudText>
-                            <MudTreeView T="EmailFolder" Items="_treeItems" Hover="true" Width="100%"
-                                SelectedValueChanged="HandleMoveToFolder">
-                                <ItemTemplate Context="treeItem">
-                                    @{
-                                        var isDisabled = (treeItem as FolderTreeItem)?.IsCurrentFolder == true;
-                                    }
-                                    <MudTreeViewItem @bind-Expanded="@treeItem.Expanded" Items="@treeItem.Children"
-                                        Value="@treeItem.Value">
-                                        <Content>
-                                            <MudIcon Icon="@treeItem.Icon" Class="ml-0 mr-2" Size="Size.Medium"
-                                                Style="@(isDisabled ? "opacity: 0.4;" : "")" />
-                                            <MudText Typo="Typo.body2" Style="@(isDisabled ? "opacity: 0.4;" : "")">
-                                                @treeItem.Value.Name</MudText>
-                                        </Content>
-                                    </MudTreeViewItem>
-                                </ItemTemplate>
-                            </MudTreeView>
-                        </div>
-                    </MudMenu>
-                </MudHidden>
-
-                <MudHidden Breakpoint="Breakpoint.Xs">
-                    <MudDivider Vertical="true" FlexItem="true" Class="mx-2 my-2" />
-                </MudHidden>
-
-                <MudTooltip Text="Delete">
-                    <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Medium" Color="Color.Error" OnClick="OnDelete" />
-                </MudTooltip>
-
-                @if (CanAddToTimeline)
+                @if (OnClose.HasDelegate)
                 {
-                    <MudHidden Breakpoint="Breakpoint.SmAndDown">
-                        <MudTooltip Text="Add to Project Timeline">
-                            <MudIconButton Icon="@Icons.Material.Filled.PlaylistAdd" Size="Size.Medium" Color="Color.Primary" OnClick="OnAddToTimeline" />
+                    <MudHidden Breakpoint="Breakpoint.MdAndUp">
+                        <MudTooltip Text="Back">
+                            <MudIconButton Icon="@Icons.Material.Filled.ArrowBack" Size="Size.Small" OnClick="OnClose" />
                         </MudTooltip>
                     </MudHidden>
                 }
 
-                <MudMenu Icon="@Icons.Material.Filled.MoreVert" Size="Size.Medium">
-                    <MudMenuItem Icon="@Icons.Material.Filled.Inventory2" OnClick="OnArchive">Archive</MudMenuItem>
-                    <MudMenuItem Icon="@Icons.Material.Filled.Report" OnClick="OnJunk">Junk</MudMenuItem>
-                    <MudMenuItem Icon="@Icons.Material.Filled.Print" OnClick="OnPrint">Print</MudMenuItem>
-                    
-                    <MudHidden Breakpoint="Breakpoint.MdAndUp">
-                        <MudDivider />
-                        <MudMenuItem Icon="@Icons.Material.Filled.ReplyAll" OnClick="OnReplyAll">Reply All</MudMenuItem>
-                        <MudMenuItem Icon="@Icons.Material.Filled.Forward" OnClick="OnForward">Forward</MudMenuItem>
-                        <MudMenuItem Icon="@Icons.Material.Filled.MarkEmailUnread" OnClick="OnMarkAsUnread">Mark as Unread</MudMenuItem>
-                        @if (CanAddToTimeline)
+                @* #23 — Previous/Next navigation *@
+                @if (OnPreviousMessage.HasDelegate || OnNextMessage.HasDelegate)
+                {
+                    <MudTooltip Text="Previous">
+                        <MudIconButton Icon="@Icons.Material.Filled.ChevronLeft" Size="Size.Medium" OnClick="OnPreviousMessage"
+                            Disabled="@(!HasPreviousMessage)" />
+                    </MudTooltip>
+                    <MudTooltip Text="Next">
+                        <MudIconButton Icon="@Icons.Material.Filled.ChevronRight" Size="Size.Medium" OnClick="OnNextMessage"
+                            Disabled="@(!HasNextMessage)" />
+                    </MudTooltip>
+                }
+
+                @if ((OnPreviousMessage.HasDelegate || OnNextMessage.HasDelegate) && (OnReply.HasDelegate || OnReplyAll.HasDelegate || OnForward.HasDelegate))
+                {
+                    <MudHidden Breakpoint="Breakpoint.Xs">
+                        <MudDivider Vertical="true" FlexItem="true" Class="mx-2 my-2" />
+                    </MudHidden>
+                }
+
+                @* #17 — Reply / Reply All / Forward *@
+                @if (OnReply.HasDelegate)
+                {
+                    <MudTooltip Text="Reply">
+                        <MudIconButton Icon="@Icons.Material.Filled.Reply" Size="Size.Medium" Color="Color.Primary" OnClick="OnReply" />
+                    </MudTooltip>
+                }
+                @if (OnReplyAll.HasDelegate || OnForward.HasDelegate)
+                {
+                    <MudHidden Breakpoint="Breakpoint.SmAndDown">
+                        @if (OnReplyAll.HasDelegate)
                         {
-                            <MudMenuItem Icon="@Icons.Material.Filled.PlaylistAdd" OnClick="OnAddToTimeline">Add to Timeline</MudMenuItem>
+                            <MudTooltip Text="Reply All">
+                                <MudIconButton Icon="@Icons.Material.Filled.ReplyAll" Size="Size.Medium" Color="Color.Primary" OnClick="OnReplyAll" />
+                            </MudTooltip>
                         }
-                        <div class="px-2 pt-2">
-                            <MudText Typo="Typo.subtitle2" Class="px-2">Move to...</MudText>
-                            <div style="max-height: 250px; overflow-y: auto;">
+                        @if (OnForward.HasDelegate)
+                        {
+                            <MudTooltip Text="Forward">
+                                <MudIconButton Icon="@Icons.Material.Filled.Forward" Size="Size.Medium" Color="Color.Primary" OnClick="OnForward" />
+                            </MudTooltip>
+                        }
+                    </MudHidden>
+                }
+
+                @if (OnMarkAsUnread.HasDelegate || (ShowFolderActions && _treeItems.Any() && OnMoveTo.HasDelegate))
+                {
+                    <MudHidden Breakpoint="Breakpoint.Xs">
+                        <MudDivider Vertical="true" FlexItem="true" Class="mx-2 my-2" />
+                    </MudHidden>
+                }
+
+                @if (OnMarkAsUnread.HasDelegate)
+                {
+                    <MudHidden Breakpoint="Breakpoint.SmAndDown">
+                        <MudTooltip Text="Mark as Unread">
+                            <MudIconButton Icon="@Icons.Material.Filled.MarkEmailUnread" Size="Size.Medium" OnClick="OnMarkAsUnread" />
+                        </MudTooltip>
+                    </MudHidden>
+                }
+
+                @if (ShowFolderActions && _treeItems.Any() && OnMoveTo.HasDelegate)
+                {
+                    <MudHidden Breakpoint="Breakpoint.SmAndDown">
+                        <MudMenu Icon="@Icons.Material.Filled.DriveFileMove" title="Move to Folder" Size="Size.Medium" AnchorOrigin="Origin.BottomLeft"
+                            TransformOrigin="Origin.TopLeft">
+                            <div style="min-width: 280px; max-height: 400px; overflow-y: auto;" class="pa-2">
+                                <MudText Typo="Typo.subtitle2" Class="px-2 pb-2">Move to...</MudText>
                                 <MudTreeView T="EmailFolder" Items="_treeItems" Hover="true" Width="100%"
                                     SelectedValueChanged="HandleMoveToFolder">
                                     <ItemTemplate Context="treeItem">
@@ -119,26 +96,106 @@
                                                 <MudIcon Icon="@treeItem.Icon" Class="ml-0 mr-2" Size="Size.Medium"
                                                     Style="@(isDisabled ? "opacity: 0.4;" : "")" />
                                                 <MudText Typo="Typo.body2" Style="@(isDisabled ? "opacity: 0.4;" : "")">
-                                                    @treeItem.Value.Name</MudText>
+                                                    @(treeItem.Value?.Name ?? treeItem.Text)</MudText>
                                             </Content>
                                         </MudTreeViewItem>
                                     </ItemTemplate>
                                 </MudTreeView>
                             </div>
-                        </div>
+                        </MudMenu>
+                    </MudHidden>
+                }
+
+                @if (ShowDelete && OnDelete.HasDelegate)
+                {
+                    <MudHidden Breakpoint="Breakpoint.Xs">
+                        <MudDivider Vertical="true" FlexItem="true" Class="mx-2 my-2" />
+                    </MudHidden>
+
+                    <MudTooltip Text="Delete">
+                        <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Medium" Color="Color.Error" OnClick="OnDelete" />
+                    </MudTooltip>
+                }
+
+                @if (CanAddToTimeline && OnAddToTimeline.HasDelegate)
+                {
+                    <MudHidden Breakpoint="Breakpoint.SmAndDown">
+                        <MudTooltip Text="Add to Project Timeline">
+                            <MudIconButton Icon="@Icons.Material.Filled.PlaylistAdd" Size="Size.Medium" Color="Color.Primary" OnClick="OnAddToTimeline" />
+                        </MudTooltip>
+                    </MudHidden>
+                }
+
+                <MudMenu Icon="@Icons.Material.Filled.MoreVert" Size="Size.Medium">
+                    @if (OnArchive.HasDelegate)
+                    {
+                        <MudMenuItem Icon="@Icons.Material.Filled.Inventory2" OnClick="OnArchive">Archive</MudMenuItem>
+                    }
+                    @if (OnJunk.HasDelegate)
+                    {
+                        <MudMenuItem Icon="@Icons.Material.Filled.Report" OnClick="OnJunk">Junk</MudMenuItem>
+                    }
+                    <MudMenuItem Icon="@Icons.Material.Filled.Print" OnClick="OnPrint">Print</MudMenuItem>
+                    
+                    <MudHidden Breakpoint="Breakpoint.MdAndUp">
+                        <MudDivider />
+                        @if (OnReplyAll.HasDelegate)
+                        {
+                            <MudMenuItem Icon="@Icons.Material.Filled.ReplyAll" OnClick="OnReplyAll">Reply All</MudMenuItem>
+                        }
+                        @if (OnForward.HasDelegate)
+                        {
+                            <MudMenuItem Icon="@Icons.Material.Filled.Forward" OnClick="OnForward">Forward</MudMenuItem>
+                        }
+                        @if (OnMarkAsUnread.HasDelegate)
+                        {
+                            <MudMenuItem Icon="@Icons.Material.Filled.MarkEmailUnread" OnClick="OnMarkAsUnread">Mark as Unread</MudMenuItem>
+                        }
+                        @if (CanAddToTimeline && OnAddToTimeline.HasDelegate)
+                        {
+                            <MudMenuItem Icon="@Icons.Material.Filled.PlaylistAdd" OnClick="OnAddToTimeline">Add to Timeline</MudMenuItem>
+                        }
+                        @if (ShowFolderActions && _treeItems.Any() && OnMoveTo.HasDelegate)
+                        {
+                            <div class="px-2 pt-2">
+                                <MudText Typo="Typo.subtitle2" Class="px-2">Move to...</MudText>
+                                <div style="max-height: 250px; overflow-y: auto;">
+                                    <MudTreeView T="EmailFolder" Items="_treeItems" Hover="true" Width="100%"
+                                        SelectedValueChanged="HandleMoveToFolder">
+                                        <ItemTemplate Context="treeItem">
+                                            @{
+                                                var isDisabled = (treeItem as FolderTreeItem)?.IsCurrentFolder == true;
+                                            }
+                                            <MudTreeViewItem @bind-Expanded="@treeItem.Expanded" Items="@treeItem.Children"
+                                                Value="@treeItem.Value">
+                                                <Content>
+                                                    <MudIcon Icon="@treeItem.Icon" Class="ml-0 mr-2" Size="Size.Medium"
+                                                        Style="@(isDisabled ? "opacity: 0.4;" : "")" />
+                                                    <MudText Typo="Typo.body2" Style="@(isDisabled ? "opacity: 0.4;" : "")">
+                                                        @(treeItem.Value?.Name ?? treeItem.Text)</MudText>
+                                                </Content>
+                                            </MudTreeViewItem>
+                                        </ItemTemplate>
+                                    </MudTreeView>
+                                </div>
+                            </div>
+                        }
                     </MudHidden>
                 </MudMenu>
             </MudStack>
 
-            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="0">
-                <MudTooltip Text="@(SelectedMessage.IsFlagged ? "Remove Flag" : "Flag Message")">
-                    <MudIconButton
-                        Icon="@(SelectedMessage.IsFlagged ? Icons.Material.Filled.Star : Icons.Material.Outlined.StarBorder)"
-                        Size="Size.Medium"
-                        Color="@(SelectedMessage.IsFlagged ? Color.Warning : Color.Default)"
-                        OnClick="@(() => OnToggleFlag.InvokeAsync(SelectedMessage))" />
-                </MudTooltip>
-            </MudStack>
+            @if (OnToggleFlag.HasDelegate)
+            {
+                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="0">
+                    <MudTooltip Text="@(SelectedMessage.IsFlagged ? "Remove Flag" : "Flag Message")">
+                        <MudIconButton
+                            Icon="@(SelectedMessage.IsFlagged ? Icons.Material.Filled.Star : Icons.Material.Outlined.StarBorder)"
+                            Size="Size.Medium"
+                            Color="@(SelectedMessage.IsFlagged ? Color.Warning : Color.Default)"
+                            OnClick="@(() => OnToggleFlag.InvokeAsync(SelectedMessage))" />
+                    </MudTooltip>
+                </MudStack>
+            }
         </MudStack>
 
         <!-- Message Header -->
@@ -241,10 +298,22 @@
             {
                 <MudProgressLinear Indeterminate="true" Color="Color.Primary" />
             }
-            else
+            else if (!string.IsNullOrWhiteSpace(MessageBody))
             {
                 <div class="email-body-content" style="height: 100%;">
                     <EmailContentRenderer HtmlContent="@MessageBody" />
+                </div>
+            }
+            else if (!string.IsNullOrWhiteSpace(SelectedMessage.Snippet))
+            {
+                <div class="pa-4" style="white-space: pre-wrap; font-family: sans-serif; font-size: 14px; line-height: 1.6;">
+                    @SelectedMessage.Snippet
+                </div>
+            }
+            else
+            {
+                <div class="pa-4 text-muted" style="font-family: sans-serif; font-size: 14px;">
+                    No message content available.
                 </div>
             }
         </div>
@@ -268,6 +337,8 @@
     [Parameter] public List<EmailFolder> Folders { get; set; } = [];
     [Parameter] public string? CurrentFolderPath { get; set; }
     [Parameter] public string? EmployeeId { get; set; }
+    [Parameter] public bool ShowFolderActions { get; set; } = true;
+    [Parameter] public bool ShowDelete { get; set; } = true;
 
     [Parameter] public EventCallback OnClose { get; set; }
     [Parameter] public EventCallback<EmailMessage> OnToggleFlag { get; set; }
@@ -331,7 +402,7 @@
         if (IsImageAttachment(att) || IsPdfAttachment(att))
         {
             // Open preview dialog — pass content type and filename as query params
-            var url = $"/internal/attachments/email/{SelectedMessage.Id}/{att.Id}?employeeId={Uri.EscapeDataString(EmployeeId ?? "")}&ct={Uri.EscapeDataString(att.ContentType)}&fn={Uri.EscapeDataString(att.FileName)}";
+            var url = $"/spokesapi/files/email/{SelectedMessage.Id}/{att.Id}?employeeId={Uri.EscapeDataString(EmployeeId ?? "")}&ct={Uri.EscapeDataString(att.ContentType)}&fn={Uri.EscapeDataString(att.FileName)}";
             var parameters = new DialogParameters
             {
                 { "Url", url },
@@ -348,7 +419,7 @@
         }
     }
 
-    private async Task HandleMoveToFolder(EmailFolder folder)
+    private async Task HandleMoveToFolder(EmailFolder? folder)
     {
         if (folder != null && folder.Path != CurrentFolderPath && OnMoveTo.HasDelegate)
         {
@@ -385,13 +456,15 @@
         public FolderTreeItem(EmailFolder folder) : base(folder) { }
     }
 
-    private static string GetFolderIcon(EmailFolder folder) =>
-        folder.IsInbox ? Icons.Material.Filled.Inbox :
-        folder.IsSent ? Icons.Material.Filled.Send :
-        folder.IsTrash ? Icons.Material.Filled.Delete :
-        folder.IsArchive ? Icons.Material.Filled.Inventory2 :
-        folder.IsJunk ? Icons.Material.Filled.Report :
-        Icons.Material.Filled.Folder;
+    private static string GetFolderIcon(EmailFolder? folder) => folder switch
+    {
+        { IsInbox: true } => Icons.Material.Filled.Inbox,
+        { IsSent: true } => Icons.Material.Filled.Send,
+        { IsTrash: true } => Icons.Material.Filled.Delete,
+        { IsArchive: true } => Icons.Material.Filled.Inventory2,
+        { IsJunk: true } => Icons.Material.Filled.Report,
+        _ => Icons.Material.Filled.Folder
+    };
 
     private string FormatSize(long bytes)
     {

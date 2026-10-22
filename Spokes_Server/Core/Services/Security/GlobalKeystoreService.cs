@@ -39,12 +39,12 @@ public class GlobalKeystoreService
     /// Unlocks and stores the user's private key in RAM.
     /// Returns true if successful, false if unlocking failed.
     /// </summary>
-    public bool UnlockVault(string employeeId, string encryptedPrivateKey, string chatPassword, ICryptoService cryptoService)
+    public bool UnlockVault(string employeeId, string encryptedPrivateKey, string vaultPassword, ICryptoService cryptoService)
     {
         try
         {
             // The password must match what was used to encrypt the private key
-            var kek = cryptoService.DeriveKeyFromPassword(chatPassword, employeeId); // Using employeeId as salt
+            var kek = cryptoService.DeriveKeyFromPassword(vaultPassword, employeeId); // Using employeeId as salt
 
             var plainTextPrivateKey = cryptoService.DecryptAes(encryptedPrivateKey, kek);
 

@@ -1,6 +1,7 @@
 namespace Spokes_Server.Core.Models.Accounting;
 
-using Spokes_Server.Core.Models.Projects;
+using System.Text.Json.Serialization;
+using Spokes_Server.Core.Models.Core;
 using Spokes_Server.Core.Data;
 
 public class PurchaseOrder : IDataEntity
@@ -17,25 +18,42 @@ public class PurchaseOrder : IDataEntity
     public string PoNumber { get; set; } = string.Empty; // e.g. PO2512-001
 
     // Header Info
-    public string Status { get; set; } = "Draft"; // Draft, Final, Partially Billed, Fully Billed, Closed
+    public string Status { get; set; } = PurchaseOrderStatus.Draft; // Draft, Final, Partially Billed, Fully Billed, Closed
     public string PdfPath { get; set; } = string.Empty;
     public DateTime Date { get; set; } = DateTime.Today;
     public string IssuedBy { get; set; } = string.Empty; // Name of employee
     public string SupplierQuoteRef { get; set; } = string.Empty;
     public string SupplierRepName { get; set; } = string.Empty;
 
-    // Re-using ClientInfo for Supplier details (Address, etc)
-    public ClientInfo Supplier { get; set; } = new();
+    // Party contact details for Supplier (Address, etc)
+    public PartyContactInfo Supplier { get; set; } = new();
 
     // Optional Custom Recipient details (if null, use default SpokesSettings main company)
-    public ClientInfo? Recipient { get; set; }
+    public PartyContactInfo? Recipient { get; set; }
 
     // Financials
     public bool ApplyTax { get; set; } = true;
     public decimal TaxRate { get; set; } = 0.14975m; // Default Quebec Tax (adjust as needed)
 
     // The Content
-    public List<PoItem> Items { get; set; } = [];
+    public List<PoItem> LineItems { get; set; } = [];
+
+    // Backward compatibility for legacy JSON files and existing call sites
+    [JsonPropertyName("Items")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<PoItem>? LegacyItems
+    {
+        get => null;
+        set { if (value != null && LineItems.Count == 0) LineItems = value; }
+    }
+
+    [Obsolete("Prefer LineItems for consistency across accounting models.")]
+    [JsonIgnore]
+    public List<PoItem> Items
+    {
+        get => LineItems;
+        set => LineItems = value;
+    }
 
     // Custom Columns Definitions (e.g. ["Color", "Size"])
     // We store the HEADERS here so we know what keys to look for in the items
@@ -49,7 +67,7 @@ public class PurchaseOrder : IDataEntity
     public string Currency { get; set; } = string.Empty;
 
     // Totals
-    public decimal SubTotal => Items.Sum(i => i.Total);
+    public decimal SubTotal => LineItems.Sum(i => i.Total);
     public decimal TaxAmount => ApplyTax ? SubTotal * TaxRate : 0;
     public decimal GrandTotal => SubTotal + TaxAmount;
     

@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.Extensions.Logging;
 using SkiaSharp;
 
 namespace Spokes_Server.Core.Services.Communication;
@@ -12,11 +13,13 @@ namespace Spokes_Server.Core.Services.Communication;
 public class AvatarGeneratorService
 {
     private readonly IWebHostEnvironment _env;
+    private readonly ILogger<AvatarGeneratorService>? _logger;
     private SKTypeface? _typeface;
 
-    public AvatarGeneratorService(IWebHostEnvironment env)
+    public AvatarGeneratorService(IWebHostEnvironment env, ILogger<AvatarGeneratorService>? logger = null)
     {
         _env = env;
+        _logger = logger;
         LoadFont();
     }
 
@@ -33,7 +36,7 @@ public class AvatarGeneratorService
         catch (Exception ex)
         {
             // Fallback will use default typeface if Roboto fails to load
-            Console.WriteLine($"[AvatarGeneratorService] Failed to load Roboto font: {ex.Message}");
+            _logger?.LogWarning(ex, "[AvatarGeneratorService] Failed to load Roboto font: {Message}", ex.Message);
         }
     }
 
@@ -88,7 +91,7 @@ public class AvatarGeneratorService
         float x = (size / 2f) - (textWidth / 2f);
         float y = (size / 2f) + textOffset;
 
-        canvas.DrawText(initials, x, y, font, textPaint);
+        canvas.DrawText(initials, x, y, SKTextAlign.Left, font, textPaint);
 
         using var image = SKImage.FromBitmap(bitmap);
         using var data = image.Encode(SKEncodedImageFormat.Png, 100);

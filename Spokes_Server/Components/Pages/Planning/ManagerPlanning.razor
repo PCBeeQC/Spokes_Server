@@ -1,6 +1,8 @@
 @page "/planning/manager"
+@attribute [Authorize(Policy = AppPermissions.Projects.View)]
 @implements IDisposable
 @using System.Globalization
+@using Spokes_Server.Core.Constants
 @inject Database Db
 @inject NavigationManager Nav
 @inject ISnackbar Snackbar
@@ -145,7 +147,7 @@
                                                             Min="0" Max="100" Step="0.5M" Margin="Margin.Dense" HideSpinButtons="true" />
                                                     </MudTd>
                                                     <MudTd>
-                                                        <MudTextField Value="@context.Note" ValueChanged="@((string v) => UpdateNote(report.Plan, context, v))" Placeholder="..." Margin="Margin.Dense" DisableUnderLine="true" DebounceInterval="500" />
+                                                        <MudTextField Value="@context.Note" ValueChanged="@((string v) => UpdateNote(report.Plan, context, v))" Placeholder="..." Margin="Margin.Dense" Underline="false" DebounceInterval="500" />
                                                     </MudTd>
                                                     <MudTd>
                                                         <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small" Color="Color.Error" OnClick="@(() => RemoveEntry(report.Plan, context))" />
@@ -290,9 +292,19 @@
 
         CurrentUser = await UserService.GetEmployeeAsync();
 
-        ActiveProjects = Db.Projects.GetAll()
+        var rawProjects = Db.Projects.GetAll()
             .Where(p => (p.Status != ProjectStatus.Archived && p.Status != ProjectStatus.Draft) || p.IsInternal)
             .OrderBy(p => p.DisplayName).ToList();
+
+        var allowedProjects = new List<Project>();
+        foreach (var p in rawProjects)
+        {
+            if (await UserService.CanViewProjectAsync(p))
+            {
+                allowedProjects.Add(p);
+            }
+        }
+        ActiveProjects = allowedProjects;
 
         LoadData();
 
@@ -349,7 +361,7 @@
              var emp = Db.Employees.GetAll().FirstOrDefault(e => e.Id == empId);
              if (emp == null) continue;
 
-             var plan = Db.WeeklyPlans.GetByEmployeeAndWeek(emp.Id, CurrentYear, CurrentWeek);
+             var plan = Db.WeeklyPlans.GetOrStubByEmployeeAndWeek(emp.Id, CurrentYear, CurrentWeek);
              plan.EmployeeName = emp.FullName; // Ensure Name
 
              // Fix Project Names
@@ -453,14 +465,14 @@
         entry.ProjectName = projectName;
         var proj = ActiveProjects.FirstOrDefault(p => p.DisplayName == projectName);
         if (proj != null) entry.ProjectId = proj.Id;
-        _ = AutoSave(plan);
+        AutoSave(plan);
     }
-    private void UpdateHours(WeeklyPlan plan, PlanEntry entry, decimal val) { entry.Hours = val; _ = AutoSave(plan); }
-    private void UpdateNote(WeeklyPlan plan, PlanEntry entry, string val) { entry.Note = val; _ = AutoSave(plan); }
-    private void AddEntry(WeeklyPlan plan) { plan.Entries.Add(new PlanEntry { Hours = 4 }); _ = AutoSave(plan); }
-    private void RemoveEntry(WeeklyPlan plan, PlanEntry entry) { plan.Entries.Remove(entry); _ = AutoSave(plan); }
+    private void UpdateHours(WeeklyPlan plan, PlanEntry entry, decimal val) { entry.Hours = val; AutoSave(plan); }
+    private void UpdateNote(WeeklyPlan plan, PlanEntry entry, string val) { entry.Note = val; AutoSave(plan); }
+    private void AddEntry(WeeklyPlan plan) { plan.Entries.Add(new PlanEntry { Hours = 4 }); AutoSave(plan); }
+    private void RemoveEntry(WeeklyPlan plan, PlanEntry entry) { plan.Entries.Remove(entry); AutoSave(plan); }
     
-    private async Task AutoSave(WeeklyPlan plan)
+    private void AutoSave(WeeklyPlan plan)
     {
         IsSaving = true; StateHasChanged();
         Db.WeeklyPlans.Save(plan);
@@ -493,7 +505,7 @@
          var dialog = await DialogService.ShowAsync<AllocateDialog>("Allocate Work", parameters);
          var result = await dialog.Result;
 
-         if (!result.Canceled && result.Data is AllocationResult res)
+         if (result is { Canceled: false, Data: AllocationResult res })
          {
              // Add entry to the chosen employee
              var vm = AllEmployeePlans.FirstOrDefault(p => p.Employee.Id == res.EmployeeId);
@@ -507,7 +519,7 @@
                      Note = $"{item.TaskName}: {res.Note}",
                      Hours = res.Hours
                  });
-                 _ = AutoSave(vm.Plan);
+                 AutoSave(vm.Plan);
                  Snackbar.Add($"Allocated {res.Hours}h to {vm.Employee.FirstName}", Severity.Success);
              }
          }

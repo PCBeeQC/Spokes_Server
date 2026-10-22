@@ -27,7 +27,26 @@ public static class MobileSsoHelper
         ";
     }
 
-    public static string CreateMobileLogoutPageAsync(HttpContext context, string reqId)
+    /// <summary>
+    /// Creates a minimal HTML page that clears the mobile session cookies and redirects to the server base URL.
+    /// </summary>
+    public static string CreateMobileLocalLogoutPage(string serverBaseUrl)
+    {
+        return $@"
+            <!DOCTYPE html>
+            <html>
+            <body>
+                <script>
+                    window._ssoAttempts = 0;
+                    document.cookie = 'Spokes_Refresh=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;';
+                    window.location.href = '{serverBaseUrl}?client=mobile&cb=' + Date.now();
+                </script>
+            </body>
+            </html>
+        ";
+    }
+
+    public static string CreateMobileLogoutPage(HttpContext context, string reqId)
     {
         var serverBase = $"{context.Request.Scheme}://{context.Request.Host}";
 

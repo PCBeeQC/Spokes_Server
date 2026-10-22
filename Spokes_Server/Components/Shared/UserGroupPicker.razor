@@ -1,0 +1,506 @@
+@using Spokes_Server.Core.Data.Repositories.HR
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Services.Identity
+@using Spokes_Server.Core.Services.Security
+@inject EmployeeRepository EmployeeRepo
+@inject TeamRepository TeamRepo
+@inject UserService UserService
+@inject IUserPrivacyService PrivacyService
+@inject AppLabelService AppLabels
+@using Spokes_Server.Components.Shared
+
+@if (Style == UserGroupPickerStyle.Chips)
+{
+    <div class="d-flex flex-column gap-2 @Class" style="@StyleString">
+        @if (Target == UserGroupPickerTarget.Both)
+        {
+            <MudGrid Spacing="2">
+                <MudItem xs="12" sm="6">
+                    <EmployeeAutocomplete Label="@EffectiveUserLabel"
+                                          ExcludedIds="@EffectiveExcludedUserIds"
+                                          ValueChanged="AddUserAsync"
+                                          ResetOnSelect="true"
+                                          Disabled="@Disabled"
+                                          Margin="@Margin"
+                                          Variant="@Variant" />
+                </MudItem>
+                <MudItem xs="12" sm="6">
+                    <TeamAutocomplete Label="@EffectiveGroupLabel"
+                                      ExcludedIds="@EffectiveExcludedGroupIds"
+                                      ValueChanged="AddGroupAsync"
+                                      ResetOnSelect="true"
+                                      Disabled="@Disabled"
+                                      Margin="@Margin"
+                                      Variant="@Variant" />
+                </MudItem>
+            </MudGrid>
+        }
+        else if (Target == UserGroupPickerTarget.UsersOnly)
+        {
+            <EmployeeAutocomplete Label="@EffectiveUserLabel"
+                                  ExcludedIds="@EffectiveExcludedUserIds"
+                                  ValueChanged="AddUserAsync"
+                                  ResetOnSelect="true"
+                                  Disabled="@Disabled"
+                                  Margin="@Margin"
+                                  Variant="@Variant" />
+        }
+        else if (Target == UserGroupPickerTarget.GroupsOnly)
+        {
+            <TeamAutocomplete Label="@EffectiveGroupLabel"
+                              ExcludedIds="@EffectiveExcludedGroupIds"
+                              ValueChanged="AddGroupAsync"
+                              ResetOnSelect="true"
+                              Disabled="@Disabled"
+                              Margin="@Margin"
+                              Variant="@Variant" />
+        }
+
+        @if ((SelectedGroupIds?.Any() ?? false) || (SelectedUserIds?.Any() ?? false))
+        {
+            <div class="d-flex flex-wrap gap-1 mt-1">
+                @if (SelectedGroupIds != null)
+                {
+                    @foreach (var groupId in SelectedGroupIds)
+                    {
+                        var team = GetTeam(groupId);
+                        if (team != null)
+                        {
+                            <TeamChip Team="@team"
+                                      OnClose="@GetRemoveGroupCallback(groupId)"
+                                      Size="Size.Small"
+                                      Color="Color.Secondary"
+                                      Variant="Variant.Filled" />
+                        }
+                        else
+                        {
+                            <MudChip T="string"
+                                     Color="Color.Default"
+                                     Variant="Variant.Outlined"
+                                     Size="Size.Small"
+                                     Disabled="@Disabled"
+                                     OnClose="@GetRemoveGroupMudChipCallback(groupId)">
+                                @Loc["Deleted Group"]
+                            </MudChip>
+                        }
+                    }
+                }
+
+                @if (SelectedUserIds != null)
+                {
+                    @foreach (var userId in SelectedUserIds)
+                    {
+                        var emp = GetEmployee(userId);
+                        if (emp != null)
+                        {
+                            <EmployeeChip Employee="@emp"
+                                          OnClose="@GetRemoveUserCallback(userId)"
+                                          Size="Size.Small"
+                                          Color="Color.Primary"
+                                          Variant="Variant.Outlined" />
+                        }
+                        else
+                        {
+                            <MudChip T="string"
+                                     Color="Color.Default"
+                                     Variant="Variant.Outlined"
+                                     Size="Size.Small"
+                                     Disabled="@Disabled"
+                                     OnClose="@GetRemoveUserMudChipCallback(userId)">
+                                @Loc["Deleted User"]
+                            </MudChip>
+                        }
+                    }
+                }
+            </div>
+        }
+    </div>
+}
+else
+{
+    @* Checklist Presentation Style *@
+    <div class="d-flex flex-column gap-2 @Class" style="@StyleString">
+        <MudTextField @bind-Value="_searchQuery"
+                      Placeholder="@Loc["Search..."]"
+                      Variant="Variant.Outlined"
+                      Margin="Margin.Dense"
+                      Adornment="Adornment.Start"
+                      AdornmentIcon="@Icons.Material.Filled.Search"
+                      Clearable="true"
+                      Immediate="true" />
+
+        <MudCard Elevation="0" Outlined="true" Class="pa-0 rounded-lg overflow-hidden">
+            <div style="@($"max-height: {MaxChecklistHeightPx}px; overflow-y: auto;")">
+                <MudList T="string" Dense="true" Class="pa-0">
+                    @if (Target is UserGroupPickerTarget.GroupsOnly or UserGroupPickerTarget.Both)
+                    {
+                        @foreach (var team in FilteredChecklistTeams)
+                        {
+                            var isSelected = SelectedGroupIds.Contains(team.Id);
+                            <div class="d-flex align-center gap-3 py-2 px-3 hover-bg"
+                                 style="border-bottom: 1px solid var(--mud-palette-divider); cursor: pointer;"
+                                 @onclick="@(() => ToggleGroup(team.Id))">
+                                <MudCheckBox T="bool"
+                                             Value="isSelected"
+                                             ValueChanged="@((val) => SetGroupSelection(team.Id, val))"
+                                             Color="Color.Secondary"
+                                             Class="ma-0 pa-0"
+                                             Disabled="@Disabled"
+                                             @onclick:stopPropagation="true" />
+                                <TeamAvatar Team="@team" Size="Size.Small" UseIcon="true" Style="width: 24px; height: 24px;" />
+                                <div class="d-flex flex-column">
+                                    <MudText Typo="Typo.body2" Style="font-weight: 600;">@team.Name</MudText>
+                                    <MudText Typo="Typo.caption" Color="Color.Secondary">@AppLabels.Team</MudText>
+                                </div>
+                            </div>
+                        }
+                    }
+
+                    @if (Target is UserGroupPickerTarget.UsersOnly or UserGroupPickerTarget.Both)
+                    {
+                        @foreach (var emp in FilteredChecklistUsers)
+                        {
+                            var isSelected = SelectedUserIds.Contains(emp.Id);
+                            <div class="d-flex align-center gap-3 py-2 px-3 hover-bg"
+                                 style="border-bottom: 1px solid var(--mud-palette-divider); cursor: pointer;"
+                                 @onclick="@(() => ToggleUser(emp.Id))">
+                                <MudCheckBox T="bool"
+                                             Value="isSelected"
+                                             ValueChanged="@((val) => SetUserSelection(emp.Id, val))"
+                                             Color="Color.Primary"
+                                             Class="ma-0 pa-0"
+                                             Disabled="@Disabled"
+                                             @onclick:stopPropagation="true" />
+                                <EmployeeAvatar Employee="@emp" Size="Size.Small" ShowPresence="false" />
+                                <div class="d-flex flex-column">
+                                    <MudText Typo="Typo.body2" Style="font-weight: 600;">@emp.FullName</MudText>
+                                    @if (!string.IsNullOrWhiteSpace(emp.Position))
+                                    {
+                                        <MudText Typo="Typo.caption" Color="Color.Secondary">@emp.Position</MudText>
+                                    }
+                                </div>
+                            </div>
+                        }
+                    }
+
+                    @if (!FilteredChecklistUsers.Any() && !FilteredChecklistTeams.Any())
+                    {
+                        <div class="pa-4 text-center">
+                            <MudText Typo="Typo.body2" Color="Color.Secondary">@Loc["No results found."]</MudText>
+                        </div>
+                    }
+                </MudList>
+            </div>
+        </MudCard>
+    </div>
+}
+
+<style>
+    .hover-bg {
+        transition: background-color 0.2s;
+    }
+    .hover-bg:hover {
+        background-color: var(--mud-palette-action-default-hover);
+    }
+</style>
+
+@code {
+    [Parameter] public UserGroupPickerTarget Target { get; set; } = UserGroupPickerTarget.UsersOnly;
+    [Parameter] public UserGroupPickerStyle Style { get; set; } = UserGroupPickerStyle.Chips;
+
+    [Parameter] public HashSet<string> SelectedUserIds { get; set; } = new();
+    [Parameter] public EventCallback<HashSet<string>> SelectedUserIdsChanged { get; set; }
+
+    [Parameter] public List<string>? SelectedUserIdsList { get; set; }
+    [Parameter] public EventCallback<List<string>> SelectedUserIdsListChanged { get; set; }
+
+    [Parameter] public HashSet<string> SelectedGroupIds { get; set; } = new();
+    [Parameter] public EventCallback<HashSet<string>> SelectedGroupIdsChanged { get; set; }
+
+    [Parameter] public List<string>? SelectedGroupIdsList { get; set; }
+    [Parameter] public EventCallback<List<string>> SelectedGroupIdsListChanged { get; set; }
+
+    [Parameter] public IEnumerable<string>? ExcludedUserIds { get; set; }
+    [Parameter] public IEnumerable<string>? ExcludedGroupIds { get; set; }
+
+    [Parameter] public bool AllowSelf { get; set; } = true;
+    [Parameter] public bool Disabled { get; set; } = false;
+
+    [Parameter] public string? UserLabel { get; set; }
+    [Parameter] public string? GroupLabel { get; set; }
+    [Parameter] public Variant Variant { get; set; } = Variant.Outlined;
+    [Parameter] public Margin Margin { get; set; } = Margin.Dense;
+    [Parameter] public int MaxChecklistHeightPx { get; set; } = 320;
+    [Parameter] public string Class { get; set; } = "";
+    [Parameter] public string StyleString { get; set; } = "";
+
+    private Employee? _currentUser;
+    private string _searchQuery = "";
+    private List<Employee> _allDiscoverableUsers = new();
+    private List<Team> _allDiscoverableTeams = new();
+
+    private string EffectiveUserLabel => UserLabel ?? Loc["Add User"].Value;
+    private string EffectiveGroupLabel => GroupLabel ?? string.Format(Loc["Add {0}"].Value, AppLabels.Team);
+
+    private IEnumerable<string> EffectiveExcludedUserIds
+    {
+        get
+        {
+            var set = new HashSet<string>(SelectedUserIds);
+            if (ExcludedUserIds != null)
+            {
+                foreach (var id in ExcludedUserIds) set.Add(id);
+            }
+            if (!AllowSelf && _currentUser != null)
+            {
+                set.Add(_currentUser.Id);
+            }
+            return set;
+        }
+    }
+
+    private IEnumerable<string> EffectiveExcludedGroupIds
+    {
+        get
+        {
+            var set = new HashSet<string>(SelectedGroupIds);
+            if (ExcludedGroupIds != null)
+            {
+                foreach (var id in ExcludedGroupIds) set.Add(id);
+            }
+            return set;
+        }
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        _currentUser = await UserService.GetEmployeeAsync();
+        SyncFromListParameters();
+        LoadDiscoverableData();
+    }
+
+    protected override void OnParametersSet()
+    {
+        SyncFromListParameters();
+    }
+
+    private void SyncFromListParameters()
+    {
+        if (SelectedUserIdsList != null && !SelectedUserIds.SetEquals(SelectedUserIdsList))
+        {
+            SelectedUserIds = new HashSet<string>(SelectedUserIdsList);
+        }
+        if (SelectedGroupIdsList != null && !SelectedGroupIds.SetEquals(SelectedGroupIdsList))
+        {
+            SelectedGroupIds = new HashSet<string>(SelectedGroupIdsList);
+        }
+    }
+
+    private void LoadDiscoverableData()
+    {
+        if (_currentUser == null) return;
+
+        // Privacy-enforcing user discovery
+        var activeUsers = EmployeeRepo.GetActiveEmployees();
+        _allDiscoverableUsers = PrivacyService.FilterDiscoverableEmployees(_currentUser, activeUsers);
+
+        if (!AllowSelf)
+        {
+            _allDiscoverableUsers = _allDiscoverableUsers.Where(u => u.Id != _currentUser.Id).ToList();
+        }
+
+        // Retain any already-selected users even if not normally discoverable so their names/avatars render
+        var discoverableIds = new HashSet<string>(_allDiscoverableUsers.Select(u => u.Id));
+        foreach (var id in SelectedUserIds)
+        {
+            if (!discoverableIds.Contains(id))
+            {
+                var emp = EmployeeRepo.GetById(id);
+                if (emp != null)
+                {
+                    _allDiscoverableUsers.Add(emp);
+                    discoverableIds.Add(id);
+                }
+            }
+        }
+
+        // Privacy-enforcing team discovery
+        var allTeams = TeamRepo.GetAll();
+        _allDiscoverableTeams = PrivacyService.FilterDiscoverableTeams(_currentUser, allTeams);
+
+        var discoverableTeamIds = new HashSet<string>(_allDiscoverableTeams.Select(t => t.Id));
+        foreach (var tid in SelectedGroupIds)
+        {
+            if (!discoverableTeamIds.Contains(tid))
+            {
+                var team = TeamRepo.GetById(tid);
+                if (team != null)
+                {
+                    _allDiscoverableTeams.Add(team);
+                    discoverableTeamIds.Add(tid);
+                }
+            }
+        }
+    }
+
+    private IEnumerable<Employee> FilteredChecklistUsers
+    {
+        get
+        {
+            var excluded = ExcludedUserIds != null ? new HashSet<string>(ExcludedUserIds) : null;
+            var list = _allDiscoverableUsers.AsEnumerable();
+
+            if (excluded != null)
+            {
+                list = list.Where(u => !excluded.Contains(u.Id));
+            }
+
+            if (!string.IsNullOrWhiteSpace(_searchQuery))
+            {
+                var q = _searchQuery.Trim();
+                list = list.Where(u =>
+                    u.FullName.Contains(q, StringComparison.OrdinalIgnoreCase) ||
+                    (u.Email != null && u.Email.Contains(q, StringComparison.OrdinalIgnoreCase)) ||
+                    (!string.IsNullOrEmpty(u.Position) && u.Position.Contains(q, StringComparison.OrdinalIgnoreCase)));
+            }
+
+            return list.OrderBy(u => u.FullName);
+        }
+    }
+
+    private IEnumerable<Team> FilteredChecklistTeams
+    {
+        get
+        {
+            var excluded = ExcludedGroupIds != null ? new HashSet<string>(ExcludedGroupIds) : null;
+            var list = _allDiscoverableTeams.AsEnumerable();
+
+            if (excluded != null)
+            {
+                list = list.Where(t => !excluded.Contains(t.Id));
+            }
+
+            if (!string.IsNullOrWhiteSpace(_searchQuery))
+            {
+                var q = _searchQuery.Trim();
+                list = list.Where(t => t.Name.Contains(q, StringComparison.OrdinalIgnoreCase));
+            }
+
+            return list.OrderBy(t => t.Name);
+        }
+    }
+
+    private async Task NotifyUserIdsChangedAsync()
+    {
+        await SelectedUserIdsChanged.InvokeAsync(SelectedUserIds);
+        if (SelectedUserIdsList != null)
+        {
+            SelectedUserIdsList.Clear();
+            SelectedUserIdsList.AddRange(SelectedUserIds);
+            await SelectedUserIdsListChanged.InvokeAsync(SelectedUserIdsList);
+        }
+    }
+
+    private async Task NotifyGroupIdsChangedAsync()
+    {
+        await SelectedGroupIdsChanged.InvokeAsync(SelectedGroupIds);
+        if (SelectedGroupIdsList != null)
+        {
+            SelectedGroupIdsList.Clear();
+            SelectedGroupIdsList.AddRange(SelectedGroupIds);
+            await SelectedGroupIdsListChanged.InvokeAsync(SelectedGroupIdsList);
+        }
+    }
+
+    private async Task AddUserAsync(Employee? user)
+    {
+        if (user == null || Disabled) return;
+        SelectedUserIds.Add(user.Id);
+        await NotifyUserIdsChangedAsync();
+    }
+
+    private async Task RemoveUser(string userId)
+    {
+        if (Disabled) return;
+        if (SelectedUserIds.Remove(userId))
+        {
+            await NotifyUserIdsChangedAsync();
+        }
+    }
+
+    private async Task SetUserSelection(string userId, bool selected)
+    {
+        if (Disabled) return;
+        if (selected)
+        {
+            SelectedUserIds.Add(userId);
+        }
+        else
+        {
+            SelectedUserIds.Remove(userId);
+        }
+        await NotifyUserIdsChangedAsync();
+    }
+
+    private async Task ToggleUser(string userId)
+    {
+        if (Disabled) return;
+        var selected = SelectedUserIds.Contains(userId);
+        await SetUserSelection(userId, !selected);
+    }
+
+    private async Task AddGroupAsync(Team? team)
+    {
+        if (team == null || Disabled) return;
+        SelectedGroupIds.Add(team.Id);
+        await NotifyGroupIdsChangedAsync();
+    }
+
+    private async Task RemoveGroup(string groupId)
+    {
+        if (Disabled) return;
+        if (SelectedGroupIds.Remove(groupId))
+        {
+            await NotifyGroupIdsChangedAsync();
+        }
+    }
+
+    private async Task SetGroupSelection(string groupId, bool selected)
+    {
+        if (Disabled) return;
+        if (selected)
+        {
+            SelectedGroupIds.Add(groupId);
+        }
+        else
+        {
+            SelectedGroupIds.Remove(groupId);
+        }
+        await NotifyGroupIdsChangedAsync();
+    }
+
+    private async Task ToggleGroup(string groupId)
+    {
+        if (Disabled) return;
+        var selected = SelectedGroupIds.Contains(groupId);
+        await SetGroupSelection(groupId, !selected);
+    }
+
+    private Employee? GetEmployee(string id) =>
+        _allDiscoverableUsers.FirstOrDefault(e => e.Id == id) ?? EmployeeRepo.GetById(id);
+
+    private Team? GetTeam(string id) =>
+        _allDiscoverableTeams.FirstOrDefault(t => t.Id == id) ?? TeamRepo.GetById(id);
+
+    private EventCallback GetRemoveGroupCallback(string groupId) =>
+        Disabled ? default : EventCallback.Factory.Create(this, () => RemoveGroup(groupId));
+
+    private EventCallback GetRemoveUserCallback(string userId) =>
+        Disabled ? default : EventCallback.Factory.Create(this, () => RemoveUser(userId));
+
+    private EventCallback<MudChip<string>> GetRemoveGroupMudChipCallback(string groupId) =>
+        Disabled ? default : EventCallback.Factory.Create<MudChip<string>>(this, _ => RemoveGroup(groupId));
+
+    private EventCallback<MudChip<string>> GetRemoveUserMudChipCallback(string userId) =>
+        Disabled ? default : EventCallback.Factory.Create<MudChip<string>>(this, _ => RemoveUser(userId));
+}

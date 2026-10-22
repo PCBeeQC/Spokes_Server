@@ -1,14 +1,15 @@
-using Spokes_Server.Components.Layout;
+using System;
+using Spokes_Server.Core.Models.Communication;
 
 namespace Spokes_Server.Core.Services.Communication;
 
 public class ShareTargetStateService
 {
     private readonly object _lock = new();
-    private MainLayout.SharePayload? _pendingPayload;
+    private SharePayload? _pendingPayload;
     private string? _targetChannelId;
 
-    public MainLayout.SharePayload? PendingPayload
+    public SharePayload? PendingPayload
     {
         get { lock (_lock) return _pendingPayload; }
     }
@@ -19,7 +20,7 @@ public class ShareTargetStateService
 
     public event Action? OnPayloadReceived;
 
-    public void SetPayload(MainLayout.SharePayload payload, string channelId)
+    public void SetPayload(SharePayload payload, string channelId)
     {
         lock (_lock)
         {

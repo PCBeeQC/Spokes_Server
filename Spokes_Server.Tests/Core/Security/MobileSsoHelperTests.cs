@@ -1,31 +1,17 @@
-namespace Spokes_Server.Tests.Core.Security;
-
 using Microsoft.AspNetCore.Http;
 using Spokes_Server.Core.Security;
+using Xunit;
+
+namespace Spokes_Server.Tests.Core.Security;
 
 public class MobileSsoHelperTests
 {
     [Fact]
-    public void CreateJsRedirectPage_ValidTargetUrl_ReturnsHtmlWithSessionStorageCleanupAndRedirect()
+    public void CreateJsRedirectPage_ValidUrl_GeneratesHtmlWithExpectedScript()
     {
         // Arrange
-        var targetUrl = "/dashboard";
+        const string targetUrl = "https://spokes.company.com/dashboard";
 
-        // Act
-        var html = MobileSsoHelper.CreateJsRedirectPage(targetUrl);
-
-        // Assert
-        Assert.NotNull(html);
-        Assert.Contains("<!DOCTYPE html>", html);
-        Assert.Contains("sessionStorage.removeItem('mobile_auto_login_attempts');", html);
-        Assert.Contains($"window.location.replace('{targetUrl}');", html);
-    }
-
-    [Theory]
-    [InlineData("https://spokes.company.com/sso/callback?code=abc&state=xyz")]
-    [InlineData("/projects/123")]
-    public void CreateJsRedirectPage_VariousUrls_ContainsExpectedRedirectLocation(string targetUrl)
-    {
         // Act
         var html = MobileSsoHelper.CreateJsRedirectPage(targetUrl);
 
@@ -35,7 +21,21 @@ public class MobileSsoHelperTests
     }
 
     [Fact]
-    public void CreateMobileLogoutPageAsync_ValidContextAndReqId_UsesSchemeAndHostFromContext()
+    public void CreateJsRedirectPage_EscapesSpecialCharacters_Safely()
+    {
+        // Arrange
+        const string targetUrl = "https://spokes.company.com/path?foo=1&bar='baz'\"qux\"";
+
+        // Act
+        var html = MobileSsoHelper.CreateJsRedirectPage(targetUrl);
+
+        // Assert
+        Assert.Contains($"window.location.replace('{targetUrl}');", html);
+        Assert.Contains("sessionStorage.removeItem('mobile_auto_login_attempts');", html);
+    }
+
+    [Fact]
+    public void CreateMobileLogoutPage_ValidContextAndReqId_UsesSchemeAndHostFromContext()
     {
         // Arrange
         var context = new DefaultHttpContext();
@@ -44,7 +44,7 @@ public class MobileSsoHelperTests
         var reqId = "req-456-test";
 
         // Act
-        var html = MobileSsoHelper.CreateMobileLogoutPageAsync(context, reqId);
+        var html = MobileSsoHelper.CreateMobileLogoutPage(context, reqId);
 
         // Assert
         Assert.NotNull(html);
@@ -53,7 +53,7 @@ public class MobileSsoHelperTests
     }
 
     [Fact]
-    public void CreateMobileLogoutPageAsync_CustomPortAndHttpScheme_ConstructsExpectedUrls()
+    public void CreateMobileLogoutPage_CustomPortAndHttpScheme_ConstructsExpectedUrls()
     {
         // Arrange
         var context = new DefaultHttpContext();
@@ -62,7 +62,7 @@ public class MobileSsoHelperTests
         var reqId = "req-local-789";
 
         // Act
-        var html = MobileSsoHelper.CreateMobileLogoutPageAsync(context, reqId);
+        var html = MobileSsoHelper.CreateMobileLogoutPage(context, reqId);
 
         // Assert
         Assert.NotNull(html);
@@ -71,7 +71,7 @@ public class MobileSsoHelperTests
     }
 
     [Fact]
-    public void CreateMobileLogoutPageAsync_IncludesCapacitorPreferencesCleanup()
+    public void CreateMobileLogoutPage_IncludesCapacitorPreferencesCleanup()
     {
         // Arrange
         var context = new DefaultHttpContext();
@@ -80,7 +80,7 @@ public class MobileSsoHelperTests
         var reqId = "req-pref-test";
 
         // Act
-        var html = MobileSsoHelper.CreateMobileLogoutPageAsync(context, reqId);
+        var html = MobileSsoHelper.CreateMobileLogoutPage(context, reqId);
 
         // Assert
         Assert.Contains("const refreshKey = 'spokes_refresh_' + window.location.hostname;", html);
@@ -92,7 +92,7 @@ public class MobileSsoHelperTests
     }
 
     [Fact]
-    public void CreateMobileLogoutPageAsync_IncludesCapacitorCookiesCleanup()
+    public void CreateMobileLogoutPage_IncludesCapacitorCookiesCleanup()
     {
         // Arrange
         var context = new DefaultHttpContext();
@@ -101,7 +101,7 @@ public class MobileSsoHelperTests
         var reqId = "req-cookies-test";
 
         // Act
-        var html = MobileSsoHelper.CreateMobileLogoutPageAsync(context, reqId);
+        var html = MobileSsoHelper.CreateMobileLogoutPage(context, reqId);
 
         // Assert
         Assert.Contains("'Spokes_Refresh'", html);
@@ -114,7 +114,7 @@ public class MobileSsoHelperTests
     }
 
     [Fact]
-    public void CreateMobileLogoutPageAsync_SetsExplicitLogoutFlag()
+    public void CreateMobileLogoutPage_SetsExplicitLogoutFlag()
     {
         // Arrange
         var context = new DefaultHttpContext();
@@ -123,7 +123,7 @@ public class MobileSsoHelperTests
         var reqId = "req-flag-test";
 
         // Act
-        var html = MobileSsoHelper.CreateMobileLogoutPageAsync(context, reqId);
+        var html = MobileSsoHelper.CreateMobileLogoutPage(context, reqId);
 
         // Assert
         Assert.Contains("localStorage.setItem('spokes_explicit_logout', 'true');", html);

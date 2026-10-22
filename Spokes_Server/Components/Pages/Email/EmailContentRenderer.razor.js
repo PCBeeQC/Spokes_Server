@@ -16,15 +16,9 @@ export function renderContent(container, htmlContent, dotNetHelper) {
     // allow-same-origin lets us access contentDocument for auto-sizing
     // No allow-scripts, allow-forms, allow-popups — blocks all dangerous behavior
     iframe.sandbox = 'allow-same-origin';
-    iframe.style.cssText = 'width: 100%; border: none; overflow: hidden; min-height: 200px; background: white;';
+    iframe.style.cssText = 'width: 100%; border: none; overflow-y: auto; min-height: 200px; background: white;';
     
-    // Set srcdoc with the email HTML content
-    iframe.srcdoc = htmlContent;
-
-    container.appendChild(iframe);
-
-    // Auto-resize iframe to match content height
-    iframe.onload = () => {
+    const setupIframe = () => {
         try {
             const doc = iframe.contentDocument;
             if (!doc || !doc.body) return;
@@ -32,7 +26,7 @@ export function renderContent(container, htmlContent, dotNetHelper) {
             // Set base styles on the iframe body for consistent rendering
             const style = doc.createElement('style');
             style.textContent = `
-                body { margin: 0; padding: 16px; font-family: Roboto, Helvetica, Arial, sans-serif; line-height: 1.5; }
+                body { margin: 0; padding: 16px; font-family: Roboto, Helvetica, Arial, sans-serif; line-height: 1.5; word-wrap: break-word; }
                 img { max-width: 100%; height: auto; }
                 a { color: #1a0dab; text-decoration: underline; cursor: pointer; }
             `;
@@ -80,6 +74,19 @@ export function renderContent(container, htmlContent, dotNetHelper) {
             iframe.style.overflow = 'auto';
         }
     };
+
+    // Attach handler before setting srcdoc / appending to avoid missed synchronous load events
+    iframe.onload = setupIframe;
+
+    // Set srcdoc with the email HTML content
+    iframe.srcdoc = htmlContent;
+
+    container.appendChild(iframe);
+
+    // If iframe was already parsed synchronously upon insertion, invoke setup directly
+    if (iframe.contentDocument && (iframe.contentDocument.readyState === 'complete' || iframe.contentDocument.readyState === 'interactive')) {
+        setupIframe();
+    }
     } catch (e) {
         console.error('Error initializing renderContent:', e);
     }

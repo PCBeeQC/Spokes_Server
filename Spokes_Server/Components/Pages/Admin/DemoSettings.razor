@@ -193,17 +193,19 @@
         try
         {
             // 1. Save Config
-            var config = Db.DemoConfigs.Get();
+            var config = Db.DemoConfigs.GetOrCreate();
             config.AutoLoginEmployeeIds = _selectedIds.Where(kv => kv.Value).Select(kv => kv.Key).ToList();
             Db.DemoConfigs.Save(config);
 
             // 2. Run Backup
-            var zipPath = await BackupService.RunBackupNow();
-            if (zipPath.StartsWith("Error"))
+            var result = await BackupService.RunBackupNowAsync();
+            if (!result.Success || string.IsNullOrEmpty(result.ZipPath))
             {
-                Snackbar.Add(zipPath, Severity.Error);
+                Snackbar.Add(result.ErrorMessage ?? "Backup failed", result.IsBusy ? Severity.Warning : Severity.Error);
                 return;
             }
+
+            var zipPath = result.ZipPath;
 
             // 3. Rename to Golden Snapshot
             var dataPath = Config["DataPath"] ?? "Data";
@@ -244,14 +246,25 @@
         }
     }
 
-    private void RestoreSnapshot()
+    private async Task RestoreSnapshot()
     {
         var dataPath = Config["DataPath"] ?? "Data";
         var goldenPath = Path.Combine(dataPath, "Backups", "demo_golden_snapshot.zip");
         if (File.Exists(goldenPath))
         {
-            Db.RestoreBackup(goldenPath, null!);
-            Nav.NavigateTo("/", true);
+            var result = await BackupService.RestoreBackupAsync(goldenPath, null);
+            if (result.Success)
+            {
+                Nav.NavigateTo("/", true);
+            }
+            else
+            {
+                Snackbar.Add($"Restore failed: {result.ErrorMessage}", Severity.Error);
+            }
+        }
+        else
+        {
+            Snackbar.Add("Snapshot file not found", Severity.Warning);
         }
     }
 }

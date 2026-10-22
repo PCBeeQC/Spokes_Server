@@ -1,11 +1,20 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.StaticFiles;
-using SkiaSharp;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Net.Http.Headers;
+using Spokes_Server.Aggregate.Contexts;
 using Spokes_Server.Core.Data.Repositories.Communication;
 using Spokes_Server.Core.Data.Repositories.Core;
 using Spokes_Server.Core.Data.Repositories.HR;
-using Spokes_Server.Core.Services.Core;
+using Spokes_Server.Core.Models.Communication;
+using Spokes_Server.Core.Models.HR;
+using Spokes_Server.Core.Services.Communication.Chat;
+using Spokes_Server.Core.Services.Content;
+using Spokes_Server.Core.Services.Identity;
+using Spokes_Server.Core.Services.Maintenance;
+using Spokes_Server.Core.Services.Security;
+using Spokes_Server.Core.Services.Storage;
 
 namespace Spokes_Server.Controllers;
 
@@ -15,53 +24,69 @@ namespace Spokes_Server.Controllers;
 public class FileController : SpokesControllerBase
 {
     private readonly IFileService _fileService;
-    private readonly IEnumerable<IFileAccessProvider> _providers;
-    private readonly EmployeeRepository _employees;
-    private readonly ScopedKeystoreService _keystore;
-    private readonly ICryptoService _crypto;
+    private readonly IFileAuthorizationService _fileAuthService;
     private readonly CompanyProfileRepository _companyProfiles;
-    private readonly OpenIdAccountRepository _openIdAccounts;
-    private readonly ILogger<FileController> _logger;
     private readonly ChatChannelRepository _channels;
-    private readonly AlbumRepository _albums;
-    private readonly ServerEscrowService _escrowService;
+    private readonly ILogger<FileController> _logger;
     private readonly UserService _userService;
     private readonly ImageProcessingService _imageService;
-    private readonly DeviceSessionRepository _deviceSessions;
-    private readonly Spokes_Server.Core.Services.Core.IStorageHealthService? _storageHealth;
+    private readonly IConfiguration? _config;
+    private readonly IStorageHealthService? _storageHealth;
+    private readonly FileTokenService? _fileTokenService;
+    private readonly IMp4FastStartService? _fastStartService;
 
+    [ActivatorUtilitiesConstructor]
     public FileController(
         IFileService fileService,
-        IEnumerable<IFileAccessProvider> providers,
-        EmployeeRepository employees,
-        ChatChannelRepository channels,
-        ScopedKeystoreService keystore,
-        ICryptoService crypto,
-        CompanyProfileRepository companyProfiles,
-        OpenIdAccountRepository openIdAccounts,
+        IFileAuthorizationService fileAuthService,
+        CoreContext coreContext,
+        CommunicationContext communicationContext,
         ILogger<FileController> logger,
-        AlbumRepository albums,
-        ServerEscrowService escrowService,
         UserService userService,
         ImageProcessingService imageService,
-        DeviceSessionRepository deviceSessions,
-        Spokes_Server.Core.Services.Core.IStorageHealthService? storageHealth = null)
+        IStorageHealthService? storageHealth = null,
+        FileTokenService? fileTokenService = null,
+        IConfiguration? config = null,
+        IMp4FastStartService? fastStartService = null)
+        : this(
+            fileService,
+            fileAuthService,
+            coreContext.CompanyProfile,
+            logger,
+            userService,
+            imageService,
+            communicationContext.ChatChannels,
+            storageHealth,
+            fileTokenService,
+            config,
+            fastStartService)
+    {
+    }
+
+    internal FileController(
+        IFileService fileService,
+        IFileAuthorizationService fileAuthService,
+        CompanyProfileRepository companyProfiles,
+        ILogger<FileController> logger,
+        UserService userService,
+        ImageProcessingService imageService,
+        ChatChannelRepository channels,
+        IStorageHealthService? storageHealth = null,
+        FileTokenService? fileTokenService = null,
+        IConfiguration? config = null,
+        IMp4FastStartService? fastStartService = null)
     {
         _fileService = fileService;
-        _providers = providers;
-        _employees = employees;
-        _channels = channels;
-        _keystore = keystore;
-        _crypto = crypto;
+        _fileAuthService = fileAuthService;
         _companyProfiles = companyProfiles;
-        _openIdAccounts = openIdAccounts;
         _logger = logger;
-        _albums = albums;
-        _escrowService = escrowService;
         _userService = userService;
         _imageService = imageService;
-        _deviceSessions = deviceSessions;
+        _channels = channels;
         _storageHealth = storageHealth;
+        _fileTokenService = fileTokenService;
+        _config = config;
+        _fastStartService = fastStartService;
     }
 
     // Extensions that should be forced to download instead of inline display (XSS prevention)
@@ -70,367 +95,241 @@ public class FileController : SpokesControllerBase
         ".html", ".htm", ".svg", ".xml", ".xhtml"
     };
 
-    private string? TryResolveAlbumKey(string albumId, string userId, string? tokenEncryptionKey = null)
+    private static readonly HashSet<string> SafeInlineContentTypes = new(StringComparer.OrdinalIgnoreCase)
     {
-        if (!string.IsNullOrEmpty(tokenEncryptionKey)) return tokenEncryptionKey;
+        "image/jpeg", "image/png", "image/gif", "image/webp", "image/bmp", "application/pdf"
+    };
 
-        var album = _albums.GetById(albumId);
-        if (album == null || !album.IsEncrypted) return null;
-
-        string? privateKey = null;
-
-        // Step 1: Direct user access (Owner or Contributor)
-        if (album.EncryptedAlbumKeys.TryGetValue(userId, out var cipherUserKey))
-        {
-            if (_keystore.IsUnlocked)
-            {
-                privateKey = _keystore.GetPrivateKey();
-                if (privateKey != null)
-                {
-                    try { return _crypto.DecryptRsa(cipherUserKey, privateKey); } catch { }
-                }
-            }
-        }
-
-        // Step 2: Channel access
-        foreach (var channelId in album.SharedWithChannelIds)
-        {
-            if (album.EncryptedAlbumKeys.TryGetValue($"Channel_{channelId}", out var cipherAlbumKey))
-            {
-                var channel = _channels.GetById(channelId);
-                if (channel != null && channel.EncryptedChannelKeys.TryGetValue(userId, out var cipherChannelKey))
-                {
-                    if (_keystore.IsUnlocked)
-                    {
-                        privateKey ??= _keystore.GetPrivateKey();
-                        if (privateKey != null)
-                        {
-                            try
-                            {
-                                var channelKey = _crypto.DecryptRsa(cipherChannelKey, privateKey);
-                                return _crypto.DecryptAes(cipherAlbumKey, channelKey);
-                            }
-                            catch { }
-                        }
-                    }
-                }
-            }
-        }
-
-        // Step 3: Escrow fallback
-        if (_escrowService.IsEscrowAvailable && album.EncryptedAlbumKeys.TryGetValue("Escrow", out var escrowCipherKey))
-        {
-            try
-            {
-                return _crypto.DecryptRsa(escrowCipherKey, _escrowService.DecryptedEscrowPrivateKey!);
-            }
-            catch { }
-        }
-
-        return null;
-    }
-
-    [HttpPost("{category}/{contextId}")]
-    public async Task<IActionResult> UploadFile(string category, string contextId, [FromForm] IFormFileCollection files, [FromQuery] string? t = null)
+    private static readonly HashSet<string> SafeThumbnailFallbackExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
+        ".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"
+    };
+
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, object> _thumbRegenLocks = new(StringComparer.OrdinalIgnoreCase);
+
+    private record UploadContext(
+        Employee User,
+        string? EncryptionKey);
+
+    private IActionResult? ValidateUploadPrelude(
+        string category,
+        string contextId,
+        string? token,
+        out UploadContext? context,
+        bool isThumbnail = false)
+    {
+        context = null;
+
         if (!IsValidPathSegment(category) || !IsValidPathSegment(contextId))
         {
-            return BadRequest("Invalid path parameters");
+            return BadRequestError("Invalid path parameters");
         }
 
-        var config = HttpContext.RequestServices?.GetService<IConfiguration>();
+        var config = _config;
         if (config?.GetValue<bool>("Spokes_DemoMode") == true)
         {
             var demoUser = _userService.GetEmployee(User);
             if (demoUser == null || !demoUser.IsAdmin)
             {
-                return StatusCode(403, "Uploads are disabled in demo mode.");
+                return StatusCodeError(403, "Uploads are disabled in demo mode.");
             }
-        }
-
-        if (files == null || files.Count == 0)
-        {
-            return BadRequest("No files uploaded");
         }
 
         if (_storageHealth != null && !_storageHealth.IsUploadAllowed)
         {
-            return BadRequest("Server storage is critically full (< 100 MB remaining). Uploads are temporarily paused to protect database integrity. Please free disk space on the server.");
+            return BadRequestError("Server storage is critically full (< 100 MB remaining). Uploads are temporarily paused to protect database integrity. Please free disk space on the server.");
         }
-
 
         var user = _userService.GetEmployee(User);
-        if (user == null || !user.IsActive || user.IsSuspended || user.IsBanned) return Unauthorized("Authentication required.");
-        
-        // Extract decryption key from token (auth is handled by [Authorize])
-        string? tokenEncryptionKey = null;
-        try
+        if (user == null || !user.IsActive || user.IsSuspended || user.IsBanned)
         {
-            tokenEncryptionKey = ValidateDecryptionToken(category, contextId, "*", t);
-        }
-        catch (ApplicationException)
-        {
-            return StatusCode(410, "Upload Token Expired or Invalid");
+            return UnauthorizedError("Authentication required.");
         }
 
-        var provider = _providers.FirstOrDefault(p => p.Category.Equals(category, StringComparison.OrdinalIgnoreCase));
-        if (provider != null)
+        var sessionId = User.FindFirst("SessionId")?.Value;
+
+        var tokenValidation = _fileTokenService?.ValidateAccessToken(category, contextId, "*", token, user.Id, sessionId)
+            ?? (string.IsNullOrEmpty(token) ? FileTokenValidationResult.None() : FileTokenValidationResult.Invalid());
+        if (!tokenValidation.IsSuccess)
         {
-            bool canAccess = await provider.CanAccessAsync(user, contextId);
-            if (!canAccess) return Forbid();
+            return StatusCodeError(410, "Upload Token Expired or Invalid");
         }
-        else
+        string? tokenEncryptionKey = tokenValidation.EncryptionKey;
+
+        if (!_fileAuthService.IsKnownCategory(category))
         {
-            return BadRequest($"Unknown file category: {category}");
+            return BadRequestError($"Unknown file category: {category}");
         }
 
-        var results = new List<object>();
-
-        long maxFileSize = _companyProfiles.Get()?.MaxFileUploadSizeBytes ?? 268435456;
-
-        string? encryptionKey = null;
-        if (category.Equals("chat", StringComparison.OrdinalIgnoreCase))
+        if (!_fileAuthService.CanUpload(category, contextId, user))
         {
-            var channel = _channels.GetById(contextId);
-            if (channel != null && channel.IsEncrypted)
-            {
-                if (!string.IsNullOrEmpty(tokenEncryptionKey))
-                {
-                    encryptionKey = tokenEncryptionKey;
-                }
-                else
-                {
-                    if (!_keystore.IsUnlocked && HttpContext != null && !string.IsNullOrEmpty(user.EncryptedPrivateKey))
-                    {
-                        _keystore.TryInitializeFromVaultCookie(HttpContext, user.Id, user.EncryptedPrivateKey, _crypto);
-                    }
+            return ForbiddenError("Access forbidden.", "FORBIDDEN");
+        }
 
-                    if (_keystore.IsUnlocked)
-                    {
-                        var privateKey = _keystore.GetPrivateKey();
-                        if (privateKey != null && channel.EncryptedChannelKeys.TryGetValue(user.Id, out var cipherKey))
-                        {
-                            try { encryptionKey = _crypto.DecryptRsa(cipherKey, privateKey); }
-                            catch (Exception ex)
-                            {
-                                _logger.LogWarning("Failed to decrypt channel key for user {UserId}: {Message}", user.Id, ex.Message);
-                            }
-                        }
-                    }
+        var keyResolution = _fileAuthService.ResolveUploadKey(new FileUploadKeyRequest(category, contextId, user, tokenEncryptionKey, isThumbnail, HttpContext));
+        if (!keyResolution.IsSuccess)
+        {
+            return BadRequestError(keyResolution.ErrorMessage ?? "Encryption key resolution failed.");
+        }
+        string? encryptionKey = keyResolution.EncryptionKey;
 
-                    if (encryptionKey == null)
-                    {
-                        return BadRequest("You do not have the encryption key for this channel (missing token).");
-                    }
-                }
-            }
+        context = new UploadContext(user, encryptionKey);
+        return null;
+    }
+
+    [HttpPost("{category}/{contextId}")]
+    [DisableRequestSizeLimit]
+    [RequestFormLimits(MultipartBodyLengthLimit = long.MaxValue)]
+    public async Task<IActionResult> UploadFile(string category, string contextId, [FromForm] IFormFileCollection files, [FromQuery] string? t = null)
+    {
+        if (files == null || files.Count == 0)
+        {
+            return BadRequestError("No files uploaded");
+        }
+
+        var errorResult = ValidateUploadPrelude(category, contextId, t, out var uploadCtx);
+        if (errorResult != null) return errorResult;
+
+        var user = uploadCtx!.User;
+        var encryptionKey = uploadCtx.EncryptionKey;
+
+        var profile = _companyProfiles.Get();
+        long maxFileSize = profile?.MaxFileUploadSizeBytes ?? 268435456;
+
+        bool isMobileUpload = Request.Headers.TryGetValue("X-Upload-Platform", out var platformVal)
+            && string.Equals(platformVal, "mobile", StringComparison.OrdinalIgnoreCase);
+
+        int serverMaxDim;
+        int serverQuality;
+
+        if (isMobileUpload)
+        {
+            // Mobile device already applied configured mobile compression settings client-side.
+            // Bypass server-side downscaling (preserve uploaded bytes, generate thumbnail).
+            serverMaxDim = 0;
+            serverQuality = 90;
         }
         else if (category.Equals("albums", StringComparison.OrdinalIgnoreCase))
         {
-            var album = _albums.GetById(contextId);
-            if (album != null && album.IsEncrypted)
-            {
-                encryptionKey = TryResolveAlbumKey(contextId, user.Id, tokenEncryptionKey);
-                if (encryptionKey == null)
-                {
-                    return BadRequest("You do not have the encryption key to upload to this album.");
-                }
-            }
+            serverMaxDim = profile?.Albums?.DesktopPhotoMaxDimension ?? 3840;
+            serverQuality = profile?.Albums?.DesktopPhotoQuality ?? 90;
+        }
+        else if (category.Equals("chat", StringComparison.OrdinalIgnoreCase))
+        {
+            serverMaxDim = profile?.Chat?.DesktopPhotoMaxDimension ?? 3840;
+            serverQuality = profile?.Chat?.DesktopPhotoQuality ?? 85;
+        }
+        else
+        {
+            serverMaxDim = 3840;
+            serverQuality = 90;
         }
 
         foreach (var file in files)
         {
             if (file.Length > maxFileSize)
             {
-                return BadRequest($"File {file.FileName} exceeds the max size of {maxFileSize} bytes.");
+                return BadRequestError($"File {file.FileName} exceeds the max size of {maxFileSize} bytes.");
             }
+        }
 
-            try
+        var results = new FileUploadResult[files.Count];
+        Exception? processingException = null;
+
+        var parallelOptions = new ParallelOptions
+        {
+            MaxDegreeOfParallelism = Math.Clamp(Environment.ProcessorCount, 1, 4)
+        };
+
+        await Parallel.ForEachAsync(
+            Enumerable.Range(0, files.Count),
+            parallelOptions,
+            async (index, ct) =>
             {
-                int? imageWidth = null;
-                int? imageHeight = null;
-                
-                bool hasThumbnail = false;
-                
-                string safeName = _fileService.GenerateSafeName(file.FileName);
-                
-                Stream uploadStream = file.OpenReadStream();
-
+                var file = files[index];
                 try
                 {
-                    // Attempt to read image dimensions if it might be an image (skip for temp files to avoid unnecessary processing and orphaned thumbnails)
-                    if (!category.Equals("temp", StringComparison.OrdinalIgnoreCase) && file.ContentType.StartsWith("image/", StringComparison.OrdinalIgnoreCase))
+                    int? imageWidth = null;
+                    int? imageHeight = null;
+                    double? durationSeconds = null;
+                    bool hasThumbnail = false;
+                    string safeName = _fileService.GenerateSafeName(file.FileName);
+                    Stream uploadStream = file.OpenReadStream();
+
+                    try
                     {
-                        // Mitigate memory exhaustion from huge "image bombs"
-                        if (file.Length <= 50 * 1024 * 1024) // 50 MB max for image parsing
+                        // Attempt to process image and generate thumbnail (skip for temp files to avoid unnecessary processing and orphaned thumbnails)
+                        if (!category.Equals("temp", StringComparison.OrdinalIgnoreCase) &&
+                            _imageService.TryProcessUploadImage(uploadStream, file.ContentType, file.Length, out var processedImage, serverMaxDim, serverQuality))
                         {
-                            try
+                            if (processedImage.ProcessedStream != uploadStream)
                             {
-                                using var skStream = new SKManagedStream(uploadStream, disposeManagedStream: false);
-                                using var codec = SKCodec.Create(skStream);
-                                if (codec != null)
-                                {
-                                    imageWidth = codec.Info.Width;
-                                    imageHeight = codec.Info.Height;
-
-                                    if (imageWidth > 16384 || imageHeight > 16384 || (long)imageWidth * imageHeight > 100_000_000)
-                                    {
-                                        throw new InvalidOperationException("Image dimensions are too large, potential decompression bomb.");
-                                    }
-
-                                    using var bitmap = SKBitmap.Decode(codec);
-                                    if (bitmap != null)
-                                    {
-                                        var orientedBitmap = bitmap;
-                                        bool modifiedMainImage = false;
-
-                                        if (codec.EncodedOrigin != SKEncodedOrigin.TopLeft && codec.EncodedOrigin != SKEncodedOrigin.Default)
-                                        {
-                                            orientedBitmap = AutoOrientBitmap(bitmap, codec.EncodedOrigin);
-                                            modifiedMainImage = true;
-                                        }
-
-                                        // Check if main image needs downscaling (max 3840)
-                                        int maxMainDim = 3840;
-                                        int mainWidth = orientedBitmap.Width;
-                                        int mainHeight = orientedBitmap.Height;
-
-                                        if (mainWidth > maxMainDim || mainHeight > maxMainDim)
-                                        {
-                                            if (mainWidth > mainHeight)
-                                            {
-                                                mainHeight = (int)Math.Round((double)mainHeight * maxMainDim / mainWidth);
-                                                mainWidth = maxMainDim;
-                                            }
-                                            else
-                                            {
-                                                mainWidth = (int)Math.Round((double)mainWidth * maxMainDim / mainHeight);
-                                                mainHeight = maxMainDim;
-                                            }
-
-                                            var resizedBitmap = orientedBitmap.Resize(new SKImageInfo(mainWidth, mainHeight), new SKSamplingOptions(SKFilterMode.Linear));
-                                            if (orientedBitmap != bitmap) orientedBitmap.Dispose();
-                                            orientedBitmap = resizedBitmap;
-                                            modifiedMainImage = true;
-                                        }
-
-                                        if (modifiedMainImage)
-                                        {
-                                            var ms = new MemoryStream();
-                                            var format = file.ContentType.Contains("png") ? SKEncodedImageFormat.Png : SKEncodedImageFormat.Jpeg;
-                                            orientedBitmap.Encode(ms, format, 90);
-                                            ms.Position = 0;
-                                            
-                                            uploadStream.Dispose();
-                                            uploadStream = ms;
-                                            
-                                            imageWidth = orientedBitmap.Width;
-                                            imageHeight = orientedBitmap.Height;
-                                        }
-
-                                        // GENERATE THUMBNAIL
-                                        int maxThumbDim = 1280;
-
-                                        int thumbWidth = orientedBitmap.Width;
-                                        int thumbHeight = orientedBitmap.Height;
-
-                                        if (thumbWidth > maxThumbDim || thumbHeight > maxThumbDim)
-                                        {
-                                            if (thumbWidth > thumbHeight)
-                                            {
-                                                thumbHeight = (int)Math.Round((double)thumbHeight * maxThumbDim / thumbWidth);
-                                                thumbWidth = maxThumbDim;
-                                            }
-                                            else
-                                            {
-                                                thumbWidth = (int)Math.Round((double)thumbWidth * maxThumbDim / thumbHeight);
-                                                thumbHeight = maxThumbDim;
-                                            }
-                                        }
-
-                                        // Only resize if needed to save CPU
-                                        bool didResize = false;
-                                        SKBitmap thumbBitmap = orientedBitmap;
-                                        if (thumbWidth != orientedBitmap.Width || thumbHeight != orientedBitmap.Height)
-                                        {
-                                            thumbBitmap = orientedBitmap.Resize(new SKImageInfo(thumbWidth, thumbHeight), new SKSamplingOptions(SKFilterMode.Linear));
-                                            didResize = true;
-                                        }
-
-                                        if (thumbBitmap != null)
-                                        {
-                                            var folder = _fileService.GetPhysicalPath(category, contextId, "");
-                                            if (!Directory.Exists(folder)) Directory.CreateDirectory(folder);
-                                            var thumbPath = Path.Combine(folder, $"{safeName}_thumb.jpg");
-                                            
-                                            using var thumbStream = new FileStream(thumbPath, FileMode.Create);
-                                            using var thumbData = thumbBitmap.Encode(SKEncodedImageFormat.Jpeg, 80);
-                                            
-                                            if (!string.IsNullOrEmpty(encryptionKey))
-                                            {
-                                                using var msThumb = new MemoryStream();
-                                                thumbData.SaveTo(msThumb);
-                                                msThumb.Position = 0;
-                                                await _crypto.EncryptStreamAsync(msThumb, thumbStream, encryptionKey);
-                                            }
-                                            else
-                                            {
-                                                thumbData.SaveTo(thumbStream);
-                                            }
-                                            hasThumbnail = true;
-
-                                            if (didResize && thumbBitmap != orientedBitmap)
-                                            {
-                                                thumbBitmap.Dispose();
-                                            }
-                                        }
-
-                                        if (orientedBitmap != bitmap)
-                                        {
-                                            orientedBitmap.Dispose();
-                                        }
-                                    }
-                                }
+                                uploadStream.Dispose();
+                                uploadStream = processedImage.ProcessedStream;
                             }
-                            catch
+
+                            imageWidth = processedImage.Width;
+                            imageHeight = processedImage.Height;
+
+                            if (processedImage.ThumbnailBytes != null)
                             {
-                                // Ignore exceptions if it's not a valid image
+                                using var msThumb = new MemoryStream(processedImage.ThumbnailBytes);
+                                await _fileService.UploadThumbnailAsync(category, contextId, msThumb, safeName, encryptionKey);
+                                hasThumbnail = true;
                             }
                         }
-                        
-                        // Reset stream position for the actual upload
+                        else if (!category.Equals("temp", StringComparison.OrdinalIgnoreCase) &&
+                                 _fastStartService != null &&
+                                 (file.ContentType.StartsWith("video/", StringComparison.OrdinalIgnoreCase) || IsMp4Video(file.FileName)))
+                        {
+                            if (_fastStartService.TryProcessMp4(uploadStream, out var videoMeta) && videoMeta.Success)
+                            {
+                                if (videoMeta.WasModified && videoMeta.ProcessedStream != null)
+                                {
+                                    uploadStream.Dispose();
+                                    uploadStream = videoMeta.ProcessedStream;
+                                }
+
+                                imageWidth = videoMeta.Width;
+                                imageHeight = videoMeta.Height;
+                                durationSeconds = videoMeta.DurationSeconds;
+                            }
+                        }
+
                         if (uploadStream.CanSeek)
                         {
                             uploadStream.Position = 0;
                         }
+                        // Pass to IFileService which sanitizes and saves with optional encryption
+                        var url = await _fileService.UploadStreamAsync(category, contextId, uploadStream, file.FileName, encryptionKey, safeName);
+
+                        results[index] = new FileUploadResult(
+                            url,
+                            file.FileName,
+                            file.ContentType,
+                            uploadStream.CanSeek ? uploadStream.Length : file.Length,
+                            imageWidth,
+                            imageHeight,
+                            hasThumbnail,
+                            durationSeconds);
                     }
-
-                    // Pass to IFileService which sanitizes and saves with optional encryption
-                    var url = await _fileService.UploadStreamAsync(category, contextId, uploadStream, file.FileName, encryptionKey, safeName);
-
-                    results.Add(new
+                    finally
                     {
-                        FilePath = url,
-                        FileName = file.FileName,
-                        ContentType = file.ContentType,
-                        FileSizeBytes = uploadStream.CanSeek ? uploadStream.Length : file.Length,
-                        ImageWidth = imageWidth,
-                        ImageHeight = imageHeight,
-                        HasThumbnail = hasThumbnail
-                    });
+                        uploadStream?.Dispose();
+                    }
                 }
-                finally
+                catch (Exception ex)
                 {
-                    uploadStream?.Dispose();
+                    Interlocked.CompareExchange(ref processingException, ex, null);
                 }
-            }
-            catch (Exception ex)
-            {
-                return StatusCode(500, $"Failed to process {file.FileName}: {ex.Message}");
-            }
+            });
+
+        if (processingException != null)
+        {
+            return StatusCodeError(500, $"Failed to process file: {processingException.Message}", "UPLOAD_PROCESSING_FAILED");
         }
 
-        return Ok(results);
+        return Ok(results.ToList());
     }
 
     [HttpPost("thumbnail/{category}/{contextId}/{fileName}")]
@@ -438,112 +337,33 @@ public class FileController : SpokesControllerBase
     {
         fileName = Path.GetFileName(fileName);
         
-        if (!IsValidPathSegment(category) || !IsValidPathSegment(contextId) || !IsValidPathSegment(fileName))
+        if (!IsValidPathSegment(fileName))
         {
-            return BadRequest("Invalid path parameters");
+            return BadRequestError("Invalid path parameters");
         }
 
         if (category.Equals("temp", StringComparison.OrdinalIgnoreCase))
         {
-            return BadRequest("Thumbnails are not supported for temporary files.");
+            return BadRequestError("Thumbnails are not supported for temporary files.");
         }
 
-        var config = HttpContext.RequestServices?.GetService<IConfiguration>();
-        if (config?.GetValue<bool>("Spokes_DemoMode") == true)
-        {
-            var demoUser = _userService.GetEmployee(User);
-            if (demoUser == null || !demoUser.IsAdmin)
-            {
-                return StatusCode(403, "Uploads are disabled in demo mode.");
-            }
-        }
+        if (file == null || file.Length == 0) return BadRequestError("No file uploaded");
+        if (file.Length > 5 * 1024 * 1024) return BadRequestError("Thumbnail must be smaller than 5MB");
 
-        if (file == null || file.Length == 0) return BadRequest("No file uploaded");
-        if (file.Length > 5 * 1024 * 1024) return BadRequest("Thumbnail must be smaller than 5MB");
+        var errorResult = ValidateUploadPrelude(category, contextId, t, out var uploadCtx, isThumbnail: true);
+        if (errorResult != null) return errorResult;
 
-        if (_storageHealth != null && !_storageHealth.IsUploadAllowed)
-        {
-            return BadRequest("Server storage is critically full (< 100 MB remaining). Uploads are temporarily paused to protect database integrity. Please free disk space on the server.");
-        }
+        var encryptionKey = uploadCtx!.EncryptionKey;
 
-
-        var user = _userService.GetEmployee(User);
-        
-        string? tokenEncryptionKey = null;
-        try
-        {
-            tokenEncryptionKey = ValidateDecryptionToken(category, contextId, "*", t);
-        }
-        catch (ApplicationException)
-        {
-            return StatusCode(410, "Upload Token Expired or Invalid");
-        }
-
-        if (user == null || !user.IsActive || user.IsSuspended || user.IsBanned) return Unauthorized("Authentication required.");
-
-        var provider = _providers.FirstOrDefault(p => p.Category.Equals(category, StringComparison.OrdinalIgnoreCase));
-        if (provider != null)
-        {
-            if (!await provider.CanAccessAsync(user, contextId)) return Forbid();
-
-            // Verify ownership to prevent IDOR overwrites
-            if (category.Equals("albums", StringComparison.OrdinalIgnoreCase))
-            {
-                var album = _albums.GetById(contextId);
-                if (album == null || (album.OwnerId != user.Id && !album.ContributorUserIds.Contains(user.Id)))
-                {
-                    return Forbid();
-                }
-            }
-        }
-        else
-        {
-            return BadRequest($"Unknown file category: {category}");
-        }
-
-        string? encryptionKey = null;
-        if (category.Equals("chat", StringComparison.OrdinalIgnoreCase))
-        {
-            var channel = _channels.GetById(contextId);
-            if (channel != null && channel.IsEncrypted)
-            {
-                if (!string.IsNullOrEmpty(tokenEncryptionKey))
-                {
-                    encryptionKey = tokenEncryptionKey;
-                }
-                else
-                {
-                    if (!_keystore.IsUnlocked) return BadRequest("Your chat vault is locked.");
-                    var privateKey = _keystore.GetPrivateKey();
-                    if (privateKey != null && channel.EncryptedChannelKeys.TryGetValue(user.Id, out var cipherKey))
-                    {
-                        try { encryptionKey = _crypto.DecryptRsa(cipherKey, privateKey); }
-                        catch { return BadRequest("Failed to decrypt channel key."); }
-                    }
-                    else
-                    {
-                        return BadRequest("You do not have the encryption key for this channel.");
-                    }
-                }
-            }
-        }
-        else if (category.Equals("albums", StringComparison.OrdinalIgnoreCase))
-        {
-            var album = _albums.GetById(contextId);
-            if (album != null && album.IsEncrypted)
-            {
-                encryptionKey = TryResolveAlbumKey(contextId, user.Id, tokenEncryptionKey);
-                if (encryptionKey == null) return BadRequest("No encryption key.");
-            }
-        }
-
+        var thumbFileName = $"{fileName}_thumb.jpg";
         var folder = _fileService.GetPhysicalPath(category, contextId, "");
-        if (!Directory.Exists(folder)) Directory.CreateDirectory(folder);
+        var fullPath = !string.IsNullOrEmpty(folder) 
+            ? Path.Combine(folder, thumbFileName) 
+            : _fileService.GetPhysicalPath(category, contextId, thumbFileName);
 
-        var fullPath = Path.Combine(folder, $"{fileName}_thumb.jpg");
-        if (System.IO.File.Exists(fullPath))
+        if ((!string.IsNullOrEmpty(fullPath) && System.IO.File.Exists(fullPath)) || _fileService.FileExists(category, contextId, thumbFileName))
         {
-            return BadRequest("Thumbnail already exists for this file. Overwriting is not permitted.");
+            return BadRequestError("Thumbnail already exists for this file. Overwriting is not permitted.");
         }
 
         using var stream = file.OpenReadStream();
@@ -555,51 +375,68 @@ public class FileController : SpokesControllerBase
         {
             if (!_imageService.TryGenerateThumbnail(memoryStream, out var thumbData) || thumbData == null)
             {
-                return BadRequest("Invalid image format or dimensions too large.");
+                return BadRequestError("Invalid image format or dimensions too large.");
             }
-            
+
             using (thumbData)
             {
-                using var fileStream = new FileStream(fullPath, FileMode.Create);
-
-            if (!string.IsNullOrEmpty(encryptionKey))
-            {
-                await _crypto.EncryptStreamAsync(thumbData, fileStream, encryptionKey);
-            }
-            else
-            {
-                await thumbData.CopyToAsync(fileStream);
-            }
+                await _fileService.UploadThumbnailAsync(category, contextId, thumbData, fileName, encryptionKey);
             }
         }
-        catch
+        catch (IOException ex)
         {
-            if (System.IO.File.Exists(fullPath))
-            {
-                try { System.IO.File.Delete(fullPath); } catch { }
-            }
-            return BadRequest("Invalid image format.");
+            _logger.LogError(ex, "Disk or storage I/O error uploading thumbnail for {FileName} in category {Category}", fileName, category);
+            try { await _fileService.DeleteFileAsync(category, contextId, thumbFileName); } catch (Exception cleanupEx) { _logger.LogDebug(cleanupEx, "Failed to clean up file at {Path}", thumbFileName); }
+            return StatusCodeError(500, "Disk or storage I/O error occurred while saving thumbnail.");
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            _logger.LogError(ex, "Permission denied accessing storage while uploading thumbnail for {FileName} in category {Category}", fileName, category);
+            try { await _fileService.DeleteFileAsync(category, contextId, thumbFileName); } catch (Exception cleanupEx) { _logger.LogDebug(cleanupEx, "Failed to clean up file at {Path}", thumbFileName); }
+            return StatusCodeError(500, "Permission denied accessing storage while saving thumbnail.");
+        }
+        catch (Exception ex) when (ex is FormatException or System.Security.Cryptography.CryptographicException or ArgumentException)
+        {
+            _logger.LogWarning(ex, "Invalid image format or corrupt cryptographic data for thumbnail of {FileName}", fileName);
+            try { await _fileService.DeleteFileAsync(category, contextId, thumbFileName); } catch (Exception cleanupEx) { _logger.LogDebug(cleanupEx, "Failed to clean up file at {Path}", thumbFileName); }
+            return BadRequestError("Invalid image format.");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Unexpected error processing thumbnail for file {FileName}", fileName);
+            try { await _fileService.DeleteFileAsync(category, contextId, thumbFileName); } catch (Exception cleanupEx) { _logger.LogDebug(cleanupEx, "Failed to clean up file at {Path}", thumbFileName); }
+            return StatusCodeError(500, "An error occurred while generating the thumbnail.");
         }
 
         return Ok();
     }
 
     [HttpGet("thumb/{category}/{contextId}/{fileName}")]
-    public Task<IActionResult> GetFileThumb(string category, string contextId, string fileName, [FromQuery] string? t = null)
+    public IActionResult GetFileThumb(string category, string contextId, string fileName, [FromQuery] string? t = null)
         => GetFileInternal(category, contextId, fileName, t, thumb: true);
 
     [HttpGet("{category}/{contextId}/{fileName}")]
-    public Task<IActionResult> GetFile(string category, string contextId, string fileName, [FromQuery] string? t = null)
+    public IActionResult GetFile(string category, string contextId, string fileName, [FromQuery] string? t = null)
         => GetFileInternal(category, contextId, fileName, t, thumb: false);
+
+    [HttpGet("/internal/attachments/{channelId}/{fileName}")]
+    [HttpGet("/spokesapi/attachments/{channelId}/{fileName}")]
+    public IActionResult GetLegacyAttachment(string channelId, string fileName, [FromQuery] string? t = null)
+        => GetFileInternal("chat", channelId, fileName, t, thumb: false);
+
+    [HttpGet("/internal/attachments/thumb/{channelId}/{fileName}")]
+    [HttpGet("/spokesapi/attachments/thumb/{channelId}/{fileName}")]
+    public IActionResult GetLegacyAttachmentThumb(string channelId, string fileName, [FromQuery] string? t = null)
+        => GetFileInternal("chat", channelId, fileName, t, thumb: true);
 
     [HttpGet("demo-media/{fileName}")]
     public IActionResult GetDemoMedia(string fileName)
     {
         fileName = Path.GetFileName(fileName);
-        var config = HttpContext.RequestServices.GetRequiredService<IConfiguration>();
-        if (!config.GetValue<bool>("Spokes_DemoMode") && !config.GetValue<bool>("Spokes_DemoSetup"))
+        var config = _config;
+        if (config == null || (!config.GetValue<bool>("Spokes_DemoMode") && !config.GetValue<bool>("Spokes_DemoSetup")))
         {
-            return NotFound();
+            return NotFoundError("Demo media not available.", "DEMO_MEDIA_NOT_FOUND");
         }
 
         var dataPath = config["DataPath"] ?? "Data";
@@ -614,199 +451,482 @@ public class FileController : SpokesControllerBase
             }
             return PhysicalFile(Path.GetFullPath(demoMediaPath), contentType);
         }
-        return NotFound();
+        return NotFoundError("Demo media file not found.", "NOT_FOUND");
     }
 
     [HttpGet("thumb/demo-media/{fileName}")]
     public IActionResult GetDemoMediaThumb(string fileName)
         => GetDemoMedia(fileName);
 
-    /// <summary>
-    /// Validates a self-contained DataProtection-encrypted token and extracts the AES encryption key.
-    /// Does NOT perform authentication — that's handled by [Authorize].
-    /// Returns the Base64 encryption key. Throws an exception if the token is provided but invalid.
-    /// </summary>
-    private string? ValidateDecryptionToken(string category, string contextId, string fileName, string? t)
+    [HttpGet("email/{messageId}/{attachmentId}")]
+    [HttpGet("/internal/attachments/email/{messageId}/{attachmentId}")]
+    [HttpGet("/spokesapi/attachments/email/{messageId}/{attachmentId}")]
+    public IActionResult GetEmailAttachment(
+        string messageId,
+        string attachmentId,
+        [FromQuery] string employeeId,
+        [FromQuery] string? ct = null,
+        [FromQuery] string? fn = null)
     {
-        if (string.IsNullOrEmpty(t)) return null;
-
-        var fileTokenService = HttpContext.RequestServices.GetRequiredService<FileTokenService>();
-        var payload = fileTokenService.UnprotectToken(t);
-
-        if (payload == null)
+        // Validate authenticated user
+        var user = _userService.GetEmployee(User);
+        if (user == null || !user.IsActive || user.IsSuspended || user.IsBanned)
         {
-            throw new ApplicationException("TokenInvalid");
+            return UnauthorizedError("Authentication required.", "UNAUTHORIZED");
         }
 
-        // Validate token matches this specific file (or wildcard for uploads)
-        if (payload.Category != category || payload.ContextId != contextId || (payload.FileName != fileName && fileName != "*" && payload.FileName != "*"))
+        if (string.IsNullOrEmpty(employeeId))
         {
-            throw new ApplicationException("TokenInvalid");
+            return BadRequestError("employeeId is required");
         }
 
-        // Check expiry
-        if (DateTime.UtcNow.Ticks > payload.ExpiryTicks)
+        // Enforce ownership via EmailFileAccessProvider
+        if (!_fileAuthService.CanAccess("email", employeeId, user))
         {
-            throw new ApplicationException("TokenExpired");
+            return ForbiddenError("Access to email attachment forbidden.", "FORBIDDEN");
         }
 
-        // Return the AES key (may be null for non-encrypted files)
-        return payload.EncryptionKeyBase64;
+
+        // Prevent path traversal
+        if (string.IsNullOrWhiteSpace(messageId) || messageId.Contains("..") || messageId.Contains('/') || messageId.Contains('\\') ||
+            string.IsNullOrWhiteSpace(attachmentId) || attachmentId.Contains("..") || attachmentId.Contains('/') || attachmentId.Contains('\\') ||
+            employeeId.Contains("..") || employeeId.Contains('/') || employeeId.Contains('\\'))
+        {
+            return BadRequestError("Invalid path parameters");
+        }
+
+        string filePath;
+        try
+        {
+            filePath = _fileService.GetEmailAttachmentPhysicalPath(employeeId, messageId, attachmentId);
+        }
+        catch (ArgumentException)
+        {
+            return BadRequestError("Invalid path parameters");
+        }
+
+        if (!System.IO.File.Exists(filePath))
+        {
+            try
+            {
+                var attachmentsDir = Path.GetDirectoryName(filePath);
+                var emailDir = Directory.GetParent(attachmentsDir ?? "")?.FullName;
+                if (!string.IsNullOrEmpty(emailDir))
+                {
+                    var mimePath = Path.Combine(emailDir, "Mime", $"{messageId}.eml");
+                    if (System.IO.File.Exists(mimePath))
+                    {
+                        using var stream = System.IO.File.OpenRead(mimePath);
+                        var mime = MimeKit.MimeMessage.Load(stream);
+                        var part = mime.Attachments.OfType<MimeKit.MimePart>()
+                            .FirstOrDefault(p => !string.IsNullOrEmpty(fn) && p.FileName == fn)
+                            ?? mime.Attachments.OfType<MimeKit.MimePart>().FirstOrDefault();
+                        if (part != null && part.Content != null)
+                        {
+                            Directory.CreateDirectory(attachmentsDir!);
+                            using var outStream = System.IO.File.Create(filePath);
+                            part.Content.DecodeTo(outStream);
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to extract missing email attachment from MIME for message {MessageId}", messageId);
+            }
+        }
+
+        if (!System.IO.File.Exists(filePath))
+        {
+            return NotFoundError("Attachment not found");
+        }
+
+        // Use content type from query param or resolve from IFileService
+        var contentType = !string.IsNullOrEmpty(ct) ? ct : _fileService.GetContentType(filePath);
+        var originalFileName = !string.IsNullOrEmpty(fn) ? fn : attachmentId;
+
+        var extension = Path.GetExtension(originalFileName);
+
+        bool forceDownload = Request.Query.ContainsKey("download") || 
+                             ForceDownloadExtensions.Contains(extension) || 
+                             !SafeInlineContentTypes.Contains(contentType);
+
+        // Support download mode or force download for dangerous types
+        if (forceDownload)
+        {
+            return PhysicalFile(filePath, contentType, originalFileName, enableRangeProcessing: true);
+        }
+
+        // Serve inline — set Content-Disposition: inline to prevent browser auto-download
+        // Use ASCII-safe filename + RFC 5987 UTF-8 encoding for non-ASCII characters
+        var safeFileName = new string(originalFileName.Select(c => c > 127 ? '_' : c).ToArray());
+        var encodedFileName = Uri.EscapeDataString(originalFileName);
+        Response.Headers.ContentDisposition = $"inline; filename=\"{safeFileName}\"; filename*=UTF-8''{encodedFileName}";
+        return PhysicalFile(filePath, contentType, enableRangeProcessing: true);
     }
 
-    private async Task<IActionResult> GetFileInternal(string category, string contextId, string fileName, string? t, bool thumb)
+    private IActionResult GetFileInternal(string category, string contextId, string fileName, string? t, bool thumb)
     {
-        fileName = Path.GetFileName(fileName);
-        
         // 0. Validate route parameters - prevent path traversal
         if (!IsValidPathSegment(category) || !IsValidPathSegment(contextId) || !IsValidPathSegment(fileName))
         {
-            return BadRequest("Invalid path parameters");
+            return BadRequestError("Invalid path parameters");
         }
 
-        var extension = Path.GetExtension(fileName);
+        fileName = Path.GetFileName(fileName);
 
         // 1. Identify User (always available from [Authorize] middleware)
         var user = _userService.GetEmployee(User);
-        if (user == null || !user.IsActive || user.IsSuspended || user.IsBanned) return Unauthorized("Authentication required.");
+        if (user == null || !user.IsActive || user.IsSuspended || user.IsBanned) return UnauthorizedError("Authentication required.");
+
+        var sessionId = User.FindFirst("SessionId")?.Value;
 
         // Extract decryption key from token (auth is handled by [Authorize])
-        string? tokenEncryptionKey = null;
-        try
+        var tokenValidation = _fileTokenService?.ValidateAccessToken(category, contextId, fileName, t, user.Id, sessionId)
+            ?? (string.IsNullOrEmpty(t) ? FileTokenValidationResult.None() : FileTokenValidationResult.Invalid());
+        if (!tokenValidation.IsSuccess)
         {
-            tokenEncryptionKey = ValidateDecryptionToken(category, contextId, fileName, t);
+            return StatusCodeError(410, "File Token Expired or Invalid");
         }
-        catch (ApplicationException)
+        string? tokenEncryptionKey = tokenValidation.EncryptionKey;
+
+        return ServeFileForUser(category, contextId, fileName, user, thumb, tokenEncryptionKey);
+    }
+
+    /// <summary>
+    /// Serves an authorized file for an authenticated user with permission checks and on-the-fly decryption.
+    /// Can be called directly by user-scoped session bridges (e.g. slideshow presentations) to ensure
+    /// the full FileController authorization and decryption pipeline is applied.
+    /// </summary>
+    public IActionResult ServeFileForUser(
+        string category,
+        string contextId,
+        string fileName,
+        Employee user,
+        bool thumb,
+        string? tokenEncryptionKey = null)
+    {
+        if (!IsValidPathSegment(category) || !IsValidPathSegment(contextId) || !IsValidPathSegment(fileName))
         {
-            return StatusCode(410, "File Token Expired or Invalid");
+            return BadRequestError("Invalid path parameters");
+        }
+
+        fileName = Path.GetFileName(fileName);
+        var extension = Path.GetExtension(fileName);
+
+        if (user == null || !user.IsActive || user.IsSuspended || user.IsBanned)
+        {
+            return UnauthorizedError("Authentication required.");
         }
 
         // 2. Find Access Provider
-        var provider = _providers.FirstOrDefault(p => p.Category.Equals(category, StringComparison.OrdinalIgnoreCase));
-
-        // If no provider is defined for this category, deny access by default for security
-        if (provider == null)
-        {
-            return BadRequest($"Unknown file category: {category}");
-        }
-
         // Temporary staging files are for internal ingestion only and cannot be downloaded
         if (category.Equals("temp", StringComparison.OrdinalIgnoreCase))
         {
-            return NotFound();
+            return NotFoundError("Temporary files cannot be downloaded directly.", "NOT_FOUND");
         }
 
         // 3. Check Permissions
-        bool canAccess = await provider.CanAccessAsync(user, contextId);
-        if (!canAccess)
+        if (category.Equals("chat", StringComparison.OrdinalIgnoreCase))
         {
-            return Forbid();
+            var channel = _channels.GetById(contextId);
+            if (channel == null)
+            {
+                return NotFoundError("Channel not found");
+            }
+
+            if (_fileAuthService.IsKnownCategory("chat"))
+            {
+                if (!_fileAuthService.CanAccess(category, contextId, user))
+                {
+                    return ForbiddenError("Access forbidden.", "FORBIDDEN");
+                }
+            }
+            else
+            {
+                if (channel.ChannelType != ChatChannelType.General && !channel.ParticipantIds.Contains(user.Id))
+                {
+                    return ForbiddenError("Access to channel attachment forbidden.", "FORBIDDEN");
+                }
+            }
+        }
+        else
+        {
+            // If no provider is defined for this category, deny access by default for security
+            if (!_fileAuthService.IsKnownCategory(category))
+            {
+                return BadRequestError($"Unknown file category: {category}");
+            }
+
+            if (!_fileAuthService.CanAccess(category, contextId, user))
+            {
+                return ForbiddenError("Access forbidden.", "FORBIDDEN");
+            }
         }
 
         // 4. Serve File Securely
-        var targetFileName = thumb ? $"{fileName}_thumb.jpg" : fileName;
+        var targetFileName = thumb ? FileService.GetThumbnailFileName(fileName) : fileName;
         var path = _fileService.GetPhysicalPath(category, contextId, targetFileName);
+        bool fellBackToOriginalForThumb = false;
         
         if (thumb && !System.IO.File.Exists(path))
         {
-            targetFileName = fileName;
-            path = _fileService.GetPhysicalPath(category, contextId, targetFileName);
+            if (category.Equals("chat", StringComparison.OrdinalIgnoreCase))
+            {
+                try
+                {
+                    var legacyPath = _fileService.GetAttachmentPhysicalPath(contextId, fileName, thumb: true);
+                    if (System.IO.File.Exists(legacyPath))
+                    {
+                        path = legacyPath;
+                        targetFileName = Path.GetFileName(legacyPath);
+                        if (!targetFileName.EndsWith("_thumb.jpg", StringComparison.OrdinalIgnoreCase))
+                        {
+                            fellBackToOriginalForThumb = true;
+                        }
+                    }
+                }
+                catch (ArgumentException) { }
+            }
+
+            if (!System.IO.File.Exists(path))
+            {
+                // Only allow falling back to original file if the original file itself is a safe image format.
+                // Videos, archives, audio, and documents must never stream as thumbnail responses.
+                if (SafeThumbnailFallbackExtensions.Contains(extension))
+                {
+                    fellBackToOriginalForThumb = true;
+                    targetFileName = fileName;
+                    path = _fileService.GetPhysicalPath(category, contextId, targetFileName);
+
+                    if (!System.IO.File.Exists(path) && category.Equals("chat", StringComparison.OrdinalIgnoreCase))
+                    {
+                        try
+                        {
+                            var legacyPath = _fileService.GetAttachmentPhysicalPath(contextId, fileName, thumb: false);
+                            if (System.IO.File.Exists(legacyPath))
+                            {
+                                path = legacyPath;
+                                targetFileName = Path.GetFileName(legacyPath);
+                            }
+                        }
+                        catch (ArgumentException) { }
+                    }
+                }
+                else
+                {
+                    return NotFoundError("Thumbnail not found.", "NOT_FOUND");
+                }
+            }
+        }
+        else if (!thumb && !System.IO.File.Exists(path) && category.Equals("chat", StringComparison.OrdinalIgnoreCase))
+        {
+            try
+            {
+                var legacyPath = _fileService.GetAttachmentPhysicalPath(contextId, fileName, thumb: false);
+                if (System.IO.File.Exists(legacyPath))
+                {
+                    path = legacyPath;
+                    targetFileName = Path.GetFileName(legacyPath);
+                }
+            }
+            catch (ArgumentException) { }
         }
 
         if (!System.IO.File.Exists(path))
         {
-            return NotFound();
+            return NotFoundError("File not found.", "NOT_FOUND");
         }
 
-        var providerType = new FileExtensionContentTypeProvider();
-        if (!providerType.TryGetContentType(targetFileName, out var contentType))
+        var httpContext = ControllerContext?.HttpContext;
+        string? activeEncryptionKey = null;
+
+        // 5. Resolve encryption key if needed
+        if (category.Equals("chat", StringComparison.OrdinalIgnoreCase) || category.Equals("albums", StringComparison.OrdinalIgnoreCase))
         {
-            contentType = "application/octet-stream";
-        }
-
-        // Force download for potentially dangerous content types (prevents XSS)
-        if (ForceDownloadExtensions.Contains(extension) || contentType.StartsWith("text/html"))
-        {
-            Response.Headers.Append("Content-Disposition", $"attachment; filename=\"{fileName}\"");
-        }
-
-        // Add security headers
-        Response.Headers.Append("X-Content-Type-Options", "nosniff");
-        Response.Headers.Append("Referrer-Policy", "no-referrer");
-
-        // Prevent CDN caching to ensure the [Authorize] attribute is not bypassed by Edge caches
-        // But allow the client's browser/WebView to cache it privately (for 2 weeks) to prevent 
-        // slow re-downloading when scrolling on mobile devices.
-        Response.Headers.Append("Cache-Control", "private, max-age=1209600");
-
-        // 5. Decrypt on the fly if needed
-        if (category.Equals("chat", StringComparison.OrdinalIgnoreCase))
-        {
-            var channel = _channels.GetById(contextId);
-            if (channel != null && channel.IsEncrypted)
+            var keyResult = _fileAuthService.ResolveDownloadKey(category, contextId, user, tokenEncryptionKey, httpContext);
+            if (!keyResult.IsSuccess)
             {
-                string? encryptionKey = tokenEncryptionKey;
-                
-                if (encryptionKey == null)
-                {
-                    var privateKey = _keystore.GetPrivateKey();
-                    if (privateKey != null && channel.EncryptedChannelKeys.TryGetValue(user.Id, out var cipherKey))
-                    {
-                        try
-                        {
-                            encryptionKey = _crypto.DecryptRsa(cipherKey, privateKey);
-                        }
-                        catch
-                        {
-                            return BadRequest("Failed to decrypt channel key.");
-                        }
-                    }
-                }
+                return BadRequestError(keyResult.ErrorMessage ?? "Access denied.");
+            }
 
-                if (encryptionKey != null)
-                {
-                    try
-                    {
-                        var keyBytes = Convert.FromBase64String(encryptionKey);
-
-                        var fileStream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
-                        var seekableStream = new SeekableAesStream(fileStream, keyBytes);
-
-                        // Safely stream the fully seekable file, letting ASP.NET Core handle range processing
-                        return File(seekableStream, contentType, enableRangeProcessing: true);
-                    }
-                    catch
-                    {
-                        return BadRequest("Failed to decrypt channel key.");
-                    }
-                }
-                else
-                {
-                    return BadRequest("You do not have the encryption key for this channel.");
-                }
+            if (keyResult.IsEncrypted && !string.IsNullOrEmpty(keyResult.EncryptionKey))
+            {
+                activeEncryptionKey = keyResult.EncryptionKey;
             }
         }
-        else if (category.Equals("albums", StringComparison.OrdinalIgnoreCase))
+
+        // 5.5 Self-heal missing thumbnail on demand so subsequent requests serve the compact JPEG thumbnail directly
+        byte[]? regeneratedThumbBytes = null;
+        if (fellBackToOriginalForThumb &&
+            TrySelfHealMissingThumbnail(category, contextId, fileName, path, activeEncryptionKey, out var healedThumbPath, out regeneratedThumbBytes))
         {
-            var album = _albums.GetById(contextId);
-            if (album != null && album.IsEncrypted)
+            targetFileName = FileService.GetThumbnailFileName(fileName);
+            if (!string.IsNullOrEmpty(healedThumbPath))
             {
-                var encryptionKey = tokenEncryptionKey ?? TryResolveAlbumKey(contextId, user.Id);
-                if (encryptionKey != null)
-                {
-                    var keyBytes = Convert.FromBase64String(encryptionKey);
-                    var fileStream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
-                    var seekableStream = new SeekableAesStream(fileStream, keyBytes);
-                    return File(seekableStream, contentType, enableRangeProcessing: true);
-                }
-                else
-                {
-                    return BadRequest("You do not have the encryption key to view this album.");
-                }
+                path = healedThumbPath;
             }
+        }
+
+        var contentType = _fileService.GetContentType(targetFileName);
+
+        bool forceDownload = (httpContext?.Request?.Query?.ContainsKey("download") == true) || 
+                             ForceDownloadExtensions.Contains(extension) || 
+                             !SafeInlineContentTypes.Contains(contentType);
+
+        var safeFileName = new string(targetFileName.Select(c => c > 127 ? '_' : c).ToArray());
+        var encodedFileName = Uri.EscapeDataString(targetFileName);
+
+        if (httpContext?.Response != null)
+        {
+            if (forceDownload)
+            {
+                httpContext.Response.Headers.Append("Content-Disposition", $"attachment; filename=\"{safeFileName}\"; filename*=UTF-8''{encodedFileName}");
+            }
+            else
+            {
+                httpContext.Response.Headers.Append("Content-Disposition", $"inline; filename=\"{safeFileName}\"; filename*=UTF-8''{encodedFileName}");
+            }
+
+            // Add security headers
+            httpContext.Response.Headers.Append("X-Content-Type-Options", "nosniff");
+            httpContext.Response.Headers.Append("Referrer-Policy", "no-referrer");
+
+            // Prevent CDN caching to ensure the [Authorize] attribute is not bypassed by Edge caches
+            // But allow the client's browser/WebView to cache it privately (for 2 weeks) to prevent 
+            // slow re-downloading when scrolling on mobile devices.
+            httpContext.Response.Headers.Append("Cache-Control", !string.IsNullOrEmpty(activeEncryptionKey) ? "private, no-store" : "private, max-age=1209600");
+        }
+
+        if (regeneratedThumbBytes != null)
+        {
+            return File(new MemoryStream(regeneratedThumbBytes), contentType, forceDownload ? targetFileName : null);
+        }
+
+        // 6. Decrypt on the fly if needed
+        if (!string.IsNullOrEmpty(activeEncryptionKey))
+        {
+            try
+            {
+                var seekableStream = _fileService.OpenDecryptedStream(path, activeEncryptionKey);
+                var lastWrite = System.IO.File.GetLastWriteTimeUtc(path);
+                var fileLength = new System.IO.FileInfo(path).Length;
+                var etag = new EntityTagHeaderValue($"\"{lastWrite.Ticks:x}_{fileLength:x}\"");
+                return File(seekableStream, contentType, forceDownload ? targetFileName : null, lastWrite, etag, enableRangeProcessing: true);
+            }
+            catch (FileNotFoundException ex)
+            {
+                _logger.LogWarning(ex, "Encrypted file not found on disk: {Path}", path);
+                return NotFoundError("File not found.", "NOT_FOUND");
+            }
+            catch (IOException ex)
+            {
+                _logger.LogError(ex, "I/O error opening decrypted stream for file: {Path}", path);
+                return StatusCodeError(500, "Disk or storage I/O error occurred while accessing file.");
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                _logger.LogError(ex, "Permission denied accessing encrypted file: {Path}", path);
+                return StatusCodeError(500, "Permission denied accessing file storage.");
+            }
+            catch (Exception ex) when (ex is System.Security.Cryptography.CryptographicException or FormatException or ArgumentException)
+            {
+                _logger.LogWarning(ex, "Failed to decrypt channel key or file stream for: {Path}", path);
+                return BadRequestError("Failed to decrypt channel key.");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Unexpected error opening decrypted stream for file: {Path}", path);
+                return StatusCodeError(500, "An error occurred while opening the decrypted file.");
+            }
+        }
+
+        if (forceDownload)
+        {
+            return PhysicalFile(path, contentType, targetFileName, enableRangeProcessing: true);
         }
 
         return PhysicalFile(path, contentType, enableRangeProcessing: true);
+    }
+
+    private bool TrySelfHealMissingThumbnail(
+        string category,
+        string contextId,
+        string fileName,
+        string originalPath,
+        string? encryptionKey,
+        out string? healedThumbPath,
+        out byte[]? healedThumbBytes)
+    {
+        healedThumbPath = null;
+        healedThumbBytes = null;
+
+        try
+        {
+            var lockObj = _thumbRegenLocks.GetOrAdd(originalPath, static _ => new object());
+            lock (lockObj)
+            {
+                var canonicalThumbName = FileService.GetThumbnailFileName(fileName);
+                var candidatePath = _fileService.GetPhysicalPath(category, contextId, canonicalThumbName);
+                if (!string.IsNullOrEmpty(candidatePath) && System.IO.File.Exists(candidatePath))
+                {
+                    healedThumbPath = candidatePath;
+                    return true;
+                }
+
+                using Stream? sourceStream = !string.IsNullOrEmpty(encryptionKey)
+                    ? _fileService.OpenDecryptedStream(originalPath, encryptionKey)
+                    : new FileStream(originalPath, FileMode.Open, FileAccess.Read, FileShare.Read);
+
+                if (sourceStream == null) return false;
+
+                using var memoryBuffer = new MemoryStream();
+                sourceStream.CopyTo(memoryBuffer);
+                memoryBuffer.Position = 0;
+
+                if (!_imageService.TryGenerateThumbnail(memoryBuffer, out var thumbData) || thumbData == null)
+                {
+                    return false;
+                }
+
+                using (thumbData)
+                {
+                    byte[] thumbBytes;
+                    if (thumbData is MemoryStream ms)
+                    {
+                        thumbBytes = ms.ToArray();
+                    }
+                    else
+                    {
+                        using var copyMs = new MemoryStream();
+                        thumbData.CopyTo(copyMs);
+                        thumbBytes = copyMs.ToArray();
+                    }
+
+                    using var uploadStream = new MemoryStream(thumbBytes);
+                    _fileService.UploadThumbnailAsync(category, contextId, uploadStream, fileName, encryptionKey)
+                        .GetAwaiter()
+                        .GetResult();
+
+                    candidatePath = _fileService.GetPhysicalPath(category, contextId, canonicalThumbName);
+                    if (!string.IsNullOrEmpty(candidatePath) && System.IO.File.Exists(candidatePath))
+                    {
+                        healedThumbPath = candidatePath;
+                    }
+                    else
+                    {
+                        healedThumbBytes = thumbBytes;
+                    }
+
+                    return true;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Could not self-heal thumbnail for {Category}/{ContextId}/{FileName}; falling back to original.", category, contextId, fileName);
+            return false;
+        }
     }
 
     /// <summary>
@@ -827,58 +947,21 @@ public class FileController : SpokesControllerBase
         return true;
     }
 
-    private static SKBitmap AutoOrientBitmap(SKBitmap bitmap, SKEncodedOrigin origin)
+    private static bool IsMp4Video(string fileName)
     {
-        var isRotated = origin == SKEncodedOrigin.LeftTop ||
-                        origin == SKEncodedOrigin.RightTop ||
-                        origin == SKEncodedOrigin.RightBottom ||
-                        origin == SKEncodedOrigin.LeftBottom;
-
-        int newWidth = isRotated ? bitmap.Height : bitmap.Width;
-        int newHeight = isRotated ? bitmap.Width : bitmap.Height;
-
-        var oriented = new SKBitmap(newWidth, newHeight);
-        using var canvas = new SKCanvas(oriented);
-
-        switch (origin)
-        {
-            case SKEncodedOrigin.TopRight:
-                canvas.Translate(bitmap.Width, 0);
-                canvas.Scale(-1, 1);
-                break;
-            case SKEncodedOrigin.BottomRight:
-                canvas.Translate(bitmap.Width, bitmap.Height);
-                canvas.RotateDegrees(180);
-                break;
-            case SKEncodedOrigin.BottomLeft:
-                canvas.Translate(0, bitmap.Height);
-                canvas.Scale(1, -1);
-                break;
-            case SKEncodedOrigin.LeftTop:
-                canvas.RotateDegrees(90);
-                canvas.Scale(-1, 1);
-                break;
-            case SKEncodedOrigin.RightTop:
-                canvas.Translate(bitmap.Height, 0);
-                canvas.RotateDegrees(90);
-                break;
-            case SKEncodedOrigin.RightBottom:
-                canvas.Translate(bitmap.Height, bitmap.Width);
-                canvas.RotateDegrees(270);
-                canvas.Scale(-1, 1);
-                break;
-            case SKEncodedOrigin.LeftBottom:
-                canvas.Translate(0, bitmap.Width);
-                canvas.RotateDegrees(270);
-                break;
-            default:
-                return bitmap;
-        }
-
-        canvas.DrawBitmap(bitmap, 0, 0);
-        return oriented;
+        var ext = Path.GetExtension(fileName);
+        return ext.Equals(".mp4", StringComparison.OrdinalIgnoreCase) ||
+               ext.Equals(".mov", StringComparison.OrdinalIgnoreCase) ||
+               ext.Equals(".m4v", StringComparison.OrdinalIgnoreCase);
     }
 }
 
-
-
+public record FileUploadResult(
+    string FilePath,
+    string FileName,
+    string ContentType,
+    long FileSizeBytes,
+    int? ImageWidth,
+    int? ImageHeight,
+    bool HasThumbnail,
+    double? DurationSeconds = null);

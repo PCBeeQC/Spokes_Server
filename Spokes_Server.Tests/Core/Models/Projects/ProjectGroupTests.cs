@@ -1,6 +1,7 @@
 namespace Spokes_Server.Tests.Core.Models.Projects;
 
 using System.Collections.Generic;
+using Spokes_Server.Core.Models.Core;
 using Spokes_Server.Core.Models.Projects;
 
 public class ProjectGroupTests

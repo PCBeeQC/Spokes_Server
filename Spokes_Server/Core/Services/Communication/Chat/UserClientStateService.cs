@@ -5,10 +5,10 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
-using Microsoft.AspNetCore.SignalR;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using Spokes_Server.Aggregate;
-using Spokes_Server.Core.Hubs;
+using Spokes_Server.Aggregate.Contexts;
+using Spokes_Server.Core.Data.Repositories.Communication;
 using Spokes_Server.Core.Models.Communication;
 
 /// <summary>
@@ -16,11 +16,12 @@ using Spokes_Server.Core.Models.Communication;
 /// Drafts are held purely in memory during typing and only flushed to disk via Db.ClientStates
 /// when the user backgrounds, disconnects, or closes the app before sending.
 /// </summary>
-public class UserClientStateService
+public class UserClientStateService : IUserClientStateService
 {
-    private readonly Database _db;
+    private readonly UserClientStateRepository _clientStates;
+    private readonly Func<ChatChannelRepository?>? _channelRepoAccessor;
     private readonly ChatStateService _chatState;
-    private readonly IHubContext<ChatHub> _hubContext;
+    private readonly IChatRealtimeGateway _realtimeGateway;
     private readonly ILogger<UserClientStateService> _logger;
 
     // In-memory drafts: Key: (UserId, ChannelId), Value: Draft message
@@ -35,27 +36,39 @@ public class UserClientStateService
     // Tracks channels that have already been auto-opened for a user, to prevent repeated forced navigation. Key: (UserId, ChannelId)
     private readonly ConcurrentDictionary<(string UserId, string ChannelId), bool> _autoOpenedDrafts = new();
 
-    /// <summary>
-    /// Parameterless constructor for mocking frameworks.
-    /// </summary>
-    protected UserClientStateService()
+    public UserClientStateService(
+        UserClientStateRepository clientStates,
+        ChatChannelRepository? channels,
+        ChatStateService chatState,
+        IChatRealtimeGateway realtimeGateway,
+        ILogger<UserClientStateService> logger)
+        : this(clientStates, () => channels, chatState, realtimeGateway, logger)
     {
-        _db = null!;
-        _chatState = null!;
-        _hubContext = null!;
-        _logger = null!;
     }
 
     public UserClientStateService(
-        Database db,
+        UserClientStateRepository clientStates,
+        Func<ChatChannelRepository?> channelRepoAccessor,
         ChatStateService chatState,
-        IHubContext<ChatHub> hubContext,
+        IChatRealtimeGateway realtimeGateway,
         ILogger<UserClientStateService> logger)
     {
-        _db = db;
+        ArgumentNullException.ThrowIfNull(clientStates);
+        _clientStates = clientStates;
+        _channelRepoAccessor = channelRepoAccessor;
         _chatState = chatState;
-        _hubContext = hubContext;
+        _realtimeGateway = realtimeGateway;
         _logger = logger;
+    }
+
+    [ActivatorUtilitiesConstructor]
+    public UserClientStateService(
+        CommunicationContext communicationContext,
+        ChatStateService chatState,
+        IChatRealtimeGateway realtimeGateway,
+        ILogger<UserClientStateService> logger)
+        : this(communicationContext.ClientStates, () => communicationContext.ChatChannels, chatState, realtimeGateway, logger)
+    {
     }
 
     /// <summary>
@@ -71,7 +84,7 @@ public class UserClientStateService
         {
             _inMemoryDrafts.TryRemove((userId, channelId), out _);
             _autoOpenedDrafts.TryRemove((userId, channelId), out _);
-            _db.ClientStates.ClearDraft(userId, channelId);
+            _clientStates.ClearDraft(userId, channelId);
         }
         else
         {
@@ -110,7 +123,7 @@ public class UserClientStateService
             return memoryDraft;
         }
 
-        var diskDraft = _db.ClientStates.GetDraft(userId, channelId);
+        var diskDraft = _clientStates.GetDraft(userId, channelId);
         if (!string.IsNullOrWhiteSpace(diskDraft))
         {
             _inMemoryDrafts[(userId, channelId)] = diskDraft;
@@ -124,9 +137,10 @@ public class UserClientStateService
     private bool IsChannelExisting(string channelId)
     {
         if (string.IsNullOrEmpty(channelId)) return false;
-        if (_db?.ChatChannels != null)
+        var channels = _channelRepoAccessor?.Invoke();
+        if (channels != null)
         {
-            return _db.ChatChannels.GetById(channelId) != null;
+            return channels.GetById(channelId) != null;
         }
         return true;
     }
@@ -160,7 +174,7 @@ public class UserClientStateService
         }
 
         // 3. Check persisted state in repository
-        var state = _db?.ClientStates?.GetByUserId(userId);
+        var state = _clientStates.GetByUserId(userId);
         if (state != null)
         {
             if (!string.IsNullOrEmpty(state.ActiveChannelId) &&
@@ -217,7 +231,7 @@ public class UserClientStateService
         try
         {
             _chatState.NotifyUserStoppedTyping(channelId, userId);
-            await _hubContext.Clients.Group($"channel_{channelId}").SendAsync("UserStoppedTyping", new
+            await _realtimeGateway.SendToChannelAsync(channelId, "UserStoppedTyping", new
             {
                 ChannelId = channelId,
                 UserId = userId
@@ -243,7 +257,7 @@ public class UserClientStateService
             .Where(kvp => kvp.Key.UserId == userId && !string.IsNullOrWhiteSpace(kvp.Value))
             .ToList();
 
-        var state = _db.ClientStates.GetByUserId(userId);
+        var state = _clientStates.GetByUserId(userId);
         
         // If there are no drafts in memory AND no state on disk, nothing to do.
         if (userDrafts.Count == 0 && state == null)
@@ -267,7 +281,7 @@ public class UserClientStateService
         }
 
         state.LastUpdatedAt = DateTime.UtcNow;
-        _db.ClientStates.Save(state);
+        _clientStates.Save(state);
         
         if (userDrafts.Count > 0)
         {
@@ -284,7 +298,7 @@ public class UserClientStateService
 
         _inMemoryDrafts.TryRemove((userId, channelId), out _);
         _autoOpenedDrafts.TryRemove((userId, channelId), out _);
-        _db.ClientStates.ClearDraft(userId, channelId);
+        _clientStates.ClearDraft(userId, channelId);
         StopActiveTyping(userId);
     }
 }

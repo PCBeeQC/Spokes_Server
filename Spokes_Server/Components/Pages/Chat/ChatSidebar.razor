@@ -1,7 +1,10 @@
+@using Spokes_Server.Core.Services.Communication.Chat
+@using Spokes_Server.Core.Services.Communication.Chat.Formatters
 @inject Database Db
 @inject IDialogService DialogService
 @inject ChatNotificationService ChatNotifications
 @inject ChatService ChatService
+@inject ChatSecurityService ChatSecurityService
 @inject ChatStateService ChatState
 @inject ScopedKeystoreService ScopedKeystore
 @inject ICryptoService Crypto
@@ -11,30 +14,33 @@
 @inject GlobalVoiceService VoiceService
 @implements IDisposable
 
+@{
+    StartupTimings.Add($"Server: RenderTree Sidebar[{_diagTag}] Markup Start"); // DIAG-TEMP tag
+}
 <MudPaper Elevation="0" Style="height: 100%; display: flex; flex-direction: column;">
     <!-- Search & Actions -->
     <div class="pa-3 d-flex flex-column gap-2">
         <div class="d-flex gap-2 align-center">
-            <MudTextField @bind-Value="_searchText" Placeholder="Search channels..." Variant="Variant.Outlined"
+            <MudTextField @bind-Value="_searchText" Placeholder="@Loc["Search channels..."]" Variant="Variant.Outlined"
                 Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search"
                 DebounceInterval="500"
                 Margin="Margin.Dense" Class="flex-grow-1" UserAttributes="@_inputAttributes" />
             <MudMenu Icon="@Icons.Material.Filled.Sort" Size="Size.Small" AnchorOrigin="Origin.BottomRight" TransformOrigin="Origin.TopRight" Color="@(_reorderMode != ReorderMode.None ? Color.Primary : Color.Default)">
-                <MudMenuItem OnClick="() => SetReorderMode(ReorderMode.Personal)">Reorder Channels</MudMenuItem>
+                <MudMenuItem OnClick="() => SetReorderMode(ReorderMode.Personal)">@Loc["Reorder Channels"]</MudMenuItem>
                 
                 @if (_currentUserObj?.UsesCustomSidebarOrder == true)
                 {
-                    <MudMenuItem OnClick="ReattachToDefault">Reattach to Default</MudMenuItem>
+                    <MudMenuItem OnClick="ReattachToDefault">@Loc["Reattach to Default"]</MudMenuItem>
                 }
 
                 @if (CanReorder)
                 {
                     <div class="d-flex align-center px-3 mt-1 mb-1 pointer-events-none">
                         <MudDivider Style="flex: 1; min-width: 0; width: auto;" />
-                        <MudText Typo="Typo.caption" Class="px-2 flex-shrink-0" Style="color: var(--mud-palette-text-secondary); font-size: 0.65rem; font-weight: bold; letter-spacing: 0.5px;">ADMIN</MudText>
+                        <MudText Typo="Typo.caption" Class="px-2 flex-shrink-0" Style="color: var(--mud-palette-text-secondary); font-size: 0.65rem; font-weight: bold; letter-spacing: 0.5px;">@Loc["ADMIN"]</MudText>
                         <MudDivider Style="flex: 1; min-width: 0; width: auto;" />
                     </div>
-                    <MudMenuItem OnClick="() => SetReorderMode(ReorderMode.Global)">Modify Default Order</MudMenuItem>
+                    <MudMenuItem OnClick="() => SetReorderMode(ReorderMode.Global)">@Loc["Modify Default Order"]</MudMenuItem>
                 }
             </MudMenu>
             @if (CanCreateChannel)
@@ -47,7 +53,7 @@
             <div class="d-flex justify-center mt-1">
                 <MudButton Variant="Variant.Filled" Color="@(_reorderMode == ReorderMode.Global ? Color.Secondary : Color.Primary)" 
                            OnClick="() => SetReorderMode(ReorderMode.None)" Size="Size.Small" FullWidth="true" Class="mx-2">
-                    Save Order
+                    @Loc["Save Order"]
                 </MudButton>
             </div>
         }
@@ -60,9 +66,7 @@
         @* PUBLIC Channels (no team or user restrictions) *@
         @{
             var publicChannels = FilteredChannels.Where(c =>
-            c.ChannelType == ChatChannelType.General &&
-            !c.AllowedTeamIds.Any() &&
-            !c.ParticipantIds.Any() &&
+            c.IsPublicChannel &&
             (string.IsNullOrEmpty(c.CategoryId) || c.CategoryId == cat.Id))
             .OrderBy(c => c.IsVoiceChannel ? 1 : 0)
             .ThenBy(c => GetChannelOrder(c))
@@ -76,7 +80,7 @@
                 <div class="d-flex align-center" style="cursor: pointer; flex-grow: 1; user-select: none;" @onclick="() => { _publicCollapsed = !_publicCollapsed; SaveLocalPrefs(); }">
                     <MudIcon Icon="@(_publicCollapsed ? Icons.Material.Filled.KeyboardArrowRight : Icons.Material.Filled.KeyboardArrowDown)" Size="Size.Small" Style="color: var(--mud-palette-text-secondary); width: 18px; height: 18px; margin-right: 4px;" />
                     <MudText Typo="Typo.overline" Style="color: var(--mud-palette-text-secondary);">
-                        PUBLIC
+                        @Loc["PUBLIC"]
                     </MudText>
                     @if (_publicCollapsed && publicUnread > 0)
                     {
@@ -99,7 +103,7 @@
                 {
                     <div class="d-flex align-center px-3 mt-1 mb-1">
                         <MudDivider Style="flex: 1; min-width: 0; width: auto;" />
-                        <MudText Typo="Typo.caption" Class="px-2 flex-shrink-0" Style="color: var(--mud-palette-text-secondary); font-size: 0.65rem; font-weight: bold; letter-spacing: 0.5px;">VOICE CHANNELS</MudText>
+                        <MudText Typo="Typo.caption" Class="px-2 flex-shrink-0" Style="color: var(--mud-palette-text-secondary); font-size: 0.65rem; font-weight: bold; letter-spacing: 0.5px;">@Loc["VOICE CHANNELS"]</MudText>
                         <MudDivider Style="flex: 1; min-width: 0; width: auto;" />
                     </div>
                     publicVoiceShown = true;
@@ -183,7 +187,7 @@
                 <div class="d-flex align-center" style="cursor: pointer; flex-grow: 1; user-select: none;" @onclick="() => { _projectsCollapsed = !_projectsCollapsed; SaveLocalPrefs(); }">
                     <MudIcon Icon="@(_projectsCollapsed ? Icons.Material.Filled.KeyboardArrowRight : Icons.Material.Filled.KeyboardArrowDown)" Size="Size.Small" Style="color: var(--mud-palette-text-secondary); width: 18px; height: 18px; margin-right: 4px;" />
                     <MudText Typo="Typo.overline" Style="color: var(--mud-palette-text-secondary);">
-                        PROJECTS
+                        @BizLoc["PROJECTS"]
                     </MudText>
                     @if (_projectsCollapsed && projectsUnread > 0)
                     {
@@ -206,7 +210,7 @@
                 {
                     <div class="d-flex align-center px-3 mt-2 mb-1">
                         <MudDivider Style="flex: 1; min-width: 0; width: auto;" />
-                        <MudText Typo="Typo.caption" Class="px-2 flex-shrink-0" Style="color: var(--mud-palette-text-secondary); font-size: 0.65rem; font-weight: bold; letter-spacing: 0.5px;">VOICE CHANNELS</MudText>
+                        <MudText Typo="Typo.caption" Class="px-2 flex-shrink-0" Style="color: var(--mud-palette-text-secondary); font-size: 0.65rem; font-weight: bold; letter-spacing: 0.5px;">@Loc["VOICE CHANNELS"]</MudText>
                         <MudDivider Style="flex: 1; min-width: 0; width: auto;" />
                     </div>
                     projectVoiceShown = true;
@@ -316,7 +320,7 @@
                 {
                     <div class="d-flex align-center px-3 mt-2 mb-1">
                         <MudDivider Style="flex: 1; min-width: 0; width: auto;" />
-                        <MudText Typo="Typo.caption" Class="px-2 flex-shrink-0" Style="color: var(--mud-palette-text-secondary); font-size: 0.65rem; font-weight: bold; letter-spacing: 0.5px;">VOICE CHANNELS</MudText>
+                        <MudText Typo="Typo.caption" Class="px-2 flex-shrink-0" Style="color: var(--mud-palette-text-secondary); font-size: 0.65rem; font-weight: bold; letter-spacing: 0.5px;">@Loc["VOICE CHANNELS"]</MudText>
                         <MudDivider Style="flex: 1; min-width: 0; width: auto;" />
                     </div>
                     teamVoiceShown = true;
@@ -398,7 +402,7 @@
                 <div class="d-flex align-center" style="cursor: pointer; flex-grow: 1; user-select: none;" @onclick="() => { _groupChatsCollapsed = !_groupChatsCollapsed; SaveLocalPrefs(); }">
                     <MudIcon Icon="@(_groupChatsCollapsed ? Icons.Material.Filled.KeyboardArrowRight : Icons.Material.Filled.KeyboardArrowDown)" Size="Size.Small" Style="color: var(--mud-palette-text-secondary); width: 18px; height: 18px; margin-right: 4px;" />
                     <MudText Typo="Typo.overline" Style="color: var(--mud-palette-text-secondary);">
-                        GROUP CHATS
+                        @Loc["GROUP CHATS"]
                     </MudText>
                     @if (_groupChatsCollapsed && groupsUnread > 0)
                     {
@@ -422,7 +426,7 @@
                 {
                     <div class="d-flex align-center px-3 mt-2 mb-1">
                         <MudDivider Style="flex: 1; min-width: 0; width: auto;" />
-                        <MudText Typo="Typo.caption" Class="px-2 flex-shrink-0" Style="color: var(--mud-palette-text-secondary); font-size: 0.65rem; font-weight: bold; letter-spacing: 0.5px;">VOICE CHANNELS</MudText>
+                        <MudText Typo="Typo.caption" Class="px-2 flex-shrink-0" Style="color: var(--mud-palette-text-secondary); font-size: 0.65rem; font-weight: bold; letter-spacing: 0.5px;">@Loc["VOICE CHANNELS"]</MudText>
                         <MudDivider Style="flex: 1; min-width: 0; width: auto;" />
                     </div>
                     groupVoiceShown = true;
@@ -500,7 +504,7 @@
             <div class="d-flex align-center" style="cursor: pointer; flex-grow: 1; user-select: none;" @onclick="() => { _directCollapsed = !_directCollapsed; SaveLocalPrefs(); }">
                 <MudIcon Icon="@(_directCollapsed ? Icons.Material.Filled.KeyboardArrowRight : Icons.Material.Filled.KeyboardArrowDown)" Size="Size.Small" Style="color: var(--mud-palette-text-secondary); width: 18px; height: 18px; margin-right: 4px;" />
                 <MudText Typo="Typo.overline" Style="color: var(--mud-palette-text-secondary);">
-                    DIRECT MESSAGES
+                    @Loc["DIRECT MESSAGES"]
                 </MudText>
                 @if (_directCollapsed && directUnread > 0)
                 {
@@ -524,7 +528,7 @@
                 {
                 <div class="d-flex align-center px-3 mt-2 mb-1">
                     <MudDivider Style="flex: 1; min-width: 0; width: auto;" />
-                    <MudText Typo="Typo.caption" Class="px-2 flex-shrink-0" Style="color: var(--mud-palette-text-secondary); font-size: 0.65rem; font-weight: bold; letter-spacing: 0.5px;">VOICE CALLS</MudText>
+                    <MudText Typo="Typo.caption" Class="px-2 flex-shrink-0" Style="color: var(--mud-palette-text-secondary); font-size: 0.65rem; font-weight: bold; letter-spacing: 0.5px;">@Loc["VOICE CALLS"]</MudText>
                     <MudDivider Style="flex: 1; min-width: 0; width: auto;" />
                 </div>
                 directVoiceShown = true;
@@ -579,7 +583,7 @@
             <div class="d-flex align-center px-3 pt-3" style="cursor: pointer; user-select: none;" @onclick="() => { _archiveCollapsed = !_archiveCollapsed; SaveLocalPrefs(); }">
                 <MudIcon Icon="@(_archiveCollapsed ? Icons.Material.Filled.KeyboardArrowRight : Icons.Material.Filled.KeyboardArrowDown)" Size="Size.Small" Style="color: var(--mud-palette-text-secondary); width: 18px; height: 18px; margin-right: 4px;" />
                 <MudText Typo="Typo.overline" Style="color: var(--mud-palette-text-secondary);">
-                    ARCHIVED
+                    @Loc["ARCHIVED"]
                 </MudText>
                 @if (_archiveCollapsed && archiveUnread > 0)
                 {
@@ -607,9 +611,11 @@
                         <div class="d-flex align-center">
                             @if (CanManageChannel(channel))
                             {
-                                <MudTooltip Text="Unarchive Channel">
+                                var isLocked = channel.IsEncrypted && !ScopedKeystore.IsUnlocked;
+                                <MudTooltip Text="@(isLocked ? Loc["Unlock secure chat to modify this channel."].Value : Loc["Unarchive Channel"].Value)">
                                     <MudIconButton Icon="@Icons.Material.Filled.Unarchive" Size="Size.Small"
                                         OnClick="@((e) => OnUnarchiveChannel.InvokeAsync(channel))" Class="pa-0 mr-1"
+                                        Disabled="@isLocked"
                                         Style="opacity: 0.7;" />
                                 </MudTooltip>
                             }
@@ -668,7 +674,7 @@
                             {
                                 <div class="d-flex align-center px-3 mt-1 mb-1">
                                     <MudDivider Style="flex: 1; min-width: 0; width: auto;" />
-                                    <MudText Typo="Typo.caption" Class="px-2 flex-shrink-0" Style="color: var(--mud-palette-text-secondary); font-size: 0.65rem; font-weight: bold; letter-spacing: 0.5px;">VOICE CHANNELS</MudText>
+                                    <MudText Typo="Typo.caption" Class="px-2 flex-shrink-0" Style="color: var(--mud-palette-text-secondary); font-size: 0.65rem; font-weight: bold; letter-spacing: 0.5px;">@Loc["VOICE CHANNELS"]</MudText>
                                     <MudDivider Style="flex: 1; min-width: 0; width: auto;" />
                                 </div>
                                 catVoiceShown = true;
@@ -719,6 +725,9 @@
         }
     </div>
 </MudPaper>
+@{
+    StartupTimings.Add($"Server: RenderTree Sidebar[{_diagTag}] Markup End"); // DIAG-TEMP tag
+}
 
 @code {
     [Parameter] public List<ChatChannel> Channels { get; set; } = [];
@@ -730,6 +739,7 @@
     [Parameter] public EventCallback<ChatChannel> OnArchiveChannel { get; set; }
     [Parameter] public EventCallback<ChatChannel> OnUnarchiveChannel { get; set; }
     [Parameter] public EventCallback<Dictionary<string, int>> OnChannelOrdersChanged { get; set; }
+    [Parameter] public bool IsMobile { get; set; }
 
     private string _searchTextInternal = "";
     private string _searchText
@@ -811,9 +821,7 @@
         if (cat.Id == "sys_public")
         {
             return FilteredChannels.Any(c =>
-                c.ChannelType == ChatChannelType.General &&
-                !c.AllowedTeamIds.Any() &&
-                !c.ParticipantIds.Any() &&
+                c.IsPublicChannel &&
                 (string.IsNullOrEmpty(c.CategoryId) || c.CategoryId == cat.Id));
         }
         if (cat.Id == "sys_projects")
@@ -1008,8 +1016,29 @@
     private bool CanCreateChannel => _currentUserObj?.HasPermission(Spokes_Server.Core.Constants.AppPermissions.Chat.CreateChannels) == true || _currentUserObj?.IsAdmin == true;
     private bool CanReorder => _currentUserObj?.HasPermission(Spokes_Server.Core.Constants.AppPermissions.Chat.EditAllPublicChannels) == true || _currentUserObj?.IsAdmin == true;
 
+    private bool _hasRenderedOnce;
+
+    protected override bool ShouldRender()
+    {
+        if (!_hasRenderedOnce)
+        {
+            _hasRenderedOnce = true;
+            return true;
+        }
+        if (IsMobile && !string.IsNullOrEmpty(SelectedChannelId))
+        {
+            return false;
+        }
+        return true;
+    }
+
     protected override void OnParametersSet()
     {
+        if (_hasRenderedOnce && IsMobile && !string.IsNullOrEmpty(SelectedChannelId))
+        {
+            return;
+        }
+
         var lookup = new Dictionary<string, Employee>();
         foreach (var emp in Employees)
         {
@@ -1032,24 +1061,7 @@
             _prefsLoaded = true;
         }
 
-        // Clean up legacy direct message IDs from CustomChannelOrder if present
-        if (_currentUserObj != null && _currentUserObj.UsesCustomSidebarOrder && _currentUserObj.CustomChannelOrder.Count > 0)
-        {
-            var directIds = Channels.Where(c => c.ChannelType == ChatChannelType.Direct).Select(c => c.Id).ToList();
-            bool modified = false;
-            foreach (var dId in directIds)
-            {
-                if (_currentUserObj.CustomChannelOrder.Remove(dId))
-                {
-                    modified = true;
-                }
-            }
-            if (modified)
-            {
-                Db.Employees.Save(_currentUserObj);
-            }
-        }
-        StartupTimings.Add($"Server: ChatSidebar OnParametersSet Done (Channels: {Channels.Count}, Employees: {Employees.Count})");
+        StartupTimings.Add($"Server: ChatSidebar[{_diagTag}] OnParametersSet Done (Channels: {Channels.Count}, Employees: {Employees.Count})");
     }
 
     private void SaveLocalPrefs()
@@ -1086,9 +1098,9 @@
 
     private bool IsBlockedDM(ChatChannel c)
     {
-        if (c.ChannelType != ChatChannelType.Direct || _currentUserObj == null) return false;
+        if (c.ChannelType != ChatChannelType.Direct || _currentUserObj == null || string.IsNullOrEmpty(CurrentUserId)) return false;
         var otherUserId = c.ParticipantIds.FirstOrDefault(id => id != CurrentUserId) ?? CurrentUserId;
-        return otherUserId != CurrentUserId && _currentUserObj.BlockedUserIds.Contains(otherUserId);
+        return otherUserId != CurrentUserId && !string.IsNullOrEmpty(otherUserId) && _currentUserObj.BlockedUserIds.Contains(otherUserId);
     }
 
     private IEnumerable<ChatChannel> FilteredChannels => Channels.Where(c => !c.IsArchived && MatchesSearch(c) && !IsBlockedDM(c));
@@ -1099,7 +1111,7 @@
 
     protected override void OnInitialized()
     {
-        StartupTimings.Add("Server: ChatSidebar OnInitialized");
+        StartupTimings.Add($"Server: ChatSidebar[{_diagTag}] OnInitialized"); // DIAG-TEMP tag
         // Subscribe to unread count changes to re-render badges
         ChatNotifications.OnUnreadCountChanged += OnUnreadChanged;
         ChatState.VoiceMemberJoined += OnVoicePresenceChanged;
@@ -1107,46 +1119,66 @@
         ChatState.VoiceActiveSpeakersChanged += OnVoiceSpeakersChanged;
         ChatState.VoiceUserMutedChanged += OnVoiceMutedChanged;
         VoiceService.OnChange += OnVoiceStateChanged;
+        ScopedKeystore.OnUnlocked += OnKeystoreStateChanged;
+        ScopedKeystore.OnLocked += OnKeystoreStateChanged;
+    }
+
+    private bool IsHiddenOnMobile => IsMobile && !string.IsNullOrEmpty(SelectedChannelId);
+
+    private void OnKeystoreStateChanged()
+    {
+        if (IsHiddenOnMobile) return;
+        InvokeAsync(StateHasChanged);
     }
 
     private void OnUnreadChanged()
     {
+        if (IsHiddenOnMobile) return;
         InvokeAsync(StateHasChanged);
     }
     
     private void OnVoicePresenceChanged(string channelId, string userId)
     {
+        if (IsHiddenOnMobile) return;
         InvokeAsync(StateHasChanged);
     }
     
     private void OnVoiceSpeakersChanged(string channelId, string[] speakerIds)
     {
+        if (IsHiddenOnMobile) return;
         InvokeAsync(StateHasChanged);
     }
 
     private void OnVoiceMutedChanged(string channelId, string userId, bool isMuted)
     {
+        if (IsHiddenOnMobile) return;
         InvokeAsync(StateHasChanged);
     }
 
     private void OnVoiceStateChanged()
     {
+        if (IsHiddenOnMobile) return;
         InvokeAsync(StateHasChanged);
     }
 
+    private readonly string _diagTag = Guid.NewGuid().ToString("N")[..4]; // DIAG-TEMP
+
     public void Dispose()
     {
+        StartupTimings.AddChatTransition($"Server: ChatSidebar[{_diagTag}] Dispose"); // DIAG-TEMP
         ChatNotifications.OnUnreadCountChanged -= OnUnreadChanged;
         ChatState.VoiceMemberJoined -= OnVoicePresenceChanged;
         ChatState.VoiceMemberLeft -= OnVoicePresenceChanged;
         ChatState.VoiceActiveSpeakersChanged -= OnVoiceSpeakersChanged;
         ChatState.VoiceUserMutedChanged -= OnVoiceMutedChanged;
         VoiceService.OnChange -= OnVoiceStateChanged;
+        ScopedKeystore.OnUnlocked -= OnKeystoreStateChanged;
+        ScopedKeystore.OnLocked -= OnKeystoreStateChanged;
     }
 
     private string FormatPreviewContent(string? rawContent, System.Collections.Generic.List<ChatAttachment>? attachments = null)
     {
-        return Spokes_Server.Core.Helpers.ChatPreviewFormatter.FormatAndTruncatePreview(rawContent, attachments, 30);
+        return ChatPreviewFormatter.FormatAndTruncatePreview(rawContent, attachments, 30);
     }
 
     private readonly Dictionary<string, (string MessageId, string Text)> _decryptedPreviewCache = new();
@@ -1155,7 +1187,7 @@
     {
         if (firstRender)
         {
-            StartupTimings.Add("Server: ChatSidebar OnAfterRenderAsync Start");
+            StartupTimings.Add($"Server: ChatSidebar[{_diagTag}] OnAfterRenderAsync Start"); // DIAG-TEMP tag
         }
         return Task.CompletedTask;
     }
@@ -1190,9 +1222,10 @@
                 var privKey = ScopedKeystore.GetPrivateKey();
                 if (channel != null && privKey != null && channel.EncryptedChannelKeys.TryGetValue(CurrentUserId, out var cipherChannelKey))
                 {
+                    string? cipherContent = null;
                     try
                     {
-                        var cipherContent = preview.EncryptedContent;
+                        cipherContent = preview.EncryptedContent;
                         if (cipherContent == null)
                         {
                             var fullMsg = Db.ChatMessages.GetLatestInChannel(channelId);
@@ -1208,7 +1241,15 @@
                             return $"{senderName}: {formatted}";
                         }
                     }
-                    catch { }
+                    catch 
+                    {
+                        if (!string.IsNullOrEmpty(cipherContent) && !ChatSecurityService.IsPotentialBase64Cipher(cipherContent))
+                        {
+                            var formatted = FormatPreviewContent(cipherContent, preview.Attachments);
+                            _decryptedPreviewCache[channelId] = (preview.MessageId, formatted);
+                            return $"{senderName}: {formatted}";
+                        }
+                    }
                 }
             }
             return $"{senderName}: 🔒 Locked Message";
@@ -1225,6 +1266,12 @@
 
     private async Task OpenChannelDialog(ChatChannel? existing, string? initialAccessType = null, string? categoryId = null)
     {
+        if (existing?.IsEncrypted == true && !ScopedKeystore.IsUnlocked)
+        {
+            Snackbar.Add(Loc["Unlock secure chat to modify this channel."].Value, Severity.Warning);
+            return;
+        }
+
         var teams = Db.Teams.GetAll().OrderBy(t => t.Name).ToList();
         var employees = Db.Employees.GetAll().Where(e => e.IsActive).OrderBy(e => e.FullName).ToList();
         var projects = Db.Projects.GetAll().Where(p => p.IsActive).OrderBy(p => p.Name).ToList();
@@ -1237,10 +1284,11 @@
                 ["ExistingChannel"] = existing,
                 ["InitialAccessType"] = initialAccessType,
                 ["InitialCategoryId"] = categoryId,
-                ["CanManageCategories"] = CanCreateChannel
+                ["CanManageCategories"] = CanCreateChannel,
+                ["CurrentUser"] = _currentUserObj
             };
 
-        string title = existing == null ? "Create New Channel" : "Edit Channel";
+        string title = existing == null ? Loc["Create New Channel"].Value : Loc["Edit Channel"].Value;
         var options = new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true };
         var dialog = await DialogService.ShowAsync<CreateChannelDialog>(title, parameters, options);
         var result = await dialog.Result;
@@ -1251,6 +1299,12 @@
 
             if (existing == null)
             {
+                if (data.IsEncrypted && !ScopedKeystore.IsUnlocked)
+                {
+                    Snackbar.Add(Loc["Your vault must be unlocked to enable encryption."].Value, Severity.Error);
+                    return;
+                }
+
                 // Create New
                 var participantIds = data.ParticipantIds ?? new();
                 if (data.Type == ChatChannelType.Group && !string.IsNullOrEmpty(CurrentUserId) && !participantIds.Contains(CurrentUserId))
@@ -1268,20 +1322,20 @@
                         LinkedEntityId = data.LinkedEntityId,
                         AllowedTeamIds = data.AllowedTeamIds ?? new(),
                         ParticipantIds = participantIds,
-                        CreatedById = CurrentUserId,
+                        CreatedById = CurrentUserId ?? string.Empty,
                         CreatedAt = DateTime.UtcNow,
                         IsVoiceChannel = data.IsVoiceChannel,
-                        IsEncrypted = data.IsEncrypted,
+                        IsEncrypted = false,
                         AudioBitrateKbps = data.AudioBitrateKbps,
                         IsAnnouncementOnly = data.IsAnnouncementOnly,
                         AllowedPostUserIds = data.AllowedPostUserIds ?? new(),
                         AllowedPostTeamIds = data.AllowedPostTeamIds ?? new()
                     };
-                await ChatService.CreateChannelAsync(channelToSave);
+                ChatService.CreateChannel(channelToSave);
                 
                 if (data.IsEncrypted)
                 {
-                    await ChatService.ToggleChannelEncryptionAsync(channelToSave.Id, true, CurrentUserId!);
+                    await ChatSecurityService.ToggleChannelEncryptionAsync(channelToSave.Id, true, CurrentUserId!, ScopedKeystore.GetPrivateKey());
                 }
 
                 await OnChannelSelected.InvokeAsync(channelToSave.Id);
@@ -1304,7 +1358,6 @@
                 channelToSave.ParticipantIds = data.ParticipantIds ?? new();
                 channelToSave.IsArchived = data.IsArchived;
                 channelToSave.IsVoiceChannel = data.IsVoiceChannel;
-                channelToSave.IsEncrypted = data.IsEncrypted;
                 channelToSave.AudioBitrateKbps = data.AudioBitrateKbps;
                 channelToSave.IsAnnouncementOnly = data.IsAnnouncementOnly;
                 channelToSave.AllowedPostUserIds = data.AllowedPostUserIds ?? new();
@@ -1312,18 +1365,31 @@
 
                 if (isEncryptionChanging)
                 {
-                    if (!data.IsEncrypted && !ScopedKeystore.IsUnlocked)
+                    if (!ScopedKeystore.IsUnlocked)
                     {
-                        Snackbar.Add("Your vault must be unlocked to disable encryption.", Severity.Error);
+                        var msg = data.IsEncrypted
+                            ? Loc["Your vault must be unlocked to enable encryption."].Value
+                            : Loc["Your vault must be unlocked to disable encryption."].Value;
+                        Snackbar.Add(msg, Severity.Error);
                         return;
                     }
 
-                    var privateKey = !data.IsEncrypted ? ScopedKeystore.GetPrivateKey() : null;
-                    await ChatService.ToggleChannelEncryptionAsync(channelToSave.Id, data.IsEncrypted, CurrentUserId!, privateKey);
+                    var privateKey = ScopedKeystore.GetPrivateKey();
+                    await ChatSecurityService.ToggleChannelEncryptionAsync(channelToSave.Id, data.IsEncrypted, CurrentUserId!, privateKey);
+                    var refreshed = Db.ChatChannels.GetById(channelToSave.Id);
+                    if (refreshed != null)
+                    {
+                        channelToSave.IsEncrypted = refreshed.IsEncrypted;
+                        channelToSave.EncryptedChannelKeys = refreshed.EncryptedChannelKeys;
+                    }
                 }
                 
-                // ToggleChannelEncryptionAsync handles its own UpdateChannelAsync, otherwise we do it here
-                await ChatService.UpdateChannelAsync(channelToSave);
+                var updateResult = ChatService.UpdateChannel(channelToSave, CurrentUserId, ScopedKeystore.IsUnlocked);
+                if (!updateResult.IsSuccess)
+                {
+                    Snackbar.Add(updateResult.ErrorMessage ?? Loc["Failed to update channel"].Value, Severity.Error);
+                    return;
+                }
             }
 
             // Force refresh UI (Channel creation event usually handles it, but edit might need manual trigger if not handled)
@@ -1452,21 +1518,32 @@
                 Position = DialogPosition.TopCenter
             };
 
-        var dialog = await DialogService.ShowAsync<NewDirectMessageDialog>("New Direct Message", parameters, options);
+        var dialog = await DialogService.ShowAsync<NewDirectMessageDialog>(Loc["New Direct Message"].Value, parameters, options);
         var result = await dialog.Result;
 
         if (result != null && !result.Canceled && result.Data is (List<string> selectedUserIds, bool isEncrypted))
         {
             try
             {
+                if (isEncrypted && !ScopedKeystore.IsUnlocked)
+                {
+                    Snackbar.Add(Loc["Your vault must be unlocked to enable encryption."].Value, Severity.Error);
+                    return;
+                }
+
                 ChatChannel channel;
                 if (selectedUserIds.Count == 1)
                 {
-                    channel = await ChatService.CreateDirectMessageChannelAsync(CurrentUserId!, selectedUserIds[0], isEncrypted);
+                    channel = ChatService.CreateDirectMessageChannel(CurrentUserId!, selectedUserIds[0]);
                 }
                 else
                 {
-                    channel = await ChatService.CreateGroupDirectMessageChannelAsync(CurrentUserId!, selectedUserIds, isEncrypted);
+                    channel = ChatService.CreateGroupDirectMessageChannel(CurrentUserId!, selectedUserIds);
+                }
+
+                if (isEncrypted)
+                {
+                    await ChatSecurityService.ToggleChannelEncryptionAsync(channel.Id, true, CurrentUserId!, ScopedKeystore.GetPrivateKey());
                 }
 
                 // Refresh channels and navigate
@@ -1498,14 +1575,24 @@
                 Position = DialogPosition.TopCenter
             };
 
-        var dialog = await DialogService.ShowAsync<NewTeamChannelDialog>($"New {AppLabels.Team} Channel", parameters, options);
+        var dialog = await DialogService.ShowAsync<NewTeamChannelDialog>(string.Format(Loc["New {0} Channel"].Value, AppLabels.Team), parameters, options);
         var result = await dialog.Result;
 
         if (result != null && !result.Canceled && result.Data is (List<string> teamIds, bool isEncrypted))
         {
             try
             {
-                var channel = await ChatService.CreateTeamChannelAsync(CurrentUserId!, teamIds, isEncrypted);
+                if (isEncrypted && !ScopedKeystore.IsUnlocked)
+                {
+                    Snackbar.Add(Loc["Your vault must be unlocked to enable encryption."].Value, Severity.Error);
+                    return;
+                }
+
+                var channel = ChatService.CreateTeamChannel(CurrentUserId!, teamIds);
+                if (isEncrypted)
+                {
+                    await ChatSecurityService.ToggleChannelEncryptionAsync(channel.Id, true, CurrentUserId!, ScopedKeystore.GetPrivateKey());
+                }
                 await OnChannelSelected.InvokeAsync(channel.Id);
             }
             catch (Exception ex)

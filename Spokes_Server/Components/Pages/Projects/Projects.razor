@@ -1,4 +1,5 @@
 @page "/projects"
+@attribute [Authorize(Policy = AppPermissions.Projects.View)]
 <PageTitle>Projects</PageTitle>
 @using Spokes_Server.Core.Models.Core
 @using Spokes_Server.Core.Models.Projects
@@ -276,6 +277,9 @@
 
 
 @code {
+    private List<Project> _allVisibleProjects = [];
+    private List<Project> _baseExternalProjects = [];
+
     private List<Project> ExternalProjects = [];
     private List<Project> InternalProjects = [];
     private List<Project> ArchivedProjects = [];
@@ -310,7 +314,7 @@
         var profile = Db.CompanyProfile.Get();
         Statuses = profile.ProjectStatuses;
 
-        RefreshList();
+        await RefreshListAsync();
     }
 
     private Color GetStatusColor(string statusName)
@@ -332,32 +336,49 @@
         }
     }
 
-    private void RefreshList()
+    private async Task RefreshListAsync()
     {
         var all = Db.Projects.GetAll().OrderByDescending(p => p.LastEdited).ToList();
 
-        ExternalProjects = all.Where(p => !p.IsInternal && p.Status != ProjectStatus.Archived).ToList();
-        InternalProjects = all.Where(p => p.IsInternal && p.Status != ProjectStatus.Archived).ToList();
-        ArchivedProjects = all.Where(p => p.Status == ProjectStatus.Archived).ToList();
+        var visibleProjects = new List<Project>(all.Count);
+        foreach (var p in all)
+        {
+            if (await UserService.CanViewProjectAsync(p))
+            {
+                visibleProjects.Add(p);
+            }
+        }
+        _allVisibleProjects = visibleProjects;
+
+        _baseExternalProjects = _allVisibleProjects.Where(p => !p.IsInternal && p.Status != ProjectStatus.Archived).ToList();
+        InternalProjects = _allVisibleProjects.Where(p => p.IsInternal && p.Status != ProjectStatus.Archived).ToList();
+        ArchivedProjects = _allVisibleProjects.Where(p => p.Status == ProjectStatus.Archived).ToList();
 
         // Load Project Groups
-        ProjectGroups = Db.ProjectGroups.GetAll().OrderBy(g => g.Name).ToList();
+        var allGroups = Db.ProjectGroups.GetAll().OrderBy(g => g.Name).ToList();
+        var emp = await UserService.GetEmployeeAsync();
+        if (emp != null && emp.IsAdmin)
+        {
+            ProjectGroups = allGroups;
+        }
+        else
+        {
+            var visibleProjectIds = _allVisibleProjects.Select(p => p.Id).ToHashSet();
+            ProjectGroups = allGroups.Where(g => !g.ProjectIds.Any() || g.ProjectIds.Any(id => visibleProjectIds.Contains(id))).ToList();
+        }
 
         ApplyFilter();
     }
 
     private void ApplyFilter()
     {
-        var all = Db.Projects.GetAll().OrderByDescending(p => p.LastEdited).ToList();
-        var baseExternal = all.Where(p => !p.IsInternal && p.Status != ProjectStatus.Archived);
-
         if (!string.IsNullOrEmpty(SelectedFilter) && SelectedFilter != "All")
         {
-            ExternalProjects = baseExternal.Where(p => p.Status == SelectedFilter).ToList();
+            ExternalProjects = _baseExternalProjects.Where(p => p.Status == SelectedFilter).ToList();
         }
         else
         {
-            ExternalProjects = baseExternal.ToList();
+            ExternalProjects = _baseExternalProjects.ToList();
         }
 
         // Note: Project Groups are not currently filtered by status as they don't have a status property
@@ -387,7 +408,7 @@
             string search = globalSearchString.Trim();
 
             // Client Projects
-            var clientMatches = ExternalProjects.Where(p => MatchProject(p, search));
+            var clientMatches = _baseExternalProjects.Where(p => MatchProject(p, search));
             foreach (var p in clientMatches)
             {
                 results.Add(new GlobalSearchResult
@@ -502,16 +523,15 @@
         var dialog = await DialogService.ShowAsync<ProjectDialog>("New Project", options);
         var result = await dialog.Result;
 
-        if (!result.Canceled)
+        if (result is { Canceled: false, Data: Project newProject })
         {
-            var newProject = (Project)result.Data;
             Db.Projects.Save(newProject);
 
             // Auto-create chat channel removed as per requirements
             // Db.ChatChannels.GetOrCreateProjectChannel(newProject.Id, newProject.Name);
 
             Snackbar.Add("Project Created!", Severity.Success);
-            RefreshList();
+            await RefreshListAsync();
         }
     }
 
@@ -521,11 +541,11 @@
         var dialog = await DialogService.ShowAsync<ProjectGroupDialog>("Create Project Group", options);
         var result = await dialog.Result;
 
-        if (!result.Canceled && result.Data is ProjectGroup newGroup)
+        if (result is { Canceled: false, Data: ProjectGroup newGroup })
         {
             Db.ProjectGroups.Save(newGroup);
             Snackbar.Add("Project Group Created!", Severity.Success);
-            RefreshList();
+            await RefreshListAsync();
             Nav.NavigateTo($"/project-groups/{newGroup.Id}");
         }
     }

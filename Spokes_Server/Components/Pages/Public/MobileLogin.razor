@@ -4,11 +4,16 @@
 @using Spokes_Server.Core.Security
 @using Microsoft.AspNetCore.Authorization
 @using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.Extensions.Localization
+@using Spokes_Server.Resources
 @layout LoginLayout
 @attribute [AllowAnonymous]
 @inject Database Db
 @inject NavigationManager Nav
 @inject AuthenticationStateProvider AuthStateProvider
+@inject IStringLocalizer<AppResources> Loc
+
+<PageTitle>@Loc["Mobile Login"]</PageTitle>
 
 <MudContainer MaxWidth="MaxWidth.False" Class="d-flex align-center justify-center mud-width-full" Style="height: 100vh; background-color: var(--mud-palette-background-grey);">
     <MudPaper Elevation="3" Class="pa-8 d-flex flex-column align-center" Width="100%" MaxWidth="500px">
@@ -28,16 +33,16 @@
         @if (sso_error == "1")
         {
             <MudAlert Severity="Severity.Error" Class="mb-4">
-                Authentication failed. Please check your system configuration.
+                @Loc["Authentication failed. Please check your system configuration."]
             </MudAlert>
         }
         
         <MudText Typo="Typo.body1" Align="Align.Center" Color="Color.Secondary" Class="mb-8">
-            Welcome back. Please log in to continue.
+            @Loc["Welcome back. Please log in to continue."]
         </MudText>
         <MudButton id="mobile-login-btn" Variant="Variant.Filled" Color="Color.Primary" Size="Size.Large" FullWidth="true" Class="py-3">
             <MudIcon Icon="@Icons.Material.Filled.Login" Class="mr-2" />
-            Log In
+            @Loc["Log In"]
         </MudButton>
     </MudPaper>
 </MudContainer>

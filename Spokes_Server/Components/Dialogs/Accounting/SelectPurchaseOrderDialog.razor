@@ -1,0 +1,124 @@
+@using Spokes_Server.Aggregate
+@using Spokes_Server.Core.Models.Accounting
+@inject Database Db
+@inject IStringLocalizer<BusinessResources> BizLoc
+@inject IStringLocalizer<AppResources> Loc
+
+<MudDialog>
+    <DialogContent>
+        <MudText Typo="Typo.body2" Class="mb-3 text-muted">
+            @BizLoc["Select an open Purchase Order to link with this draft bill."]
+        </MudText>
+
+        <div class="mb-3">
+            <MudTextField @bind-Value="_searchQuery" Placeholder="@BizLoc["Search PO number, supplier, amount..."]" Immediate="true"
+                          Variant="Variant.Outlined" Margin="Margin.Dense" Adornment="Adornment.Start"
+                          AdornmentIcon="@Icons.Material.Filled.Search" Clearable="true" />
+        </div>
+
+        <MudTable T="PurchaseOrder" Items="FilteredPurchaseOrders" Dense="true" Hover="true" FixedHeader="true" Height="300px"
+                  SelectedItem="_selectedPo" SelectedItemChanged="@((PurchaseOrder? p) => OnPoSelected(p))"
+                  RowClassFunc="@((p, i) => _selectedPo?.Id == p?.Id ? "mud-selected-item" : "")">
+            <HeaderContent>
+                <MudTh>@BizLoc["PO Number"]</MudTh>
+                <MudTh>@BizLoc["Supplier"]</MudTh>
+                <MudTh>@BizLoc["Date"]</MudTh>
+                <MudTh>@BizLoc["Total"]</MudTh>
+                <MudTh>@BizLoc["Status"]</MudTh>
+            </HeaderContent>
+            <RowTemplate>
+                <MudTd DataLabel="PO Number">
+                    <MudText Typo="Typo.body2" Style="font-weight: 600;">@context.PoNumber</MudText>
+                </MudTd>
+                <MudTd DataLabel="Supplier">
+                    <MudText Typo="Typo.body2">@(!string.IsNullOrEmpty(context.Supplier?.BusinessName) ? context.Supplier.BusinessName : "—")</MudText>
+                </MudTd>
+                <MudTd DataLabel="Date">
+                    <MudText Typo="Typo.caption">@context.Date.ToShortDateString()</MudText>
+                </MudTd>
+                <MudTd DataLabel="Total">
+                    <MudText Typo="Typo.body2">@context.GrandTotal.ToString("C2")</MudText>
+                </MudTd>
+                <MudTd DataLabel="Status">
+                    <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Primary"
+                             Style="height: 20px; font-size: 0.7rem;">
+                        @context.Status
+                    </MudChip>
+                </MudTd>
+            </RowTemplate>
+            <NoRecordsContent>
+                <div class="pa-4 text-center text-muted">
+                    <MudText Typo="Typo.body2">@BizLoc["No open purchase orders found."]</MudText>
+                </div>
+            </NoRecordsContent>
+        </MudTable>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">@Loc["Cancel"]</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled"
+                   StartIcon="@Icons.Material.Filled.Link"
+                   OnClick="Submit" Disabled="@(_selectedPo == null)">
+            @BizLoc["Link Purchase Order"]
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
+
+    [Parameter] public string? SupplierName { get; set; }
+
+    private List<PurchaseOrder> _allPos = [];
+    private PurchaseOrder? _selectedPo;
+    private string _searchQuery = "";
+
+    protected override void OnInitialized()
+    {
+        _allPos = Db.PurchaseOrders.GetAll()
+            .Where(p => p.Status != PurchaseOrderStatus.Closed &&
+                        p.Status != PurchaseOrderStatus.Void &&
+                        p.Status != PurchaseOrderStatus.FullyBilled)
+            .OrderByDescending(p => p.Date)
+            .ToList();
+
+        if (!string.IsNullOrWhiteSpace(SupplierName))
+        {
+            var cleaned = SupplierName.Trim();
+            if (_allPos.Any(p => p.Supplier?.BusinessName?.Contains(cleaned, StringComparison.OrdinalIgnoreCase) == true))
+            {
+                _searchQuery = cleaned;
+            }
+        }
+    }
+
+    private IEnumerable<PurchaseOrder> FilteredPurchaseOrders
+    {
+        get
+        {
+            if (string.IsNullOrWhiteSpace(_searchQuery))
+            {
+                return _allPos;
+            }
+
+            return _allPos.Where(p =>
+                p.PoNumber.Contains(_searchQuery, StringComparison.OrdinalIgnoreCase) ||
+                (p.Supplier?.BusinessName?.Contains(_searchQuery, StringComparison.OrdinalIgnoreCase) == true) ||
+                p.GrandTotal.ToString("F2").Contains(_searchQuery, StringComparison.OrdinalIgnoreCase));
+        }
+    }
+
+    private void OnPoSelected(PurchaseOrder? po)
+    {
+        _selectedPo = po;
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+
+    private void Submit()
+    {
+        if (_selectedPo != null)
+        {
+            MudDialog.Close(DialogResult.Ok(_selectedPo));
+        }
+    }
+}

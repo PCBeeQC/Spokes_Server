@@ -1,7 +1,6 @@
 // spokes-vault.js
-// Static JS functions for Capacitor vault key persistence.
-// Replaces inline eval() calls for reading/writing the encrypted chat password
-// to/from native Capacitor Preferences storage.
+// Static JS functions for Capacitor and web vault key persistence.
+// Centralizes reading/writing the encrypted chat password and calling /spokesapi/vault/* endpoints.
 
 window.spokesVault = {
 
@@ -59,5 +58,80 @@ window.spokesVault = {
             await window.Capacitor.Plugins.Preferences.remove({ key: vaultKeyHost });
             await window.Capacitor.Plugins.Preferences.remove({ key: 'chat_vault_key' });
         }
+    },
+
+    /**
+     * Authenticates with /spokesapi/vault/login to set the HttpOnly cookie (on web),
+     * mark DeviceSession.HasVaultCookie = true, and persist the encrypted key in
+     * Capacitor Preferences (on native mobile).
+     * @param {string} password - The user's vault password.
+     * @returns {Promise<{success: boolean, vaultKey?: string}>}
+     */
+    login: async function (password) {
+        try {
+            const headers = window.spokesAuth?.getHeaders
+                ? await window.spokesAuth.getHeaders({ 'Content-Type': 'application/json' })
+                : { 'Content-Type': 'application/json' };
+            const response = await fetch('/spokesapi/vault/login', {
+                method: 'POST',
+                headers: headers,
+                body: JSON.stringify({ Password: password })
+            });
+            if (!response.ok) {
+                return { success: false };
+            }
+            const data = await response.json();
+            if (data && data.vaultKey) {
+                await this.storeVaultKey(data.vaultKey);
+            }
+            return data;
+        } catch (e) {
+            console.warn('[Vault] Login failed:', e);
+            return { success: false };
+        }
+    },
+
+    /**
+     * Logs out of /spokesapi/vault/logout (deleting the HttpOnly cookie and clearing
+     * DeviceSession.HasVaultCookie) and removes any stored Capacitor Preferences key.
+     */
+    logout: async function () {
+        try {
+            const headers = window.spokesAuth?.getHeaders
+                ? await window.spokesAuth.getHeaders()
+                : {};
+            await fetch('/spokesapi/vault/logout', {
+                method: 'POST',
+                headers: headers
+            });
+        } catch (e) {
+            console.warn('[Vault] Logout request failed:', e);
+        }
+        await this.clearStoredVaultKey();
+    },
+
+    /**
+     * Queries /spokesapi/vault/status for whether the current device has an active vault cookie.
+     * @returns {Promise<{hasCookie: boolean}>}
+     */
+    getStatus: async function () {
+        try {
+            const headers = window.spokesAuth?.getHeaders
+                ? await window.spokesAuth.getHeaders()
+                : {};
+            const response = await fetch('/spokesapi/vault/status', {
+                credentials: 'include',
+                cache: 'no-store',
+                headers: headers
+            });
+            if (response.ok) {
+                return await response.json();
+            }
+        } catch (e) {
+            console.warn('[Vault] Status check failed:', e);
+        }
+        return { hasCookie: false };
     }
 };
+
+window.spokes_vault = window.spokesVault;

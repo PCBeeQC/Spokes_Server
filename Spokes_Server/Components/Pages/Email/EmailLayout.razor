@@ -4,8 +4,11 @@
 @using Microsoft.AspNetCore.Components.Authorization
 @using Spokes_Server.Core.Constants
 @using Spokes_Server.Components.Dialogs
+@using Spokes_Server.Core.Services.Communication.Email
 @attribute [Authorize(Policy = AppPermissions.Email.Use)]
-@inject EmailService EmailService
+@inject IEmailSyncService EmailSyncService
+@inject IEmailMessageLifecycleService MessageLifecycleService
+@inject IEmailCacheMaintenanceService CacheMaintenance
 @inject UserService UserService
 @inject Database Db
 @inject EmailIdleService EmailIdleService
@@ -14,7 +17,7 @@
 @inject NavigationManager Nav
 @inject IJSRuntime JS
 @inject ISnackbar Snackbar
-@inject IConfiguration _config
+@inject ILogger<EmailLayout> Logger
 @implements IDisposable
 
 <PageTitle>Email</PageTitle>
@@ -224,11 +227,18 @@
 
         InvokeAsync(() =>
         {
-            Console.WriteLine($"[EmailLayout] New Message detected in {folderPath}. Refreshing.");
+            Logger.LogInformation("New message detected in {FolderPath}. Refreshing.", folderPath);
             _ = Task.Run(async () =>
             {
-                await EmailService.SyncSingleFolderAsync(employeeId, folderPath);
-                await InvokeAsync(() => LoadMessages(_selectedFolderId));
+                try
+                {
+                    await EmailSyncService.SyncSingleFolderAsync(employeeId, folderPath);
+                    await InvokeAsync(() => LoadMessages(_selectedFolderId));
+                }
+                catch (Exception ex)
+                {
+                    Logger.LogError(ex, "Failed to sync folder {FolderPath} for employee {EmployeeId} on message received", folderPath, employeeId);
+                }
             });
         });
     }
@@ -242,11 +252,18 @@
 
         InvokeAsync(() =>
         {
-            Console.WriteLine($"[EmailLayout] Flags changed in {folderPath}. Refreshing.");
+            Logger.LogInformation("Flags changed in {FolderPath}. Refreshing.", folderPath);
             _ = Task.Run(async () =>
             {
-                await EmailService.SyncSingleFolderAsync(employeeId, folderPath);
-                await InvokeAsync(() => LoadMessages(_selectedFolderId));
+                try
+                {
+                    await EmailSyncService.SyncSingleFolderAsync(employeeId, folderPath);
+                    await InvokeAsync(() => LoadMessages(_selectedFolderId));
+                }
+                catch (Exception ex)
+                {
+                    Logger.LogError(ex, "Failed to sync folder {FolderPath} for employee {EmployeeId} on message flags changed", folderPath, employeeId);
+                }
             });
         });
     }
@@ -417,7 +434,7 @@
             // Offload the entire streaming process to a background thread to keep UI responsive
             await Task.Run(async () =>
             {
-                await foreach (var msg in Db.EmailMessages.SearchStreamingAsync(_currentEmployee.Id, _searchText, _config["DataPath"] ?? "Data", folderPath, progress, token))
+                await foreach (var msg in Db.EmailMessages.SearchStreamingAsync(_currentEmployee.Id, _searchText, folderPath, progress, token))
                 {
                     if (token.IsCancellationRequested) break;
                     
@@ -485,7 +502,17 @@
                 EmailIdleService.WatchFolder(_currentEmployee.Id, folder.Path);
             }
             // Just sync the selected folder for fresh data — IDLE is managed by background service
-            _ = Task.Run(() => EmailService.SyncSingleFolderAsync(_currentEmployee.Id, folder.Path));
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await EmailSyncService.SyncSingleFolderAsync(_currentEmployee.Id, folder.Path);
+                }
+                catch (Exception ex)
+                {
+                    Logger.LogError(ex, "Failed to background sync folder {FolderPath} for employee {EmployeeId}", folder.Path, _currentEmployee.Id);
+                }
+            });
         }
     }
 
@@ -499,11 +526,13 @@
             return;
         }
 
+        if (_currentEmployee == null) return;
+
         // Check if Draft
         var folder = _folders.FirstOrDefault(f => f.Id == _selectedFolderId);
         if (folder != null && folder.IsDrafts)
         {
-            OpenComposerDialog(draftId: msg.Id);
+            await OpenComposerDialog(draftId: msg.Id);
             return;
         }
 
@@ -512,12 +541,12 @@
         _isLoadingBody = true;
         _messageBody = "";
 
-        _messageBody = await EmailService.GetEmailBodyAsync(msg.Id, _currentEmployee.Id);
+        _messageBody = await CacheMaintenance.GetEmailBodyAsync(_currentEmployee.Id, msg.Id);
 
         if (!msg.IsRead)
         {
             msg.IsRead = true;
-            _ = EmailService.MarkMessageReadAsync(msg.Id, true);
+            await MessageLifecycleService.MarkMessageReadAsync(msg.EmployeeId, msg.Id, true);
             if (folder != null && folder.UnreadCount > 0)
             {
                 folder.UnreadCount--;
@@ -531,14 +560,14 @@
     private async Task ToggleFlag(EmailMessage msg)
     {
         msg.IsFlagged = !msg.IsFlagged;
-        await EmailService.MarkMessageFlaggedAsync(msg.Id, msg.IsFlagged);
+        await MessageLifecycleService.MarkMessageFlaggedAsync(msg.EmployeeId, msg.Id, msg.IsFlagged);
     }
 
     private async Task DownloadAttachment(EmailAttachmentMeta att)
     {
         if (_selectedMessage == null || _currentEmployee == null) return;
         
-        var url = $"/internal/attachments/email/{Uri.EscapeDataString(_selectedMessage.Id)}/{Uri.EscapeDataString(att.Id)}" +
+        var url = $"/spokesapi/files/email/{Uri.EscapeDataString(_selectedMessage.Id)}/{Uri.EscapeDataString(att.Id)}" +
                   $"?employeeId={Uri.EscapeDataString(_currentEmployee.Id)}" +
                   $"&fn={Uri.EscapeDataString(att.FileName)}" +
                   "&download=true";
@@ -552,12 +581,12 @@
         if (_currentEmployee == null) return;
         _isRepairing = true;
         StateHasChanged();
-        await Task.Run(() => EmailService.RepairEmailInstallationAsync(_currentEmployee.Id));
+        await Task.Run(() => CacheMaintenance.RepairEmailInstallationAsync(_currentEmployee.Id, (id, ct) => EmailSyncService.SyncEmployeeAsync(id, ct)));
         _isRepairing = false;
         StateHasChanged();
     }
 
-    private void OpenComposer() => OpenComposerDialog();
+    private async Task OpenComposer() => await OpenComposerDialog();
 
     private async Task OpenComposerDialog(string? to = null, string? subject = null, string? body = null, string? draftId = null, List<(string Path, string FileName)>? preloadedFiles = null)
     {
@@ -598,7 +627,7 @@
         return cleanHtml;
     }
 
-    private void Reply()
+    private async Task Reply()
     {
         if (_selectedMessage == null) return;
         var subject = _selectedMessage.Subject.StartsWith("Re:", StringComparison.OrdinalIgnoreCase)
@@ -609,10 +638,10 @@
         var cleanQuote = GetCleanQuotedBody(_messageBody);
         var body = $"On {dateStr}, {_selectedMessage.FromName} wrote:<br><blockquote style=\"margin: 0 0 0 .8ex; border-left: 1px #ccc solid; padding-left: 1ex;\">{cleanQuote}</blockquote>";
 
-        OpenComposerDialog(to: _selectedMessage.FromAddress, subject: subject, body: body);
+        await OpenComposerDialog(to: _selectedMessage.FromAddress, subject: subject, body: body);
     }
 
-    private void ReplyAll()
+    private async Task ReplyAll()
     {
         if (_selectedMessage == null) return;
         var subject = _selectedMessage.Subject.StartsWith("Re:", StringComparison.OrdinalIgnoreCase)
@@ -626,10 +655,10 @@
         var dateStr = FormatDate(_selectedMessage.Date);
         var cleanQuote = GetCleanQuotedBody(_messageBody);
         var body = $"On {dateStr}, {_selectedMessage.FromName} wrote:<br><blockquote style=\"margin: 0 0 0 .8ex; border-left: 1px #ccc solid; padding-left: 1ex;\">{cleanQuote}</blockquote>";
-        OpenComposerDialog(to: to, subject: subject, body: body);
+        await OpenComposerDialog(to: to, subject: subject, body: body);
     }
 
-    private void Forward()
+    private async Task Forward()
     {
         if (_selectedMessage == null) return;
         var subject = $"Fwd: {_selectedMessage.Subject}";
@@ -642,7 +671,7 @@
         {
             foreach (var att in _selectedMessage.Attachments)
             {
-                var path = EmailService.GetAttachmentPath(_selectedMessage.Id, att.Id, _currentEmployee.Id);
+                var path = CacheMaintenance.GetAttachmentPath(_currentEmployee.Id, _selectedMessage.Id, att.Id);
                 if (System.IO.File.Exists(path))
                 {
                     preloadedFiles.Add((path, att.FileName));
@@ -650,7 +679,7 @@
             }
         }
 
-        OpenComposerDialog(subject: subject, body: body, preloadedFiles: preloadedFiles);
+        await OpenComposerDialog(subject: subject, body: body, preloadedFiles: preloadedFiles);
     }
 
     private async Task MarkAsUnread()
@@ -684,7 +713,10 @@
         }
 
         // Server update
-        await EmailService.MarkMessageReadAsync(msgId, false);
+        if (_currentEmployee != null)
+        {
+            await MessageLifecycleService.MarkMessageReadAsync(_currentEmployee.Id, msgId, false);
+        }
         StateHasChanged();
     }
 
@@ -761,7 +793,7 @@
         _selectedMessageId = null;
         _messageBody = "";
 
-        await EmailService.MoveMessageAsync(msgId, _currentEmployee.Id, destFolderPath);
+        await MessageLifecycleService.MoveMessageAsync(_currentEmployee.Id, msgId, destFolderPath);
 
         // Reload folders (counts changed) and messages to stay in sync with IDLE events
         LoadFolders();
@@ -782,7 +814,7 @@
         _messageBody = "";
 
         // Server Move to Trash
-        await EmailService.MoveMessageToTrashAsync(msgId, _currentEmployee.Id);
+        await MessageLifecycleService.MoveMessageToTrashAsync(_currentEmployee.Id, msgId);
 
         StateHasChanged();
     }
@@ -799,7 +831,7 @@
         _selectedMessageId = null;
         _messageBody = "";
 
-        await EmailService.ArchiveMessageAsync(msgId, _currentEmployee.Id);
+        await MessageLifecycleService.ArchiveMessageAsync(_currentEmployee.Id, msgId);
         StateHasChanged();
     }
 
@@ -815,7 +847,7 @@
         _selectedMessageId = null;
         _messageBody = "";
 
-        await EmailService.JunkMessageAsync(msgId, _currentEmployee.Id);
+        await MessageLifecycleService.JunkMessageAsync(_currentEmployee.Id, msgId);
         StateHasChanged();
     }
     private async Task PrintMessage()

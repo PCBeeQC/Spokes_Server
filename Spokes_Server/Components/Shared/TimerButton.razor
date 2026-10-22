@@ -1,7 +1,8 @@
 @inject Database Db
-@inject TimerService TimerService
+@inject TimesheetTimerService TimerService
 @inject UserService UserService
 @inject ISnackbar Snackbar
+@inject ILogger<TimerButton> Logger
 @implements IDisposable
 
 @if (_currentUser != null)
@@ -40,26 +41,17 @@
                 SearchFunc="SearchProjects" ToStringFunc="GetProjectName" ResetValueOnEmptyText="true" CoerceText="false"
                 MaxItems="null" />
 
-            <MudSelect T="string" @bind-Value="_selectedWorkTypeId" Label="Task" Variant="Variant.Outlined" Dense="true"
-                Required="true" Disabled="@(string.IsNullOrEmpty(_selectedProjectId))">
-                @foreach (var wt in _filteredWorkTypes)
-                {
-                    <MudSelectItem Value="@wt.Id">@wt.Name</MudSelectItem>
-                }
-            </MudSelect>
+            <WorkTypeSubTaskSelector WorkTypes="@_allWorkTypes"
+                                     Projects="@_projects"
+                                     ProjectId="@_selectedProjectId"
+                                     RequireProject="true"
+                                     @bind-WorkTypeId="_selectedWorkTypeId"
+                                     @bind-SubTaskId="_selectedSubTaskId"
+                                     Layout="WorkTypeSelectorLayout.Stack"
+                                     Variant="Variant.Outlined"
+                                     Required="true" />
 
-            @if (_subTasks.Count > 0)
-            {
-                <MudSelect T="string" @bind-Value="_selectedSubTaskId" Label="Sub-Task" Variant="Variant.Outlined" Dense="true"
-                    Clearable="true">
-                    @foreach (var st in _subTasks)
-                    {
-                        <MudSelectItem Value="@st.Id">@st.Name</MudSelectItem>
-                    }
-                </MudSelect>
-            }
-
-            <MudTextField T="string" @bind-Value="_note" Label="Note (optional)" Variant="Variant.Outlined" Dense="true"
+            <MudTextField T="string" @bind-Value="_note" Label="Note (optional)" Variant="Variant.Outlined" Margin="Margin.Dense"
                 Lines="2" Placeholder="What are you working on?" />
 
             <div class="d-flex justify-end gap-2">
@@ -108,34 +100,12 @@
 
     private List<Project> _projects = new();
     private List<WorkType> _allWorkTypes = new();
-    private List<WorkType> _filteredWorkTypes = new();
-    private List<SubTask> _subTasks => string.IsNullOrEmpty(_selectedWorkTypeId)
-    ? new()
-    : _filteredWorkTypes.FirstOrDefault(w => w.Id == _selectedWorkTypeId)?.SubTasks ?? new();
 
     private void OnProjectChanged(string projectId)
     {
         _selectedProjectId = projectId;
         _selectedWorkTypeId = string.Empty;
         _selectedSubTaskId = null;
-
-        // Filter work types by project's approved list (matching timesheet logic)
-        if (!string.IsNullOrEmpty(projectId))
-        {
-            var project = _projects.FirstOrDefault(p => p.Id == projectId);
-            if (project != null && project.ApprovedWorkTypeIds.Any())
-            {
-                _filteredWorkTypes = _allWorkTypes.Where(w => project.ApprovedWorkTypeIds.Contains(w.Id)).ToList();
-            }
-            else
-            {
-                _filteredWorkTypes = _allWorkTypes; // Fallback: show all
-            }
-        }
-        else
-        {
-            _filteredWorkTypes = _allWorkTypes;
-        }
     }
 
     protected override async Task OnInitializedAsync()
@@ -167,7 +137,7 @@
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[TimerButton] Error loading timer data: {ex.Message}");
+            Logger.LogWarning(ex, "[TimerButton] Error loading timer data");
         }
     }
 
@@ -186,7 +156,7 @@
 
         _projects = Db.Projects.GetAll()
         .Where(p => (p.IsActive || p.Status != ProjectStatus.Archived) &&
-        (p.AccessPolicy == "Public" ||
+        (p.AccessPolicy == ProjectAccessPolicy.Public ||
         (p.AllowedUserIds != null && p.AllowedUserIds.Contains(_currentUser.Id)) ||
         (!string.IsNullOrEmpty(_currentUser.TeamId) && p.AllowedTeamIds != null &&
         p.AllowedTeamIds.Contains(_currentUser.TeamId))))
@@ -195,19 +165,10 @@
     }
 
     private Task<IEnumerable<string>> SearchProjects(string value, CancellationToken token)
-    {
-        var matching = string.IsNullOrEmpty(value)
-        ? _projects
-        : _projects.Where(p => p.DisplayName.Contains(value, StringComparison.InvariantCultureIgnoreCase));
-
-        return Task.FromResult(matching.Select(p => p.Id));
-    }
+        => Task.FromResult(TimesheetSearchHelper.SearchProjects(value, _projects));
 
     private string GetProjectName(string id)
-    {
-        var p = _projects.FirstOrDefault(x => x.Id == id);
-        return p?.DisplayName ?? "";
-    }
+        => TimesheetSearchHelper.GetProjectName(id, _projects);
 
     private void TogglePopover() => _popoverOpen = !_popoverOpen;
     private void ClosePopover() => _popoverOpen = false;
@@ -217,7 +178,13 @@
         if (_currentUser == null || string.IsNullOrEmpty(_selectedProjectId) || string.IsNullOrEmpty(_selectedWorkTypeId))
             return;
 
-        TimerService.Start(_currentUser.Id, _selectedProjectId, _selectedWorkTypeId, _selectedSubTaskId, _note);
+        var result = TimerService.Start(_currentUser.Id, _selectedProjectId, _selectedWorkTypeId, _selectedSubTaskId, _note);
+        if (!result.IsSuccess)
+        {
+            Snackbar.Add(result.ErrorMessage ?? "Cannot start timer.", Severity.Error);
+            return;
+        }
+
         _state = TimerService.GetState(_currentUser.Id);
         _popoverOpen = false;
         _note = string.Empty;
@@ -228,17 +195,32 @@
     {
         if (_currentUser == null) return;
 
-        var elapsed = TimerService.Stop(_currentUser.Id);
+        var result = TimerService.Stop(_currentUser.Id);
         _state = TimerService.GetState(_currentUser.Id);
+        if (_state.IsRunning)
+        {
+            // Timer was not stopped (e.g. timesheet is locked)
+            Snackbar.Add(result.ErrorMessage ?? "Cannot stop timer.", Severity.Error);
+            return;
+        }
+
         StopUiTimer();
 
-        if (elapsed.TotalMinutes >= 1)
+        if (result.IsSuccess)
         {
-            Snackbar.Add($"Logged {elapsed.Hours}h {elapsed.Minutes}m to your timesheet", Severity.Success);
+            var elapsed = result.Value;
+            if (elapsed.TotalMinutes >= 1)
+            {
+                Snackbar.Add($"Logged {elapsed.Hours}h {elapsed.Minutes}m to your timesheet", Severity.Success);
+            }
+            else
+            {
+                Snackbar.Add("Timer was less than 1 minute — not logged", Severity.Warning);
+            }
         }
         else
         {
-            Snackbar.Add("Timer was less than 1 minute — not logged", Severity.Warning);
+            Snackbar.Add(result.ErrorMessage ?? "Cannot stop timer.", Severity.Error);
         }
     }
 

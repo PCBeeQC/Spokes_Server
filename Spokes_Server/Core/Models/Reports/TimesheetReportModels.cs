@@ -1,6 +1,55 @@
 namespace Spokes_Server.Core.Models.Reports;
 
 using Spokes_Server.Core.Helpers;
+using Spokes_Server.Core.Models.HR;
+
+public class TimesheetReportFilterCriteria
+{
+    public DateTime? StartDate { get; set; }
+    public DateTime? EndDate { get; set; }
+    public IEnumerable<string>? SelectedEmployees { get; set; }
+    public int TotalEmployeesCount { get; set; }
+    public IEnumerable<string>? SelectedTeams { get; set; }
+    public int TotalTeamsCount { get; set; }
+    public IEnumerable<string>? SelectedProjectGroups { get; set; }
+    public int TotalProjectGroupsCount { get; set; }
+    public IEnumerable<string>? SelectedClients { get; set; }
+    public int TotalClientsCount { get; set; }
+    public IEnumerable<string>? SelectedProjects { get; set; }
+    public int TotalProjectsCount { get; set; }
+    public IEnumerable<string>? SelectedTasks { get; set; }
+    public int TotalTasksCount { get; set; }
+
+    public BillableFilterStatus BillableStatus { get; set; } = BillableFilterStatus.All;
+    public string? TimesheetStatus { get; set; }
+    public string? DescriptionSearch { get; set; }
+}
+
+public class TimesheetReportEntry
+{
+    public TimeEntry Entry { get; set; } = new();
+    public string EmployeeId { get; set; } = "";
+    public string EmployeeName { get; set; } = "";
+    public string EmployeeInitials { get; set; } = "";
+    public string TeamId { get; set; } = "";
+    public string TeamName { get; set; } = "";
+    public string ProjectId { get; set; } = "";
+    public string ProjectName { get; set; } = "";
+    public string ProjectGroupId { get; set; } = "";
+    public string ClientId { get; set; } = "";
+    public string TaskId { get; set; } = "";
+    public string TaskName { get; set; } = "";
+    public string Status { get; set; } = "Draft";
+    public string ProjectColor { get; set; } = "#3B82F6";
+    public decimal? ProjectAllocatedHours { get; set; }
+
+    public decimal HourlyRate { get; set; }
+    public decimal CostRate { get; set; }
+    public decimal BillableAmount => Entry.IsBillable ? Entry.Hours * HourlyRate : 0m;
+    public decimal CostAmount => Entry.Hours * CostRate;
+    public decimal ProfitAmount => BillableAmount - CostAmount;
+}
+
 
 public enum ReportGroupBy
 {
@@ -29,8 +78,8 @@ public enum WeeklyGroupBy
 
 public enum TimeDisplayFormat
 {
-    Duration_HHMM,
-    Decimal_Hours
+    DurationHhmm,
+    DecimalHours
 }
 
 public enum BillableFilterStatus

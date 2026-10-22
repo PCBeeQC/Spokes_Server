@@ -51,16 +51,30 @@ if (window.visualViewport) {
     updateViewport();
 }
 
+export function initComposerAll(idSuffix, autofocus, dotNetHelper) {
+    window.spokesChatDiagnostics?.mark(`Client: JS ChatComposer.initComposerAll (${idSuffix})`);
+    initComposer(`chat-message-input-${idSuffix}`, false, autofocus, dotNetHelper);
+    initComposer(`chat-message-input-desktop-${idSuffix}`, true, autofocus, dotNetHelper);
+    initMobileSendButton(`mobile-send-btn-${idSuffix}`, `chat-message-input-${idSuffix}`, dotNetHelper);
+    initMentionPopover(`mention-popover-container-${idSuffix}`, dotNetHelper);
+    initEventPopover(`event-popover-container-${idSuffix}`, dotNetHelper);
+    initEmojiAutocompletePopover(`emoji-autocomplete-popover-container-${idSuffix}`, dotNetHelper);
+    initSnippetPopover(`snippet-popover-container-${idSuffix}`, dotNetHelper);
+}
+
 /**
  * Prevent Enter (without Shift) from inserting a newline in the textarea.
  * Attaches a keydown listener and paste listener to the textarea element.
  */
 export function initComposer(textareaId, preventEnter, autofocus, dotNetHelper) {
+    window.spokesChatDiagnostics?.mark(`Client: JS ChatComposer.initComposer (${textareaId})`);
     const container = document.getElementById(textareaId);
     if (!container) return;
 
     // MudTextField renders a <textarea> inside the container div
     const textarea = container.querySelector('textarea') || container;
+    if (textarea._spokesComposerInit) return;
+    textarea._spokesComposerInit = true;
 
     textarea.addEventListener('keydown', (e) => {
         if (preventEnter && e.key === 'Enter' && !e.shiftKey) {
@@ -346,11 +360,44 @@ export function insertAtCursor(textareaId, textToInsert, focusAfterInsert = true
 
 /**
  * Initializes the mobile send button to securely prevent focus loss (keyboard flashing)
- * by intercepting `touchstart` with a non-passive listener.
+ * by intercepting `touchstart` with a non-passive listener, and synchronizes send button
+ * enabled state and text payload directly from the client textarea in 0ms.
  */
-export function initMobileSendButton(btnId, dotNetHelper) {
+export function initMobileSendButton(btnId, textareaIdOrHelper, dotNetHelperArg) {
+    window.spokesChatDiagnostics?.mark('Client: JS ChatComposer.initMobileSendButton');
     const btn = document.getElementById(btnId);
-    if (!btn) return;
+    if (!btn || btn._spokesMobileSendInit) return;
+    btn._spokesMobileSendInit = true;
+
+    const dotNetHelper = dotNetHelperArg || textareaIdOrHelper;
+    const textareaId = typeof textareaIdOrHelper === 'string'
+        ? textareaIdOrHelper
+        : btnId.replace('mobile-send-btn-', 'chat-message-input-');
+
+    const getTextarea = () => {
+        const container = document.getElementById(textareaId);
+        return container ? (container.querySelector('textarea') || container) : null;
+    };
+
+    const syncClientSendButton = () => {
+        const textarea = getTextarea();
+        if (!textarea) return;
+        if (textarea.value && textarea.value.trim().length > 0) {
+            if (btn.style.pointerEvents === 'none' || btn.style.opacity !== '1') {
+                btn.style.opacity = '1';
+                btn.style.pointerEvents = 'auto';
+            }
+        }
+    };
+
+    const initialTextarea = getTextarea();
+    if (initialTextarea) {
+        initialTextarea.addEventListener('input', syncClientSendButton);
+    }
+
+    // Prevent stale server renders from disabling the send button while the user has non-empty text
+    const observer = new MutationObserver(syncClientSendButton);
+    observer.observe(btn, { attributes: true, attributeFilter: ['style'] });
 
     const preventFocusLoss = (e) => {
         // e.preventDefault() prevents the browser from shifting focus away from the input,
@@ -362,6 +409,18 @@ export function initMobileSendButton(btnId, dotNetHelper) {
     btn.addEventListener('touchstart', preventFocusLoss, { passive: false });
     btn.addEventListener('mousedown', preventFocusLoss, { passive: false });
 
+    const performSend = () => {
+        const textarea = getTextarea();
+        const currentText = textarea ? textarea.value : null;
+        if (textarea && currentText && currentText.trim().length > 0) {
+            textarea.value = '';
+            textarea.style.height = 'auto';
+            btn.style.opacity = '0.5';
+            btn.style.pointerEvents = 'none';
+        }
+        dotNetHelper.invokeMethodAsync('TriggerSendMobile', currentText);
+    };
+
     // Since we prevented default on touchstart/mousedown, the native `click` 
     // event will NOT fire. We must manually trigger the callback on touchend/mouseup.
     
@@ -370,194 +429,110 @@ export function initMobileSendButton(btnId, dotNetHelper) {
     btn.addEventListener('touchend', (e) => {
         e.preventDefault();
         isHandlingTouch = true;
-        dotNetHelper.invokeMethodAsync('TriggerSendMobile');
+        performSend();
         setTimeout(() => isHandlingTouch = false, 300); // Debounce paired clicks
     });
 
     btn.addEventListener('mouseup', (e) => {
         e.preventDefault();
         if (!isHandlingTouch) {
-            dotNetHelper.invokeMethodAsync('TriggerSendMobile');
+            performSend();
         }
     });
 }
 
 /**
- * Initializes the mention popover to securely prevent focus loss (keyboard flashing)
- * when selecting a mention on mobile devices. Uses event delegation on the container.
+ * Sets up autocomplete popovers for smooth touch scrolling on mobile while preventing
+ * focus loss on desktop and avoiding accidental item selection during swipe/drag.
  */
-export function initMentionPopover(containerId, dotNetHelper) {
+function setupPopoverTouchScrollAndSelection(containerId, itemClass, callbackMethod, dotNetHelper) {
     const container = document.getElementById(containerId);
-    if (!container) return;
+    if (!container || container._spokesPopoverInit) return;
+    container._spokesPopoverInit = true;
 
-    const preventFocusLoss = (e) => {
-        // Only prevent default if we tapped a mention item
-        const item = e.target.closest('.mention-popover-item');
-        if (item) {
-            // e.preventDefault() prevents the browser from shifting focus away from the input
-            e.preventDefault();
-        }
-    };
-
-    container.addEventListener('touchstart', preventFocusLoss, { passive: false });
-    container.addEventListener('mousedown', preventFocusLoss, { passive: false });
-
+    let touchStartY = 0;
+    let touchStartX = 0;
+    let isScrolling = false;
     let isHandlingTouch = false;
 
+    // Allow native momentum scrolling by keeping touchstart passive and uncancelled
+    container.addEventListener('touchstart', (e) => {
+        if (e.touches && e.touches.length > 0) {
+            touchStartY = e.touches[0].clientY;
+            touchStartX = e.touches[0].clientX;
+            isScrolling = false;
+        }
+    }, { passive: true });
+
+    // Track finger movement: if delta > 8px, it is a scroll gesture, not a tap
+    container.addEventListener('touchmove', (e) => {
+        if (e.touches && e.touches.length > 0) {
+            const deltaY = Math.abs(e.touches[0].clientY - touchStartY);
+            const deltaX = Math.abs(e.touches[0].clientX - touchStartX);
+            if (deltaY > 8 || deltaX > 8) {
+                isScrolling = true;
+            }
+        }
+    }, { passive: true });
+
+    // Touchend selects the item only if the user tapped (did not scroll)
     container.addEventListener('touchend', (e) => {
-        const item = e.target.closest('.mention-popover-item');
+        if (isScrolling) {
+            return;
+        }
+        const item = e.target.closest(itemClass);
         if (item) {
-            e.preventDefault();
+            e.preventDefault(); // Prevent synthetic mouse/click and focus loss
             isHandlingTouch = true;
             const indexStr = item.getAttribute('data-index');
             if (indexStr) {
-                dotNetHelper.invokeMethodAsync('TriggerMentionMobile', parseInt(indexStr, 10));
+                dotNetHelper.invokeMethodAsync(callbackMethod, parseInt(indexStr, 10));
             }
             setTimeout(() => isHandlingTouch = false, 300); // Debounce paired clicks
         }
     });
 
+    // On desktop: prevent default on mousedown so clicking popover does not blur the input
+    container.addEventListener('mousedown', (e) => {
+        const item = e.target.closest(itemClass);
+        if (item) {
+            e.preventDefault();
+        }
+    });
+
+    // On desktop: trigger selection on mouseup
     container.addEventListener('mouseup', (e) => {
-        const item = e.target.closest('.mention-popover-item');
+        const item = e.target.closest(itemClass);
         if (item) {
             e.preventDefault();
             if (!isHandlingTouch) {
                 const indexStr = item.getAttribute('data-index');
                 if (indexStr) {
-                    dotNetHelper.invokeMethodAsync('TriggerMentionMobile', parseInt(indexStr, 10));
+                    dotNetHelper.invokeMethodAsync(callbackMethod, parseInt(indexStr, 10));
                 }
             }
         }
     });
+}
+
+export function initMentionPopover(containerId, dotNetHelper) {
+    window.spokesChatDiagnostics?.mark('Client: JS ChatComposer.initMentionPopover');
+    setupPopoverTouchScrollAndSelection(containerId, '.mention-popover-item', 'TriggerMentionMobile', dotNetHelper);
 }
 
 export function initEventPopover(containerId, dotNetHelper) {
-    const container = document.getElementById(containerId);
-    if (!container) return;
-
-    const preventFocusLoss = (e) => {
-        const item = e.target.closest('.event-popover-item');
-        if (item) {
-            e.preventDefault();
-        }
-    };
-
-    container.addEventListener('touchstart', preventFocusLoss, { passive: false });
-    container.addEventListener('mousedown', preventFocusLoss, { passive: false });
-
-    let isHandlingTouch = false;
-
-    container.addEventListener('touchend', (e) => {
-        const item = e.target.closest('.event-popover-item');
-        if (item) {
-            e.preventDefault();
-            isHandlingTouch = true;
-            const indexStr = item.getAttribute('data-index');
-            if (indexStr) {
-                dotNetHelper.invokeMethodAsync('TriggerEventMobile', parseInt(indexStr, 10));
-            }
-            setTimeout(() => isHandlingTouch = false, 300);
-        }
-    });
-
-    container.addEventListener('mouseup', (e) => {
-        const item = e.target.closest('.event-popover-item');
-        if (item) {
-            e.preventDefault();
-            if (!isHandlingTouch) {
-                const indexStr = item.getAttribute('data-index');
-                if (indexStr) {
-                    dotNetHelper.invokeMethodAsync('TriggerEventMobile', parseInt(indexStr, 10));
-                }
-            }
-        }
-    });
+    window.spokesChatDiagnostics?.mark('Client: JS ChatComposer.initEventPopover');
+    setupPopoverTouchScrollAndSelection(containerId, '.event-popover-item', 'TriggerEventMobile', dotNetHelper);
 }
 
 export function initEmojiAutocompletePopover(containerId, dotNetHelper) {
-    const container = document.getElementById(containerId);
-    if (!container) return;
-
-    const preventFocusLoss = (e) => {
-        const item = e.target.closest('.emoji-autocomplete-popover-item');
-        if (item) {
-            e.preventDefault();
-        }
-    };
-
-    container.addEventListener('touchstart', preventFocusLoss, { passive: false });
-    container.addEventListener('mousedown', preventFocusLoss, { passive: false });
-
-    let isHandlingTouch = false;
-
-    container.addEventListener('touchend', (e) => {
-        const item = e.target.closest('.emoji-autocomplete-popover-item');
-        if (item) {
-            e.preventDefault();
-            isHandlingTouch = true;
-            const indexStr = item.getAttribute('data-index');
-            if (indexStr) {
-                dotNetHelper.invokeMethodAsync('TriggerEmojiAutocompleteMobile', parseInt(indexStr, 10));
-            }
-            setTimeout(() => isHandlingTouch = false, 300);
-        }
-    });
-
-    container.addEventListener('mouseup', (e) => {
-        const item = e.target.closest('.emoji-autocomplete-popover-item');
-        if (item) {
-            e.preventDefault();
-            if (!isHandlingTouch) {
-                const indexStr = item.getAttribute('data-index');
-                if (indexStr) {
-                    dotNetHelper.invokeMethodAsync('TriggerEmojiAutocompleteMobile', parseInt(indexStr, 10));
-                }
-            }
-        }
-    });
+    window.spokesChatDiagnostics?.mark('Client: JS ChatComposer.initEmojiAutocompletePopover');
+    setupPopoverTouchScrollAndSelection(containerId, '.emoji-autocomplete-popover-item', 'TriggerEmojiAutocompleteMobile', dotNetHelper);
 }
 
 export function initSnippetPopover(containerId, dotNetHelper) {
-    const container = document.getElementById(containerId);
-    if (!container) return;
-
-    const preventFocusLoss = (e) => {
-        const item = e.target.closest('.snippet-popover-item');
-        if (item) {
-            e.preventDefault();
-        }
-    };
-
-    container.addEventListener('touchstart', preventFocusLoss, { passive: false });
-    container.addEventListener('mousedown', preventFocusLoss, { passive: false });
-
-    let isHandlingTouch = false;
-
-    container.addEventListener('touchend', (e) => {
-        const item = e.target.closest('.snippet-popover-item');
-        if (item) {
-            e.preventDefault();
-            isHandlingTouch = true;
-            const indexStr = item.getAttribute('data-index');
-            if (indexStr) {
-                dotNetHelper.invokeMethodAsync('TriggerSnippetMobile', parseInt(indexStr, 10));
-            }
-            setTimeout(() => isHandlingTouch = false, 300);
-        }
-    });
-
-    container.addEventListener('mouseup', (e) => {
-        const item = e.target.closest('.snippet-popover-item');
-        if (item) {
-            e.preventDefault();
-            if (!isHandlingTouch) {
-                const indexStr = item.getAttribute('data-index');
-                if (indexStr) {
-                    dotNetHelper.invokeMethodAsync('TriggerSnippetMobile', parseInt(indexStr, 10));
-                }
-            }
-        }
-    });
+    window.spokesChatDiagnostics?.mark('Client: JS ChatComposer.initSnippetPopover');
+    setupPopoverTouchScrollAndSelection(containerId, '.snippet-popover-item', 'TriggerSnippetMobile', dotNetHelper);
 }
 
 export function scrollSnippetPopoverToSelected(containerId) {

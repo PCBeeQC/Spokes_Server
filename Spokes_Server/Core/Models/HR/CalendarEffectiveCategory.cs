@@ -3,6 +3,21 @@ namespace Spokes_Server.Core.Models.HR;
 using MudBlazor;
 using Spokes_Server.Core.Models.Core;
 
+public record CalendarViewingContext(
+    string CurrentUserId,
+    IReadOnlySet<string>? CurrentUserTeamIds = null,
+    IReadOnlyDictionary<string, string>? EmployeeNames = null,
+    IReadOnlyDictionary<string, string>? TeamNames = null,
+    IReadOnlyDictionary<string, CalendarCategory>? UserCategories = null);
+
+public record CalendarCategoryResolutionContext(
+    string CurrentUserId,
+    IReadOnlySet<string>? CurrentUserTeamIds = null,
+    IReadOnlyDictionary<string, string>? EmployeeNames = null,
+    IReadOnlyDictionary<string, string>? TeamNames = null,
+    IReadOnlyDictionary<string, CalendarCategory>? UserCategories = null)
+    : CalendarViewingContext(CurrentUserId, CurrentUserTeamIds, EmployeeNames, TeamNames, UserCategories);
+
 public class CalendarEffectiveCategory
 {
     public string FilterKey { get; set; } = string.Empty;
@@ -15,14 +30,27 @@ public class CalendarEffectiveCategory
 
     public static CalendarEffectiveCategory Resolve(
         CalendarEvent evt,
-        string currentUserId,
-        IReadOnlySet<string> currentUserTeamIds,
-        IReadOnlyDictionary<string, string> employeeNames,
-        IReadOnlyDictionary<string, string> teamNames,
-        IReadOnlyDictionary<string, CalendarCategory>? userCategories = null)
+        CalendarViewingContext context)
     {
         var categoryName = string.IsNullOrWhiteSpace(evt.Category) ? "General" : evt.Category;
-        var color = ResolveColor(evt, userCategories);
+        var color = ResolveColor(evt, context.UserCategories);
+        var currentUserId = context.CurrentUserId ?? string.Empty;
+        var currentUserTeamIds = context.CurrentUserTeamIds ?? (IReadOnlySet<string>)new HashSet<string>();
+        var employeeNames = context.EmployeeNames;
+        var teamNames = context.TeamNames;
+
+        // If user category matches by CategoryId, prefer the live category name and color
+        if (context.UserCategories != null && !string.IsNullOrEmpty(evt.CategoryId) && context.UserCategories.TryGetValue(evt.CategoryId, out var userCat))
+        {
+            if (!string.IsNullOrWhiteSpace(userCat.Name))
+            {
+                categoryName = userCat.Name;
+            }
+            if (Enum.TryParse<Color>(userCat.Color, true, out var parsedCol))
+            {
+                color = parsedCol;
+            }
+        }
 
         // 1. Is this the current user's own event?
         if (string.Equals(evt.EmployeeId, currentUserId, StringComparison.OrdinalIgnoreCase))
@@ -57,7 +85,7 @@ public class CalendarEffectiveCategory
             var matchingTeamId = evt.InvitedTeamIds.FirstOrDefault(t => currentUserTeamIds.Contains(t));
             if (!string.IsNullOrEmpty(matchingTeamId))
             {
-                var teamName = teamNames.GetValueOrDefault(matchingTeamId, "Team");
+                var teamName = teamNames?.GetValueOrDefault(matchingTeamId, "Team") ?? "Team";
                 return new CalendarEffectiveCategory
                 {
                     FilterKey = $"team:{matchingTeamId}:{categoryName.ToLowerInvariant()}",
@@ -71,7 +99,7 @@ public class CalendarEffectiveCategory
         }
 
         // 4. Otherwise, it is shared directly with the current user by the creator (attendee)
-        var creatorName = employeeNames.GetValueOrDefault(evt.EmployeeId, "User");
+        var creatorName = employeeNames?.GetValueOrDefault(evt.EmployeeId, "User") ?? "User";
         return new CalendarEffectiveCategory
         {
             FilterKey = $"user:{evt.EmployeeId}:{categoryName.ToLowerInvariant()}",

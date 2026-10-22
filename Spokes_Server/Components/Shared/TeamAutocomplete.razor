@@ -1,4 +1,9 @@
-@inject Database Db
+@using Spokes_Server.Core.Data.Repositories.HR
+@using Spokes_Server.Core.Services.Identity
+@using Spokes_Server.Core.Services.Security
+@inject TeamRepository TeamRepo
+@inject UserService UserService
+@inject IUserPrivacyService PrivacyService
 
 <MudAutocomplete @ref="_autocomplete"
                  T="Team"
@@ -67,14 +72,27 @@
         }
     }
 
-    private Task<IEnumerable<Team>> InternalSearchFunc(string value, CancellationToken ct)
+    private Employee? _currentUser;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _currentUser = await UserService.GetEmployeeAsync();
+    }
+
+    private async Task<IEnumerable<Team>> InternalSearchFunc(string value, CancellationToken ct)
     {
         if (SearchFunc != null)
         {
-            return SearchFunc(value, ct);
+            return await SearchFunc(value, ct);
         }
 
-        var source = Teams ?? Db.Teams.GetAll();
+        if (_currentUser == null)
+        {
+            _currentUser = await UserService.GetEmployeeAsync();
+        }
+
+        var source = Teams ?? TeamRepo.GetAll();
+        source = PrivacyService.FilterDiscoverableTeams(_currentUser, source);
 
         if (ExcludedIds != null && ExcludedIds.Any())
         {
@@ -84,7 +102,7 @@
 
         if (string.IsNullOrWhiteSpace(value))
         {
-            return Task.FromResult(source.OrderBy(t => t.Name).Take(20).AsEnumerable());
+            return source.OrderBy(t => t.Name).Take(20);
         }
 
         var filtered = source.Where(t =>
@@ -93,6 +111,6 @@
             .OrderBy(t => t.Name)
             .Take(20);
 
-        return Task.FromResult(filtered.AsEnumerable());
+        return filtered;
     }
 }

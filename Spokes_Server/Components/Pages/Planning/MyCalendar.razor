@@ -1,33 +1,40 @@
 @page "/planning/calendar"
+@attribute [Authorize(Policy = AppPermissions.Calendar.View)]
+@using Microsoft.AspNetCore.Authorization
+@using Spokes_Server.Core.Constants
 @using Spokes_Server.Components.Dialogs
+@using Spokes_Server.Core.Services.Communication.Chat
+@implements IDisposable
 @inject Database Db
 @inject UserService UserService
+@inject CalendarService CalendarService
+@inject ChatStateService ChatState
 @inject IDialogService DialogService
 @inject ISnackbar Snackbar
 
-<PageTitle>My Calendar</PageTitle>
+<PageTitle>@Loc["My Calendar"]</PageTitle>
 
 @* <MudText Class="mt-4 ml-6" Typo="Typo.h4" GutterBottom="true">Calendar</MudText> *@
 
 <MudHidden Breakpoint="Breakpoint.MdAndUp" Invert="true">
     <MudContainer MaxWidth="MaxWidth.ExtraLarge" Class="mt-4">
 
-        <MudPaper Elevation="0" Outlined="true" Rounded="true" Class="pa-6">
+        <MudPaper Elevation="0" Outlined="true" Class="pa-6">
             <!-- Calendar Controls -->
             <div class="d-flex justify-space-between align-center mb-4">
                 <div class="d-flex align-center gap-2">
                     <MudIconButton Icon="@Icons.Material.Filled.ChevronLeft" OnClick="PrevMonth" />
                     <MudText Typo="Typo.h5" Align="Align.Center" Style="width: 220px;"><b>@CurrentMonth.ToString("MMMM yyyy")</b></MudText>
                     <MudIconButton Icon="@Icons.Material.Filled.ChevronRight" OnClick="NextMonth" />
-                    <MudButton Variant="Variant.Outlined" OnClick="GoToToday" Size="Size.Small" Class="ml-4">Today
+                    <MudButton Variant="Variant.Outlined" OnClick="GoToToday" Size="Size.Small" Class="ml-4">@Loc["Today"]
                     </MudButton>
                 </div>
 
                 <div class="d-flex align-center gap-2">
                     <MudButton StartIcon="@Icons.Material.Filled.Palette" Variant="Variant.Outlined" Color="Color.Default"
-                        OnClick="OpenCategoryManager">Categories</MudButton>
+                        OnClick="OpenCategoryManager">@Loc["Categories"]</MudButton>
                     <MudButton StartIcon="@Icons.Material.Filled.Add" Variant="Variant.Outlined" Color="Color.Primary"
-                        OnClick="AddEvent">Add Event</MudButton>
+                        OnClick="AddEvent">@Loc["Add Event"]</MudButton>
                 </div>
             </div>
 
@@ -56,7 +63,7 @@
             <div style="overflow-x: auto;">
                 <div class="calendar-grid" style="min-width: 700px;">
                     <!-- Headers -->
-                    @foreach (var day in new[] { "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun" })
+                    @foreach (var day in new[] { Loc["Mon"].Value, Loc["Tue"].Value, Loc["Wed"].Value, Loc["Thu"].Value, Loc["Fri"].Value, Loc["Sat"].Value, Loc["Sun"].Value })
                     {
                         <div class="calendar-header">@day</div>
                     }
@@ -78,11 +85,18 @@
                                         {
                                             <span class="evt-time">@(evt.IsAllDay ? "" : evt.TimeStr)</span>
                                         }
-                                        @if (!string.IsNullOrEmpty(evt.OwnerName))
+                                        @if (!string.IsNullOrEmpty(evt.OwnerName) && (!evt.IsContinuation || day.Date.DayOfWeek == DayOfWeek.Monday))
                                         {
                                             <span class="evt-owner">@evt.OwnerName:</span>
                                         }
-                                        <span>@evt.Title</span>
+                                        @if (!evt.IsContinuation || day.Date.DayOfWeek == DayOfWeek.Monday)
+                                        {
+                                            <span>@evt.Title</span>
+                                        }
+                                        else
+                                        {
+                                            <span>&nbsp;</span>
+                                        }
                                     </div>
                                 }
                             </div>
@@ -105,10 +119,10 @@
                             </MudText>
                             <MudText Typo="Typo.caption" Color="Color.Secondary">
                                 @(SelectedDayEvents.Count == 0 
-                                    ? "No events scheduled" 
+                                    ? Loc["No events scheduled"].Value 
                                     : SelectedDayEvents.Count == 1 
-                                        ? "1 event scheduled" 
-                                        : $"{SelectedDayEvents.Count} events scheduled")
+                                        ? Loc["1 event scheduled"].Value 
+                                        : string.Format(Loc["{0} events scheduled"].Value, SelectedDayEvents.Count))
                             </MudText>
                         </div>
                     </div>
@@ -117,7 +131,7 @@
                                Color="Color.Primary"
                                Size="Size.Small"
                                OnClick="AddEvent">
-                        Add Event
+                        @Loc["Add Event"]
                     </MudButton>
                 </div>
 
@@ -126,86 +140,153 @@
                 {
                     <div class="d-flex flex-column align-center justify-center py-6 text-center" style="background-color: var(--mud-palette-background-grey); border-radius: 8px;">
                         <MudIcon Icon="@Icons.Material.Outlined.EventAvailable" Size="Size.Large" Color="Color.Secondary" Style="opacity: 0.5;" />
-                        <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mt-2">No events scheduled for this day.</MudText>
+                        <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mt-2">@Loc["No events scheduled for this day."]</MudText>
                         <MudButton StartIcon="@Icons.Material.Filled.Add"
                                    Variant="Variant.Text"
                                    Color="Color.Primary"
                                    Size="Size.Small"
                                    OnClick="AddEvent"
                                    Class="mt-1">
-                            Schedule an event
+                            @Loc["Schedule an event"]
                         </MudButton>
                     </div>
                 }
                 else
                 {
-                    <div class="d-flex flex-column gap-2">
-                        @foreach (var evt in SelectedDayEvents)
-                        {
-                            var startDt = evt.SourceEvent.Start;
-                            var endDt = evt.SourceEvent.End;
-                            var colorKey = evt.Color.ToString().ToLower();
-
-                            <div class="agenda-row d-flex align-center" style="cursor: pointer;" @onclick="@((e) => OnEventClick(evt, e))">
-                                <!-- Time column -->
-                                <div class="agenda-time pr-4 d-flex flex-column justify-center" style="min-width: 90px; color: var(--mud-palette-text-secondary); font-size: 0.85rem; font-weight: 500;">
-                                    @if (evt.IsAllDay)
-                                    {
-                                        <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Default" Class="ma-0 px-2" Style="height: 22px; font-size: 0.75rem;">
-                                            All Day
-                                        </MudChip>
-                                    }
-                                    else
-                                    {
-                                        <span class="font-weight-bold">@startDt.ToString("HH:mm")</span>
-                                        <span style="opacity: 0.6; font-size: 0.75rem;">@endDt.ToString("HH:mm")</span>
-                                    }
-                                </div>
-
-                                <!-- Event block -->
-                                <div class="agenda-block flex-grow-1 pa-3 rounded d-flex justify-space-between align-center"
-                                     style="background-color: rgba(var(--mud-palette-@(colorKey)-rgb), 0.12); border-left: 4px solid var(--mud-palette-@(colorKey));">
-                                    <div class="d-flex flex-column">
-                                        <div class="d-flex align-center gap-2">
-                                            <MudText Typo="Typo.subtitle1" Class="font-weight-bold" Style="line-height: 1.2; color: var(--mud-palette-text-primary);">
-                                                @evt.Title
+                    @if (SelectedDayAllDayEvents.Any())
+                    {
+                        <div class="mb-4 pa-3 rounded-lg" style="background-color: var(--mud-palette-background-grey); border: 1px dashed var(--mud-palette-lines-default);">
+                            <div class="d-flex align-center gap-2 mb-2">
+                                <MudIcon Icon="@Icons.Material.Filled.WbSunny" Size="Size.Small" Color="Color.Warning" />
+                                <MudText Typo="Typo.caption" Color="Color.Secondary" Style="font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;">
+                                    @string.Format(Loc["All-Day ({0})"].Value, SelectedDayAllDayEvents.Count)
+                                </MudText>
+                            </div>
+                            <div class="d-flex flex-wrap gap-2">
+                                @foreach (var evt in SelectedDayAllDayEvents)
+                                {
+                                    var colorKey = evt.Color.ToString().ToLower();
+                                    <div class="agenda-block pa-2 rounded d-flex align-center gap-2"
+                                         style="cursor: pointer; background-color: rgba(var(--mud-palette-@(colorKey)-rgb), 0.15); border-left: 4px solid var(--mud-palette-@(colorKey));"
+                                         @onclick="@((e) => OnEventClick(evt, e))">
+                                        <MudText Typo="Typo.body2" Class="font-weight-bold" Style="color: var(--mud-palette-text-primary);">
+                                            @evt.Title
+                                        </MudText>
+                                        @if (!string.IsNullOrEmpty(evt.EffectiveCategory.DisplayName))
+                                        {
+                                            <MudChip T="string" Color="@evt.Color" Size="Size.Small" Variant="Variant.Filled" Style="height: 18px; font-size: 0.65rem;">
+                                                @evt.EffectiveCategory.DisplayName
+                                            </MudChip>
+                                        }
+                                        @if (!string.IsNullOrEmpty(evt.OwnerName))
+                                        {
+                                            <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                                @string.Format(Loc["by {0}"].Value, evt.OwnerName)
                                             </MudText>
-                                            @if (!string.IsNullOrEmpty(evt.EffectiveCategory.DisplayName))
+                                        }
+                                    </div>
+                                }
+                            </div>
+                        </div>
+                    }
+
+                    <!-- Timed Events with Duration-Tiered Cards and Timeline Track -->
+                    @if (SelectedDayTimedEvents.Any())
+                    {
+                        CalendarEventViewModel? prevEvt = null;
+                        <div class="agenda-timeline d-flex flex-column gap-3">
+                            @foreach (var evt in SelectedDayTimedEvents)
+                            {
+                                var startDt = evt.SourceEvent.Start;
+                                var endDt = evt.SourceEvent.End;
+                                var colorKey = evt.Color.ToString().ToLower();
+                                var isNow = IsEventHappeningNow(evt.SourceEvent);
+                                var isPast = IsEventPast(evt.SourceEvent);
+                                var minHeightStyle = GetDurationTierMinHeight(evt.SourceEvent);
+                                var durationText = GetDurationBadgeText(evt.SourceEvent);
+
+                                if (prevEvt != null)
+                                {
+                                    var gap = startDt - prevEvt.SourceEvent.End;
+                                    if (gap.TotalMinutes >= 45)
+                                    {
+                                        var gapText = GetFreeTimeGapText(gap);
+                                        <div class="d-flex align-center gap-2 my-1" style="padding-left: 110px; opacity: 0.6;">
+                                            <div style="flex: 1; border-top: 1px dashed var(--mud-palette-lines-default);"></div>
+                                            <MudText Typo="Typo.caption" Color="Color.Secondary" Style="font-size: 0.72rem; font-style: italic;">@gapText</MudText>
+                                            <div style="flex: 1; border-top: 1px dashed var(--mud-palette-lines-default);"></div>
+                                        </div>
+                                    }
+                                }
+                                prevEvt = evt;
+
+                                <div class="agenda-row d-flex align-stretch @(isPast ? "agenda-past" : "") @(isNow ? "agenda-now" : "")"
+                                     style="cursor: pointer;"
+                                     @onclick="@((e) => OnEventClick(evt, e))">
+                                    <!-- Time column -->
+                                    <div class="agenda-time pr-4 d-flex flex-column justify-start pt-1" style="min-width: 110px; color: var(--mud-palette-text-secondary);">
+                                        <div class="d-flex align-center gap-1">
+                                            <span class="font-weight-bold" style="font-size: 0.88rem; color: var(--mud-palette-text-primary);">@startDt.ToString("HH:mm")</span>
+                                            <span style="opacity: 0.6; font-size: 0.75rem;">- @endDt.ToString("HH:mm")</span>
+                                        </div>
+                                        <div class="mt-1 d-flex align-center gap-1">
+                                            <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Default" Class="ma-0 px-1" Style="height: 18px; font-size: 0.68rem;">
+                                                @durationText
+                                            </MudChip>
+                                            @if (isNow)
                                             {
-                                                <MudChip T="string" Color="@evt.Color" Size="Size.Small" Variant="Variant.Filled" Style="height: 20px; font-size: 0.7rem;">
-                                                    @evt.EffectiveCategory.DisplayName
+                                                <MudChip T="string" Size="Size.Small" Color="Color.Success" Variant="Variant.Filled" Class="ma-0 px-1 pulse-chip" Style="height: 18px; font-size: 0.65rem;">
+                                                    @Loc["Live"]
                                                 </MudChip>
                                             }
-                                            @if (!string.IsNullOrEmpty(evt.OwnerName))
+                                        </div>
+                                    </div>
+
+                                    <!-- Event block with duration-tiered min-height -->
+                                    <div class="agenda-block flex-grow-1 pa-3 rounded d-flex justify-space-between align-center"
+                                         style="@minHeightStyle background-color: rgba(var(--mud-palette-@(colorKey)-rgb), @(isNow ? "0.22" : "0.12")); border-left: 4px solid var(--mud-palette-@(colorKey)); @(isNow ? "box-shadow: 0 0 0 1.5px var(--mud-palette-success);" : "")">
+                                        <div class="d-flex flex-column justify-center">
+                                            <div class="d-flex align-center gap-2 flex-wrap">
+                                                <MudText Typo="Typo.subtitle1" Class="font-weight-bold" Style="line-height: 1.2; color: var(--mud-palette-text-primary);">
+                                                    @evt.Title
+                                                </MudText>
+                                                @if (!string.IsNullOrEmpty(evt.EffectiveCategory.DisplayName))
+                                                {
+                                                    <MudChip T="string" Color="@evt.Color" Size="Size.Small" Variant="Variant.Filled" Style="height: 20px; font-size: 0.7rem;">
+                                                        @evt.EffectiveCategory.DisplayName
+                                                    </MudChip>
+                                                }
+                                                @if (!string.IsNullOrEmpty(evt.OwnerName))
+                                                {
+                                                    <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                                        @string.Format(Loc["by {0}"].Value, evt.OwnerName)
+                                                    </MudText>
+                                                }
+                                            </div>
+
+                                            @if (!string.IsNullOrEmpty(evt.SourceEvent.Location))
                                             {
-                                                <MudText Typo="Typo.caption" Color="Color.Secondary">
-                                                    by @evt.OwnerName
+                                                <div class="d-flex align-center mt-1" style="color: var(--mud-palette-text-secondary); font-size: 0.8rem;">
+                                                    <MudIcon Icon="@Icons.Material.Filled.LocationOn" Size="Size.Small" Class="mr-1" Style="font-size: 0.95rem;" />
+                                                    @evt.SourceEvent.Location
+                                                </div>
+                                            }
+                                            @if (!string.IsNullOrEmpty(evt.SourceEvent.Description))
+                                            {
+                                                <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mt-1" Style="font-size: 0.85rem; line-height: 1.3;">
+                                                    @evt.SourceEvent.Description
                                                 </MudText>
                                             }
                                         </div>
 
-                                        @if (!string.IsNullOrEmpty(evt.SourceEvent.Location))
-                                        {
-                                            <div class="d-flex align-center mt-1" style="color: var(--mud-palette-text-secondary); font-size: 0.8rem;">
-                                                <MudIcon Icon="@Icons.Material.Filled.LocationOn" Size="Size.Small" Class="mr-1" Style="font-size: 0.95rem;" />
-                                                @evt.SourceEvent.Location
-                                            </div>
-                                        }
-                                        @if (!string.IsNullOrEmpty(evt.SourceEvent.Description))
-                                        {
-                                            <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mt-1" Style="font-size: 0.85rem;">
-                                                @evt.SourceEvent.Description
-                                            </MudText>
-                                        }
-                                    </div>
-
-                                    <div class="d-flex align-center ml-4">
-                                        <MudIcon Icon="@Icons.Material.Filled.ChevronRight" Size="Size.Small" Color="Color.Secondary" Style="opacity: 0.5;" />
+                                        <div class="d-flex align-center ml-4">
+                                            <MudIcon Icon="@Icons.Material.Filled.ChevronRight" Size="Size.Small" Color="Color.Secondary" Style="opacity: 0.5;" />
+                                        </div>
                                     </div>
                                 </div>
-                            </div>
-                        }
-                    </div>
+                            }
+                        </div>
+                    }
                 }
             </div>
         </MudPaper>
@@ -215,132 +296,181 @@
 
 <MudHidden Breakpoint="Breakpoint.SmAndDown" Invert="true">
     <div class="mobile-calendar-container">
-        <!-- Mobile Header Row 1: Action Controls -->
-        <div class="d-flex justify-space-between align-center px-2 pt-2">
-            <MudButton StartIcon="@Icons.Material.Filled.Today" OnClick="GoToToday">Today</MudButton>
-            <MudButton EndIcon="@Icons.Material.Filled.Palette" OnClick="OpenCategoryManager">Categories</MudButton>
-        </div>
-
-        <!-- Mobile Header Row 2: Month Navigation -->
-        <div class="d-flex justify-space-between align-center px-2 py-2">
-            <MudIconButton Icon="@Icons.Material.Filled.ChevronLeft" OnClick="PrevMonth" />
-            <MudText Typo="Typo.h5" Class="font-weight-bold" Style="letter-spacing: 1px;">@CurrentMonth.ToString("MMM yyyy").ToUpper()</MudText>
-            <MudIconButton Icon="@Icons.Material.Filled.ChevronRight" OnClick="NextMonth" />
-        </div>
-
-        <!-- Mobile Category Filters -->
-        @if (DynamicCategories.Any())
-        {
-            <div class="d-flex align-center gap-1 px-3 pb-2 overflow-x-auto" style="scrollbar-width: none; -webkit-overflow-scrolling: touch;">
-                @foreach (var cat in DynamicCategories)
-                {
-                    bool isSelected = SelectedCategoryKeys.Contains(cat.FilterKey);
-
-                    <MudChip T="string" Color="@cat.Color" Variant="@(isSelected ? Variant.Filled : Variant.Outlined)"
-                        OnClick="@(() => ToggleCategoryFilter(cat.FilterKey))" Size="Size.Small" Class="flex-shrink-0">
-                        @cat.DisplayName
-                    </MudChip>
-                }
+        <div class="mobile-calendar-card">
+            <!-- Mobile Header Row 1: Action Controls -->
+            <div class="d-flex justify-space-between align-center px-2 pt-2">
+                <MudButton StartIcon="@Icons.Material.Filled.Today" OnClick="GoToToday">@Loc["Today"]</MudButton>
+                <MudButton EndIcon="@Icons.Material.Filled.Palette" OnClick="OpenCategoryManager">@Loc["Categories"]</MudButton>
             </div>
-        }
 
-        <!-- Weekly Header -->
-        <div class="mobile-calendar-header mobile-calendar-grid pb-2 px-2 border-b">
-            <div style="color: var(--mud-palette-text-secondary); font-size: 0.8rem; font-weight: bold; text-align: center;">M</div>
-            <div style="color: var(--mud-palette-text-secondary); font-size: 0.8rem; font-weight: bold; text-align: center;">T</div>
-            <div style="color: var(--mud-palette-text-secondary); font-size: 0.8rem; font-weight: bold; text-align: center;">W</div>
-            <div style="color: var(--mud-palette-text-secondary); font-size: 0.8rem; font-weight: bold; text-align: center;">T</div>
-            <div style="color: var(--mud-palette-text-secondary); font-size: 0.8rem; font-weight: bold; text-align: center;">F</div>
-            <div style="color: var(--mud-palette-text-secondary); font-size: 0.8rem; font-weight: bold; text-align: center;">S</div>
-            <div style="color: var(--mud-palette-secondary); font-size: 0.8rem; font-weight: bold; text-align: center;">S</div>
-        </div>
+            <!-- Mobile Header Row 2: Month Navigation -->
+            <div class="d-flex justify-space-between align-center px-2 py-2">
+                <MudIconButton Icon="@Icons.Material.Filled.ChevronLeft" OnClick="PrevMonth" />
+                <MudText Typo="Typo.h5" Class="font-weight-bold" Style="letter-spacing: 1px;">@CurrentMonth.ToString("MMM yyyy").ToUpper()</MudText>
+                <MudIconButton Icon="@Icons.Material.Filled.ChevronRight" OnClick="NextMonth" />
+            </div>
 
-        @if (Loading)
-        {
-            <MudProgressLinear Indeterminate="true" />
-        }
-
-        <!-- Grid -->
-        <div class="mobile-calendar-grid px-2">
-            @foreach (var day in CalendarDays)
+            <!-- Mobile Category Filters -->
+            @if (DynamicCategories.Any())
             {
-                <div class="@GetMobileCellClass(day)" @onclick="@(() => OnMobileDayClick(day))">
-                    <div class="m-day-number">@day.Date.Day</div>
-                    <div class="m-day-events">
-                        @foreach (var evt in FilteredEvents.Where(e => e.Date == day.Date && (SelectedCategoryKeys.Count == 0 || SelectedCategoryKeys.Contains(e.EffectiveCategory.FilterKey))))
-                        {
-                            if (!evt.IsContinuation || evt.Date.DayOfWeek == DayOfWeek.Monday) {
-                              <div class="m-evt" style="border-left-color: var(--mud-palette-@(evt.Color.ToString().ToLower()));">
-                                  @evt.Title
-                              </div>
-                            }
-                        }
-                    </div>
+                <div class="d-flex align-center gap-1 px-3 pb-2 overflow-x-auto" style="scrollbar-width: none; -webkit-overflow-scrolling: touch;">
+                    @foreach (var cat in DynamicCategories)
+                    {
+                        bool isSelected = SelectedCategoryKeys.Contains(cat.FilterKey);
+
+                        <MudChip T="string" Color="@cat.Color" Variant="@(isSelected ? Variant.Filled : Variant.Outlined)"
+                            OnClick="@(() => ToggleCategoryFilter(cat.FilterKey))" Size="Size.Small" Class="flex-shrink-0">
+                            @cat.DisplayName
+                        </MudChip>
+                    }
                 </div>
             }
+
+            <!-- Weekly Header -->
+            <div class="mobile-calendar-header mobile-calendar-grid pb-2 px-2 border-b">
+                @foreach (var day in new[] { Loc["Mon"].Value, Loc["Tue"].Value, Loc["Wed"].Value, Loc["Thu"].Value, Loc["Fri"].Value, Loc["Sat"].Value, Loc["Sun"].Value })
+                {
+                    <div style="color: @(day == Loc["Sun"].Value ? "var(--mud-palette-secondary)" : "var(--mud-palette-text-secondary)"); font-size: 0.8rem; font-weight: bold; text-align: center;">
+                        @day
+                    </div>
+                }
+            </div>
+
+            @if (Loading)
+            {
+                <MudProgressLinear Indeterminate="true" />
+            }
+
+            <!-- Grid -->
+            <div class="mobile-calendar-grid px-2 pb-2">
+                @foreach (var day in CalendarDays)
+                {
+                    <div class="@GetMobileCellClass(day)" @onclick="@(() => OnMobileDayClick(day))">
+                        <div class="m-day-number">@day.Date.Day</div>
+                        <div class="m-day-events">
+                            @foreach (var evt in FilteredEvents.Where(e => e.Date == day.Date && (SelectedCategoryKeys.Count == 0 || SelectedCategoryKeys.Contains(e.EffectiveCategory.FilterKey))))
+                            {
+                                var colorHex = $"var(--mud-palette-{evt.Color.ToString().ToLower()})";
+                                <div class="m-evt @(evt.IsContinuation ? "m-evt-cont" : "")"
+                                     style="border-left-color: @colorHex; @(evt.IsContinuation ? "opacity: 0.85;" : "")"
+                                     title="@evt.Title">
+                                    @if (evt.IsContinuation && evt.Date.DayOfWeek != DayOfWeek.Monday)
+                                    {
+                                        <span class="m-evt-cont-indicator" style="color: @colorHex;">&rsaquo;</span>
+                                    }
+                                    @evt.Title
+                                </div>
+                            }
+                        </div>
+                    </div>
+                }
+            </div>
         </div>
 
         <!-- Agenda View -->
         <div class="mobile-agenda px-4 pt-4 pb-16">
             <MudText Typo="Typo.h6" Class="font-weight-bold mb-4">@SelectedDate.ToString("dddd, MMM d")</MudText>
             
-            @{
-                var selectedEvents = SelectedDayEvents;
-            }
-
-            @if (selectedEvents.Count == 0)
+            @if (SelectedDayEvents.Count == 0)
             {
-                <MudText Typo="Typo.body2" Color="Color.Secondary" Class="text-center my-6">No events for this day.</MudText>
+                <MudText Typo="Typo.body2" Color="Color.Secondary" Class="text-center my-6">@Loc["No events for this day."]</MudText>
             }
             else
             {
-                <div class="agenda-list">
-                    @foreach (var evt in selectedEvents)
-                    {
-                        var startDt = evt.SourceEvent.Start;
-                        var endDt = evt.SourceEvent.End;
-                        var colorKey = evt.Color.ToString().ToLower();
-
-                        <div class="agenda-row d-flex mb-3" style="cursor: pointer;" @onclick="@((e) => OnEventClick(evt, e))">
-                            <!-- Time column -->
-                            <div class="agenda-time pr-3 d-flex flex-column justify-start pt-1" style="min-width: 60px; color: var(--mud-palette-text-secondary); font-size: 0.8rem; font-weight: 500;">
-                                @if (evt.IsAllDay)
-                                {
-                                    <span>All Day</span>
-                                }
-                                else
-                                {
-                                    <span>@startDt.ToString("HH:mm")</span>
-                                    <span style="opacity: 0.6; font-size: 0.75rem;">@endDt.ToString("HH:mm")</span>
-                                }
-                            </div>
-                            
-                            <!-- Event block -->
-                            <div class="agenda-block flex-grow-1 pa-3 rounded" style="background-color: rgba(var(--mud-palette-@(colorKey)-rgb), 0.15); border-left: 4px solid var(--mud-palette-@(colorKey));">
-                                <MudText Typo="Typo.body1" Class="font-weight-bold mb-1" Style="line-height: 1.2; color: var(--mud-palette-text-primary);">@evt.Title</MudText>
-                                @if (!string.IsNullOrEmpty(evt.SourceEvent.Location))
-                                {
-                                    <div class="d-flex align-center mt-1" style="color: var(--mud-palette-text-secondary); font-size: 0.75rem;">
-                                        <MudIcon Icon="@Icons.Material.Filled.LocationOn" Size="Size.Small" Class="mr-1" Style="font-size: 0.9rem;" />
-                                        @evt.SourceEvent.Location
-                                    </div>
-                                }
-                                @if (!string.IsNullOrEmpty(evt.EffectiveCategory.DisplayName))
-                                {
-                                     <div class="mt-1" style="color: var(--mud-palette-text-secondary); font-size: 0.75rem;">
-                                        @evt.EffectiveCategory.DisplayName
-                                    </div>
-                                }
-                            </div>
+                @if (SelectedDayAllDayEvents.Any())
+                {
+                    <div class="mb-3 pa-2 rounded-lg" style="background-color: var(--mud-palette-surface); border: 1px dashed var(--mud-palette-lines-default); box-shadow: 0 1px 3px rgba(0,0,0,0.04);">
+                        <MudText Typo="Typo.caption" Color="Color.Secondary" Style="font-weight: 600; text-transform: uppercase;">
+                            @string.Format(Loc["All-Day ({0})"].Value, SelectedDayAllDayEvents.Count)
+                        </MudText>
+                        <div class="d-flex flex-wrap gap-1 mt-1">
+                            @foreach (var evt in SelectedDayAllDayEvents)
+                            {
+                                var colorKey = evt.Color.ToString().ToLower();
+                                <div class="agenda-block pa-2 rounded d-flex align-center gap-1"
+                                     style="cursor: pointer; background-color: rgba(var(--mud-palette-@(colorKey)-rgb), 0.15); border-left: 3px solid var(--mud-palette-@(colorKey));"
+                                     @onclick="@((e) => OnEventClick(evt, e))">
+                                    <MudText Typo="Typo.body2" Class="font-weight-bold">@evt.Title</MudText>
+                                </div>
+                            }
                         </div>
-                    }
-                </div>
+                    </div>
+                }
+
+                @if (SelectedDayTimedEvents.Any())
+                {
+                    CalendarEventViewModel? prevMobileEvt = null;
+                    <div class="agenda-list d-flex flex-column gap-2">
+                        @foreach (var evt in SelectedDayTimedEvents)
+                        {
+                            var startDt = evt.SourceEvent.Start;
+                            var endDt = evt.SourceEvent.End;
+                            var colorKey = evt.Color.ToString().ToLower();
+                            var isNow = IsEventHappeningNow(evt.SourceEvent);
+                            var isPast = IsEventPast(evt.SourceEvent);
+                            var minHeightStyle = GetDurationTierMinHeight(evt.SourceEvent);
+                            var durationText = GetDurationBadgeText(evt.SourceEvent);
+
+                            if (prevMobileEvt != null)
+                            {
+                                var gap = startDt - prevMobileEvt.SourceEvent.End;
+                                if (gap.TotalMinutes >= 45)
+                                {
+                                    <div class="d-flex align-center gap-2 my-1" style="padding-left: 77px; opacity: 0.6;">
+                                        <div style="flex: 1; border-top: 1px dashed var(--mud-palette-lines-default);"></div>
+                                        <MudText Typo="Typo.caption" Color="Color.Secondary" Style="font-size: 0.7rem; font-style: italic;">
+                                            @GetFreeTimeGapText(gap)
+                                        </MudText>
+                                        <div style="flex: 1; border-top: 1px dashed var(--mud-palette-lines-default);"></div>
+                                    </div>
+                                }
+                            }
+                            prevMobileEvt = evt;
+
+                            <div class="agenda-row d-flex @(isPast ? "agenda-past" : "") @(isNow ? "agenda-now" : "")" style="cursor: pointer;" @onclick="@((e) => OnEventClick(evt, e))">
+                                <!-- Time column -->
+                                <div class="agenda-time pr-3 d-flex flex-column justify-start pt-1" style="min-width: 65px; color: var(--mud-palette-text-secondary); font-size: 0.8rem; font-weight: 500;">
+                                    <span class="font-weight-bold" style="color: var(--mud-palette-text-primary);">@startDt.ToString("HH:mm")</span>
+                                    <span style="opacity: 0.6; font-size: 0.72rem;">@endDt.ToString("HH:mm")</span>
+                                    <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Default" Class="ma-0 px-1 mt-1" Style="height: 16px; font-size: 0.62rem;">
+                                        @durationText
+                                    </MudChip>
+                                    @if (isNow)
+                                    {
+                                        <MudChip T="string" Size="Size.Small" Color="Color.Success" Variant="Variant.Filled" Class="ma-0 px-1 mt-0.5 pulse-chip" Style="height: 16px; font-size: 0.6rem;">
+                                            @Loc["Live"]
+                                        </MudChip>
+                                    }
+                                </div>
+                                
+                                <!-- Event block -->
+                                <div class="agenda-block flex-grow-1 pa-3 rounded d-flex flex-column justify-center"
+                                     style="@minHeightStyle background-color: var(--mud-palette-surface); border-left: 4px solid var(--mud-palette-@(colorKey)); box-shadow: 0 1px 3px rgba(0,0,0,0.05); @(isNow ? "box-shadow: 0 0 0 1px var(--mud-palette-success);" : "")">
+                                    <MudText Typo="Typo.body1" Class="font-weight-bold mb-1" Style="line-height: 1.2; color: var(--mud-palette-text-primary);">@evt.Title</MudText>
+                                    @if (!string.IsNullOrEmpty(evt.SourceEvent.Location))
+                                    {
+                                        <div class="d-flex align-center mt-1" style="color: var(--mud-palette-text-secondary); font-size: 0.75rem;">
+                                            <MudIcon Icon="@Icons.Material.Filled.LocationOn" Size="Size.Small" Class="mr-1" Style="font-size: 0.9rem;" />
+                                            @evt.SourceEvent.Location
+                                        </div>
+                                    }
+                                    @if (!string.IsNullOrEmpty(evt.EffectiveCategory.DisplayName))
+                                    {
+                                         <div class="mt-1" style="color: var(--mud-palette-text-secondary); font-size: 0.75rem;">
+                                            @evt.EffectiveCategory.DisplayName
+                                        </div>
+                                    }
+                                </div>
+                            </div>
+                        }
+                    </div>
+                }
             }
         </div>
 
         <!-- FAB Add Event -->
         <div class="mobile-fab-wrapper d-flex justify-end align-center">
-            <MudFab Color="Color.Primary" StartIcon="@Icons.Material.Filled.Add" OnClick="AddEvent" DisableElevation="true" Class="m-fab" />
+            <MudFab Color="Color.Primary" StartIcon="@Icons.Material.Filled.Add" OnClick="AddEvent" DropShadow="false" Class="m-fab" />
         </div>
     </div>
 </MudHidden>
@@ -429,6 +559,23 @@
         box-shadow: 0 2px 8px rgba(0,0,0,0.08);
     }
 
+    .agenda-past {
+        opacity: 0.65;
+    }
+
+    .agenda-now {
+        position: relative;
+    }
+
+    .pulse-chip {
+        animation: pulse-glow 2s infinite ease-in-out;
+    }
+
+    @@keyframes pulse-glow {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.6; }
+    }
+
     .day-number {
         text-align: right;
         font-size: 0.8rem;
@@ -485,11 +632,15 @@
         font-size: 0.9em;
     }
 
-    /* Mobile Calendar Styles */
     .mobile-calendar-container {
         padding-bottom: 80px; /* Space for FAB */
+        background-color: var(--mud-palette-background);
+    }
+
+    .mobile-calendar-card {
         background-color: var(--mud-palette-surface);
-        min-height: 100vh;
+        border-bottom: 1px solid var(--mud-palette-lines-default);
+        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.04);
     }
 
     .border-b {
@@ -584,6 +735,15 @@
         color: var(--mud-palette-text-secondary);
         font-weight: 500;
     }
+
+    .m-evt-cont {
+        border-left-style: dashed !important;
+    }
+
+    .m-evt-cont-indicator {
+        font-weight: bold;
+        margin-right: 2px;
+    }
     
     .mobile-fab-wrapper {
         position: fixed;
@@ -624,6 +784,14 @@
     private List<CalendarEventViewModel> AllEvents = [];
     private IEnumerable<CalendarEventViewModel> FilteredEvents => AllEvents; // Can add filters later
 
+    [SupplyParameterFromQuery(Name = "date")]
+    public string? QueryDate { get; set; }
+
+    [SupplyParameterFromQuery(Name = "eventId")]
+    public string? QueryEventId { get; set; }
+
+    private bool _hasHandledQueryParameters;
+
     private bool Loading;
     private string CurrentUserId = "";
     private string CurrentUserTeamId = "";
@@ -660,9 +828,65 @@
             Categories = emp.EnsureCalendarCategories(serverProfile);
         }
 
+        ChatState.CalendarEventUpdated += HandleCalendarEventChanged;
+        ChatState.CalendarEventDeleted += HandleCalendarEventDeleted;
+
         // Go to first of month
         CurrentMonth = new DateOnly(CurrentMonth.Year, CurrentMonth.Month, 1);
-        await LoadData();
+        LoadData();
+    }
+
+    protected override void OnParametersSet()
+    {
+        if (!_hasHandledQueryParameters && (!string.IsNullOrEmpty(QueryDate) || !string.IsNullOrEmpty(QueryEventId)))
+        {
+            _hasHandledQueryParameters = true;
+
+            CalendarEvent? targetEvt = null;
+            if (!string.IsNullOrEmpty(QueryEventId))
+            {
+                targetEvt = CalendarService.GetEventById(QueryEventId);
+            }
+
+            if (targetEvt != null)
+            {
+                var dt = DateOnly.FromDateTime(targetEvt.Start);
+                SelectedDate = dt;
+                CurrentMonth = new DateOnly(dt.Year, dt.Month, 1);
+                LoadData();
+                _ = OpenDialog(targetEvt, false);
+            }
+            else if (!string.IsNullOrEmpty(QueryDate) && DateOnly.TryParse(QueryDate, out var parsedDate))
+            {
+                SelectedDate = parsedDate;
+                CurrentMonth = new DateOnly(parsedDate.Year, parsedDate.Month, 1);
+                LoadData();
+            }
+        }
+    }
+
+    public void Dispose()
+    {
+        ChatState.CalendarEventUpdated -= HandleCalendarEventChanged;
+        ChatState.CalendarEventDeleted -= HandleCalendarEventDeleted;
+    }
+
+    private void HandleCalendarEventChanged(CalendarEvent evt)
+    {
+        InvokeAsync(() =>
+        {
+            LoadData();
+            StateHasChanged();
+        });
+    }
+
+    private void HandleCalendarEventDeleted(string eventId)
+    {
+        InvokeAsync(() =>
+        {
+            LoadData();
+            StateHasChanged();
+        });
     }
 
     private void ToggleCategoryFilter(string filterKey)
@@ -676,7 +900,7 @@
 
     private async Task OpenCategoryManager()
     {
-        var options = new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true, CloseButton = true };
+        var options = new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true, CloseButton = true };
         var dialog = await DialogService.ShowAsync<CalendarCategoryManagerDialog>("", options);
         var result = await dialog.Result;
         if (result != null && !result.Canceled)
@@ -684,35 +908,37 @@
             var emp = await UserService.GetEmployeeAsync();
             if (emp != null)
             {
-                Categories = emp.EnsureCalendarCategories(Db.CompanyProfile.Get());
+                Categories = CalendarService.GetEffectiveCategories(emp.Id);
             }
-            await LoadData();
+            LoadData();
         }
     }
 
-    private async Task PrevMonth()
+    private void PrevMonth()
     {
         CurrentMonth = CurrentMonth.AddMonths(-1);
-        await LoadData();
+        LoadData();
     }
 
-    private async Task NextMonth()
+    private void NextMonth()
     {
         CurrentMonth = CurrentMonth.AddMonths(1);
-        await LoadData();
+        LoadData();
     }
 
-    private async Task GoToToday()
+    private void GoToToday()
     {
         var today = DateOnly.FromDateTime(DateTime.Today);
         CurrentMonth = new DateOnly(today.Year, today.Month, 1);
         SelectedDate = today;
-        await LoadData();
+        LoadData();
     }
 
-    private async Task LoadData()
+    private void LoadData()
     {
         if (string.IsNullOrEmpty(CurrentUserId)) return;
+
+        Categories = CalendarService.GetEffectiveCategories(CurrentUserId);
 
         Loading = true;
         BuildGrid();
@@ -725,14 +951,15 @@
         var employees = Db.Employees.GetAll().ToDictionary(e => e.Id, e => e.FullName);
         var teamsDict = Db.Teams.GetAll().ToDictionary(t => t.Id, t => t.Name);
         var userCategoriesDict = Categories.ToDictionary(c => c.Id, c => c);
+        var viewingContext = new CalendarViewingContext(
+            CurrentUserId,
+            CurrentUserTeamIds,
+            employees,
+            teamsDict,
+            userCategoriesDict);
 
         // Load Events from DB
-        var dbEvents = Db.CalendarEvents.GetAll()
-        .Where(e => e.IsCompanyWide
-        || e.EmployeeId == CurrentUserId
-        || (e.Attendees != null && e.Attendees.Contains(CurrentUserId))
-        || (e.InvitedTeamIds != null && e.InvitedTeamIds.Any(tId => CurrentUserTeamIds.Contains(tId))))
-        .ToList();
+        var dbEvents = CalendarService.GetEventsForUser(CurrentUserId, CurrentUserTeamIds);
 
         foreach (var evt in dbEvents)
         {
@@ -748,19 +975,13 @@
                 var current = start < startEx ? startEx : start;
                 var last = end > endEx ? endEx : end;
 
-                var ownerName = evt.EmployeeId == CurrentUserId ? "" : employees.GetValueOrDefault(evt.EmployeeId, "Unknown");
-                var effCat = CalendarEffectiveCategory.Resolve(
-                    evt,
-                    CurrentUserId,
-                    CurrentUserTeamIds,
-                    employees,
-                    teamsDict,
-                    userCategoriesDict);
+                var ownerName = evt.EmployeeId == CurrentUserId ? "" : employees.GetValueOrDefault(evt.EmployeeId, Loc["Unknown"].Value);
+                var effCat = CalendarEffectiveCategory.Resolve(evt, viewingContext);
 
                 while (current <= last)
                 {
                     var isStart = current == start;
-                    var isCont = !isStart && current.DayOfWeek != DayOfWeek.Monday;
+                    var isCont = !isStart;
 
                     var vm = new CalendarEventViewModel
                         {
@@ -775,13 +996,6 @@
                             TypeClass = $"{(current < last ? "evt-span-start" : "")}", // Add custom color logic here
                             IsContinuation = isCont
                         };
-
-                    // Logic to hide title on continuation unless it's Monday
-                    if (isCont)
-                    {
-                        vm.Title = "\u00A0"; // Non-breaking space to keep height
-                        vm.OwnerName = "";
-                    }
 
                     AllEvents.Add(vm);
                     current = current.AddDays(1);
@@ -851,6 +1065,12 @@
         .ThenBy(e => e.SourceEvent.Start)
         .ToList();
 
+    private List<CalendarEventViewModel> SelectedDayAllDayEvents =>
+        SelectedDayEvents.Where(e => e.IsAllDay).ToList();
+
+    private List<CalendarEventViewModel> SelectedDayTimedEvents =>
+        SelectedDayEvents.Where(e => !e.IsAllDay).OrderBy(e => e.SourceEvent.Start).ToList();
+
     private async Task AddEvent()
     {
         var newEvent = new CalendarEvent
@@ -892,28 +1112,76 @@
             CloseOnEscapeKey = true
         };
 
-        var dialog = await DialogService.ShowAsync<CalendarEventDialog>(isNew ? "New Event" : "Event Details", parameters, options);
+        var dialog = await DialogService.ShowAsync<CalendarEventDialog>(isNew ? Loc["New Event"].Value : Loc["Event Details"].Value, parameters, options);
         var result = await dialog.Result;
 
         if (result != null && !result.Canceled)
         {
-            var resultEvent = result.Data as CalendarEvent;
-
-            if (resultEvent is null) // Deleted
+            if (result.Data is CalendarEvent resultEvent) // Saved
             {
-                if (!isNew)
-                {
-                    Db.CalendarEvents.Delete(evt.Id);
-                    Snackbar.Add("Event deleted", Severity.Success);
-                }
+                CalendarService.SaveEvent(resultEvent);
+                Snackbar.Add(Loc["Event saved"].Value, Severity.Success);
             }
-            else // Saved
+            else if (!isNew) // Deleted
             {
-                Db.CalendarEvents.Save(resultEvent);
-                Snackbar.Add("Event saved", Severity.Success);
+                CalendarService.DeleteEvent(evt.Id);
+                Snackbar.Add(Loc["Event deleted"].Value, Severity.Success);
             }
-            await LoadData();
+            LoadData();
         }
+    }
+
+    private static double GetEventDurationMinutes(CalendarEvent evt)
+    {
+        var duration = (evt.End - evt.Start).TotalMinutes;
+        return duration <= 0 ? 30 : duration;
+    }
+
+    internal static string GetDurationTierMinHeight(CalendarEvent evt)
+    {
+        var mins = GetEventDurationMinutes(evt);
+        if (mins < 45) return "min-height: 44px;";
+        if (mins <= 75) return "min-height: 56px;";
+        if (mins <= 120) return "min-height: 84px;";
+        if (mins <= 180) return "min-height: 112px;";
+        return "min-height: 140px;";
+    }
+
+    private string GetDurationBadgeText(CalendarEvent evt)
+    {
+        var duration = evt.End - evt.Start;
+        var totalMinutes = (int)Math.Max(1, duration.TotalMinutes);
+        if (totalMinutes < 60)
+            return string.Format(Loc["{0}m"].Value, totalMinutes);
+
+        var hours = totalMinutes / 60;
+        var remMinutes = totalMinutes % 60;
+        return remMinutes > 0 ? string.Format(Loc["{0}h {1}m"].Value, hours, remMinutes) : string.Format(Loc["{0}h"].Value, hours);
+    }
+
+    internal string GetFreeTimeGapText(TimeSpan gap)
+    {
+        if (gap.TotalHours >= 1)
+        {
+            var hours = (int)gap.TotalHours;
+            var minutes = gap.Minutes;
+            return minutes > 0
+                ? string.Format(Loc["{0}h {1}m free"].Value, hours, minutes)
+                : string.Format(Loc["{0}h free"].Value, hours);
+        }
+        return string.Format(Loc["{0}m free"].Value, (int)gap.TotalMinutes);
+    }
+
+    private static bool IsEventHappeningNow(CalendarEvent evt)
+    {
+        var now = DateTime.Now;
+        return now >= evt.Start && now <= evt.End;
+    }
+
+    private static bool IsEventPast(CalendarEvent evt)
+    {
+        var now = DateTime.Now;
+        return evt.End < now;
     }
 
     public class CalendarDay

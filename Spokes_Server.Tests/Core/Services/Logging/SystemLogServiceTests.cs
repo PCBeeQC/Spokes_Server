@@ -40,32 +40,19 @@ public class SystemLogServiceTests : IDisposable
     }
 
     [Fact]
-    public void Constructor_WithDefaultDataPath_CreatesLogsDirectory()
+    public void Constructor_WithDefaultDataPath_DoesNotEagerlyCreateDirectory()
     {
         var emptyConfig = new ConfigurationBuilder().AddInMemoryCollection().Build();
         var defaultLogsPath = Path.Combine("Data", "Logs");
 
-        try
-        {
-            var service = new SystemLogService(emptyConfig);
-            Assert.NotNull(service);
-            Assert.True(Directory.Exists(defaultLogsPath));
-        }
-        finally
-        {
-            if (Directory.Exists(defaultLogsPath))
-            {
-                try { Directory.Delete(defaultLogsPath, recursive: true); } catch { }
-            }
-            if (Directory.Exists("Data") && !Directory.EnumerateFileSystemEntries("Data").Any())
-            {
-                try { Directory.Delete("Data"); } catch { }
-            }
-        }
+        var service = new SystemLogService(emptyConfig);
+        Assert.NotNull(service);
+        // Constructor must not perform disk I/O side effects
+        Assert.False(Directory.Exists(defaultLogsPath));
     }
 
     [Fact]
-    public void Constructor_WithCustomDataPath_CreatesLogsDirectory()
+    public async Task Constructor_WithCustomDataPath_DoesNotEagerlyCreateDirectory_CreatesOnFirstWrite()
     {
         var customPath = Path.Combine(_testDir, "CustomData");
         var config = CreateConfig(customPath);
@@ -74,6 +61,11 @@ public class SystemLogServiceTests : IDisposable
 
         Assert.NotNull(service);
         var expectedLogsPath = Path.Combine(customPath, "Logs");
+        Assert.False(Directory.Exists(expectedLogsPath));
+
+        service.LogInfo("InitCategory", "Initial log message");
+        await service.FlushAsync();
+
         Assert.True(Directory.Exists(expectedLogsPath));
     }
 
@@ -83,19 +75,10 @@ public class SystemLogServiceTests : IDisposable
         var config = CreateConfig(_testDir);
         var service = new SystemLogService(config);
 
-        var utcNow = DateTime.UtcNow;
-        service.LogInfo("TestCategory", "Info message", "Info details");
-        service.LogError("ErrorCategory", "Error message", "Error details");
+        await service.LogInfoAsync("TestCategory", "Info message", "Info details");
+        await service.LogErrorAsync("ErrorCategory", "Error message", "Error details");
 
-        // Retry loop to wait for fire-and-forget background write tasks
-        List<SystemLogEntry> entries = new();
-        for (int i = 0; i < 30; i++)
-        {
-            await Task.Delay(100);
-            entries = await service.GetLogsAsync(DateTime.UtcNow);
-            if (entries.Count >= 2) break;
-        }
-
+        var entries = await service.GetLogsAsync(DateTime.UtcNow);
         Assert.Equal(2, entries.Count);
 
         var infoEntry = entries.FirstOrDefault(e => e.Severity == "Info");
@@ -119,16 +102,9 @@ public class SystemLogServiceTests : IDisposable
         var config = CreateConfig(_testDir);
         var service = new SystemLogService(config);
 
-        service.Log("Security", "Warning", "Failed login attempt", "IP: 127.0.0.1");
+        await service.LogAsync("Security", "Warning", "Failed login attempt", "IP: 127.0.0.1");
 
-        List<SystemLogEntry> entries = new();
-        for (int i = 0; i < 30; i++)
-        {
-            await Task.Delay(100);
-            entries = await service.GetLogsAsync(DateTime.UtcNow);
-            if (entries.Any(e => e.Severity == "Warning")) break;
-        }
-
+        var entries = await service.GetLogsAsync(DateTime.UtcNow);
         var warningEntry = Assert.Single(entries);
         Assert.Equal("Security", warningEntry.Category);
         Assert.Equal("Warning", warningEntry.Severity);
@@ -236,5 +212,47 @@ public class SystemLogServiceTests : IDisposable
 
         Assert.NotNull(dates);
         Assert.Empty(dates);
+    }
+
+    [Fact]
+    public async Task SynchronousLog_QueuesAndFlushesWithoutOverwritingOrDroppingEntries()
+    {
+        var config = CreateConfig(_testDir);
+        await using var service = new SystemLogService(config);
+
+        // Multiple concurrent synchronous calls
+        const int count = 25;
+        Parallel.For(0, count, i =>
+        {
+            service.Log("ConcurrentCategory", "Info", $"Message {i}", $"Detail {i}");
+        });
+
+        // Flush all items
+        await service.FlushAsync();
+
+        var logs = await service.GetLogsAsync(DateTime.UtcNow);
+        Assert.Equal(count, logs.Count);
+        Assert.All(logs, log =>
+        {
+            Assert.Equal("ConcurrentCategory", log.Category);
+            Assert.Equal("Info", log.Severity);
+            Assert.StartsWith("Message ", log.Message);
+        });
+    }
+
+    [Fact]
+    public async Task DisposeAsync_FlushesPendingEntriesBeforeCompletion()
+    {
+        var config = CreateConfig(_testDir);
+        var service = new SystemLogService(config);
+
+        service.LogInfo("ShutdownCategory", "Shutdown message");
+        await service.DisposeAsync();
+
+        var verificationService = new SystemLogService(config);
+        var logs = await verificationService.GetLogsAsync(DateTime.UtcNow);
+        var entry = Assert.Single(logs);
+        Assert.Equal("ShutdownCategory", entry.Category);
+        Assert.Equal("Shutdown message", entry.Message);
     }
 }

@@ -17,8 +17,8 @@
         var localDate = Date.ToLocalTime().Date;
         var today = DateTime.Today;
 
-        if (localDate == today) return "Today";
-        if (localDate == today.AddDays(-1)) return "Yesterday";
+        if (localDate == today) return Loc["Today"].Value;
+        if (localDate == today.AddDays(-1)) return Loc["Yesterday"].Value;
         return localDate.ToString("MMMM d, yyyy");
     }
 }

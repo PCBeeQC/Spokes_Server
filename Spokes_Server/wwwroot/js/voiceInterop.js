@@ -6,11 +6,8 @@ let globalScreenTracks = [];
 let noiseManager = new NoiseSuppressionManager();
 let currentNoiseSuppression = 'webrtc';
 
-// iOS adaptive resolution state — dynamically scales capture resolution based on connection quality
-let _iosAdaptiveEnabled = false;
-let _iosCurrentTier = null;         // 'low' (360p) | 'mid' (720p) | 'high' (1080p)
-let _iosAdaptiveDebounce = null;    // debounce timer to prevent rapid resolution flapping
-let _iosTargetCeiling = null;       // user's selected quality as the max tier ('low' | 'mid' | 'high')
+let _iosActiveMicrophoneMode = 'unsupported';
+let _mutedRemoteScreenAudio = new Set();
 // --- Native Platform Helpers ---
 const isNativePlatform = () => typeof window.isCapacitorNative === 'function' ? window.isCapacitorNative() : Boolean(window.Capacitor?.isNativePlatform?.());
 const getNativePlatform = () => window.Capacitor?.getPlatform?.() || '';
@@ -78,6 +75,12 @@ function getVoiceAudioContext() {
         const AudioCtx = window.AudioContext || window.webkitAudioContext;
         if (AudioCtx) {
             _globalAudioContext = new AudioCtx();
+            try {
+                const savedSink = localStorage.getItem('spokes_active_speaker_id');
+                if (savedSink && typeof _globalAudioContext.setSinkId === 'function') {
+                    _globalAudioContext.setSinkId(savedSink === 'default' ? '' : savedSink).catch(() => {});
+                }
+            } catch(e) {}
         }
     }
     if (_globalAudioContext && _globalAudioContext.state === 'suspended') {
@@ -89,7 +92,7 @@ function getVoiceAudioContext() {
 // --- Web Audio Volume Pipeline (0% to 200% Master & Per-Participant) ---
 let _masterVolume = 1.0; // 0.0 to 2.0
 let _masterGainNode = null;
-const _participantGainNodes = new Map(); // identity -> { source, gainNode, element, trackSid }
+const _participantGainNodes = new Map(); // trackKey -> { identity, trackSid, source, gainNode, element }
 let _savedVoiceSettings = {
     masterVolume: 100,
     participantVolumes: {},
@@ -113,65 +116,141 @@ function attachParticipantAudio(track, participant, element) {
     // Never route local audio back through speakers
     if (participant === currentRoom?.localParticipant) return;
 
+    const identity = participant.identity;
+    const trackSid = track.sid || track.mediaStreamTrack.id || (track.source === window.LivekitClient.Track.Source.ScreenShareAudio ? 'screenshare_audio' : 'mic');
+    const trackKey = `${identity}_${trackSid}`;
+    detachParticipantAudio(identity, trackSid);
+
+    // Apply active speaker sinkId to the HTML element if supported
+    try {
+        const savedSink = localStorage.getItem('spokes_active_speaker_id');
+        const sinkVal = (!savedSink || savedSink === 'default') ? '' : savedSink;
+        if (element && typeof element.setSinkId === 'function') {
+            element.setSinkId(sinkVal).catch(() => {});
+        }
+    } catch(e) {}
+
+    const isScreenAudio = track.source === window.LivekitClient.Track.Source.ScreenShareAudio;
+    const isScreenMuted = isScreenAudio && _mutedRemoteScreenAudio.has(identity);
+
+    // NATIVE MOBILE (ANDROID & IOS):
+    // Do NOT route incoming WebRTC call audio through Web Audio API!
+    if (isNativePlatform()) {
+        const isMuted = isScreenMuted || (!isScreenAudio && _savedVoiceSettings?.participantVolumes && _savedVoiceSettings.participantVolumes[identity] === 0);
+        element.muted = Boolean(isMuted);
+        element.volume = isMuted ? 0 : 1.0;
+        _participantGainNodes.set(trackKey, {
+            identity,
+            trackSid,
+            isScreenAudio,
+            element
+        });
+        return;
+    }
+
     const ctx = getVoiceAudioContext();
     const masterGain = getMasterGainNode();
-    if (!ctx || !masterGain) return;
-
-    const identity = participant.identity;
-    detachParticipantAudio(identity);
+    if (!ctx || !masterGain || ctx.state === 'suspended') {
+        // Fallback: If Web Audio is not available or suspended, play the raw HTML element directly
+        const isMuted = isScreenMuted || (!isScreenAudio && _savedVoiceSettings?.participantVolumes && _savedVoiceSettings.participantVolumes[identity] === 0);
+        element.muted = Boolean(isMuted);
+        element.volume = isMuted ? 0 : Math.min(1.0, _masterVolume);
+        _participantGainNodes.set(trackKey, {
+            identity,
+            trackSid,
+            isScreenAudio,
+            element
+        });
+        return;
+    }
 
     try {
         const stream = new MediaStream([track.mediaStreamTrack]);
         const source = ctx.createMediaStreamSource(stream);
         const gainNode = ctx.createGain();
 
-        // Native mobile boost multiplier (approx 9.5 dB)
-        const isMobile = isNativePlatform() && (getNativePlatform() === 'android' || getNativePlatform() === 'ios');
-        const mobileBoost = isMobile ? 3.0 : 1.0;
-
         let userVolume = 1.0;
-        if (_savedVoiceSettings?.participantVolumes && typeof _savedVoiceSettings.participantVolumes[identity] === 'number') {
+        if (isScreenMuted) {
+            userVolume = 0;
+        } else if (!isScreenAudio && _savedVoiceSettings?.participantVolumes && typeof _savedVoiceSettings.participantVolumes[identity] === 'number') {
             userVolume = Math.max(0, Math.min(200, _savedVoiceSettings.participantVolumes[identity])) / 100.0;
         }
 
-        gainNode.gain.value = userVolume * mobileBoost;
+        gainNode.gain.value = userVolume;
 
         source.connect(gainNode);
         gainNode.connect(masterGain);
 
-        // Mute raw HTML audio element to prevent double playback
+        // Mute raw HTML audio element to prevent double playback on desktop where Web Audio is active
         element.volume = 0;
         element.muted = true;
 
-        _participantGainNodes.set(identity, {
+        _participantGainNodes.set(trackKey, {
+            identity,
+            trackSid,
+            isScreenAudio,
             source,
             gainNode,
-            element,
-            trackSid: track.sid
+            element
         });
     } catch (e) {
-        console.warn("[Voice] Web Audio routing fallback for", identity, e);
-        element.muted = false;
-        element.volume = Math.min(1.0, _masterVolume);
+        console.warn("[Voice] Web Audio routing fallback for", identity, trackSid, e);
+        const isMuted = isScreenMuted || (!isScreenAudio && _savedVoiceSettings?.participantVolumes && _savedVoiceSettings.participantVolumes[identity] === 0);
+        element.muted = Boolean(isMuted);
+        element.volume = isMuted ? 0 : Math.min(1.0, _masterVolume);
+        _participantGainNodes.set(trackKey, {
+            identity,
+            trackSid,
+            isScreenAudio,
+            element
+        });
     }
 }
 
-function detachParticipantAudio(identity) {
-    const item = _participantGainNodes.get(identity);
-    if (item) {
-        try {
-            item.source.disconnect();
-            item.gainNode.disconnect();
-        } catch (e) {}
-        _participantGainNodes.delete(identity);
+function detachParticipantAudio(identity, trackSid = null) {
+    if (!identity) return;
+    if (trackSid) {
+        const trackKey = `${identity}_${trackSid}`;
+        let item = _participantGainNodes.get(trackKey);
+        if (!item) {
+            for (const [k, v] of _participantGainNodes.entries()) {
+                if (v.identity === identity && (v.trackSid === trackSid || k.endsWith(trackSid))) {
+                    item = v;
+                    _participantGainNodes.delete(k);
+                    break;
+                }
+            }
+        } else {
+            _participantGainNodes.delete(trackKey);
+        }
+        if (item) {
+            try {
+                if (item.source) item.source.disconnect();
+                if (item.gainNode) item.gainNode.disconnect();
+            } catch (e) {}
+        }
+        return;
     }
+
+    // Detach all audio tracks for this participant
+    const toDelete = [];
+    _participantGainNodes.forEach((item, k) => {
+        if (item.identity === identity) {
+            try {
+                if (item.source) item.source.disconnect();
+                if (item.gainNode) item.gainNode.disconnect();
+            } catch (e) {}
+            toDelete.push(k);
+        }
+    });
+    toDelete.forEach(k => _participantGainNodes.delete(k));
 }
 
 function clearAllParticipantAudio() {
     _participantGainNodes.forEach((item) => {
         try {
-            item.source.disconnect();
-            item.gainNode.disconnect();
+            if (item.source) item.source.disconnect();
+            if (item.gainNode) item.gainNode.disconnect();
         } catch (e) {}
     });
     _participantGainNodes.clear();
@@ -191,12 +270,45 @@ export function setParticipantVolume(participantId, volumePercent) {
     }
     _savedVoiceSettings.participantVolumes[participantId] = volumePercent;
 
-    const item = _participantGainNodes.get(participantId);
-    if (item && item.gainNode) {
-        const isMobile = isNativePlatform() && (getNativePlatform() === 'android' || getNativePlatform() === 'ios');
-        const mobileBoost = isMobile ? 3.0 : 1.0;
-        item.gainNode.gain.value = (Math.max(0, Math.min(200, volumePercent)) / 100.0) * mobileBoost;
+    const isMuted = volumePercent === 0;
+    const vol = Math.max(0, Math.min(200, volumePercent)) / 100.0;
+
+    _participantGainNodes.forEach(item => {
+        if (item.identity === participantId && !item.isScreenAudio) {
+            if (item.element) {
+                item.element.muted = isMuted;
+                if (isNativePlatform()) {
+                    item.element.volume = isMuted ? 0 : 1.0;
+                }
+            }
+            if (item.gainNode) {
+                item.gainNode.gain.value = vol;
+            }
+        }
+    });
+}
+
+export function setRemoteScreenAudioMuted(participantIdentity, isMuted) {
+    if (!participantIdentity) return;
+    if (isMuted) {
+        _mutedRemoteScreenAudio.add(participantIdentity);
+    } else {
+        _mutedRemoteScreenAudio.delete(participantIdentity);
     }
+
+    _participantGainNodes.forEach(item => {
+        if (item.identity === participantIdentity && item.isScreenAudio) {
+            if (item.element) {
+                item.element.muted = isMuted;
+                if (isNativePlatform()) {
+                    item.element.volume = isMuted ? 0 : 1.0;
+                }
+            }
+            if (item.gainNode) {
+                item.gainNode.gain.value = isMuted ? 0 : 1.0;
+            }
+        }
+    });
 }
 
 export function initVoiceSettings(settingsJson) {
@@ -310,12 +422,22 @@ export async function connectToVoice(token, url, helper, audioBitrateKbps = 64, 
             currentRoom = null;
         }
 
+        // Universal H.264: Leverages on-die hardware acceleration across iOS (VideoToolbox), Android (MediaCodec), and Desktop (NVENC/QuickSync/AMF)
+        let preferredCodec = 'h264';
+
         currentRoom = new window.LivekitClient.Room({
             adaptiveStream: true,
             dynacast: true,
             publishDefaults: {
                 audioBitrate: audioBitrateKbps * 1000,
-                audioPreset: { maxBitrate: audioBitrateKbps * 1000 }
+                audioPreset: { maxBitrate: audioBitrateKbps * 1000 },
+                dtx: true,
+                videoCodec: preferredCodec,
+                backupCodec: true,
+                screenShareEncoding: {
+                    maxBitrate: 8000000,
+                    maxFramerate: 60
+                }
             }
         });
 
@@ -347,7 +469,8 @@ export async function connectToVoice(token, url, helper, audioBitrateKbps = 64, 
                 let audioPlugin = getAudioSessionPlugin();
                 if (platform === 'ios' && audioPlugin) {
                     let res = await audioPlugin.configureVoiceChat({ enabled: true });
-                    console.info(`[Voice] iOS Native Session Initialized: Category=${res.category}, Mode=${res.mode}, Output=${res.activeOutput}`);
+                    _iosActiveMicrophoneMode = res?.microphoneMode || 'unsupported';
+                    console.info(`[Voice] iOS Native Session Initialized: Category=${res?.category}, Mode=${res?.mode}, Output=${res?.activeOutput}, MicMode=${_iosActiveMicrophoneMode}`);
                 } else if (platform === 'ios') {
                     console.warn(`[Voice] iOS Native Session plugin NOT FOUND`);
                 }
@@ -393,9 +516,9 @@ export async function connectToVoice(token, url, helper, audioBitrateKbps = 64, 
             let existingParticipants = [];
             if (currentRoom.remoteParticipants) {
                 if (typeof currentRoom.remoteParticipants.values === 'function') {
-                    existingParticipants = Array.from(currentRoom.remoteParticipants.values()).map(p => p.identity);
+                    existingParticipants = Array.from(currentRoom.remoteParticipants.values()).map(p => p.identity).filter(id => !id.startsWith('bot:'));
                 } else {
-                    existingParticipants = Object.values(currentRoom.remoteParticipants).map(p => p.identity);
+                    existingParticipants = Object.values(currentRoom.remoteParticipants).map(p => p.identity).filter(id => !id.startsWith('bot:'));
                 }
             }
             try {
@@ -416,7 +539,40 @@ export async function connectToVoice(token, url, helper, audioBitrateKbps = 64, 
     }
 }
 
+function stopAllScreenTracks() {
+    if (globalScreenTracks && globalScreenTracks.length > 0) {
+        for (let t of globalScreenTracks) {
+            try {
+                if (t.mediaStreamTrack && typeof t.mediaStreamTrack.stop === 'function') {
+                    t.mediaStreamTrack.stop();
+                } else if (typeof t.stop === 'function') {
+                    t.stop();
+                }
+            } catch (e) {
+                console.warn('[Voice] Error stopping screen track:', e);
+            }
+        }
+        globalScreenTracks = [];
+    }
+    if (currentRoom && currentRoom.localParticipant && currentRoom.localParticipant.videoTrackPublications) {
+        try {
+            let tracks = currentRoom.localParticipant.videoTrackPublications;
+            let pubArr = typeof tracks.values === 'function' ? Array.from(tracks.values()) : Object.values(tracks);
+            let screenPubs = pubArr.filter(p => p.source === window.LivekitClient?.Track?.Source?.ScreenShare || p.source === window.LivekitClient?.Track?.Source?.ScreenShareAudio);
+            for (let p of screenPubs) {
+                if (p.track) {
+                    try {
+                        if (p.track.mediaStreamTrack && typeof p.track.mediaStreamTrack.stop === 'function') p.track.mediaStreamTrack.stop();
+                        if (typeof p.track.stop === 'function') p.track.stop();
+                    } catch (e) {}
+                }
+            }
+        } catch (e) {}
+    }
+}
+
 export async function disconnectFromVoice() {
+    stopAllScreenTracks();
     if (currentRoom) {
         await currentRoom.disconnect();
         currentRoom = null;
@@ -467,7 +623,7 @@ export async function setMicrophoneEnabled(enabled) {
             if (tracks) {
                 let pubArr = typeof tracks.values === 'function' ? Array.from(tracks.values()) : Object.values(tracks);
                 for (let p of pubArr) {
-                    if (p.track) {
+                    if (p.track && p.source !== window.LivekitClient.Track.Source.ScreenShareAudio) {
                         await currentRoom.localParticipant.unpublishTrack(p.track, true);
                     }
                 }
@@ -475,19 +631,21 @@ export async function setMicrophoneEnabled(enabled) {
             return;
         }
 
-        let isIOS = isNativePlatform() && getNativePlatform() === 'ios';
+        let isIOS = isAppleMobileDevice();
 
         if (currentNoiseSuppression === 'webrtc') {
             if (isIOS) {
-                // For "Basic" on iOS, enable hardware AEC (echoCancellation) to keep Voice Processing I/O active, but disable software double-processing
+                // For iOS: enable hardware AEC (echoCancellation) to keep Voice Processing I/O active,
+                // enable WebRTC spectral noise suppression to eliminate baseline hum/hiss,
+                // and keep AGC off to prevent dual-AGC volume pumping / amplifier loop.
                 let trackOptions = {
                     echoCancellation: true, 
-                    noiseSuppression: false,
+                    noiseSuppression: true,
                     autoGainControl: false
                 };
                 console.info(`[Voice] Publishing iOS Basic Track: echo=${trackOptions.echoCancellation}, ns=${trackOptions.noiseSuppression}, agc=${trackOptions.autoGainControl}`);
                 let track = await window.LivekitClient.createLocalAudioTrack(trackOptions);
-                await currentRoom.localParticipant.publishTrack(track);
+                await currentRoom.localParticipant.publishTrack(track, { dtx: true });
             } else {
                 console.info(`[Voice] Publishing Standard WebRTC Track`);
                 await currentRoom.localParticipant.setMicrophoneEnabled(true);
@@ -505,29 +663,29 @@ export async function setMicrophoneEnabled(enabled) {
                 };
                 console.info(`[Voice] Publishing iOS Raw Track (None): echo=${trackOptions.echoCancellation}, ns=${trackOptions.noiseSuppression}, agc=${trackOptions.autoGainControl}`);
                 let track = await window.LivekitClient.createLocalAudioTrack(trackOptions);
-                await currentRoom.localParticipant.publishTrack(track);
+                await currentRoom.localParticipant.publishTrack(track, { dtx: true });
             } else {
                 let trackOptions = { echoCancellation: false, noiseSuppression: false, autoGainControl: false };
                 console.info(`[Voice] Publishing Standard Raw Track`);
                 let track = await window.LivekitClient.createLocalAudioTrack(trackOptions);
-                await currentRoom.localParticipant.publishTrack(track);
+                await currentRoom.localParticipant.publishTrack(track, { dtx: true });
             }
             return;
         }
 
         // --- AI Filtering Logic ---
         // iOS does not support AudioWorklet-based processors (rnnoise, deepfilternet).
-        // Apple's hardware Voice Processing I/O provides built-in noise suppression via echoCancellation.
+        // Apple's hardware Voice Processing I/O and Neural Engine Voice Isolation provide built-in ML noise suppression.
         // This follows the same platform branching pattern used above for 'webrtc' and 'none' modes.
         if (isIOS) {
             let trackOptions = {
                 echoCancellation: true, 
-                noiseSuppression: false,
+                noiseSuppression: true,
                 autoGainControl: false
             };
-            console.info(`[Voice] iOS: AI filter "${currentNoiseSuppression}" not supported, using hardware noise filter. echo=${trackOptions.echoCancellation}`);
+            console.info(`[Voice] iOS: using optimized hardware & spectral noise filter. echo=${trackOptions.echoCancellation}, ns=${trackOptions.noiseSuppression}`);
             let track = await window.LivekitClient.createLocalAudioTrack(trackOptions);
-            await currentRoom.localParticipant.publishTrack(track);
+            await currentRoom.localParticipant.publishTrack(track, { dtx: true });
             return;
         }
 
@@ -590,7 +748,7 @@ export async function setMicrophoneEnabled(enabled) {
             }
         }
         
-        await currentRoom.localParticipant.publishTrack(track);
+        await currentRoom.localParticipant.publishTrack(track, { dtx: true });
         
     } catch (e) {
         console.error('[Voice] setMicrophoneEnabled failed:', e);
@@ -638,123 +796,105 @@ function getCustomPreset(resolutionStr, is60fps) {
     return { width: 1920, height: 1080, maxBitrate: 8000000 * mult }; // default
 }
 
-// --- iOS Adaptive Resolution System ---
-// Dynamically adjusts capture resolution based on LiveKit connection quality events.
-// This compensates for the lack of simulcast on iOS by manually scaling the single
-// encoding layer to match available bandwidth.
+function getScreenPreset(resolutionStr, is60fps) {
+    const mult = is60fps ? 1.5 : 1.0;
+    const targetFps = is60fps ? 60 : 30;
+    let isAppleMobile = /iPhone|iPad|iPod/i.test(navigator.userAgent) || (navigator.userAgent.includes("Mac") && "ontouchend" in document);
 
-function _getIosTierForQuality(quality) {
-    const CQ = window.LivekitClient.ConnectionQuality;
-    if (quality === CQ.Excellent) return 'high';
-    if (quality === CQ.Good) return 'mid';
-    return 'low'; // Poor or Unknown
+    if (isAppleMobile && window.LivekitClient && window.LivekitClient.VideoPresets) {
+        if (resolutionStr === '2160p') return { width: 3840, height: 2160, maxBitrate: 8000000, frameRate: targetFps };
+        if (resolutionStr === '1440p') return { width: 2560, height: 1440, maxBitrate: 6000000, frameRate: targetFps };
+        if (resolutionStr === '720p') return { width: 1280, height: 720, maxBitrate: 2500000, frameRate: targetFps };
+        return { width: 1920, height: 1080, maxBitrate: 4500000, frameRate: targetFps };
+    }
+
+    if (resolutionStr === '2160p') return { width: 3840, height: 2160, maxBitrate: Math.round(20000000 * mult), frameRate: targetFps };
+    if (resolutionStr === '1440p') return { width: 2560, height: 1440, maxBitrate: Math.round(12000000 * mult), frameRate: targetFps };
+    if (resolutionStr === '1080p') return { width: 1920, height: 1080, maxBitrate: Math.round(8000000 * mult), frameRate: targetFps };
+    if (resolutionStr === '720p') return { width: 1280, height: 720, maxBitrate: Math.round(3500000 * mult), frameRate: targetFps };
+    if (resolutionStr === '360p') return { width: 640, height: 360, maxBitrate: Math.round(1500000 * mult), frameRate: targetFps };
+
+    // Performant 'Auto' default: 1080p ceiling at 6 Mbps (30fps) / 9 Mbps (60fps)
+    return { width: 1920, height: 1080, maxBitrate: Math.round(6000000 * mult), frameRate: targetFps };
 }
 
-function _getIosPresetForTier(tier) {
-    const presets = window.LivekitClient.VideoPresets;
-    if (tier === 'high') return presets.h1080;
-    if (tier === 'mid') return presets.h720;
-    return presets.h360;
+function computeScreenScaleDown(track, targetPreset) {
+    if (!track || !targetPreset) return 1.0;
+    const mediaStreamTrack = track.mediaStreamTrack || track;
+    const settings = typeof mediaStreamTrack.getSettings === 'function' ? mediaStreamTrack.getSettings() : {};
+    const srcW = settings.width || track.dimensions?.width || 0;
+    const srcH = settings.height || track.dimensions?.height || 0;
+    const sourceMaxEdge = Math.max(srcW, srcH);
+    const targetMaxEdge = Math.max(targetPreset.width || 1920, targetPreset.height || 1080);
+
+    if (sourceMaxEdge <= 0 || targetMaxEdge <= 0 || sourceMaxEdge <= targetMaxEdge) {
+        return 1.0;
+    }
+    const rawScale = sourceMaxEdge / targetMaxEdge;
+    return rawScale < 1.05 ? 1.0 : Math.round(rawScale * 1000) / 1000;
 }
 
-function _iosTierRank(tier) {
-    if (tier === 'low') return 0;
-    if (tier === 'mid') return 1;
-    if (tier === 'high') return 2;
-    return 0;
-}
+async function applyScreenShareEncoding(track, resolutionStr = 'Auto', targetFps = 30, mode = 'motion') {
+    if (!track) return;
+    const is60 = targetFps > 35;
+    const targetPreset = getScreenPreset(resolutionStr, is60);
+    const isDetail = mode === 'detail';
+    const degradationPref = isDetail ? 'maintain-resolution' : 'balanced';
 
-function _resolutionCeilingToTier(resolutionStr) {
-    if (resolutionStr === '360p') return 'low';
-    if (resolutionStr === '720p') return 'mid';
-    // 1080p, 1440p, 2160p, Auto — all allow up to 1080p (iOS hardware ceiling)
-    return 'high';
-}
-
-function _clampTierToCeiling(tier, ceiling) {
-    if (_iosTierRank(tier) > _iosTierRank(ceiling)) return ceiling;
-    return tier;
-}
-
-async function _applyIosTierChange(newTier) {
-    if (!currentRoom || !currentRoom.localParticipant) return;
-
-    let pubs = currentRoom.localParticipant.videoTrackPublications;
-    if (!pubs) return;
-    let pubArr = typeof pubs.values === 'function' ? Array.from(pubs.values()) : Object.values(pubs);
-    let cameraPub = pubArr.find(p => p.source === window.LivekitClient.Track.Source.Camera);
-    if (!cameraPub || !cameraPub.track) return;
-
-    let actualTrack = cameraPub.videoTrack || cameraPub.track;
-    let preset = _getIosPresetForTier(newTier);
-
-    try {
-        if (typeof actualTrack.restartTrack === 'function') {
-            await actualTrack.restartTrack({ resolution: preset });
-        } else {
-            console.warn('[Voice] iOS adaptive: restartTrack not available, skipping resolution change');
-            return;
+    // Content hint & capture frameRate constraint:
+    // "motion" maintains frame rate (preventing drops during window motion/video)
+    // "detail" prioritizes razor-sharp static text/lines for documents
+    if (track.mediaStreamTrack) {
+        track.mediaStreamTrack.contentHint = isDetail ? 'detail' : 'motion';
+        if (typeof track.mediaStreamTrack.applyConstraints === 'function') {
+            try {
+                await track.mediaStreamTrack.applyConstraints({
+                    frameRate: { ideal: targetFps, max: targetFps }
+                });
+            } catch (e) {
+                console.warn('[VoiceInterop] Failed to apply frameRate constraint on screen track:', e);
+            }
         }
-        _iosCurrentTier = newTier;
-        console.info(`[Voice] iOS adaptive resolution: successfully switched to ${newTier} tier (${preset.width}x${preset.height})`);
-    } catch (e) {
-        console.error('[Voice] iOS adaptive resolution: restartTrack failed', e);
+    }
+
+    if (typeof track.setDegradationPreference === 'function') {
+        try {
+            await track.setDegradationPreference(degradationPref);
+        } catch (e) {}
+    }
+
+    const scaleDown = computeScreenScaleDown(track, targetPreset);
+    const sender = track.sender;
+    if (sender && typeof sender.getParameters === 'function' && typeof sender.setParameters === 'function') {
+        try {
+            const params = sender.getParameters();
+            params.degradationPreference = degradationPref;
+            if (params.encodings && params.encodings.length > 0) {
+                const topIdx = params.encodings.length - 1;
+                params.encodings.forEach((enc, idx) => {
+                    enc.maxFramerate = targetFps;
+                    enc.priority = 'high';
+                    enc.networkPriority = 'high';
+                    if (idx === topIdx) {
+                        enc.maxBitrate = targetPreset.maxBitrate;
+                        enc.scaleResolutionDownBy = scaleDown;
+                    } else {
+                        enc.maxBitrate = Math.max(150000, Math.round(targetPreset.maxBitrate / 4));
+                        enc.scaleResolutionDownBy = scaleDown * 2;
+                    }
+                });
+                if (track.encodings) {
+                    track.encodings = params.encodings;
+                }
+                await sender.setParameters(params);
+            }
+        } catch (e) {
+            console.warn('[VoiceInterop] Failed to update screen share RTCRtpSender parameters:', e);
+        }
     }
 }
 
-function _onIosConnectionQualityChanged(quality, participant) {
-    // Only react to local participant quality changes
-    if (!_iosAdaptiveEnabled || !currentRoom) return;
-    if (participant.identity !== currentRoom.localParticipant.identity) return;
 
-    let desiredTier = _getIosTierForQuality(quality);
-    desiredTier = _clampTierToCeiling(desiredTier, _iosTargetCeiling);
-
-    if (desiredTier === _iosCurrentTier) return;
-
-    // Debounce: wait 2 seconds at the new quality level before committing to the resolution change.
-    // This prevents rapid flapping during transient network jitter.
-    if (_iosAdaptiveDebounce) {
-        clearTimeout(_iosAdaptiveDebounce);
-        _iosAdaptiveDebounce = null;
-    }
-
-    let fromTier = _iosCurrentTier;
-    console.info(`[Voice] iOS adaptive resolution: network quality event fired (quality=${quality}). Scheduling transition: ${fromTier} -> ${desiredTier} in 2s (debouncing).`);
-
-    _iosAdaptiveDebounce = setTimeout(async () => {
-        _iosAdaptiveDebounce = null;
-        if (!_iosAdaptiveEnabled) return; // cancelled during debounce
-        if (desiredTier === _iosCurrentTier) return; // already changed by another event
-        await _applyIosTierChange(desiredTier);
-    }, 2000);
-}
-
-function _startIosAdaptive(ceilingResolutionStr) {
-    if (!currentRoom || !window.LivekitClient) return;
-    _iosAdaptiveEnabled = true;
-    _iosCurrentTier = 'low';
-    _iosTargetCeiling = _resolutionCeilingToTier(ceilingResolutionStr);
-    currentRoom.on(window.LivekitClient.RoomEvent.ConnectionQualityChanged, _onIosConnectionQualityChanged);
-    console.info(`[Voice] iOS adaptive resolution: system started at 360p. Hardware ceiling: ${_iosTargetCeiling} (${ceilingResolutionStr})`);
-}
-
-function _stopIosAdaptive() {
-    if (!_iosAdaptiveEnabled) return;
-    if (_iosAdaptiveDebounce) {
-        clearTimeout(_iosAdaptiveDebounce);
-        _iosAdaptiveDebounce = null;
-    }
-    if (currentRoom) {
-        currentRoom.off(window.LivekitClient.RoomEvent.ConnectionQualityChanged, _onIosConnectionQualityChanged);
-    }
-    _iosAdaptiveEnabled = false;
-    _iosCurrentTier = null;
-    _iosTargetCeiling = null;
-    console.log('[Voice] iOS adaptive resolution: stopped');
-}
-
-// --- End iOS Adaptive Resolution System ---
 
 
 export async function setCameraEnabled(enabled, resolutionStr = '1080p', targetFps = 30, deviceId = null) {
@@ -772,61 +912,67 @@ export async function setCameraEnabled(enabled, resolutionStr = '1080p', targetF
                 let targetPreset = getCustomPreset(resolutionStr, is60);
                 
                 let livekitPreset = targetPreset;
-                // Only build a custom VideoPreset for PC/Android where we injected our own maxBitrate POJO.
-                // For iOS, targetPreset is a PURE native LiveKit instance, so we must NOT tear it apart into a new wrapper or it loses its internal safety profiles (and throws TypeErrors).
                 let isApple = /iPhone|iPad|iPod/i.test(navigator.userAgent) || (navigator.userAgent.includes("Mac") && "ontouchend" in document);
                 if (!isApple && resolutionStr !== 'Auto' && window.LivekitClient && window.LivekitClient.VideoPreset) {
                     livekitPreset = new window.LivekitClient.VideoPreset(targetPreset.width, targetPreset.height, targetPreset.maxBitrate, targetFps);
                 }
 
+                // Preserve active camera selection and facing mode across operations
+                let activeMediaTrack = cameraPub?.track?.mediaStreamTrack;
+                let targetDeviceId = deviceId || activeMediaTrack?.getSettings?.().deviceId || localStorage.getItem('spokes_active_camera_id');
+                let currentFacing = activeMediaTrack?.getSettings?.().facingMode;
+
+                let trackOptions = { resolution: livekitPreset };
+                if (targetDeviceId && targetDeviceId !== 'default') {
+                    trackOptions.deviceId = targetDeviceId;
+                } else if (currentFacing) {
+                    trackOptions.facingMode = currentFacing;
+                } else {
+                    trackOptions.facingMode = 'user';
+                }
+
+                // Universal H.264 hardware acceleration across iOS, Android, and Desktop
+                let publishOptions = { 
+                    source: window.LivekitClient.Track.Source.Camera, 
+                    simulcast: true,
+                    videoCodec: 'h264'
+                };
+                if (window.LivekitClient?.VideoPresets) {
+                    if (resolutionStr === '1080p') {
+                        publishOptions.videoSimulcastLayers = [
+                            window.LivekitClient.VideoPresets.h360,
+                            window.LivekitClient.VideoPresets.h720
+                        ];
+                    } else {
+                        publishOptions.videoSimulcastLayers = [
+                            window.LivekitClient.VideoPresets.h360
+                        ];
+                    }
+                }
+
                 if (cameraPub && cameraPub.track) {
                     try {
-                        // On iOS, a manual resolution change cancels and restarts the adaptive system
-                        if (isApple) _stopIosAdaptive();
-
                         let actualTrack = cameraPub.videoTrack || cameraPub.track;
-                        // Natively replaces the hardware stream without breaking DOM attachments or requiring manual timeouts
                         if (typeof actualTrack.restartTrack === 'function') {
-                            let restartPreset = isApple ? _getIosPresetForTier('low') : livekitPreset;
-                            await actualTrack.restartTrack({ resolution: restartPreset });
+                            let restartOptions = { resolution: livekitPreset };
+                            if (targetDeviceId && targetDeviceId !== 'default') restartOptions.deviceId = targetDeviceId;
+                            else if (currentFacing) restartOptions.facingMode = currentFacing;
+                            await actualTrack.restartTrack(restartOptions);
                         } else {
-                            // Fallback if specific SDK version does not expose restartTrack
                             await currentRoom.localParticipant.unpublishTrack(actualTrack, true);
-                            
-                            let trackOptions = { resolution: livekitPreset };
-                            if (deviceId) trackOptions.deviceId = deviceId;
-                            else trackOptions.facingMode = 'user';
-
                             let track = await window.LivekitClient.createLocalVideoTrack(trackOptions);
-                            await currentRoom.localParticipant.publishTrack(track, { 
-                                source: window.LivekitClient.Track.Source.Camera, 
-                                simulcast: !isApple 
-                            });
+                            await currentRoom.localParticipant.publishTrack(track, publishOptions);
                         }
-
-                        // Restart adaptive monitoring from the new resolution baseline
-                        if (isApple) _startIosAdaptive(resolutionStr);
                     } catch(e) {
                          console.error("[Voice] LiveKit native restartTrack failed, unable to switch camera resolution", e);
                     }
                 } else {
-                    let iosInitialPreset = isApple ? _getIosPresetForTier('low') : null;
-                    let trackOptions = { resolution: isApple ? iosInitialPreset : livekitPreset };
-                    if (deviceId) trackOptions.deviceId = deviceId;
-                    else trackOptions.facingMode = 'user';
-
                     let track = await window.LivekitClient.createLocalVideoTrack(trackOptions);
+                    await currentRoom.localParticipant.publishTrack(track, publishOptions);
+                }
 
-                    // Bypass iOS Safari memory limits by disabling simulcast layers explicitly on iPhones.
-                    // iOS starts at 360p and uses the adaptive resolution system to scale up based on connection quality.
-                    await currentRoom.localParticipant.publishTrack(track, { 
-                        source: window.LivekitClient.Track.Source.Camera, 
-                        simulcast: !isApple 
-                    });
-
-                    if (isApple) {
-                        _startIosAdaptive(resolutionStr);
-                    }
+                if (targetDeviceId && targetDeviceId !== 'default') {
+                    localStorage.setItem('spokes_active_camera_id', targetDeviceId);
                 }
 
                 const cameras = await getAvailableCameras();
@@ -834,7 +980,6 @@ export async function setCameraEnabled(enabled, resolutionStr = '1080p', targetF
                 return { cameras, activeCameraDeviceId: activeId };
 
             } else {
-                _stopIosAdaptive();
                 let tracks = currentRoom.localParticipant.videoTrackPublications;
                 if (tracks) {
                     let pubArr = typeof tracks.values === 'function' ? Array.from(tracks.values()) : Object.values(tracks);
@@ -1047,6 +1192,10 @@ export async function isAndroidDevice() {
     return isNativePlatform() && getNativePlatform() === 'android';
 }
 
+export async function isNativePlatformApp() {
+    return isNativePlatform();
+}
+
 export async function getAvailableSpeakers() {
     if (isNativePlatform()) {
         let platform = getNativePlatform();
@@ -1144,6 +1293,25 @@ export async function switchActiveSpeaker(deviceId) {
         localStorage.setItem('spokes_active_speaker_id', targetSink);
     } catch(e) {}
 
+    const sinkVal = targetSink === 'default' ? '' : targetSink;
+
+    // Direct Web Audio API destination to selected speaker/headset (Chrome 110+, Edge, Electron)
+    if (_globalAudioContext && typeof _globalAudioContext.setSinkId === 'function') {
+        try {
+            await _globalAudioContext.setSinkId(sinkVal);
+            console.log(`[Voice] AudioContext sinkId set to: "${sinkVal}"`);
+        } catch(e) {
+            console.warn('[Voice] Failed to set sinkId on AudioContext:', e);
+        }
+    }
+
+    // Direct all attached HTML audio elements to selected speaker/headset
+    _participantGainNodes.forEach(item => {
+        if (item.element && typeof item.element.setSinkId === 'function') {
+            item.element.setSinkId(sinkVal).catch(() => {});
+        }
+    });
+
     if (window.SoundManager?.setSinkId) {
         try {
             await window.SoundManager.setSinkId(targetSink);
@@ -1204,7 +1372,7 @@ export async function playTestSpeakerSound(deviceId) {
 }
 
 
-export async function setScreenShareEnabled(enabled, resolutionStr = '1080p', targetFps = 30) {
+export async function setScreenShareEnabled(enabled, resolutionStr = 'Auto', targetFps = 30, mode = 'motion', captureAudio = false) {
     if (currentRoom && currentRoom.localParticipant) {
         try {
             if (enabled) {
@@ -1215,35 +1383,75 @@ export async function setScreenShareEnabled(enabled, resolutionStr = '1080p', ta
                     if (screenPub && screenPub.track) await currentRoom.localParticipant.unpublishTrack(screenPub.track, true);
                 }
 
+                let exAudioTracks = currentRoom.localParticipant.audioTrackPublications;
+                if (exAudioTracks) {
+                    let pubArr = typeof exAudioTracks.values === 'function' ? Array.from(exAudioTracks.values()) : Object.values(exAudioTracks);
+                    let screenAudioPub = pubArr.find(p => p.source === window.LivekitClient.Track.Source.ScreenShareAudio);
+                    if (screenAudioPub && screenAudioPub.track) await currentRoom.localParticipant.unpublishTrack(screenAudioPub.track, true);
+                }
+
                 let is60 = targetFps > 35;
-                let targetPreset = getCustomPreset(resolutionStr, is60);
-                let probePreset = getCustomPreset('2160p', is60);
+                let targetPreset = getScreenPreset(resolutionStr, is60);
+                let probePreset = Object.assign({}, getScreenPreset('2160p', is60), { frameRate: targetFps });
 
                 let trackRes = await window.LivekitClient.createLocalScreenTracks({
                     resolution: probePreset,
-                    audio: false
+                    audio: true
                 });
-                let track = Array.isArray(trackRes) ? (trackRes.find(t => t.kind === 'video') || trackRes[0]) : trackRes;
-                globalScreenTracks = Array.isArray(trackRes) ? trackRes : [trackRes];
+                let tracks = Array.isArray(trackRes) ? trackRes : [trackRes];
+                let videoTrack = tracks.find(t => t.kind === 'video') || tracks[0];
+                let audioTrack = tracks.find(t => t.kind === 'audio');
+                globalScreenTracks = tracks;
 
-                if (is60 && track && track.mediaStreamTrack) {
-                    track.mediaStreamTrack.contentHint = "motion";
+                // Content hint controls WebRTC rate control degradation:
+                // "motion" maintains frame rate (preventing 1-5 FPS drops during window movement)
+                // "detail" prioritizes razor-sharp static text/lines for documents
+                if (videoTrack && videoTrack.mediaStreamTrack) {
+                    videoTrack.mediaStreamTrack.contentHint = mode === 'detail' ? 'detail' : 'motion';
                 }
+
+                const initialScaleDown = computeScreenScaleDown(videoTrack, targetPreset);
+                const degradationPref = mode === 'detail' ? 'maintain-resolution' : 'balanced';
 
                 let publishOptions = { 
                     source: window.LivekitClient.Track.Source.ScreenShare,
-                    simulcast: true
-                };
-
-                if (resolutionStr !== 'Auto') {
-                    publishOptions.videoEncoding = {
+                    simulcast: false,
+                    videoCodec: 'h264',
+                    degradationPreference: degradationPref,
+                    screenShareEncoding: {
+                        maxBitrate: targetPreset.maxBitrate,
+                        maxFramerate: targetFps,
+                        scaleResolutionDownBy: initialScaleDown,
+                        priority: 'high',
+                        networkPriority: 'high'
+                    },
+                    videoEncoding: {
                         maxBitrate: targetPreset.maxBitrate,
                         maxFramerate: targetFps
-                    };
-                }
+                    }
+                };
 
-                // With videoEncoding specified, LiveKit enforces the maximum payload natively, scaling internally if the screen is smaller.
-                await currentRoom.localParticipant.publishTrack(track, publishOptions);
+                // Publish with screenShareEncoding and enforce active capture/sender parameters.
+                await currentRoom.localParticipant.publishTrack(videoTrack, publishOptions);
+                await applyScreenShareEncoding(videoTrack, resolutionStr, targetFps, mode);
+
+                // Publish desktop audio if captured
+                if (audioTrack) {
+                    console.log('[Voice] Publishing desktop audio track:', audioTrack.sid);
+                    await currentRoom.localParticipant.publishTrack(audioTrack, {
+                        source: window.LivekitClient.Track.Source.ScreenShareAudio
+                    });
+                    if (dotnetHelper) {
+                        dotnetHelper.invokeMethodAsync('OnScreenShareAudioActive', true).catch(() => {});
+                    }
+                } else {
+                    if (dotnetHelper) {
+                        dotnetHelper.invokeMethodAsync('OnScreenShareAudioActive', false).catch(() => {});
+                        if (captureAudio) {
+                            dotnetHelper.invokeMethodAsync('OnVoiceLog', 'No desktop audio captured. When sharing in browser, select "Entire Screen" and check "Share system audio" (or share a browser tab).', 'warning').catch(() => {});
+                        }
+                    }
+                }
             } else {
                 if (globalScreenTracks.length > 0) {
                     for (let t of globalScreenTracks) {
@@ -1273,6 +1481,50 @@ export async function setScreenShareEnabled(enabled, resolutionStr = '1080p', ta
             console.error('[VoiceInterop] Error in setScreenShareEnabled:', error);
             throw error;
         }
+    }
+}
+
+export async function setScreenShareAudioEnabled(enabled) {
+    if (!currentRoom || !currentRoom.localParticipant) return false;
+    let audioTrack = globalScreenTracks.find(t => t.kind === 'audio');
+    if (audioTrack) {
+        if (enabled) {
+            if (audioTrack.mediaStreamTrack) audioTrack.mediaStreamTrack.enabled = true;
+            let pubs = currentRoom.localParticipant.audioTrackPublications;
+            let pubArr = typeof pubs?.values === 'function' ? Array.from(pubs.values()) : Object.values(pubs || {});
+            let existingPub = pubArr.find(p => p.source === window.LivekitClient.Track.Source.ScreenShareAudio);
+            if (!existingPub) {
+                await currentRoom.localParticipant.publishTrack(audioTrack, {
+                    source: window.LivekitClient.Track.Source.ScreenShareAudio
+                });
+            }
+        } else {
+            if (audioTrack.mediaStreamTrack) audioTrack.mediaStreamTrack.enabled = false;
+            let pubs = currentRoom.localParticipant.audioTrackPublications;
+            let pubArr = typeof pubs?.values === 'function' ? Array.from(pubs.values()) : Object.values(pubs || {});
+            let existingPub = pubArr.find(p => p.source === window.LivekitClient.Track.Source.ScreenShareAudio);
+            if (existingPub && existingPub.track) {
+                await currentRoom.localParticipant.unpublishTrack(existingPub.track, false);
+            }
+        }
+        return true;
+    }
+    return false;
+}
+
+export async function updateScreenShareSettings(resolutionStr = 'Auto', targetFps = 30, mode = 'motion') {
+    if (!currentRoom || !currentRoom.localParticipant) return;
+    try {
+        let exTracks = currentRoom.localParticipant.videoTrackPublications;
+        if (!exTracks) return;
+        let pubArr = typeof exTracks.values === 'function' ? Array.from(exTracks.values()) : Object.values(exTracks);
+        let screenPub = pubArr.find(p => p.source === window.LivekitClient.Track.Source.ScreenShare);
+        if (!screenPub || !screenPub.track) return;
+
+        let track = screenPub.track;
+        await applyScreenShareEncoding(track, resolutionStr, targetFps, mode);
+    } catch (err) {
+        console.warn('[VoiceInterop] Error in updateScreenShareSettings:', err);
     }
 }
 
@@ -1314,9 +1566,35 @@ function waitForElement(id, timeoutMs = 5000) {
 function attachTrack(track, participant) {
     const isAudio = track.kind === window.LivekitClient.Track.Kind.Audio;
     const isVideo = track.kind === window.LivekitClient.Track.Kind.Video;
+    const isBot = participant?.identity?.startsWith('bot:');
     
-    if (isAudio || isVideo) {
-        const targetId = isAudio ? `participant-audio-${participant.identity}` : `participant-video-${participant.identity}`;
+    if (isAudio) {
+        // Universal fast-path for ALL audio tracks (bot and human participants):
+        // Audio has no visual component in the UI grid. Attach directly to the permanent
+        // voice-audio-container without waiting for Blazor DOM slots or SignalR roundtrips!
+        console.log(`[Voice] Fast-path attaching audio track: ${track.sid} for ${participant?.identity} (isBot=${isBot})`);
+        const container = document.getElementById('voice-audio-container') || document.body;
+        let element;
+        if (track.attachedElements && track.attachedElements.length > 0) {
+            element = track.attachedElements[0];
+            if (element.parentElement !== container) {
+                container.appendChild(element);
+            }
+        } else {
+            element = track.attach();
+            container.appendChild(element);
+        }
+        
+        attachParticipantAudio(track, participant, element);
+        
+        if (participant && participant.identity && track.mediaStreamTrack && !isBot && track.source !== window.LivekitClient.Track.Source.ScreenShareAudio) {
+            registerVoiceTrack(participant.identity, track.mediaStreamTrack, participant === currentRoom?.localParticipant);
+        }
+        return;
+    }
+    
+    if (isVideo) {
+        const targetId = `participant-video-${participant.identity}`;
         
         console.log(`[Voice:Diag] attachTrack called | kind=${track.kind} source=${track.source} sid=${track.sid} participant=${participant.identity} targetId=${targetId}`);
         
@@ -1330,44 +1608,26 @@ function attachTrack(track, participant) {
                 return;
             }
             
-            if (isAudio) {
-                // Audio tracks use empty <div> containers rendered by Blazor. LiveKit creates the <audio> element.
-                let element;
-                if (track.attachedElements && track.attachedElements.length > 0) {
-                    element = track.attachedElements[0];
-                    if (element.parentElement !== targetEl) {
-                        targetEl.appendChild(element);
-                    }
-                } else {
-                    element = track.attach();
-                    targetEl.appendChild(element);
-                }
-                attachParticipantAudio(track, participant, element);
-                if (participant && participant.identity && track.mediaStreamTrack) {
-                    registerVoiceTrack(participant.identity, track.mediaStreamTrack, participant === currentRoom?.localParticipant);
-                }
-            } else if (isVideo) {
-                // For video, targetEl is the native <video> tag strictly managed by Blazor.
-                // We instruct LiveKit to attach the media stream directly to this stable DOM node.
-                targetEl.style.opacity = '1';
-                targetEl.style.pointerEvents = 'auto';
-                targetEl.classList.add('has-stream');
-                
-                track.attach(targetEl);
-                
-                // CRITICAL: iOS Safari ignores HTML 'muted' attribute on dynamic WebRTC streams.
-                // It MUST be set via JS property to bypass the simultaneous playback capability block.
-                targetEl.muted = true;
-                
-                // Ensure it plays if the browser blocked autoplay
-                if (targetEl.paused) {
-                    targetEl.play().catch(e => console.warn("[Voice] Retry Play:", e));
-                }
+            // For video, targetEl is the native <video> tag strictly managed by Blazor.
+            // We instruct LiveKit to attach the media stream directly to this stable DOM node.
+            targetEl.style.opacity = '1';
+            targetEl.style.pointerEvents = 'auto';
+            targetEl.classList.add('has-stream');
+            
+            track.attach(targetEl);
+            
+            // CRITICAL: iOS Safari ignores HTML 'muted' attribute on dynamic WebRTC streams.
+            // It MUST be set via JS property to bypass the simultaneous playback capability block.
+            targetEl.muted = true;
+            
+            // Ensure it plays if the browser blocked autoplay
+            if (targetEl.paused) {
+                targetEl.play().catch(e => console.warn("[Voice] Retry Play:", e));
             }
             
-            console.log(`[Voice:Diag] DONE attaching ${track.kind}`);
+            console.log(`[Voice:Diag] DONE attaching video`);
         }).catch((err) => {
-            console.warn(`[Voice] Failed to attach track: ${err.message}`);
+            console.warn(`[Voice] Failed to attach video track: ${err.message}`);
         });
     }
 }
@@ -1430,6 +1690,17 @@ function handleTrackSubscribed(track, publication, participant) {
     attachTrack(track, participant);
     if (track.kind === window.LivekitClient.Track.Kind.Video) {
         updateParticipantQualityMax(participant);
+        // Ensure remote screen shares are not throttled down to low quality by adaptiveStream in grid view
+        if (publication?.source === window.LivekitClient.Track.Source.ScreenShare || track.source === window.LivekitClient.Track.Source.ScreenShare) {
+            publication?.setVideoQuality?.(window.LivekitClient.VideoQuality.HIGH);
+            publication?.setVideoDimensions?.({ width: 3840, height: 2160 });
+        }
+    } else if (track.kind === window.LivekitClient.Track.Kind.Audio) {
+        if (track.source === window.LivekitClient.Track.Source.ScreenShareAudio || publication?.source === window.LivekitClient.Track.Source.ScreenShareAudio) {
+            if (dotnetHelper && participant?.identity) {
+                dotnetHelper.invokeMethodAsync('OnRemoteScreenAudioChanged', participant.identity, true).catch(() => {});
+            }
+        }
     }
 }
 
@@ -1442,9 +1713,15 @@ function handleTrackUnsubscribed(track, publication, participant) {
         const orphaned = document.getElementById(`media-${sid}`);
         if (orphaned) safeRemove(orphaned);
     }
+    const isScreenAudio = track?.source === window.LivekitClient.Track.Source.ScreenShareAudio || publication?.source === window.LivekitClient.Track.Source.ScreenShareAudio;
     if (participant && participant.identity && (track?.kind === window.LivekitClient.Track.Kind.Audio || publication?.kind === window.LivekitClient.Track.Kind.Audio)) {
-        unregisterVoiceTrack(participant.identity);
-        detachParticipantAudio(participant.identity);
+        if (!isScreenAudio) {
+            unregisterVoiceTrack(participant.identity);
+        }
+        detachParticipantAudio(participant.identity, sid);
+        if (isScreenAudio && dotnetHelper) {
+            dotnetHelper.invokeMethodAsync('OnRemoteScreenAudioChanged', participant.identity, false).catch(() => {});
+        }
     }
     
     // Explicit fallback to clear the Blazor-managed video tag, since LiveKit detaches tracks before firing this event
@@ -1778,8 +2055,8 @@ function handleActiveSpeakers(speakers) {
     const localIdentity = currentRoom?.localParticipant?.identity;
     const isLocalMuted = _isLocalMicMuted;
 
-    // SFU speakers should NEVER drive the local participant's speaking state
-    const remoteSpeakers = speakers.filter(s => s.identity !== localIdentity);
+    // SFU speakers should NEVER drive the local participant's speaking state, and bots should never count as human speakers
+    const remoteSpeakers = speakers.filter(s => s.identity !== localIdentity && !s.identity?.startsWith('bot:'));
     const activeSidsList = remoteSpeakers.map(s => s.identity);
 
     if (localIdentity && isLocalMuted) {
@@ -1811,8 +2088,9 @@ function handleActiveSpeakers(speakers) {
 
 function handleDisconnect() {
     console.log('[Voice] Disconnected');
+    stopAllScreenTracks();
     _isLocalMicMuted = false;
-    _stopIosAdaptive();
+    _mutedRemoteScreenAudio.clear();
     clearAllVoiceTracks();
     clearAllParticipantAudio();
     
@@ -1881,15 +2159,20 @@ function handleLocalUnpublished(publication, participant) {
         }
     }
 
-    if (participant && participant.identity && (publication.kind === window.LivekitClient.Track.Kind.Audio || publication.track?.kind === window.LivekitClient.Track.Kind.Audio)) {
+    const isAudio = publication.kind === window.LivekitClient.Track.Kind.Audio || publication.track?.kind === window.LivekitClient.Track.Kind.Audio;
+    const isMicAudio = isAudio && publication.source === window.LivekitClient.Track.Source.Microphone;
+
+    if (participant && participant.identity && isMicAudio) {
         unregisterVoiceTrack(participant.identity);
     }
 
     // Fired when the user mutes themselves or stops video
     if (dotnetHelper) {
         try {
-            if(publication.kind === window.LivekitClient.Track.Kind.Audio) {
+            if (isMicAudio) {
                 dotnetHelper.invokeMethodAsync('OnLocalMuted', true);
+            } else if (publication.source === window.LivekitClient.Track.Source.ScreenShareAudio) {
+                dotnetHelper.invokeMethodAsync('OnScreenShareAudioActive', false);
             }
         } catch(e) {}
     }
@@ -1951,6 +2234,7 @@ function handleTrackUnmuted(publication, participant) {
 
 
 function handleParticipantConnected(participant) {
+    if (participant?.identity?.startsWith('bot:')) return;
     if (dotnetHelper) {
         try {
             dotnetHelper.invokeMethodAsync('OnParticipantConnected', participant.identity);
@@ -1962,7 +2246,14 @@ function handleParticipantDisconnected(participant) {
     if (participant && participant.identity) {
         unregisterVoiceTrack(participant.identity);
         detachParticipantAudio(participant.identity);
+        _mutedRemoteScreenAudio.delete(participant.identity);
+        if (dotnetHelper) {
+            try {
+                dotnetHelper.invokeMethodAsync('OnRemoteScreenAudioChanged', participant.identity, false);
+            } catch(e) {}
+        }
     }
+    if (participant?.identity?.startsWith('bot:')) return;
     if (dotnetHelper) {
         try {
              dotnetHelper.invokeMethodAsync('OnParticipantDisconnected', participant.identity);
@@ -2060,17 +2351,9 @@ export async function setRemoteVideoQuality(participantIdentity, qualityStr) {
     });
 }
 
-// Force Safari to rebuild WebRTC video pipelines by cycling srcObject
+// Refresh video layouts and resume any paused streams without tearing down WebRTC media pipelines
 export function refreshVideoLayouts() {
-    const isIOS = /iP(hone|ad|od)|Mac OS X/.test(navigator.userAgent) && !window.MSStream;
     document.querySelectorAll('video.has-stream').forEach(v => {
-        if (isIOS) {
-            if (v.srcObject) {
-                const stream = v.srcObject;
-                v.srcObject = null;
-                v.srcObject = stream;
-            }
-        }
         if (v.paused) {
             v.play().catch(e => console.warn("[Voice] Retry Play:", e));
         }
@@ -2091,4 +2374,28 @@ export async function isIOSDevice() {
         return getNativePlatform() === 'ios';
     }
     return false;
+}
+
+export async function promptIosVoiceIsolation() {
+    let audioPlugin = getAudioSessionPlugin();
+    if (audioPlugin && typeof audioPlugin.promptVoiceIsolation === 'function') {
+        let res = await audioPlugin.promptVoiceIsolation();
+        if (res?.activeMode) {
+            _iosActiveMicrophoneMode = res.activeMode;
+        }
+        return res;
+    }
+    return { status: 'unsupported', activeMode: 'unsupported' };
+}
+
+export async function getIosMicrophoneMode() {
+    let audioPlugin = getAudioSessionPlugin();
+    if (audioPlugin && typeof audioPlugin.getMicrophoneMode === 'function') {
+        let res = await audioPlugin.getMicrophoneMode();
+        if (res?.activeMode) {
+            _iosActiveMicrophoneMode = res.activeMode;
+            return res.activeMode;
+        }
+    }
+    return _iosActiveMicrophoneMode || 'unsupported';
 }

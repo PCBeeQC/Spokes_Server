@@ -25,6 +25,7 @@ public class ExpenseReportRepository : JsonRepository<ExpenseReport>
         base.Save(item);
     }
 
+
     private string GenerateReportNumber() =>
         _sequenceService.GenerateNumber("ExpenseReport", "EXP");
 }

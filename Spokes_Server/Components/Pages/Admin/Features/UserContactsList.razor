@@ -1,0 +1,220 @@
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Data
+@using Spokes_Server.Components.Shared
+@using Spokes_Server.Core.Services
+@using Spokes_Server.Core.Services.Identity
+@using Spokes_Server.Core.Services.Security
+@using Spokes_Server.Core.Configuration
+@implements IDisposable
+
+@inject Database Db
+@inject IDialogService DialogService
+@inject ISnackbar Snackbar
+@inject ChatService ChatService
+@inject NavigationManager Nav
+@inject UserService UserService
+@inject IUserPrivacyService PrivacyService
+@inject PresenceStateService PresenceState
+@inject AppLabelService AppLabels
+
+<div class="d-flex flex-wrap gap-4 align-center mb-6">
+    <MudTextField @bind-Value="_searchString" Placeholder="@Loc["Search Contacts..."]" Variant="Variant.Outlined" Margin="Margin.Dense"
+                  Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search" IconSize="Size.Medium"
+                  Class="flex-grow-1" Style="max-width: 600px; background-color: var(--mud-palette-surface);" />
+    <MudSpacer />
+    @if (_canDiscover)
+    {
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.PersonAdd" OnClick="OpenAddContactDialog">
+            @Loc["Add Contact"]
+        </MudButton>
+    }
+</div>
+
+@if (_contacts.Count == 0)
+{
+    <MudPaper Class="pa-8 d-flex flex-column align-center justify-center rounded-lg" Elevation="0" Outlined="true">
+        <MudIcon Icon="@Icons.Material.Filled.Contacts" Size="Size.Large" Color="Color.Secondary" Class="mb-3" />
+        <MudText Typo="Typo.h6" Class="mb-1">@Loc["No Connected Contacts"]</MudText>
+        <MudText Typo="Typo.body2" Color="Color.Secondary" Align="Align.Center" Style="max-width: 480px;">
+            @if (_canDiscover)
+            {
+                <text>@Loc["You don't have any external contacts connected yet. Use the 'Add Contact' button above to connect by entering an email address or full name."]</text>
+            }
+            else
+            {
+                <text>@Loc["You don't have any external contacts connected. Contact discovery is currently disabled by server policy."]</text>
+            }
+        </MudText>
+    </MudPaper>
+}
+else
+{
+    var filtered = _contacts.Where(FilterFunc).ToList();
+    if (filtered.Count == 0)
+    {
+        <MudText Typo="Typo.body2" Color="Color.Secondary" Class="pa-4">@Loc["No contacts match your search."]</MudText>
+    }
+    else
+    {
+        <MudGrid Spacing="3">
+            @foreach (var contact in filtered)
+            {
+                <MudItem xs="12" sm="6" md="4" lg="3">
+                    <UserDirectoryCard Employee="@contact"
+                                       CurrentUser="@_currentUser"
+                                       OnRemoveContact="@ConfirmRemoveContact" />
+                </MudItem>
+            }
+        </MudGrid>
+    }
+}
+
+@* Add Contact Dialog *@
+<MudDialog @bind-Visible="_showAddDialog" Options="_dialogOptions">
+    <TitleContent>
+        <div class="d-flex align-center gap-2">
+            <MudIcon Icon="@Icons.Material.Filled.PersonAdd" Color="Color.Primary" />
+            <MudText Typo="Typo.h6">@Loc["Add Contact"]</MudText>
+        </div>
+    </TitleContent>
+    <DialogContent>
+        <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-3">
+            @Loc["Enter the full email address or exact full name of the person you wish to connect with:"]
+        </MudText>
+        <MudTextField @bind-Value="_identifierInput" Label="@Loc["Email Address or Full Name"]" Variant="Variant.Outlined"
+                      Margin="Margin.Dense" Immediate="true" OnKeyDown="@(async e => { if (e.Key == "Enter") await SubmitAddContact(); })" />
+        @if (!string.IsNullOrEmpty(_addError))
+        {
+            <MudAlert Severity="Severity.Error" Dense="true" Class="mt-2">@_addError</MudAlert>
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="@(() => _showAddDialog = false)">@Loc["Cancel"]</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" Disabled="@(string.IsNullOrWhiteSpace(_identifierInput) || _isSubmitting)"
+                   OnClick="SubmitAddContact">
+            @if (_isSubmitting)
+            {
+                <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" />
+            }
+            @Loc["Add"]
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    private List<Employee> _contacts = [];
+    private Employee? _currentUser;
+    private string _searchString = "";
+    private bool _canDiscover;
+
+    // Add dialog state
+    private bool _showAddDialog;
+    private string _identifierInput = "";
+    private string? _addError;
+    private bool _isSubmitting;
+    private readonly DialogOptions _dialogOptions = new() { MaxWidth = MaxWidth.ExtraSmall, FullWidth = true, CloseButton = true };
+
+    protected override async Task OnInitializedAsync()
+    {
+        _currentUser = await UserService.GetEmployeeAsync();
+        var privacy = PrivacyService.GetPrivacyConfig();
+        _canDiscover = privacy.DiscoveryMethod != UserDiscoveryMethod.None;
+        RefreshContacts();
+
+        if (PresenceState != null)
+        {
+            PresenceState.OnUserPresenceChanged += HandlePresenceChanged;
+        }
+    }
+
+    private void HandlePresenceChanged(string userId)
+    {
+        InvokeAsync(StateHasChanged);
+    }
+
+    public void Dispose()
+    {
+        if (PresenceState != null)
+        {
+            PresenceState.OnUserPresenceChanged -= HandlePresenceChanged;
+        }
+    }
+
+    private void RefreshContacts()
+    {
+        if (_currentUser != null)
+        {
+            _contacts = PrivacyService.GetConnectedContacts(_currentUser);
+        }
+    }
+
+    private bool FilterFunc(Employee e)
+    {
+        if (string.IsNullOrWhiteSpace(_searchString)) return true;
+        return (e.FullName?.Contains(_searchString, StringComparison.OrdinalIgnoreCase) ?? false) ||
+               (e.Email?.Contains(_searchString, StringComparison.OrdinalIgnoreCase) ?? false) ||
+               (e.Position?.Contains(_searchString, StringComparison.OrdinalIgnoreCase) ?? false);
+    }
+
+    private void OpenAddContactDialog()
+    {
+        _identifierInput = "";
+        _addError = null;
+        _showAddDialog = true;
+    }
+
+    private async Task SubmitAddContact()
+    {
+        if (string.IsNullOrWhiteSpace(_identifierInput) || _currentUser == null) return;
+
+        _isSubmitting = true;
+        _addError = null;
+
+        try
+        {
+            var result = await PrivacyService.AddContactByIdentifierAsync(_currentUser, _identifierInput);
+            if (result.Status == AddContactStatus.Success)
+            {
+                Snackbar.Add(result.Message ?? Loc["Contact added successfully!"], Severity.Success);
+                _showAddDialog = false;
+                RefreshContacts();
+            }
+            else if (result.Status == AddContactStatus.AlreadyConnected)
+            {
+                Snackbar.Add(result.Message ?? Loc["User is already in your contacts."], Severity.Info);
+                _showAddDialog = false;
+            }
+            else
+            {
+                _addError = result.Message ?? Loc["User not found."];
+            }
+        }
+        catch (Exception ex)
+        {
+            _addError = ex.Message;
+        }
+        finally
+        {
+            _isSubmitting = false;
+        }
+    }
+
+    private async Task ConfirmRemoveContact(Employee contact)
+    {
+        if (_currentUser == null) return;
+
+        bool? confirmed = await DialogService.ShowMessageBoxAsync(
+            Loc["Remove Contact"].Value,
+            string.Format(Loc["Are you sure you want to remove {0} from your contacts? You will no longer be able to message or see each other unless re-added."].Value, contact.FullName),
+            yesText: Loc["Remove"].Value, cancelText: Loc["Cancel"].Value);
+
+        if (confirmed == true)
+        {
+            await PrivacyService.RemoveContactAsync(_currentUser, contact.Id);
+            Snackbar.Add(string.Format(Loc["Removed {0} from contacts."].Value, contact.FullName), Severity.Info);
+            RefreshContacts();
+            StateHasChanged();
+        }
+    }
+}

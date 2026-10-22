@@ -1,0 +1,601 @@
+@page "/slideshow/pair"
+@page "/slideshow/stage/{DirectSessionId}"
+@layout PresentationLayout
+@attribute [AllowAnonymous]
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Services.Communication.Chat
+@using Spokes_Server.Components.Layout
+@inject ISlideshowSessionService SessionService
+@inject NavigationManager Nav
+@inject IJSRuntime JS
+@inject ILogger<SlideshowPair> Logger
+@implements IDisposable
+
+<PageTitle>@(IsPresenting ? _stagePayload?.AlbumTitle ?? Loc["Slideshow Stage"].Value : Loc["Spokes TV Pairing"].Value)</PageTitle>
+
+<style>
+    .tv-stage-root {
+        position: fixed;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        background-color: #000;
+        overflow: hidden;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        color: white;
+        cursor: none;
+    }
+    .tv-stage-root.cursor-visible {
+        cursor: default;
+    }
+    .pairing-box {
+        background: rgba(20, 20, 26, 0.85);
+        border: 1px solid rgba(255, 255, 255, 0.15);
+        backdrop-filter: blur(20px);
+        -webkit-backdrop-filter: blur(20px);
+        border-radius: 28px;
+        padding: 40px 48px;
+        text-align: center;
+        box-shadow: 0 16px 64px rgba(0, 0, 0, 0.8);
+        max-width: 660px;
+        width: 90vw;
+        box-sizing: border-box;
+    }
+    .pin-display {
+        font-size: clamp(2.8rem, 5.5vw, 4.2rem);
+        font-weight: 800;
+        letter-spacing: 0.12em;
+        white-space: nowrap;
+        color: #fff;
+        background: linear-gradient(135deg, #ffffff 0%, #a5b4fc 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        font-variant-numeric: tabular-nums;
+        margin: 16px 0;
+    }
+    .ambient-container {
+        position: absolute;
+        inset: -40px;
+        overflow: hidden;
+        z-index: 1;
+        pointer-events: none;
+    }
+    .ambient-layer {
+        position: absolute;
+        inset: 0;
+        background-size: cover;
+        background-position: center;
+        filter: blur(50px) brightness(0.6);
+        transform: scale(1.15) translateZ(0);
+        opacity: 0;
+        transition: opacity 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+        will-change: opacity;
+        pointer-events: none;
+    }
+    .ambient-layer.visible {
+        opacity: 0.55;
+    }
+    .stage-content-area {
+        position: relative;
+        z-index: 2;
+        width: 100%;
+        height: 100%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        overflow: hidden;
+    }
+    .stage-image-container {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 100%;
+        height: 100%;
+        transition: transform 0.15s ease-out;
+    }
+    .stage-image {
+        max-width: 100%;
+        max-height: 100%;
+        object-fit: contain;
+        box-shadow: 0 10px 40px rgba(0, 0, 0, 0.8);
+        border-radius: 8px;
+        user-select: none;
+        -webkit-user-drag: none;
+    }
+    .dual-portrait-container {
+        display: flex;
+        gap: 32px;
+        align-items: center;
+        justify-content: center;
+        max-width: 96%;
+        max-height: 94%;
+        width: 100%;
+        height: 100%;
+    }
+    .dual-portrait-img {
+        max-height: 92%;
+        max-width: calc(50% - 24px);
+        object-fit: contain;
+        border-radius: 8px;
+        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.75);
+    }
+    .stage-video {
+        width: 100%;
+        height: 100%;
+        max-width: 100%;
+        max-height: 100%;
+        object-fit: contain;
+        border-radius: 8px;
+        background-color: #000;
+    }
+</style>
+
+<div class="tv-stage-root @(_showCursor ? "cursor-visible" : "")" @onmousemove="HandleMouseMove">
+    @if (!IsPresenting)
+    {
+        @* --- PAIRING SCREEN --- *@
+        <div class="pairing-box">
+            <MudIcon Icon="@Icons.Material.Filled.Tv" Style="font-size: 4rem; color: #818cf8;" Class="mb-2" />
+            <MudText Typo="Typo.h4" Style="font-weight: 700; color: white;">@Loc["Spokes TV Slideshow"]</MudText>
+            <MudText Typo="Typo.body1" Style="color: rgba(255, 255, 255, 0.7); margin-top: 8px;">
+                @Loc["Open Spokes on your phone, go to any album, and tap 'Present to TV'."]
+            </MudText>
+
+            @if (!string.IsNullOrEmpty(_pairingPin))
+            {
+                <div class="d-flex align-center justify-center gap-2" style="flex-wrap: nowrap;">
+                    <div class="pin-display">
+                        @FormatPin(_pairingPin)
+                    </div>
+                    <MudTooltip Text="@Loc["New Code"]">
+                        <MudIconButton Icon="@Icons.Material.Filled.Refresh" Size="Size.Medium" OnClick="RegeneratePin" Style="color: rgba(255,255,255,0.7);" Class="flex-shrink-0" />
+                    </MudTooltip>
+                </div>
+                <div class="d-flex align-center justify-center gap-2 mt-4" style="color: rgba(255,255,255,0.6);">
+                    <MudProgressCircular Color="Color.Info" Indeterminate="true" Size="Size.Small" />
+                    <MudText Typo="Typo.body2">@Loc["Waiting for connection..."]</MudText>
+                </div>
+            }
+            else
+            {
+                <div class="d-flex justify-center my-8">
+                    <MudProgressCircular Color="Color.Primary" Indeterminate="true" Size="Size.Large" />
+                </div>
+                <MudText Typo="Typo.body2" Color="Color.Secondary">@Loc["Connecting to server..."]</MudText>
+            }
+        </div>
+    }
+    else if (CurrentItem != null)
+    {
+        @* --- STAGE CANVAS --- *@
+        <div class="ambient-container">
+            <div class="ambient-layer @(_bgSlotAVisible ? "visible" : "")" 
+                 style="z-index: @_bgSlotAZIndex; @(!string.IsNullOrEmpty(_bgSlotAUrl) ? $"background-image: url('{_bgSlotAUrl}');" : "")">
+            </div>
+            <div class="ambient-layer @(_bgSlotBVisible ? "visible" : "")" 
+                 style="z-index: @_bgSlotBZIndex; @(!string.IsNullOrEmpty(_bgSlotBUrl) ? $"background-image: url('{_bgSlotBUrl}');" : "")">
+            </div>
+        </div>
+
+        <div class="stage-content-area">
+            @if (IsDualPortrait && NextItem != null)
+            {
+                @* DUAL PORTRAIT PAIRING *@
+                <div class="dual-portrait-container">
+                    <img src="@CurrentItem.Url" alt="@CurrentItem.FileName" class="dual-portrait-img" />
+                    <img src="@NextItem.Url" alt="@NextItem.FileName" class="dual-portrait-img" />
+                </div>
+            }
+            else if (CurrentItem.ContentType.StartsWith("video/"))
+            {
+                @* VIDEO PLAYER *@
+                <video @key="@CurrentItem.Id" id="stage-video" src="@CurrentItem.Url" autoplay muted="@_isTvMuted" loop="@_isTvLooping" playsinline class="stage-video">
+                </video>
+            }
+            else
+            {
+                @* SINGLE PHOTO WITH SYNCHRONIZED ZOOM *@
+                <div class="stage-image-container" style="@GetZoomTransformStyle()">
+                    <img id="stage-photo" src="@CurrentItem.Url" alt="@CurrentItem.FileName" class="stage-image" />
+                </div>
+            }
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter] public string? DirectSessionId { get; set; }
+
+    private SlideshowSession? _currentSession;
+    private string _pairingPin = string.Empty;
+    private SlideshowStagePayload? _stagePayload;
+    private int _currentIndex = 0;
+    private bool IsPresenting => _stagePayload != null && _stagePayload.Items.Count > 0;
+
+    private double _zoomScale = 1.0;
+    private double _zoomX = 0;
+    private double _zoomY = 0;
+    private bool _isPanning = false;
+    private DotNetObjectReference<SlideshowPair>? _dotNetRef;
+
+    private bool _showCursor = true;
+    private DateTime _lastCursorTime = DateTime.UtcNow;
+    private bool _isTvMuted = true;
+    private bool _isTvLooping = true;
+    private string? _currentVideoId;
+
+    private SlideshowMediaItem? CurrentItem => 
+        (IsPresenting && _currentIndex >= 0 && _currentIndex < _stagePayload!.Items.Count) 
+            ? _stagePayload.Items[_currentIndex] 
+            : null;
+
+    private SlideshowMediaItem? NextItem => 
+        (IsPresenting && _currentIndex + 1 < _stagePayload!.Items.Count) 
+            ? _stagePayload.Items[_currentIndex + 1] 
+            : null;
+
+    private bool IsDualPortrait =>
+        CurrentItem != null && CurrentItem.IsPortraitPhoto &&
+        NextItem != null && NextItem.IsPortraitPhoto;
+
+    private bool ShowAmbientBackground =>
+        CurrentItem != null && !CurrentItem.ContentType.StartsWith("video/") && !IsDualPortrait;
+
+    private string _bgSlotAUrl = string.Empty;
+    private string _bgSlotBUrl = string.Empty;
+    private bool _bgSlotAVisible = false;
+    private bool _bgSlotBVisible = false;
+    private int _bgSlotAZIndex = 1;
+    private int _bgSlotBZIndex = 1;
+    private char _activeBgSlot = 'A';
+
+    private void UpdateAmbientBackground(SlideshowMediaItem? item)
+    {
+        if (item == null || item.ContentType.StartsWith("video/") || IsDualPortrait)
+        {
+            _bgSlotAVisible = false;
+            _bgSlotBVisible = false;
+            return;
+        }
+
+        string newThumbUrl = !string.IsNullOrEmpty(item.ThumbnailUrl) ? item.ThumbnailUrl : item.Url;
+
+        // Initial background load
+        if (string.IsNullOrEmpty(_bgSlotAUrl) && string.IsNullOrEmpty(_bgSlotBUrl))
+        {
+            _bgSlotAUrl = newThumbUrl;
+            _bgSlotAVisible = true;
+            _bgSlotAZIndex = 2;
+            _bgSlotBVisible = false;
+            _bgSlotBZIndex = 1;
+            _activeBgSlot = 'A';
+            return;
+        }
+
+        if (_activeBgSlot == 'A')
+        {
+            // Transition from A to B: slot B is incoming on top
+            _bgSlotBUrl = newThumbUrl;
+            _bgSlotBVisible = true;
+            _bgSlotBZIndex = 2;
+            _bgSlotAVisible = false;
+            _bgSlotAZIndex = 1;
+            _activeBgSlot = 'B';
+        }
+        else
+        {
+            // Transition from B to A: slot A is incoming on top
+            _bgSlotAUrl = newThumbUrl;
+            _bgSlotAVisible = true;
+            _bgSlotAZIndex = 2;
+            _bgSlotBVisible = false;
+            _bgSlotBZIndex = 1;
+            _activeBgSlot = 'A';
+        }
+    }
+
+    private System.Threading.Timer? _pinRefreshTimer;
+
+    protected override void OnInitialized()
+    {
+        SessionService.OnSessionStarted += HandleSessionStarted;
+        SessionService.OnSlideChanged += HandleSlideChanged;
+        SessionService.OnZoomUpdated += HandleZoomUpdated;
+        SessionService.OnVideoControlUpdated += HandleVideoControlUpdated;
+        SessionService.OnSessionEnded += HandleSessionEnded;
+
+        if (!string.IsNullOrWhiteSpace(DirectSessionId))
+        {
+            var directSession = SessionService.GetSessionById(DirectSessionId);
+            if (directSession != null)
+            {
+                _currentSession = directSession;
+                if (directSession.StagePayload != null)
+                {
+                    _stagePayload = directSession.StagePayload;
+                    _currentIndex = directSession.CurrentIndex;
+                    UpdateAmbientBackground(CurrentItem);
+                    _ = PreFetchAdjacentItems();
+                }
+            }
+            else
+            {
+                CreateNewSession();
+            }
+        }
+        else
+        {
+            CreateNewSession();
+        }
+
+        // Refresh PIN every 4 minutes if still on pairing screen
+        _pinRefreshTimer = new System.Threading.Timer(_ =>
+        {
+            if (!IsPresenting && string.IsNullOrWhiteSpace(DirectSessionId))
+            {
+                InvokeAsync(() =>
+                {
+                    CreateNewSession();
+                    StateHasChanged();
+                });
+            }
+        }, null, TimeSpan.FromMinutes(4), TimeSpan.FromMinutes(4));
+    }
+
+    private void RegeneratePin()
+    {
+        if (!IsPresenting)
+        {
+            CreateNewSession();
+            StateHasChanged();
+        }
+    }
+
+    private void CreateNewSession()
+    {
+        string connectionId = $"tv_blazor_{Guid.NewGuid():N}";
+        _currentSession = SessionService.CreateSession(connectionId);
+        _pairingPin = _currentSession.PairingPin;
+    }
+
+    private void HandleSessionStarted(string sessionId, SlideshowStagePayload payload)
+    {
+        if (_currentSession?.SessionId != sessionId) return;
+
+        Logger.LogInformation("SlideshowPair TV received SessionStarted for session {SessionId}, items count: {Count}", sessionId, payload.Items.Count);
+
+        InvokeAsync(async () =>
+        {
+            _stagePayload = payload;
+            _currentIndex = payload.InitialIndex;
+            ResetZoom();
+            UpdateAmbientBackground(CurrentItem);
+            StateHasChanged();
+            await PreFetchAdjacentItems();
+        });
+    }
+
+    private void HandleSlideChanged(string sessionId, int newIndex)
+    {
+        if (_currentSession?.SessionId != sessionId) return;
+
+        InvokeAsync(async () =>
+        {
+            _currentIndex = newIndex;
+            ResetZoom();
+            UpdateAmbientBackground(CurrentItem);
+            StateHasChanged();
+            await PreFetchAdjacentItems();
+        });
+    }
+
+    private void HandleZoomUpdated(string sessionId, double scale, double x, double y, bool isPanning)
+    {
+        if (_currentSession?.SessionId != sessionId) return;
+
+        InvokeAsync(() =>
+        {
+            _zoomScale = scale;
+            _zoomX = x;
+            _zoomY = y;
+            _isPanning = isPanning;
+            StateHasChanged();
+        });
+    }
+
+    private void HandleVideoControlUpdated(string sessionId, bool isPlaying, double currentTime, bool isMuted, bool isLooping)
+    {
+        if (_currentSession?.SessionId != sessionId) return;
+
+        _isTvMuted = isMuted;
+        _isTvLooping = isLooping;
+
+        InvokeAsync(async () =>
+        {
+            try
+            {
+                await JS.InvokeVoidAsync("spokesSlideshowVideo.syncTvVideo", isPlaying, currentTime, isMuted, isLooping);
+            }
+            catch { }
+        });
+    }
+
+    private void HandleSessionEnded(string sessionId)
+    {
+        if (_currentSession?.SessionId != sessionId) return;
+
+        InvokeAsync(() =>
+        {
+            _stagePayload = null;
+            _pairingPin = string.Empty;
+            ResetZoom();
+            _currentVideoId = null;
+            _bgSlotAUrl = string.Empty;
+            _bgSlotBUrl = string.Empty;
+            _bgSlotAVisible = false;
+            _bgSlotBVisible = false;
+            _activeBgSlot = 'A';
+            CreateNewSession();
+            StateHasChanged();
+        });
+    }
+
+    private async Task PreFetchAdjacentItems()
+    {
+        if (!IsPresenting || _stagePayload == null) return;
+
+        var urlsToPreload = new List<string>();
+        void AddItemUrls(int idx)
+        {
+            if (idx >= 0 && idx < _stagePayload.Items.Count)
+            {
+                var itm = _stagePayload.Items[idx];
+                if (itm.ContentType.StartsWith("video/", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (!string.IsNullOrEmpty(itm.ThumbnailUrl) && itm.ThumbnailUrl != itm.Url)
+                    {
+                        urlsToPreload.Add(itm.ThumbnailUrl);
+                    }
+                    return;
+                }
+
+                if (!string.IsNullOrEmpty(itm.Url))
+                {
+                    urlsToPreload.Add(itm.Url);
+                }
+                if (!string.IsNullOrEmpty(itm.ThumbnailUrl) && itm.ThumbnailUrl != itm.Url)
+                {
+                    urlsToPreload.Add(itm.ThumbnailUrl);
+                }
+            }
+        }
+
+        AddItemUrls(_currentIndex + 1);
+        AddItemUrls(_currentIndex + 2);
+        AddItemUrls(_currentIndex - 1);
+
+        foreach (var url in urlsToPreload)
+        {
+            try
+            {
+                await JS.InvokeVoidAsync("eval", "(function(u){ var img = new Image(); img.src = u; if (img.decode) { img.decode().catch(function(){}); } })('" + url + "');");
+            }
+            catch { }
+        }
+    }
+
+    private void ResetZoom()
+    {
+        _zoomScale = 1.0;
+        _zoomX = 0;
+        _zoomY = 0;
+    }
+
+    private string GetZoomTransformStyle()
+    {
+        if (Math.Abs(_zoomScale - 1.0) < 0.01) return string.Empty;
+        var scaleStr = _zoomScale.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture);
+        var xStr = _zoomX.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture);
+        var yStr = _zoomY.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture);
+        var transition = _isPanning ? "transition: none;" : "transition: transform 0.15s ease-out;";
+        return $"{transition} transform: scale({scaleStr}) translate3d({xStr}%, {yStr}%, 0);";
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            _dotNetRef = DotNetObjectReference.Create(this);
+        }
+
+        if (CurrentItem != null && CurrentItem.ContentType.StartsWith("video/", StringComparison.OrdinalIgnoreCase))
+        {
+            if (_dotNetRef != null && _currentVideoId != CurrentItem.Id)
+            {
+                _currentVideoId = CurrentItem.Id;
+                try
+                {
+                    await JS.InvokeVoidAsync("spokesSlideshowVideo.initTvVideo", "stage-video", _dotNetRef, _isTvMuted, _isTvLooping);
+                }
+                catch { }
+            }
+        }
+        else
+        {
+            _currentVideoId = null;
+        }
+    }
+
+    [JSInvokable]
+    public void OnTvDurationKnown(double duration)
+    {
+        if (_currentSession != null && duration > 0)
+        {
+            SessionService.NotifyTvVideoDurationKnown(_currentSession.SessionId, duration);
+        }
+    }
+
+    [JSInvokable]
+    public void OnTvTimeUpdate(double currentTime, bool isPlaying, double duration)
+    {
+        if (_currentSession != null)
+        {
+            SessionService.NotifyTvVideoTimeUpdated(_currentSession.SessionId, currentTime, isPlaying, duration);
+        }
+    }
+
+    [JSInvokable]
+    public void OnTvPlayStateChanged(bool isPlaying, double currentTime)
+    {
+        if (_currentSession != null)
+        {
+            SessionService.NotifyTvVideoTimeUpdated(_currentSession.SessionId, currentTime, isPlaying, 0.0);
+        }
+    }
+
+    [JSInvokable]
+    public void OnTvVideoEnded()
+    {
+        if (_currentSession != null)
+        {
+            SessionService.NotifyTvVideoEnded(_currentSession.SessionId);
+        }
+    }
+
+    private void HandleMouseMove()
+    {
+        _showCursor = true;
+        _lastCursorTime = DateTime.UtcNow;
+    }
+
+    private string FormatPin(string pin)
+    {
+        if (pin.Length == 6)
+        {
+            return pin.Substring(0, 3) + " - " + pin.Substring(3);
+        }
+        return pin;
+    }
+
+    public void Dispose()
+    {
+        _pinRefreshTimer?.Dispose();
+        SessionService.OnSessionStarted -= HandleSessionStarted;
+        SessionService.OnSlideChanged -= HandleSlideChanged;
+        SessionService.OnZoomUpdated -= HandleZoomUpdated;
+        SessionService.OnVideoControlUpdated -= HandleVideoControlUpdated;
+        SessionService.OnSessionEnded -= HandleSessionEnded;
+
+        _dotNetRef?.Dispose();
+        _dotNetRef = null;
+        try { JS.InvokeVoidAsync("spokesSlideshowVideo.cleanupTvVideo", "stage-video"); } catch { }
+
+        if (_currentSession != null)
+        {
+            SessionService.EndSession(_currentSession.SessionId);
+        }
+    }
+}

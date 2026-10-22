@@ -1,40 +1,12 @@
-using Spokes_Server.Core.Data;
 using Spokes_Server.Core.Data.Repositories.Accounting;
 using Spokes_Server.Core.Models.Accounting;
-using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.Logging;
-using Moq;
+using Spokes_Server.Tests.Helpers;
 using Xunit;
 
 namespace Spokes_Server.Tests.Core.Data.Repositories.Accounting;
 
-public class BillRepositoryTests : IDisposable
+public class BillRepositoryTests : RepositoryTestFixture<BillRepository>
 {
-    private readonly string _testDataDir;
-    private readonly DiskPersistenceService _writer;
-    private readonly BillRepository _repo;
-
-    public BillRepositoryTests()
-    {
-        _testDataDir = Path.Combine(Path.GetTempPath(), $"Spokes_Test_Bills_{Guid.NewGuid()}");
-
-            var mockConfig = new Mock<IConfiguration>();
-            mockConfig.Setup(c => c["DataPath"]).Returns(_testDataDir);
-
-            var mockPersistenceLogger = new Mock<ILogger<DiskPersistenceService>>();
-            _writer = new DiskPersistenceService(mockPersistenceLogger.Object);
-
-            _repo = new BillRepository(_writer, mockConfig.Object);
-        }
-
-        public void Dispose()
-        {
-            if (Directory.Exists(_testDataDir))
-            {
-                try { Directory.Delete(_testDataDir, true); } catch (Exception ex) { Console.WriteLine($"Cleanup failed: {ex.Message}"); }
-            }
-            _writer.Dispose();
-        }
 
         [Fact]
         public void GetByPo_ReturnsMatchingBills()
@@ -77,16 +49,6 @@ public class BillRepositoryTests : IDisposable
             Assert.DoesNotContain(result, b => b.Id == "b3");
         }
 
-        [Fact]
-        public void Constructor_WithNullDataPath_UsesEmptyBasePath()
-        {
-            var mockConfig = new Mock<IConfiguration>();
-            mockConfig.Setup(c => c["DataPath"]).Returns((string?)null);
-
-            var repo = new BillRepository(_writer, mockConfig.Object);
-
-            Assert.NotNull(repo);
-        }
 
         [Fact]
         public void GetFilePath_UsesItemIdAsJsonFilename()

@@ -4,6 +4,7 @@
 .github/
 .desloppify/
 .agent/
+Spokes_Server.QcTests/
 
 # Build results
 **/bin/

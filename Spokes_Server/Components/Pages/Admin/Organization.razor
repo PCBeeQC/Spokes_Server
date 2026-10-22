@@ -1,49 +1,64 @@
 @page "/organization"
+@attribute [Authorize]
 @implements IDisposable
 @using Spokes_Server.Components.Pages.Admin.Features
 @using Spokes_Server.Core.Constants
+@using Spokes_Server.Core.Services.Security
 @inject NavigationManager Nav
 @inject UserService UserService
+@inject IUserPrivacyService PrivacyService
 @inject AppLabelService AppLabels
 @inject Database Db
 
-<PageTitle>Directory</PageTitle>
+<PageTitle>@string.Format(Loc["{0} Directory"].Value, AppLabels.Company)</PageTitle>
 
 <MudContainer MaxWidth="MaxWidth.Large" Class="mt-4 pb-4">
     <div class="d-flex justify-space-between align-start mb-4">
         <div>
-            <MudText Typo="Typo.h5" GutterBottom="true">@AppLabels.Company Directory</MudText>
-            <MudText Typo="Typo.body1">View @AppLabels.Employees.ToLower() and @AppLabels.Teams.ToLower().</MudText>
+            <MudText Typo="Typo.h5" GutterBottom="true">@string.Format(Loc["{0} Directory"].Value, AppLabels.Company)</MudText>
+            <MudText Typo="Typo.body1">@string.Format(Loc["View {0}, {1}, and organizational structure."].Value, AppLabels.Employees.ToLower(), AppLabels.Teams.ToLower())</MudText>
         </div>
         @if (_hasAccess && Db.SystemConfigs.Get().ProviderType == IdpType.BuiltInCasdoor)
         {
-            <MudButton Variant="Variant.Outlined" Color="Color.Primary" StartIcon="@Icons.Material.Filled.AdminPanelSettings" Href="@($"{Db.SystemConfigs.Get().ServerPublicUrl.TrimEnd('/')}/login/spokes-org")" Target="_blank">Open Casdoor</MudButton>
+            <MudButton Variant="Variant.Outlined" Color="Color.Primary" StartIcon="@Icons.Material.Filled.AdminPanelSettings" Href="@($"{Db.SystemConfigs.Get().ServerPublicUrl.TrimEnd('/')}/login/spokes-org")" Target="_blank">@Loc["Open Casdoor"]</MudButton>
         }
     </div>
 
     @* Desktop and Mobile Friendly Segmented Control *@
-    <MudToggleGroup T="int" Value="activeTabIndex" ValueChanged="UpdateActiveTab" Outline="true" Delimiters="true" Rounded="true" CheckMark="false" Class="mb-6 flex-wrap" Error="false">
-        <MudToggleItem Value="0" Text="@AppLabels.Employees" Icon="@Icons.Material.Filled.People" />
-        <MudToggleItem Value="1" Text="@AppLabels.Teams" Icon="@Icons.Material.Filled.Diversity3" />
-        @if (_hasAccess)
+    <MudToggleGroup T="string" Value="@currentTab" ValueChanged="UpdateActiveTab" Outlined="true" Delimiters="true" CheckMark="false" Class="mb-6 flex-wrap">
+        @if (_canViewDirectory)
         {
-             @if (!IsFriendEdition)
-             {
-                 <MudToggleItem Value="2" Text="Org Chart" Icon="@Icons.Material.Filled.AccountTree" />
-             }
+            <MudToggleItem Value="@("employees")" Text="@AppLabels.Employees" UnselectedIcon="@Icons.Material.Filled.People" SelectedIcon="@Icons.Material.Filled.People" />
+            <MudToggleItem Value="@("teams")" Text="@AppLabels.Teams" UnselectedIcon="@Icons.Material.Filled.Diversity3" SelectedIcon="@Icons.Material.Filled.Diversity3" />
+        }
+        <MudToggleItem Value="@("contacts")" Text="@Loc["My Contacts"]" UnselectedIcon="@Icons.Material.Filled.ContactPhone" SelectedIcon="@Icons.Material.Filled.ContactPhone" />
+        @if (_hasAccess && !IsFriendEdition && _canViewDirectory)
+        {
+            <MudToggleItem Value="@("chart")" Text="@BizLoc["Org Chart"]" UnselectedIcon="@Icons.Material.Filled.AccountTree" SelectedIcon="@Icons.Material.Filled.AccountTree" />
         }
     </MudToggleGroup>
 
+    @if (!_canViewDirectory && currentTab != "contacts")
+    {
+        <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Class="mt-2 mb-4">
+            @string.Format(Loc["{0} directory browsing is disabled on this {1}."].Value, AppLabels.Company, AppLabels.Company.ToLower())
+        </MudAlert>
+    }
+
     @* Content Area *@
-    @if (activeTabIndex == 0)
+    @if (currentTab == "employees" && _canViewDirectory)
     {
         <EmployeesList />
     }
-    else if (activeTabIndex == 1)
+    else if (currentTab == "teams" && _canViewDirectory)
     {
         <TeamsList />
     }
-    else if (activeTabIndex == 2 && _hasAccess && !IsFriendEdition)
+    else if (currentTab == "contacts")
+    {
+        <UserContactsList />
+    }
+    else if (currentTab == "chart" && _hasAccess && !IsFriendEdition && _canViewDirectory)
     {
         <OrgTree />
     }
@@ -54,20 +69,27 @@
 @code {
     [SupplyParameterFromQuery] public string? Tab { get; set; }
     private bool IsFriendEdition => Db.CompanyProfile.Get()?.Edition == "Family";
-    private int activeTabIndex = 0;
+    private string currentTab = "employees";
     private bool _hasAccess;
+    private Employee? _currentUser;
+    private bool _canViewDirectory = true;
 
     protected override void OnParametersSet()
     {
         if (!string.IsNullOrEmpty(Tab))
         {
-            activeTabIndex = Tab.ToLower() switch
+            currentTab = Tab.ToLower() switch
             {
-                "employees" => 0,
-                "teams" => 1,
-                "chart" => 2,
-                _ => 0
+                "employees" or "members" when _canViewDirectory => "employees",
+                "teams" when _canViewDirectory => "teams",
+                "contacts" => "contacts",
+                "chart" when _hasAccess && !IsFriendEdition && _canViewDirectory => "chart",
+                _ => _canViewDirectory ? "employees" : "contacts"
             };
+        }
+        else if (!_canViewDirectory && currentTab != "contacts")
+        {
+            currentTab = "contacts";
         }
     }
 
@@ -78,23 +100,15 @@
         _isDisposed = true;
     }
 
-    private void UpdateActiveTab(int index)
+    private void UpdateActiveTab(string tabName)
     {
-        if (_isDisposed) return;
+        if (_isDisposed || string.IsNullOrWhiteSpace(tabName)) return;
 
-        activeTabIndex = index;
+        currentTab = tabName;
 
         if (!Nav.Uri.Contains("/organization", StringComparison.OrdinalIgnoreCase))
             return;
 
-        var tabName = index switch
-        {
-            0 => "employees",
-            1 => "teams",
-            2 => "chart",
-            _ => "employees"
-        };
-        
         try
         {
             Nav.NavigateTo(Nav.GetUriWithQueryParameter("tab", tabName), replace: true);
@@ -106,7 +120,12 @@
 
     protected override async Task OnInitializedAsync()
     {
-        var emp = await UserService.GetEmployeeAsync();
-        _hasAccess = emp != null && (emp.IsAdmin || emp.HasPermission(AppPermissions.Admin.ManageUsers));
+        _currentUser = await UserService.GetEmployeeAsync();
+        _hasAccess = _currentUser != null && (_currentUser.IsAdmin || _currentUser.HasPermission(AppPermissions.Admin.ManageUsers));
+        _canViewDirectory = PrivacyService.CanViewDirectory(_currentUser);
+        if (!_canViewDirectory && currentTab != "contacts")
+        {
+            currentTab = "contacts";
+        }
     }
 }

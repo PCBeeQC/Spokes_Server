@@ -71,14 +71,6 @@ window.pushNotifications = {
         return deviceId;
     },
 
-    // Legacy stub — bidirectional sync has been removed.
-    // Mobile uses Preferences exclusively; web uses cookies exclusively.
-    // Retained as a no-op so callers (App.razor runStartup) don't throw.
-    initDeviceId: async function () {
-        await this.getDeviceId();
-    },
-
-
     // Safely copy text to clipboard with fallback for iOS WebViews
     copyText: function(text) {
         if (navigator.clipboard && window.isSecureContext && !navigator.userAgent.match(/ipad|iphone|macintosh/i)) {
@@ -205,11 +197,44 @@ window.pushNotifications = {
 
     // Check if running in native mobile Capacitor shell
     isNativePlatform: function () {
+        if (window.SpokesBridge && typeof window.SpokesBridge.isMobile !== 'undefined') {
+            return Boolean(window.SpokesBridge.isMobile);
+        }
         return typeof window.isCapacitorNative === 'function' ? window.isCapacitorNative() : Boolean(window.Capacitor?.isNativePlatform?.());
+    },
+
+    // Check if running in native desktop Electron shell
+    isDesktopApp: function () {
+        // A native mobile platform is never a desktop app
+        if (this.isNativePlatform()) {
+            return false;
+        }
+        if (window.SpokesBridge && typeof window.SpokesBridge.isDesktop !== 'undefined') {
+            return Boolean(window.SpokesBridge.isDesktop);
+        }
+        return Boolean(typeof window.isSpokesDesktop !== 'undefined' && window.isSpokesDesktop);
+    },
+
+    // Check if the current client platform requires the Spokes Push Relay (Mobile & Desktop apps)
+    requiresPushRelay: function () {
+        return this.isNativePlatform() || this.isDesktopApp();
+    },
+
+    // Get current client push platform identifier ('mobile', 'desktop', or 'web')
+    getPushPlatform: function () {
+        if (this.isNativePlatform()) return 'mobile';
+        if (this.isDesktopApp()) return 'desktop';
+        return 'web';
+    },
+
+    _lastSubscriptionError: null,
+    getLastSubscriptionError: function () {
+        return this._lastSubscriptionError || null;
     },
 
     // Check if push notifications are supported
     isSupported: function () {
+        if (this.isDesktopApp()) return true;
         if (this.isNativePlatform()) return true;
         return 'serviceWorker' in navigator &&
             'PushManager' in window &&
@@ -218,6 +243,7 @@ window.pushNotifications = {
 
     // Get the reason why push notifications are not supported
     getSupportReason: function () {
+        if (this.isDesktopApp()) return 'Supported via Spokes Desktop';
         if (this.isNativePlatform()) return 'Supported via Capacitor';
         if (!('serviceWorker' in navigator)) return 'No Service Worker (HTTPS required)';
         if (!('PushManager' in window)) return 'No Push API';
@@ -228,6 +254,7 @@ window.pushNotifications = {
     // Get current permission status: 'granted', 'denied', or 'default'
     getPermissionStatus: async function () {
         if (!this.isSupported()) return 'unsupported';
+        if (this.isDesktopApp()) return 'granted';
         if (this.isNativePlatform()) {
             try {
                 const status = await Capacitor.Plugins.FirebaseMessaging.checkPermissions();
@@ -266,6 +293,9 @@ window.pushNotifications = {
 
     // Auto-detect device type from User-Agent
     detectDeviceType: function () {
+        if (this.isDesktopApp()) {
+            return 'Desktop';
+        }
         if (this.isNativePlatform()) {
             return 'Mobile';
         }
@@ -285,9 +315,11 @@ window.pushNotifications = {
     detectDeviceName: function () {
         var ua = navigator.userAgent || '';
         var isCapacitor = this.isNativePlatform();
+        var isDesktop = this.isDesktopApp();
         
         var browser = "Browser";
         if (isCapacitor) browser = "App";
+        else if (isDesktop) browser = "Desktop App";
         else if (/Edg\//i.test(ua)) browser = "Edge";
         else if (/Chrome|CriOS/i.test(ua)) browser = "Chrome";
         else if (/Firefox|FxiOS/i.test(ua)) browser = "Firefox";
@@ -309,6 +341,15 @@ window.pushNotifications = {
         const log = (msg) => { if(dotNetRef) dotNetRef.invokeMethodAsync('OnJSLog', msg).catch(e=>{}); console.log(msg); };
         if (!this.isSupported()) {
             return { success: false, error: 'Push notifications not supported' };
+        }
+
+        if (this.isDesktopApp()) {
+            return { 
+                success: true, 
+                permission: 'granted',
+                soundDisabled: false,
+                alertDisabled: false
+            };
         }
 
         if (this.isNativePlatform()) {
@@ -385,6 +426,29 @@ window.pushNotifications = {
         const log = (msg) => { if(dotNetRef) dotNetRef.invokeMethodAsync('OnJSLog', msg).catch(e=>{}); console.log(msg); };
         if (!this.isSupported()) {
             return { success: false, error: 'Push notifications not supported' };
+        }
+
+        if (this.isDesktopApp()) {
+            log('Desktop: acquiring FCM NativeRelay subscription from SpokesBridge...');
+            if (window.SpokesBridge && window.SpokesBridge.getFcmSubscription) {
+                try {
+                    const fcmSub = await window.SpokesBridge.getFcmSubscription();
+                    if (fcmSub && fcmSub.endpoint) {
+                        return {
+                            success: true,
+                            endpoint: fcmSub.endpoint,
+                            p256dh: '',
+                            auth: '',
+                            publicKey: fcmSub.publicKey || '',
+                            subscriptionType: 'NativeRelay'
+                        };
+                    }
+                } catch (err) {
+                    log('Desktop subscription error: ' + (err && err.message ? err.message : err));
+                    return { success: false, error: err && err.message ? err.message : 'Failed to acquire desktop FCM token' };
+                }
+            }
+            return { success: false, error: 'SpokesBridge getFcmSubscription not available' };
         }
 
         if (this.isNativePlatform()) {
@@ -553,8 +617,35 @@ window.pushNotifications = {
             let subscription = await registration.pushManager.getSubscription();
 
             if (subscription) {
-                // Already subscribed, return existing subscription
-                return this._formatSubscription(subscription);
+                let isKeyMatching = true;
+                if (vapidPublicKey && subscription.options && subscription.options.applicationServerKey) {
+                    try {
+                        const currentKey = new Uint8Array(subscription.options.applicationServerKey);
+                        const expectedKey = this._urlBase64ToUint8Array(vapidPublicKey);
+                        if (currentKey.length !== expectedKey.length) {
+                            isKeyMatching = false;
+                        } else {
+                            for (let i = 0; i < currentKey.length; i++) {
+                                if (currentKey[i] !== expectedKey[i]) {
+                                    isKeyMatching = false;
+                                    break;
+                                }
+                            }
+                        }
+                    } catch (e) {
+                        isKeyMatching = false;
+                    }
+                }
+
+                if (isKeyMatching) {
+                    // Already subscribed with matching key, return existing subscription
+                    return this._formatSubscription(subscription);
+                }
+
+                // VAPID key mismatch (e.g. fresh server with new VAPID keys). Unsubscribe stale subscription.
+                console.log('[Push] Existing WebPush subscription key does not match server VAPID key. Unsubscribing stale subscription...');
+                await subscription.unsubscribe();
+                subscription = null;
             }
 
             // Convert VAPID key from base64 URL to Uint8Array
@@ -671,6 +762,25 @@ window.pushNotifications = {
     // Get existing subscription (returns null if none)
     getExistingSubscription: async function () {
         try {
+            if (this.isDesktopApp()) {
+                if (window.SpokesBridge && window.SpokesBridge.getFcmSubscription) {
+                    try {
+                        const fcmSub = await window.SpokesBridge.getFcmSubscription();
+                        if (fcmSub && fcmSub.endpoint) {
+                            return {
+                                success: true,
+                                endpoint: fcmSub.endpoint,
+                                p256dh: '',
+                                auth: '',
+                                publicKey: fcmSub.publicKey || '',
+                                subscriptionType: 'NativeRelay'
+                            };
+                        }
+                    } catch (e) {}
+                }
+                return null;
+            }
+
             if (this.isNativePlatform()) {
                 let nativeToken = null;
                 const cachedToken = localStorage.getItem('spokes_native_push_token');
@@ -678,7 +788,7 @@ window.pushNotifications = {
                 if (cachedToken) {
                     // Always try to get a fresh token first (FCM/APNs may have rotated it)
                     try {
-                        const pushPlugin = Capacitor.Plugins.FirebaseMessaging;
+                        const pushPlugin = window.Capacitor?.Plugins?.FirebaseMessaging;
                         if (pushPlugin) {
                             const result = await pushPlugin.getToken();
                             if (result && result.token) {
@@ -696,6 +806,21 @@ window.pushNotifications = {
                     // Fallback to cached token
                     if (!nativeToken) {
                         nativeToken = cachedToken;
+                    }
+                } else {
+                    // Cache empty: attempt direct retrieval from FirebaseMessaging plugin
+                    try {
+                        const pushPlugin = window.Capacitor?.Plugins?.FirebaseMessaging;
+                        if (pushPlugin) {
+                            const result = await pushPlugin.getToken();
+                            if (result && result.token) {
+                                nativeToken = result.token;
+                                localStorage.setItem('spokes_native_push_token', nativeToken);
+                                console.log('Native [getExistingSubscription]: FCM token retrieved directly from FirebaseMessaging');
+                            }
+                        }
+                    } catch (e) {
+                        console.log('Native [getExistingSubscription]: direct getToken() failed: ' + e.message);
                     }
                 }
 
@@ -758,8 +883,9 @@ window.pushNotifications = {
     sendSubscriptionToServer: async function (subscription, deviceType, deviceName, isIdleDetectionEnabled) {
         try {
             const isCapacitor = this.isNativePlatform();
-            const resolvedDeviceType = isCapacitor ? 'Mobile' : (deviceType || this.detectDeviceType());
-            const resolvedIdleDetection = isCapacitor ? false : isIdleDetectionEnabled;
+            const isDesktop = this.isDesktopApp();
+            const resolvedDeviceType = isDesktop ? 'Desktop' : (isCapacitor ? 'Mobile' : (deviceType || this.detectDeviceType()));
+            const resolvedIdleDetection = isDesktop ? true : (isCapacitor ? false : isIdleDetectionEnabled);
             const deviceId = await this.getDeviceId();
             
             var hdrs = await window.spokesAuth.getHeaders({ 'Content-Type': 'application/json' });
@@ -789,7 +915,14 @@ window.pushNotifications = {
             }
 
             if (!response.ok) {
-                console.error('Failed to send subscription to server:', response.status);
+                let errPayload = null;
+                try {
+                    errPayload = await response.json();
+                } catch (e) { }
+                const errCode = errPayload?.code || errPayload?.errorCode || '';
+                const errMsg = errPayload?.error || errPayload?.message || `Server returned ${response.status}`;
+                console.warn(`[Push] Failed to register subscription on server (HTTP ${response.status}):`, errCode ? `${errCode} - ${errMsg}` : errMsg);
+                this._lastSubscriptionError = { status: response.status, code: errCode, message: errMsg };
                 return false;
             }
 
@@ -852,133 +985,29 @@ window.pushNotifications = {
         }
     },
 
-    // --- Idle Detection API Implementation ---
+    // --- Idle Detection (handled automatically via window.registerActivityTracker in spokes-app.js) ---
 
     registerPresenceLayout: function (dotNetRef) {
         window.spokesPresenceDotNetRef = dotNetRef;
     },
 
     isIdleSupported: function () {
-        if (this.isNativePlatform()) return false;
-        return 'IdleDetector' in window;
+        return !this.isNativePlatform();
     },
 
     requestIdlePermission: async function () {
-        if (!this.isIdleSupported()) {
-            return false;
-        }
-        try {
-            const state = await IdleDetector.requestPermission();
-            return state === 'granted';
-        } catch (error) {
-            console.error('Idle detection permission error:', error);
-            return false;
-        }
+        return true;
     },
 
     stopIdleDetector: function () {
-        if (window.spokesIdlePingInterval) {
-            clearInterval(window.spokesIdlePingInterval);
-            window.spokesIdlePingInterval = null;
-        }
-        if (window.spokesIdleAbortController) {
-            try { window.spokesIdleAbortController.abort(); } catch (e) {}
-            window.spokesIdleAbortController = null;
-        }
-        window.spokesIdleDetector = null;
-        console.log('Idle detection stopped.');
+        // Unified activity tracker is managed by spokes-app.js
     },
 
     startIdleDetector: async function (dotNetRef) {
         if (dotNetRef) {
             window.spokesPresenceDotNetRef = dotNetRef;
         }
-        const activeRef = window.spokesPresenceDotNetRef;
-        if (!activeRef) {
-            console.warn('Cannot start idle detector: No presence DotNet reference registered.');
-            return false;
-        }
-
-        if (!this.isIdleSupported()) return false;
-
-        // Clean up any prior running detector / interval
-        this.stopIdleDetector();
-
-        try {
-            // Check permission safely without throwing unhandled exceptions
-            if (navigator.permissions && navigator.permissions.query) {
-                try {
-                    const perm = await navigator.permissions.query({ name: 'idle-detection' });
-                    if (perm.state !== 'granted') {
-                        console.log('Idle detection permission not granted:', perm.state);
-                        return false;
-                    }
-                } catch (e) {
-                    const state = await IdleDetector.requestPermission();
-                    if (state !== 'granted') return false;
-                }
-            } else {
-                const state = await IdleDetector.requestPermission();
-                if (state !== 'granted') return false;
-            }
-
-            const controller = new AbortController();
-            window.spokesIdleAbortController = controller;
-            const signal = controller.signal;
-
-            window.spokesIdleDetector = new IdleDetector();
-            window.spokesIdlePingInterval = null;
-
-            const sendPing = () => {
-                const ref = window.spokesPresenceDotNetRef;
-                if (ref && !window._blazorDisconnected) {
-                    try { ref.invokeMethodAsync('OnDeviceActivePing').catch(() => {}); } catch (e) {}
-                }
-            };
-
-            window.spokesIdleDetector.addEventListener('change', () => {
-                if (signal.aborted) return;
-                const userState = window.spokesIdleDetector.userState;
-                const screenState = window.spokesIdleDetector.screenState;
-
-                if (userState === 'active' && screenState === 'unlocked') {
-                    // Ping immediately, and then every 30 seconds while active so the server's 90-second grace window is never breached
-                    sendPing();
-                    if (window.spokesIdlePingInterval) clearInterval(window.spokesIdlePingInterval);
-                    window.spokesIdlePingInterval = setInterval(() => {
-                        sendPing();
-                    }, 30 * 1000); // 30 seconds
-                } else {
-                    // User is idle or screen is locked
-                    if (window.spokesIdlePingInterval) {
-                        clearInterval(window.spokesIdlePingInterval);
-                        window.spokesIdlePingInterval = null;
-                    }
-                }
-            });
-
-            await window.spokesIdleDetector.start({
-                threshold: 60000, // 1 minute
-                signal,
-            });
-            console.log('Idle detection started successfully.');
-
-            // Initial ping since user is likely active when setting it up
-            sendPing();
-            // Start the active interval immediately if active and unlocked
-            if (window.spokesIdleDetector.userState === 'active' && window.spokesIdleDetector.screenState === 'unlocked') {
-                window.spokesIdlePingInterval = setInterval(() => {
-                    sendPing();
-                }, 30 * 1000); // 30 seconds
-            }
-
-            return true;
-        } catch (err) {
-            if (err && err.name === 'AbortError') return false;
-            console.error('Failed to start idle detector:', err);
-            this.stopIdleDetector();
-            return false;
-        }
+        return true;
     },
 
     // Setup listener for service worker messages to report push results
@@ -997,16 +1026,49 @@ window.pushNotifications = {
         });
     },
 
+    // Get native notification permission status
+    getPermissionStatus: function () {
+        if (this.isDesktopApp() || this.isNativePlatform()) return 'granted';
+        if (typeof window === 'undefined' || !('Notification' in window)) return 'unsupported';
+        return Notification.permission; // 'default', 'granted', 'denied'
+    },
+
     // Check if the user has already been prompted for push notifications on this device
     hasBeenPromptedForPush: function (serverId) {
+        // If notifications are explicitly blocked by the browser or user, never prompt
+        if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'denied') {
+            return true;
+        }
+        // If already granted, no need to show the opt-in prompt
+        if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
+            return true;
+        }
+
         var key = serverId ? 'spokes_push_prompted_' + serverId : 'spokes_push_prompted';
-        return localStorage.getItem(key) === 'true';
+        try {
+            if (sessionStorage.getItem(key) === 'true') return true;
+            return localStorage.getItem(key) === 'true';
+        } catch (e) {
+            return false;
+        }
     },
 
     // Record that the user has been prompted for push notifications on this device
     setPushPrompted: function (serverId) {
         var key = serverId ? 'spokes_push_prompted_' + serverId : 'spokes_push_prompted';
-        localStorage.setItem(key, 'true');
+        try {
+            localStorage.setItem(key, 'true');
+            sessionStorage.setItem(key, 'true');
+        } catch (e) {}
+    },
+
+    // Explicitly dismiss the push prompt for this session and device
+    dismissPushPrompt: function (serverId) {
+        var key = serverId ? 'spokes_push_prompted_' + serverId : 'spokes_push_prompted';
+        try {
+            localStorage.setItem(key, 'true');
+            sessionStorage.setItem(key, 'true');
+        } catch (e) {}
     }
 };
 

@@ -1,4 +1,5 @@
 @page "/project-groups/{Id}"
+@attribute [Authorize(Policy = AppPermissions.Projects.View)]
 @implements IDisposable
 <PageTitle>@Group?.Name - Project Group</PageTitle>
 @using Spokes_Server.Core.Models.Core
@@ -203,7 +204,7 @@ else
         var dialog = await DialogService.ShowAsync<ProjectGroupDialog>("Edit Project Group", parameters, options);
         var result = await dialog.Result;
 
-        if (!result.Canceled && result.Data is ProjectGroup updatedGroup)
+        if (result is { Canceled: false, Data: ProjectGroup updatedGroup })
         {
             Db.ProjectGroups.Save(updatedGroup);
             Snackbar.Add("Project Group Updated!", Severity.Success);

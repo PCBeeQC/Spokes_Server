@@ -24,12 +24,20 @@ public class VoiceCircuitHandlerTests
 
     private GlobalVoiceService CreateGlobalVoiceService() =>
         new(
-            _jsRuntimeMock.Object, 
-            null!, 
-            null!, 
-            _snackbarMock.Object, 
-            _loggerMock.Object,
-            null!);
+            new VoiceJsInteropService(_jsRuntimeMock.Object),
+            new Mock<VoiceChannelService>().Object, 
+            new ChatStateService(), 
+            _loggerMock.Object);
+
+    [Fact]
+    public void Constructor_InitializesCorrectly()
+    {
+        var globalVoiceService = CreateGlobalVoiceService();
+        var handler = new VoiceCircuitHandler(globalVoiceService);
+        Assert.NotNull(handler);
+        Assert.NotNull(globalVoiceService);
+        Assert.False(globalVoiceService.RequiresIntegrityCheck);
+    }
 
     [Fact]
     public async Task OnConnectionDownAsync_CallsBase_ReturnsCompletedTask()
@@ -42,6 +50,9 @@ public class VoiceCircuitHandlerTests
         var task = handler.OnConnectionDownAsync(null!, CancellationToken.None);
 
         // Assert
+        Assert.NotNull(globalVoiceService);
+        Assert.NotNull(handler);
+        Assert.NotNull(task);
         Assert.True(task.IsCompletedSuccessfully);
         await task; 
     }
@@ -51,13 +62,15 @@ public class VoiceCircuitHandlerTests
     {
         // Arrange
         var globalVoiceService = CreateGlobalVoiceService();
-        globalVoiceService.ConnectMockForDemo("channel1", "user1", []);
+        globalVoiceService.ApplyMockConnectedState("channel1", "user1", []);
         var handler = new VoiceCircuitHandler(globalVoiceService);
 
         // Act
         await handler.OnConnectionUpAsync(null!, CancellationToken.None);
 
         // Assert
+        Assert.NotNull(globalVoiceService);
+        Assert.NotNull(handler);
         Assert.True(globalVoiceService.RequiresIntegrityCheck);
     }
 
@@ -72,6 +85,8 @@ public class VoiceCircuitHandlerTests
         await handler.OnConnectionUpAsync(null!, CancellationToken.None);
 
         // Assert
+        Assert.NotNull(globalVoiceService);
+        Assert.NotNull(handler);
         Assert.False(globalVoiceService.RequiresIntegrityCheck);
     }
 
@@ -85,6 +100,8 @@ public class VoiceCircuitHandlerTests
         var task = handler.OnConnectionUpAsync(null!, CancellationToken.None);
 
         // Assert
+        Assert.NotNull(handler);
+        Assert.NotNull(task);
         Assert.True(task.IsCompletedSuccessfully);
         await task; 
     }

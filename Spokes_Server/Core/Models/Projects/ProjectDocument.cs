@@ -3,7 +3,7 @@ namespace Spokes_Server.Core.Models.Projects;
 using Spokes_Server.Core.Data;
 using Spokes_Server.Core.Models.Core;
 
-public class ProjectDocument : IDataEntity
+public class ProjectDocument : IDataEntity, IHasAssociatedFiles
 {
     public string Id { get; set; } = Guid.NewGuid().ToString();
 
@@ -26,6 +26,11 @@ public class ProjectDocument : IDataEntity
     public string PdfPath { get; set; } = string.Empty;
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
+
+    public IEnumerable<string> GetAssociatedFilePaths()
+    {
+        if (!string.IsNullOrWhiteSpace(PdfPath)) yield return PdfPath;
+    }
 }
 
 public static class ProjectDocumentStatus

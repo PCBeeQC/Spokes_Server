@@ -43,7 +43,7 @@
     {
         var allReports = Db.ExpenseReports.GetAll();
         ProjectExpenses = allReports
-        .SelectMany(r => r.Items.Select(i => new ExpenseItemViewModel
+        .SelectMany(r => r.LineItems.Select(i => new ExpenseItemViewModel
             {
                 Date = i.Date,
                 EmployeeName = r.EmployeeName,

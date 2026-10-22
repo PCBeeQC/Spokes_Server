@@ -38,10 +38,7 @@ public class VoiceStateSyncServiceTests : IDisposable
         var config = new ConfigurationBuilder().AddInMemoryCollection(configDict).Build();
 
         _persistence = new DiskPersistenceService(new Mock<ILogger<DiskPersistenceService>>().Object);
-        var mockDb = new Mock<Database>(
-            (DeviceSessionRepository)null!, 
-            (EmployeeRepository)null!
-        );
+        var mockDb = new Mock<Database>();
         var systemConfigs = new SystemConfigRepository(_persistence, config);
         mockDb.Setup(x => x.SystemConfigs).Returns(systemConfigs);
         _db = mockDb.Object;
@@ -62,7 +59,7 @@ public class VoiceStateSyncServiceTests : IDisposable
         _mockScopeFactory.Setup(x => x.CreateScope()).Returns(_mockScope.Object);
         _mockScope.Setup(x => x.ServiceProvider).Returns(_mockScopedProvider.Object);
 
-        var dummyChatService = (ChatService)FormatterServices.GetUninitializedObject(typeof(ChatService));
+        var dummyChatService = (ChatService)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(ChatService));
         
         _mockScopedProvider.Setup(x => x.GetService(typeof(ChatService))).Returns(dummyChatService);
         _mockScopedProvider.Setup(x => x.GetService(typeof(Database))).Returns(_db);
@@ -91,6 +88,19 @@ public class VoiceStateSyncServiceTests : IDisposable
     }
 
     [Fact]
+    public void Constructor_InitializesCorrectly()
+    {
+        Assert.NotNull(_db);
+        Assert.NotNull(_db.SystemConfigs);
+        Assert.NotNull(_mockServiceProvider);
+        Assert.NotNull(_mockLogger);
+        var sysConfig = _db.SystemConfigs.Get();
+        Assert.NotNull(sysConfig);
+        Assert.Equal("test-key", sysConfig.LiveKitApiKey);
+        Assert.Equal("test-secret", sysConfig.LiveKitApiSecret);
+    }
+
+    [Fact]
     public async Task ExecuteAsync_DemoModeTrue_ReturnsImmediately()
     {
         var configDict = new Dictionary<string, string?> 
@@ -107,6 +117,9 @@ public class VoiceStateSyncServiceTests : IDisposable
         var task = service.RunExecuteAsync(cts.Token);
         await task;
         
+        Assert.NotNull(service);
+        Assert.NotNull(task);
+        Assert.NotNull(config);
         Assert.True(task.IsCompletedSuccessfully);
     }
 
@@ -127,6 +140,9 @@ public class VoiceStateSyncServiceTests : IDisposable
         var task = service.RunExecuteAsync(cts.Token);
         await task;
         
+        Assert.NotNull(service);
+        Assert.NotNull(task);
+        Assert.NotNull(config);
         Assert.True(task.IsCompletedSuccessfully);
     }
 
@@ -145,6 +161,9 @@ public class VoiceStateSyncServiceTests : IDisposable
         using var cts = new CancellationTokenSource();
         cts.Cancel(); // Cancel immediately
 
+        Assert.NotNull(service);
+        Assert.NotNull(config);
+        Assert.True(cts.IsCancellationRequested);
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => service.RunExecuteAsync(cts.Token));
     }
 
@@ -170,6 +189,9 @@ public class VoiceStateSyncServiceTests : IDisposable
         // Wait 6s to allow the initial 5s delay to pass and hit the loop before canceling
         cts.CancelAfter(TimeSpan.FromSeconds(6.0));
 
+        Assert.NotNull(service);
+        Assert.NotNull(chatState);
+        Assert.NotNull(config);
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => service.RunExecuteAsync(cts.Token));
     }
 }

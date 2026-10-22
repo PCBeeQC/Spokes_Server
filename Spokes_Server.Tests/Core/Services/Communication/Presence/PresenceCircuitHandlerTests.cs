@@ -9,7 +9,7 @@ public class PresenceCircuitHandlerTests : IDisposable
     private readonly ChatStateService _chatState;
     private readonly PresenceStateService _presenceState;
     private readonly UserCircuitContext _circuitContext;
-    private readonly Mock<UserClientStateService> _mockClientStateService;
+    private readonly Mock<IUserClientStateService> _mockClientStateService;
     private readonly PresenceCircuitHandler _handler;
 
     public PresenceCircuitHandlerTests()
@@ -17,7 +17,7 @@ public class PresenceCircuitHandlerTests : IDisposable
         _chatState = new ChatStateService();
         _presenceState = new PresenceStateService(_chatState);
         _circuitContext = new UserCircuitContext();
-        _mockClientStateService = new Mock<UserClientStateService>();
+        _mockClientStateService = new Mock<IUserClientStateService>();
         _handler = new PresenceCircuitHandler(_presenceState, _circuitContext, _mockClientStateService.Object);
     }
 
@@ -70,7 +70,12 @@ public class PresenceCircuitHandlerTests : IDisposable
         _circuitContext.SubscriptionId = "sub-789";
         
         // Manually register first
-        _presenceState.RegisterConnection("user-789", "sub-789", "Desktop");
+        _presenceState.RegisterConnection(new ConnectionRegistrationOptions
+        {
+            UserId = "user-789",
+            SubscriptionId = "sub-789",
+            DeviceType = "Desktop"
+        });
         Assert.True(_presenceState.HasActiveConnection("user-789"));
 
         // Act
@@ -138,7 +143,13 @@ public class PresenceCircuitHandlerTests : IDisposable
         _circuitContext.SubscriptionId = "sub-mob-test";
         _circuitContext.IsConnected = true;
         _circuitContext.IsFocused = false;
-        _presenceState.RegisterConnection("u1", "sub-mob-test", "Mobile", isFocused: false);
+        _presenceState.RegisterConnection(new ConnectionRegistrationOptions
+        {
+            UserId = "u1",
+            SubscriptionId = "sub-mob-test",
+            DeviceType = "Mobile",
+            IsFocused = false
+        });
 
         Assert.False(_circuitContext.ShouldDisplayInAppNotification(_presenceState));
     }
@@ -150,7 +161,13 @@ public class PresenceCircuitHandlerTests : IDisposable
         _circuitContext.SubscriptionId = "sub-mob-test";
         _circuitContext.IsConnected = true;
         _circuitContext.IsFocused = true;
-        _presenceState.RegisterConnection("u1", "sub-mob-test", "Mobile", isFocused: true);
+        _presenceState.RegisterConnection(new ConnectionRegistrationOptions
+        {
+            UserId = "u1",
+            SubscriptionId = "sub-mob-test",
+            DeviceType = "Mobile",
+            IsFocused = true
+        });
 
         Assert.True(_circuitContext.ShouldDisplayInAppNotification(_presenceState));
     }
@@ -185,6 +202,19 @@ public class PresenceCircuitHandlerTests : IDisposable
         _circuitContext.IsFocused = true;
 
         Assert.True(_circuitContext.ShouldDisplayInAppNotification(_presenceState));
+    }
+
+    [Theory]
+    [InlineData("Desktop", false, false)]
+    [InlineData("Desktop", true, true)]
+    [InlineData("Mobile", false, false)] // Tablet scenario in Capacitor: DeviceType is Mobile, but viewport is large (desktop layout)
+    [InlineData("Mobile", true, true)]  // Phone scenario in mobile browser or Capacitor: viewport is small (mobile layout)
+    public void IsMobileLayout_DependsStrictlyOnIsMobileViewport_RegardlessOfDeviceType(string deviceType, bool isMobileViewport, bool expectedMobileLayout)
+    {
+        _circuitContext.DeviceType = deviceType;
+        _circuitContext.IsMobileViewport = isMobileViewport;
+
+        Assert.Equal(expectedMobileLayout, _circuitContext.IsMobileLayout);
     }
 
     public void Dispose()

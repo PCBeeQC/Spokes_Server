@@ -15,16 +15,16 @@ public class SupplierTests
             Assert.False(string.IsNullOrWhiteSpace(supplier.Id));
             Assert.True(Guid.TryParse(supplier.Id, out var parsedGuid));
             Assert.NotEqual(Guid.Empty, parsedGuid);
-            Assert.NotNull(supplier.Info);
+            Assert.NotNull(supplier.ContactInfo);
             Assert.NotNull(supplier.Contacts);
             Assert.Empty(supplier.Contacts);
         }
 
         [Fact]
-        public void Name_ReturnsInfoBusinessName()
+        public void Name_ReturnsContactInfoBusinessName()
         {
             var supplier = new Supplier();
-            supplier.Info.BusinessName = "Acme Supply Co.";
+            supplier.ContactInfo.BusinessName = "Acme Supply Co.";
 
             Assert.Equal("Acme Supply Co.", supplier.Name);
         }
@@ -103,4 +103,71 @@ public class SupplierTests
             Assert.Single(supplier.Contacts);
             Assert.Equal("Jane Doe", supplier.Contacts[0].Name);
         }
+
+#pragma warning disable CS0618 // Obsolete member testing
+        [Fact]
+        public void Supplier_ContactInfo_And_Info_AreSynchronized()
+        {
+            var supplier = new Supplier();
+            supplier.ContactInfo.BusinessName = "Mega Corp";
+
+            Assert.Equal("Mega Corp", supplier.Info.BusinessName);
+            Assert.Equal("Mega Corp", supplier.Name);
+
+            supplier.Info.ContactPersonEmail = "contact@megacorp.com";
+            Assert.Equal("contact@megacorp.com", supplier.ContactInfo.ContactPersonEmail);
+        }
+
+        [Fact]
+        public void Supplier_JsonDeserialization_SupportsLegacyInfoProperty()
+        {
+            const string legacyJson = """
+            {
+                "Id": "sup-1",
+                "Info": {
+                    "BusinessName": "Legacy Components",
+                    "ContactPersonEmail": "sales@legacy.com"
+                }
+            }
+            """;
+
+            var supplier = System.Text.Json.JsonSerializer.Deserialize<Supplier>(legacyJson);
+            Assert.NotNull(supplier);
+            Assert.Equal("Legacy Components", supplier.ContactInfo.BusinessName);
+            Assert.Equal("Legacy Components", supplier.Info.BusinessName);
+            Assert.Equal("sales@legacy.com", supplier.ContactInfo.ContactPersonEmail);
+        }
+
+        [Fact]
+        public void Supplier_JsonDeserialization_SupportsContactInfoProperty()
+        {
+            const string modernJson = """
+            {
+                "Id": "sup-2",
+                "ContactInfo": {
+                    "BusinessName": "Modern Parts",
+                    "ContactPersonEmail": "orders@modern.com"
+                }
+            }
+            """;
+
+            var supplier = System.Text.Json.JsonSerializer.Deserialize<Supplier>(modernJson);
+            Assert.NotNull(supplier);
+            Assert.Equal("Modern Parts", supplier.ContactInfo.BusinessName);
+            Assert.Equal("Modern Parts", supplier.Info.BusinessName);
+            Assert.Equal("orders@modern.com", supplier.ContactInfo.ContactPersonEmail);
+        }
+#pragma warning restore CS0618
+
+        [Fact]
+        public void Supplier_JsonSerialization_WritesContactInfoProperty()
+        {
+            var supplier = new Supplier { Id = "sup-3" };
+            supplier.ContactInfo.BusinessName = "Global Logistics";
+
+            var json = System.Text.Json.JsonSerializer.Serialize(supplier);
+            Assert.Contains("\"ContactInfo\"", json);
+            Assert.DoesNotContain("\"LegacyInfo\"", json);
+        }
     }
+

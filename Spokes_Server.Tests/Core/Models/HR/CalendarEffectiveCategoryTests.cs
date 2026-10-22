@@ -16,12 +16,12 @@ public class CalendarEffectiveCategoryTests
             CategoryColor = "Primary"
         };
 
-        var result = CalendarEffectiveCategory.Resolve(
-            evt,
-            currentUserId: "emp-current",
-            currentUserTeamIds: new HashSet<string>(),
-            employeeNames: new Dictionary<string, string>(),
-            teamNames: new Dictionary<string, string>());
+        var context = new CalendarViewingContext(
+            CurrentUserId: "emp-current",
+            CurrentUserTeamIds: new HashSet<string>(),
+            EmployeeNames: new Dictionary<string, string>(),
+            TeamNames: new Dictionary<string, string>());
+        var result = CalendarEffectiveCategory.Resolve(evt, context);
 
         Assert.Equal("own:meeting", result.FilterKey);
         Assert.Equal("Meeting", result.DisplayName);
@@ -42,12 +42,12 @@ public class CalendarEffectiveCategoryTests
             CategoryColor = "Success"
         };
 
-        var result = CalendarEffectiveCategory.Resolve(
-            evt,
-            currentUserId: "emp-other",
-            currentUserTeamIds: new HashSet<string>(),
-            employeeNames: new Dictionary<string, string> { ["emp-admin"] = "Admin Boss" },
-            teamNames: new Dictionary<string, string>());
+        var context = new CalendarViewingContext(
+            CurrentUserId: "emp-other",
+            CurrentUserTeamIds: new HashSet<string>(),
+            EmployeeNames: new Dictionary<string, string> { ["emp-admin"] = "Admin Boss" },
+            TeamNames: new Dictionary<string, string>());
+        var result = CalendarEffectiveCategory.Resolve(evt, context);
 
         Assert.Equal("company:holiday", result.FilterKey);
         Assert.Equal("Holiday - Company", result.DisplayName);
@@ -68,12 +68,12 @@ public class CalendarEffectiveCategoryTests
             CategoryColor = "Info"
         };
 
-        var result = CalendarEffectiveCategory.Resolve(
-            evt,
-            currentUserId: "emp-member",
-            currentUserTeamIds: new HashSet<string> { "team-eng" },
-            employeeNames: new Dictionary<string, string> { ["emp-creator"] = "Tech Lead" },
-            teamNames: new Dictionary<string, string> { ["team-eng"] = "Engineering" });
+        var context = new CalendarViewingContext(
+            CurrentUserId: "emp-member",
+            CurrentUserTeamIds: new HashSet<string> { "team-eng" },
+            EmployeeNames: new Dictionary<string, string> { ["emp-creator"] = "Tech Lead" },
+            TeamNames: new Dictionary<string, string> { ["team-eng"] = "Engineering" });
+        var result = CalendarEffectiveCategory.Resolve(evt, context);
 
         Assert.Equal("team:team-eng:sprint", result.FilterKey);
         Assert.Equal("Sprint - Engineering", result.DisplayName);
@@ -92,12 +92,12 @@ public class CalendarEffectiveCategoryTests
             InvitedTeamIds = ["team-unknown"]
         };
 
-        var result = CalendarEffectiveCategory.Resolve(
-            evt,
-            currentUserId: "emp-member",
-            currentUserTeamIds: new HashSet<string> { "team-unknown" },
-            employeeNames: new Dictionary<string, string>(),
-            teamNames: new Dictionary<string, string>());
+        var context = new CalendarViewingContext(
+            CurrentUserId: "emp-member",
+            CurrentUserTeamIds: new HashSet<string> { "team-unknown" },
+            EmployeeNames: new Dictionary<string, string>(),
+            TeamNames: new Dictionary<string, string>());
+        var result = CalendarEffectiveCategory.Resolve(evt, context);
 
         Assert.Equal("team:team-unknown:sync", result.FilterKey);
         Assert.Equal("Sync - Team", result.DisplayName);
@@ -115,12 +115,12 @@ public class CalendarEffectiveCategoryTests
             CategoryColor = "Secondary"
         };
 
-        var result = CalendarEffectiveCategory.Resolve(
-            evt,
-            currentUserId: "emp-bob",
-            currentUserTeamIds: new HashSet<string>(),
-            employeeNames: new Dictionary<string, string> { ["emp-alice"] = "Alice Smith" },
-            teamNames: new Dictionary<string, string>());
+        var context = new CalendarViewingContext(
+            CurrentUserId: "emp-bob",
+            CurrentUserTeamIds: new HashSet<string>(),
+            EmployeeNames: new Dictionary<string, string> { ["emp-alice"] = "Alice Smith" },
+            TeamNames: new Dictionary<string, string>());
+        var result = CalendarEffectiveCategory.Resolve(evt, context);
 
         Assert.Equal("user:emp-alice:1-on-1", result.FilterKey);
         Assert.Equal("1-on-1 - Shared by Alice Smith", result.DisplayName);
@@ -138,12 +138,12 @@ public class CalendarEffectiveCategoryTests
             Category = "Review"
         };
 
-        var result = CalendarEffectiveCategory.Resolve(
-            evt,
-            currentUserId: "emp-bob",
-            currentUserTeamIds: new HashSet<string>(),
-            employeeNames: new Dictionary<string, string>(),
-            teamNames: new Dictionary<string, string>());
+        var context = new CalendarViewingContext(
+            CurrentUserId: "emp-bob",
+            CurrentUserTeamIds: new HashSet<string>(),
+            EmployeeNames: new Dictionary<string, string>(),
+            TeamNames: new Dictionary<string, string>());
+        var result = CalendarEffectiveCategory.Resolve(evt, context);
 
         Assert.Equal("user:emp-ghost:review", result.FilterKey);
         Assert.Equal("Review - Shared by User", result.DisplayName);
@@ -159,12 +159,12 @@ public class CalendarEffectiveCategoryTests
             Category = "   "
         };
 
-        var result = CalendarEffectiveCategory.Resolve(
-            evt,
-            currentUserId: "emp-user",
-            currentUserTeamIds: new HashSet<string>(),
-            employeeNames: new Dictionary<string, string>(),
-            teamNames: new Dictionary<string, string>());
+        var context = new CalendarViewingContext(
+            CurrentUserId: "emp-user",
+            CurrentUserTeamIds: new HashSet<string>(),
+            EmployeeNames: new Dictionary<string, string>(),
+            TeamNames: new Dictionary<string, string>());
+        var result = CalendarEffectiveCategory.Resolve(evt, context);
 
         Assert.Equal("own:general", result.FilterKey);
         Assert.Equal("General", result.DisplayName);
@@ -232,5 +232,36 @@ public class CalendarEffectiveCategoryTests
 
         var color = CalendarEffectiveCategory.ResolveColor(evt, new Dictionary<string, CalendarCategory>());
         Assert.Equal(Color.Info, color);
+    }
+
+    [Fact]
+    public void Resolve_WhenCategoryRenamedInUserCategories_UsesRenamedNameAndColor()
+    {
+        var evt = new CalendarEvent
+        {
+            EmployeeId = "emp-current",
+            CategoryId = "cat-work",
+            Category = "Old Work Name",
+            CategoryColor = "Info"
+        };
+
+        var userCategories = new Dictionary<string, CalendarCategory>
+        {
+            ["cat-work"] = new() { Id = "cat-work", Name = "Deep Work Focus", Color = "Secondary" }
+        };
+
+        var context = new CalendarViewingContext(
+            CurrentUserId: "emp-current",
+            CurrentUserTeamIds: new HashSet<string>(),
+            EmployeeNames: new Dictionary<string, string>(),
+            TeamNames: new Dictionary<string, string>(),
+            UserCategories: userCategories);
+
+        var result = CalendarEffectiveCategory.Resolve(evt, context);
+
+        Assert.Equal("Deep Work Focus", result.DisplayName);
+        Assert.Equal("Deep Work Focus", result.CategoryName);
+        Assert.Equal(Color.Secondary, result.Color);
+        Assert.Equal("own:deep work focus", result.FilterKey);
     }
 }

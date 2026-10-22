@@ -1,54 +1,14 @@
 using System.Text.Json;
-using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.Logging;
-using Moq;
-using Spokes_Server.Core.Data;
 using Spokes_Server.Core.Data.Repositories.Accounting;
 using Spokes_Server.Core.Models.Accounting;
-using Spokes_Server.Core.Models.Projects;
+using Spokes_Server.Core.Models.Core;
+using Spokes_Server.Tests.Helpers;
 using Xunit;
 
 namespace Spokes_Server.Tests.Core.Data.Repositories.Accounting;
 
-public class SupplierRepositoryTests : IDisposable
+public class SupplierRepositoryTests : RepositoryTestFixture<SupplierRepository>
 {
-    private readonly string _testDataDir;
-    private readonly DiskPersistenceService _writer;
-    private readonly SupplierRepository _repo;
-
-    public SupplierRepositoryTests()
-    {
-        _testDataDir = Path.Combine(Path.GetTempPath(), $"Spokes_Test_Suppliers_{Guid.NewGuid()}");
-
-        var mockConfig = new Mock<IConfiguration>();
-        mockConfig.Setup(c => c["DataPath"]).Returns(_testDataDir);
-
-        var mockPersistenceLogger = new Mock<ILogger<DiskPersistenceService>>();
-        _writer = new DiskPersistenceService(mockPersistenceLogger.Object);
-
-        _repo = new SupplierRepository(_writer, mockConfig.Object);
-    }
-
-    public void Dispose()
-    {
-        if (Directory.Exists(_testDataDir))
-        {
-            try { Directory.Delete(_testDataDir, true); } catch (Exception ex) { Console.WriteLine($"Cleanup failed: {ex.Message}"); }
-        }
-        _writer.Dispose();
-    }
-
-    [Fact]
-    public void Constructor_WithNullDataPath_UsesDefaultPath()
-    {
-        var mockConfig = new Mock<IConfiguration>();
-        mockConfig.Setup(c => c["DataPath"]).Returns((string?)null);
-
-        var repo = new SupplierRepository(_writer, mockConfig.Object);
-
-        Assert.NotNull(repo);
-    }
-
     [Fact]
     public void Save_And_GetById_ReturnsSupplier()
     {
@@ -135,14 +95,36 @@ public class SupplierRepositoryTests : IDisposable
         };
         File.WriteAllText(Path.Combine(suppliersDir, "sup-disk-loaded.json"), JsonSerializer.Serialize(supplier));
 
-        var mockConfig = new Mock<IConfiguration>();
-        mockConfig.Setup(c => c["DataPath"]).Returns(_testDataDir);
-
-        var newRepo = new SupplierRepository(_writer, mockConfig.Object);
+        var newRepo = new SupplierRepository(_writer, Config);
         newRepo.LoadFromDisk();
 
         var loaded = newRepo.GetById("sup-disk-loaded");
         Assert.NotNull(loaded);
         Assert.Equal("Disk Supplier", loaded.Name);
+    }
+
+    [Fact]
+    public void Search_FiltersAndLimitsCorrectly()
+    {
+        var s1 = new Supplier { Id = "s-1", Info = new ClientInfo { BusinessName = "Acme Tools" } };
+        var s2 = new Supplier { Id = "s-2", Info = new ClientInfo { BusinessName = "Acme Supplies" } };
+        var s3 = new Supplier { Id = "s-3", Info = new ClientInfo { BusinessName = "Beta Hardware" } };
+
+        _repo.Save(s1);
+        _repo.Save(s2);
+        _repo.Save(s3);
+
+        var matchAcme = _repo.Search("acme");
+        Assert.Equal(2, matchAcme.Count);
+        Assert.All(matchAcme, s => Assert.Contains("Acme", s.Name));
+
+        var limit1 = _repo.Search("acme", maxResults: 1);
+        Assert.Single(limit1);
+
+        var emptyQuery = _repo.Search(null);
+        Assert.Equal(3, emptyQuery.Count);
+
+        var noMatch = _repo.Search("Nonexistent");
+        Assert.Empty(noMatch);
     }
 }

@@ -10,6 +10,7 @@ using Microsoft.Extensions.Logging;
 using Moq;
 using Spokes_Server.Aggregate;
 using Spokes_Server.Controllers;
+using Spokes_Server.Core.Helpers;
 
 namespace Spokes_Server.Tests.Controllers;
 
@@ -32,7 +33,7 @@ public class PublicBrandingControllerTests : TestDataTestBase
         services.AddSingleton<IConfiguration>(mockConfig.Object);
 
         services.AddLogging(builder => builder.AddConsole());
-        services.AddSingleton<Spokes_Server.Core.Services.Core.EncryptionService>();
+        services.AddSingleton<EncryptionService>();
         services.AddSpokesDatabase();
 
         _serviceProvider = services.BuildServiceProvider();
@@ -46,7 +47,7 @@ public class PublicBrandingControllerTests : TestDataTestBase
         var mockEnv = new Mock<IWebHostEnvironment>();
         mockEnv.Setup(e => e.WebRootPath).Returns(_webRootPath);
 
-        _controller = new PublicBrandingController(_db, mockEnv.Object)
+        _controller = new PublicBrandingController(_db.CoreContext, mockEnv.Object)
         {
             ControllerContext = new ControllerContext
             {
@@ -63,8 +64,7 @@ public class PublicBrandingControllerTests : TestDataTestBase
             try
             {
                 Directory.Delete(_webRootPath, true);
-            }
-            catch { }
+            } catch (Exception ex) { System.Diagnostics.Debug.WriteLine(ex.Message); }
         }
         base.Dispose();
     }
@@ -87,7 +87,9 @@ public class PublicBrandingControllerTests : TestDataTestBase
         var result = _controller.GetLogo(token);
 
         // Assert
-        Assert.IsType<UnauthorizedResult>(result);
+        var unauthorized = Assert.IsType<UnauthorizedObjectResult>(result);
+        var payload = Assert.IsType<SpokesResult>(unauthorized.Value);
+        Assert.False(payload.IsSuccess);
     }
 
     [Theory]
@@ -105,7 +107,9 @@ public class PublicBrandingControllerTests : TestDataTestBase
         var result = _controller.GetLogo(token);
 
         // Assert
-        Assert.IsType<UnauthorizedResult>(result);
+        var unauthorizedResult = Assert.IsType<UnauthorizedObjectResult>(result);
+        var payloadResult = Assert.IsType<SpokesResult>(unauthorizedResult.Value);
+        Assert.False(payloadResult.IsSuccess);
     }
 
     [Fact]
@@ -140,7 +144,9 @@ public class PublicBrandingControllerTests : TestDataTestBase
         var result = _controller.GetIcon(token);
 
         // Assert
-        Assert.IsType<UnauthorizedResult>(result);
+        var unauthorized = Assert.IsType<UnauthorizedObjectResult>(result);
+        var payload = Assert.IsType<SpokesResult>(unauthorized.Value);
+        Assert.False(payload.IsSuccess);
     }
 
     [Theory]
@@ -157,7 +163,9 @@ public class PublicBrandingControllerTests : TestDataTestBase
         var result = _controller.GetIcon(token);
 
         // Assert
-        Assert.IsType<UnauthorizedResult>(result);
+        var unauthorized = Assert.IsType<UnauthorizedObjectResult>(result);
+        var payload = Assert.IsType<SpokesResult>(unauthorized.Value);
+        Assert.False(payload.IsSuccess);
     }
 
     [Fact]

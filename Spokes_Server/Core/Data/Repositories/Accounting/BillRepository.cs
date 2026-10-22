@@ -16,7 +16,7 @@ public class BillRepository : JsonRepository<Bill>
         GetAll().Where(b => b.PurchaseOrderId == poId).ToList();
 
     public List<Bill> GetUnpaid() =>
-        GetAll().Where(b => b.Status != "Paid" && b.Status != "Void").ToList();
+        GetAll().Where(b => b.Status != BillStatus.Paid && b.Status != BillStatus.Void).ToList();
 }
 
 

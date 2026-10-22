@@ -1,0 +1,388 @@
+@using System.IO
+@using Spokes_Server.Aggregate
+@using Spokes_Server.Core.Configuration
+@using Spokes_Server.Core.Services.Accounting.Export
+@inject Database Db
+@inject ISage50ExportService SageExportService
+@inject ISnackbar Snackbar
+
+<MudDialog>
+    <DialogContent>
+        <MudText Typo="Typo.body2" Class="mb-3 text-muted">
+            @BizLoc["Configure how Spokes transactions map to your Sage 50 Canadian Edition Chart of Accounts, tax authorities, and customer/vendor records."]
+        </MudText>
+
+        <MudTabs Elevation="0" Rounded="true" ApplyEffectsToContainer="true" TabPanelsClass="pt-3">
+            <!-- TAB 1: GL & TAX SETUP -->
+            <MudTabPanel Text="@BizLoc["GL & Tax Setup"]" Icon="@Icons.Material.Filled.AccountBalance">
+                <MudForm @ref="_form">
+                    <MudGrid Spacing="2">
+                        <MudItem xs="12" sm="4">
+                            <MudSelect T="string" @bind-Value="Config.VersionHeader" Label="@BizLoc["Sage 50 Version Code"]" HelperText="@BizLoc["12001 is universal for Sage 50 Canada"]">
+                                <MudSelectItem Value="@("12001")">12001 (Universal Sage 50 CA)</MudSelectItem>
+                                <MudSelectItem Value="@("32101")">32101 (Sage 50 2025)</MudSelectItem>
+                                <MudSelectItem Value="@("33002")">33002 (Sage 50 2026)</MudSelectItem>
+                            </MudSelect>
+                        </MudItem>
+                        <MudItem xs="12" sm="4">
+                            <MudTextField @bind-Value="Config.CountryCode" Label="@BizLoc["Country Code"]" ReadOnly="true" HelperText="@BizLoc["1 = Canada"]" />
+                        </MudItem>
+                        <MudItem xs="12" sm="4" Class="d-flex align-center">
+                            <MudSwitch T="bool" @bind-Value="Config.IncludeNewCustomersAndVendorsInImp" Color="Color.Primary"
+                                       Label="@BizLoc["Include <customers> & <vendors> blocks in .imp"]" />
+                        </MudItem>
+
+                        <MudItem xs="12">
+                            <MudDivider Class="my-1" />
+                            <MudText Typo="Typo.subtitle2" Color="Color.Primary">@BizLoc["Control Accounts & Default GL Accounts"]</MudText>
+                        </MudItem>
+
+                        <MudItem xs="12" sm="4">
+                            <MudTextField @bind-Value="Config.AccountsReceivableGl" Label="@BizLoc["Accounts Receivable (A/R)"]" Required="true" HelperText="e.g. 1200" />
+                        </MudItem>
+                        <MudItem xs="12" sm="4">
+                            <MudTextField @bind-Value="Config.AccountsPayableGl" Label="@BizLoc["Accounts Payable (A/P)"]" Required="true" HelperText="e.g. 2100" />
+                        </MudItem>
+                        <MudItem xs="12" sm="4">
+                            <MudTextField @bind-Value="Config.DefaultSalesRevenueGl" Label="@BizLoc["Default Sales Revenue GL"]" Required="true" HelperText="e.g. 4100" />
+                        </MudItem>
+
+                        <MudItem xs="12" sm="4">
+                            <MudTextField @bind-Value="Config.DefaultExpenseGl" Label="@BizLoc["Default Purchase / COGS GL"]" Required="true" HelperText="e.g. 5000" />
+                        </MudItem>
+                        <MudItem xs="12" sm="4">
+                            <MudTextField @bind-Value="Config.DefaultRecurringExpenseGl" Label="@BizLoc["Default Recurring Bills GL"]" Required="true" HelperText="e.g. 5600" />
+                        </MudItem>
+                        <MudItem xs="12" sm="4">
+                            <MudTextField @bind-Value="Config.DefaultEmployeeExpenseGl" Label="@BizLoc["Default Employee Expenses GL"]" Required="true" HelperText="e.g. 5750" />
+                        </MudItem>
+
+                        <MudItem xs="12" sm="4">
+                            <MudTextField @bind-Value="Config.DefaultKilometrageGl" Label="@BizLoc["Default Kilometrage GL"]" Required="true" HelperText="e.g. 5755" />
+                        </MudItem>
+                        <MudItem xs="12" sm="4">
+                            <MudTextField @bind-Value="Config.DefaultCommissionGl" Label="@BizLoc["Default Commissions GL"]" Required="true" HelperText="e.g. 5800" />
+                        </MudItem>
+
+                        <MudItem xs="12">
+                            <MudDivider Class="my-1" />
+                            <MudText Typo="Typo.subtitle2" Color="Color.Primary">@BizLoc["Sage 50 Service Item Codes (Detail Line Field 1)"]</MudText>
+                        </MudItem>
+
+                        <MudItem xs="12" sm="6">
+                            <MudTextField @bind-Value="Config.DefaultSalesItemCode" Label="@BizLoc["Default Sales Item / Service Code"]"
+                                          HelperText="@BizLoc["Sage 50 Inventory/Service Item code for sales lines (falls back to Revenue GL if blank)"]" />
+                        </MudItem>
+                        <MudItem xs="12" sm="6">
+                            <MudTextField @bind-Value="Config.DefaultPurchaseItemCode" Label="@BizLoc["Default Purchase Item / Service Code"]"
+                                          HelperText="@BizLoc["Sage 50 Inventory/Service Item code for purchase lines (falls back to Expense GL if blank)"]" />
+                        </MudItem>
+
+                        <MudItem xs="12">
+                            <MudDivider Class="my-1" />
+                            <MudText Typo="Typo.subtitle2" Color="Color.Primary">@BizLoc["Quebec Tax Authorities (TPS & TVQ)"]</MudText>
+                        </MudItem>
+
+                        <MudItem xs="12" sm="4">
+                            <MudTextField @bind-Value="Config.CombinedTaxCode" Label="@BizLoc["Combined Tax Code (QC)"]" Required="true" HelperText="e.g. Q (TPS+TVQ)" />
+                        </MudItem>
+                        <MudItem xs="12" sm="4">
+                            <MudTextField @bind-Value="Config.TpsTaxCode" Label="@BizLoc["TPS / GST Tax Authority Name"]" Required="true" HelperText="e.g. TPS or GST" />
+                        </MudItem>
+                        <MudItem xs="12" sm="4">
+                            <MudTextField @bind-Value="Config.TvqTaxCode" Label="@BizLoc["TVQ / QST Tax Authority Name"]" Required="true" HelperText="e.g. TVQ or QST" />
+                        </MudItem>
+
+                        <MudItem xs="12" sm="6">
+                            <MudTextField @bind-Value="Config.TpsTaxAccount" Label="@BizLoc["TPS / GST GL Account"]" Required="true" HelperText="e.g. 2210" />
+                        </MudItem>
+                        <MudItem xs="12" sm="6">
+                            <MudTextField @bind-Value="Config.TvqTaxAccount" Label="@BizLoc["TVQ / QST GL Account"]" Required="true" HelperText="e.g. 2220" />
+                        </MudItem>
+                    </MudGrid>
+                </MudForm>
+            </MudTabPanel>
+
+            <!-- TAB 2: SAGE 50 BASELINE IMPORT -->
+            <MudTabPanel Text="@BizLoc["Sage 50 Baseline Import"]" Icon="@Icons.Material.Filled.UploadFile">
+                <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true" Class="mb-3">
+                    @BizLoc["In Sage 50 Canadian Edition, use File > Import/Export > Export Records to export your Customers, Vendors, Chart of Accounts, or Inventory & Services (.csv, .txt, or .imp), then upload them here to establish your baseline."]
+                </MudAlert>
+
+                <div class="d-flex align-center justify-space-between flex-wrap gap-2 mb-3">
+                    <MudCheckBox T="bool" @bind-Value="_syncVendorsToSuppliers" Color="Color.Primary" Dense="true"
+                                 Label="@BizLoc["Automatically create/update Spokes Suppliers when importing Sage Vendors"]" />
+
+                    <MudButton Variant="Variant.Outlined" Color="Color.Secondary" Size="Size.Small"
+                               StartIcon="@Icons.Material.Filled.AutoFixHigh" OnClick="RunAutoMap">
+                        @BizLoc["Auto-Match Spokes Names to Baseline"]
+                    </MudButton>
+                </div>
+
+                <MudGrid Spacing="2" Class="mb-4">
+                    <MudItem xs="12" sm="6" md="3">
+                        <MudPaper Outlined="true" Class="pa-3 d-flex flex-column justify-space-between h-100">
+                            <div>
+                                <MudText Typo="Typo.subtitle2">@BizLoc["Sage Customers"]</MudText>
+                                <MudText Typo="Typo.h5" Color="Color.Primary">@Config.ImportedCustomers.Count</MudText>
+                            </div>
+                            <MudButton HtmlTag="label" Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small"
+                                       StartIcon="@Icons.Material.Filled.Upload" Class="mt-2">
+                                @BizLoc["Upload Customers"]
+                                <InputFile OnChange="@HandleBaselineUpload" accept=".csv,.txt,.imp" hidden />
+                            </MudButton>
+                        </MudPaper>
+                    </MudItem>
+
+                    <MudItem xs="12" sm="6" md="3">
+                        <MudPaper Outlined="true" Class="pa-3 d-flex flex-column justify-space-between h-100">
+                            <div>
+                                <MudText Typo="Typo.subtitle2">@BizLoc["Sage Vendors"]</MudText>
+                                <MudText Typo="Typo.h5" Color="Color.Primary">@Config.ImportedVendors.Count</MudText>
+                            </div>
+                            <MudButton HtmlTag="label" Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small"
+                                       StartIcon="@Icons.Material.Filled.Upload" Class="mt-2">
+                                @BizLoc["Upload Vendors"]
+                                <InputFile OnChange="@HandleBaselineUpload" accept=".csv,.txt,.imp" hidden />
+                            </MudButton>
+                        </MudPaper>
+                    </MudItem>
+
+                    <MudItem xs="12" sm="6" md="3">
+                        <MudPaper Outlined="true" Class="pa-3 d-flex flex-column justify-space-between h-100">
+                            <div>
+                                <MudText Typo="Typo.subtitle2">@BizLoc["Chart of Accounts"]</MudText>
+                                <MudText Typo="Typo.h5" Color="Color.Primary">@Config.ImportedAccounts.Count</MudText>
+                            </div>
+                            <MudButton HtmlTag="label" Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small"
+                                       StartIcon="@Icons.Material.Filled.Upload" Class="mt-2">
+                                @BizLoc["Upload Accounts"]
+                                <InputFile OnChange="@HandleBaselineUpload" accept=".csv,.txt,.imp" hidden />
+                            </MudButton>
+                        </MudPaper>
+                    </MudItem>
+
+                    <MudItem xs="12" sm="6" md="3">
+                        <MudPaper Outlined="true" Class="pa-3 d-flex flex-column justify-space-between h-100">
+                            <div>
+                                <MudText Typo="Typo.subtitle2">@BizLoc["Inventory & Services"]</MudText>
+                                <MudText Typo="Typo.h5" Color="Color.Primary">@Config.ImportedServiceItems.Count</MudText>
+                            </div>
+                            <MudButton HtmlTag="label" Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small"
+                                       StartIcon="@Icons.Material.Filled.Upload" Class="mt-2">
+                                @BizLoc["Upload Items"]
+                                <InputFile OnChange="@HandleBaselineUpload" accept=".csv,.txt,.imp" hidden />
+                            </MudButton>
+                        </MudPaper>
+                    </MudItem>
+                </MudGrid>
+
+                @if (Config.ImportedAccounts.Count > 0)
+                {
+                    <MudText Typo="Typo.subtitle2" Class="mb-1">@BizLoc["Imported GL Accounts"] (@Config.ImportedAccounts.Count)</MudText>
+                    <MudTable Items="@Config.ImportedAccounts.Take(50)" Dense="true" Hover="true" Outlined="true" Elevation="0" Class="mb-3">
+                        <HeaderContent>
+                            <MudTh>@BizLoc["Account #"]</MudTh>
+                            <MudTh>@BizLoc["Name"]</MudTh>
+                        </HeaderContent>
+                        <RowTemplate>
+                            <MudTd><b>@context.AccountNumber</b></MudTd>
+                            <MudTd>@context.AccountName</MudTd>
+                        </RowTemplate>
+                    </MudTable>
+                }
+            </MudTabPanel>
+
+            <!-- TAB 3: ENTITY MAPPINGS -->
+            <MudTabPanel Text="@BizLoc["Entity Mappings"]" Icon="@Icons.Material.Filled.CompareArrows">
+                <MudText Typo="Typo.body2" Class="mb-3 text-muted">
+                    @BizLoc["Map Spokes Client and Supplier names to their exact 35-character Sage 50 names so imported transactions attach to existing Sage records."]
+                </MudText>
+
+                <MudGrid Spacing="3">
+                    <MudItem xs="12" md="6">
+                        <MudText Typo="Typo.subtitle2" Color="Color.Primary" Class="mb-2">@BizLoc["Client -> Sage Customer Mappings"]</MudText>
+                        <MudTable Items="@_spokesClientNames" Dense="true" Hover="true" Outlined="true" Elevation="0">
+                            <HeaderContent>
+                                <MudTh>@BizLoc["Spokes Client"]</MudTh>
+                                <MudTh>@BizLoc["Sage 50 Customer Name"]</MudTh>
+                            </HeaderContent>
+                            <RowTemplate Context="clientName">
+                                <MudTd>@clientName</MudTd>
+                                <MudTd>
+                                    <MudTextField T="string" Value="@GetCustomerMapping(clientName)"
+                                                  ValueChanged="@(val => SetCustomerMapping(clientName, val))"
+                                                  Placeholder="@clientName" Margin="Margin.Dense" Underline="false" />
+                                </MudTd>
+                            </RowTemplate>
+                            <NoRecordsContent>
+                                <div class="pa-2 text-muted">@BizLoc["No clients found."]</div>
+                            </NoRecordsContent>
+                        </MudTable>
+                    </MudItem>
+
+                    <MudItem xs="12" md="6">
+                        <MudText Typo="Typo.subtitle2" Color="Color.Primary" Class="mb-2">@BizLoc["Supplier / Payee -> Sage Vendor Mappings"]</MudText>
+                        <MudTable Items="@_spokesVendorNames" Dense="true" Hover="true" Outlined="true" Elevation="0">
+                            <HeaderContent>
+                                <MudTh>@BizLoc["Spokes Supplier / Payee"]</MudTh>
+                                <MudTh>@BizLoc["Sage 50 Vendor Name"]</MudTh>
+                            </HeaderContent>
+                            <RowTemplate Context="vendorName">
+                                <MudTd>@vendorName</MudTd>
+                                <MudTd>
+                                    <MudTextField T="string" Value="@GetVendorMapping(vendorName)"
+                                                  ValueChanged="@(val => SetVendorMapping(vendorName, val))"
+                                                  Placeholder="@vendorName" Margin="Margin.Dense" Underline="false" />
+                                </MudTd>
+                            </RowTemplate>
+                            <NoRecordsContent>
+                                <div class="pa-2 text-muted">@BizLoc["No suppliers or payees found."]</div>
+                            </NoRecordsContent>
+                        </MudTable>
+                    </MudItem>
+                </MudGrid>
+            </MudTabPanel>
+        </MudTabs>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">@Loc["Cancel"]</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="Save">@BizLoc["Save Settings"]</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
+
+    private MudForm? _form;
+    private Sage50ExportConfig Config = new();
+    private bool _syncVendorsToSuppliers = true;
+    private List<string> _spokesClientNames = [];
+    private List<string> _spokesVendorNames = [];
+
+    protected override void OnInitialized()
+    {
+        var current = Db.CompanyProfile.GetAccounting().SageSettings ?? new Sage50ExportConfig();
+        Config = current.Clone();
+        LoadSpokesEntityLists();
+    }
+
+    private void LoadSpokesEntityLists()
+    {
+        var clients = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var p in Db.Projects.GetAll())
+        {
+            if (!string.IsNullOrWhiteSpace(p.Client?.BusinessName))
+                clients.Add(p.Client.BusinessName.Trim());
+        }
+        foreach (var g in Db.ProjectGroups.GetAll())
+        {
+            if (!string.IsNullOrWhiteSpace(g.Client?.BusinessName))
+                clients.Add(g.Client.BusinessName.Trim());
+        }
+        _spokesClientNames = clients.OrderBy(c => c).ToList();
+
+        var vendors = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var s in Db.Suppliers.GetAll())
+        {
+            if (!string.IsNullOrWhiteSpace(s.ContactInfo.BusinessName))
+                vendors.Add(s.ContactInfo.BusinessName.Trim());
+        }
+        foreach (var b in Db.Bills.GetAll())
+        {
+            if (!string.IsNullOrWhiteSpace(b.SupplierName))
+                vendors.Add(b.SupplierName.Trim());
+        }
+        foreach (var r in Db.RecurringExpenses.GetAll().Where(e => !e.IsEstimate))
+        {
+            var vName = !string.IsNullOrWhiteSpace(r.Supplier) ? r.Supplier.Trim() : r.Name.Trim();
+            if (!string.IsNullOrWhiteSpace(vName))
+                vendors.Add(vName);
+        }
+        foreach (var er in Db.ExpenseReports.GetAll())
+        {
+            if (!string.IsNullOrWhiteSpace(er.EmployeeName))
+                vendors.Add(er.EmployeeName.Trim());
+        }
+        _spokesVendorNames = vendors.OrderBy(v => v).ToList();
+    }
+
+    private string GetCustomerMapping(string clientName)
+    {
+        return Config.CustomerNameMappings.TryGetValue(clientName, out var mapped) ? mapped : "";
+    }
+
+    private void SetCustomerMapping(string clientName, string? sageName)
+    {
+        if (string.IsNullOrWhiteSpace(sageName))
+            Config.CustomerNameMappings.Remove(clientName);
+        else
+            Config.CustomerNameMappings[clientName] = sageName.Trim();
+    }
+
+    private string GetVendorMapping(string vendorName)
+    {
+        return Config.VendorNameMappings.TryGetValue(vendorName, out var mapped) ? mapped : "";
+    }
+
+    private void SetVendorMapping(string vendorName, string? sageName)
+    {
+        if (string.IsNullOrWhiteSpace(sageName))
+            Config.VendorNameMappings.Remove(vendorName);
+        else
+            Config.VendorNameMappings[vendorName] = sageName.Trim();
+    }
+
+    private async Task HandleBaselineUpload(InputFileChangeEventArgs e)
+    {
+        var file = e.File;
+        if (file == null) return;
+
+        try
+        {
+            await using var stream = file.OpenReadStream(maxAllowedSize: 10 * 1024 * 1024);
+            using var ms = new MemoryStream();
+            await stream.CopyToAsync(ms);
+            var bytes = ms.ToArray();
+
+            var summary = SageExportService.ImportSageBaselineBytes(bytes, Config, _syncVendorsToSuppliers);
+            var totalImported = summary.CustomersImported + summary.VendorsImported + summary.AccountsImported + summary.ServiceItemsImported;
+            Snackbar.Add($"Imported {totalImported} record(s); auto-matched {summary.AutoMappedEntities} name(s).", Severity.Success);
+            LoadSpokesEntityLists();
+            StateHasChanged();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Import failed: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private void RunAutoMap()
+    {
+        var mappedCount = SageExportService.AutoMapEntitiesToBaseline(Config);
+        Snackbar.Add($"Auto-matched {mappedCount} entity name(s).", Severity.Info);
+        StateHasChanged();
+    }
+
+    private async Task Save()
+    {
+        if (_form != null)
+        {
+            await _form.ValidateAsync();
+            if (!_form.IsValid)
+            {
+                Snackbar.Add(BizLoc["Please fill in all required GL and tax settings."].Value, Severity.Warning);
+                return;
+            }
+        }
+
+        var profile = Db.CompanyProfile.Get();
+        profile.Accounting.SageSettings = Config;
+        Db.CompanyProfile.Save(profile);
+
+        Snackbar.Add(BizLoc["Sage 50 export settings saved"].Value, Severity.Success);
+        MudDialog.Close(DialogResult.Ok(Config));
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+}

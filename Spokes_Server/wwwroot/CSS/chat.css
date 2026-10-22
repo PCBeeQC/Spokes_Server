@@ -1,0 +1,349 @@
+/* ═══ Chat feature styles ══════════════════════════════════════════════════
+   CSS for chat components rendered once per list item (messages, previews, mentions).
+   Do not put inline style blocks in such components: Blazor re-sends them over the circuit
+   and re-inserts them into the DOM for every instance. Linked globally from App.razor. */
+
+/* ─── MessageBubble ─────────────────────────────────────────────── */
+/* ─── Reply Line & Snippet ─── */
+.reply-preview-row {
+    position: relative;
+    width: 100%;
+    padding-left: 64px; /* Align with message text (8px + 40px avatar + 16px gap) */
+    padding-top: 2px;
+    padding-bottom: 2px;
+    display: flex;
+    font-family: inherit;
+    align-items: center;
+    gap: 4px;
+    cursor: pointer;
+}
+
+.reply-spine {
+    position: absolute;
+    left: 28px; /* Center of the main message avatar (8px padding + 20px half avatar) */
+    top: 50%;
+    width: 30px;
+    border-left: 2px solid var(--mud-palette-action-disabled);
+    border-top: 2px solid var(--mud-palette-action-disabled);
+    border-top-left-radius: 6px;
+    box-sizing: border-box;
+    pointer-events: none;
+    transition: border-color 0.1s;
+}
+
+.reply-preview-row:hover .reply-spine {
+    border-color: var(--mud-palette-primary);
+}
+
+.reply-text {
+    color: var(--mud-palette-text-primary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 0.75rem;
+    max-width: calc(100% - 150px);
+    opacity: 0.9;
+}
+
+/* ─── Desktop: actions float right, hidden until hover ─── */
+.message-content-wrapper {
+    display: flex;
+    flex-direction: row;
+    flex-grow: 1;
+    min-width: 0;
+}
+
+.message-row {
+    border-radius: 4px;
+    transition: background-color 0.1s ease-in-out;
+}
+
+.message-row:hover {
+    background-color: var(--mud-palette-action-default-hover); /* Fallback */
+    background-color: color-mix(in srgb, var(--mud-palette-text-primary) 6%, transparent);
+}
+
+/* Right side blur overlay on hover */
+.message-row::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    right: 0;
+    width: 100%;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.15s ease-in-out;
+    z-index: 5;
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    
+    /* Elliptical radial gradient ensures it fades to the left AND fades to the top/bottom */
+        mask-image: radial-gradient(ellipse 175px 50px at right bottom, black 85%, transparent 175%);
+        -webkit-mask-image: radial-gradient(ellipse 175px 50px at right bottom, black 85%, transparent 175%);
+    
+    /* Very subtle tint to improve button contrast */
+        /* background: radial-gradient(ellipse 250px 70px at right bottom, color-mix(in srgb, var(--mud-palette-background) 25%, transparent) 25%, transparent 175%); */
+    
+    /* Match container corners */
+    border-top-right-radius: 4px;
+    border-bottom-right-radius: 4px;
+}
+
+.message-row:hover::after {
+    opacity: 1;
+}
+
+.message-actions-stack {
+    position: absolute;
+    right: 8px;
+    top: auto;
+    /* Centers mathematically (shifted up 4px from true center), but caps at 8px from the bottom on tall messages */
+    bottom: min(calc(50% - 14px), 8px);
+    margin: 0;
+    height: fit-content;
+    z-index: 10;
+    display: flex;
+    align-items: center;
+}
+
+.message-row .message-actions {
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.1s ease-in-out;
+    flex-shrink: 0;
+}
+
+.message-row:hover .message-actions,
+.message-actions.force-visible {
+    opacity: 1;
+    pointer-events: auto;
+}
+
+.message-row .message-read-receipts {
+    transition: opacity 0.1s ease-in-out;
+    opacity: 1;
+}
+@media (min-width: 960px) {
+    .message-row:hover .message-read-receipts {
+        opacity: 0;
+        pointer-events: none;
+    }
+}
+
+/* Show hover timestamp on grouped messages */
+.message-row:hover .message-hover-time {
+    opacity: 1 !important;
+}
+
+/* ─── Mobile: hide inline actions (long-press bottom sheet handles them) ─── */
+@media (max-width: 959.98px) {
+    .message-row .message-actions {
+        display: none !important;
+    }
+    .message-row::after {
+        display: none !important;
+    }
+    .message-content-wrapper.has-media {
+        flex-direction: column;
+    }
+
+    .message-content-wrapper.has-media .message-actions-stack {
+        align-self: flex-end;
+        margin-top: 4px;
+    }
+}
+
+/* Mention styles */
+.chat-markdown .mention {
+    background-color: rgba(var(--mud-palette-primary-rgb), 0.15);
+    color: var(--mud-palette-primary);
+    padding: 0 0.2em;
+    border-radius: 3px;
+    font-weight: 600;
+}
+
+.chat-markdown .mention-self {
+    background-color: rgba(255, 193, 7, 0.25);
+    color: #b8860b;
+}
+
+.chat-markdown .mention-special {
+    background-color: rgba(255, 152, 0, 0.2);
+    color: #e65100;
+    font-weight: 700;
+}
+
+.chat-markdown img {
+    max-width: 100%;
+    max-height: 500px;
+    width: auto;
+    height: auto;
+    border-radius: 8px;
+    display: block;
+    object-fit: contain;
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
+}
+
+/* Markdown styles */
+.chat-markdown p {
+    margin: 0;
+    color: var(--mud-palette-text-primary);
+    font-size: 0.875rem;
+    line-height: 1.43;
+    word-break: break-word;
+}
+
+.chat-markdown strong {
+    font-weight: 700;
+}
+
+.chat-markdown em {
+    font-style: italic;
+}
+
+.chat-markdown del {
+    text-decoration: line-through;
+}
+
+.chat-markdown code {
+    background-color: var(--mud-palette-background-grey);
+    padding: 0.15em 0.4em;
+    border-radius: 4px;
+    font-size: 0.85em;
+    font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+}
+
+.chat-markdown pre {
+    background-color: #1e1e1e !important;
+    border: 1px solid var(--mud-palette-divider);
+    border-radius: 6px;
+    padding: 0.75em 1em;
+    margin: 0;
+    overflow-x: auto;
+}
+
+.chat-markdown pre code {
+    background: none;
+    padding: 0;
+    border-radius: 0;
+    font-size: 0.85em;
+    color: #d4d4d4; /* Default dark mode text color for un-highlighted code */
+}
+
+.code-block-wrapper {
+    position: relative;
+    margin: 0.5em 0;
+    border-radius: 6px;
+    overflow: hidden;
+}
+
+.code-block-wrapper .copy-code-btn {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    background-color: rgba(255, 255, 255, 0.1);
+    color: #d4d4d4;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 4px;
+    padding: 4px 8px;
+    font-size: 0.75rem;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.2s, background-color 0.2s;
+    display: flex;
+    align-items: center;
+    z-index: 10;
+}
+
+.code-block-wrapper:hover .copy-code-btn {
+    opacity: 1;
+}
+
+.code-block-wrapper .copy-code-btn:hover {
+    background-color: rgba(255, 255, 255, 0.2);
+    color: #fff;
+}
+
+/* Syntax Highlighting Base Colors (ColorCode generates inline styles, but we ensure consistency) */
+.chat-markdown pre code span {
+    font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+}
+
+.chat-markdown blockquote {
+    border-left: 3px solid var(--mud-palette-primary);
+    margin: 0.5em 0;
+    padding: 0.25em 0.75em;
+    color: var(--mud-palette-text-secondary);
+}
+
+.chat-markdown a {
+    color: var(--mud-palette-primary);
+    text-decoration: none;
+}
+
+.chat-markdown a:hover {
+    text-decoration: underline;
+}
+
+.chat-markdown ul,
+.chat-markdown ol {
+    margin: 0.25em 0;
+    padding-left: 1.5em;
+}
+
+.chat-markdown table {
+    border-collapse: collapse;
+    margin: 0.5em 0;
+}
+
+.chat-markdown th,
+.chat-markdown td {
+    border: 1px solid var(--mud-palette-divider);
+    padding: 0.35em 0.75em;
+    font-size: 0.875rem;
+}
+
+.chat-markdown th {
+    background-color: var(--mud-palette-background-grey);
+    font-weight: 600;
+}
+.message-row .message-actions-stack .message-read-receipts {
+    opacity: 1;
+    transition: opacity 0s;
+    pointer-events: auto;
+}
+
+@media (min-width: 960px) {
+    .message-row:hover .message-actions-stack .message-read-receipts,
+    .message-actions-stack .message-read-receipts.force-hidden {
+        opacity: 0;
+        pointer-events: none;
+    }
+}
+
+.attachment-image .needs-fade {
+    opacity: 0;
+    transition: opacity 0.3s ease-in-out;
+}
+.attachment-image.is-loaded .needs-fade {
+    opacity: 1;
+}
+.attachment-image.is-loaded .attachment-skeleton {
+    display: none !important;
+}
+
+/* ─── LinkPreviewCard ───────────────────────────────────────────── */
+.link-preview-card:hover {
+    border-color: var(--mud-palette-primary) !important;
+}
+.yt-overlay:hover {
+    background: rgba(0,0,0,0.1) !important;
+}
+
+/* ─── EventMentionCard ──────────────────────────────────────────── */
+.attendee-row:hover {
+    background-color: var(--mud-palette-action-default-hover);
+}

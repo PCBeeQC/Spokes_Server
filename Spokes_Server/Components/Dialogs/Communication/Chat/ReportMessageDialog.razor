@@ -1,0 +1,43 @@
+<MudDialog>
+    <DialogContent>
+        <MudText Typo="Typo.body2" Class="mb-4">@Loc["Please select a reason for reporting this message."]</MudText>
+        <MudSelect T="string" @bind-Value="_reason" Label="@Loc["Reason"]" AnchorOrigin="Origin.BottomCenter" Variant="Variant.Outlined">
+            <MudSelectItem Value="@("Harassment or Bullying")">@Loc["Harassment or Bullying"]</MudSelectItem>
+            <MudSelectItem Value="@("Hate Speech")">@Loc["Hate Speech"]</MudSelectItem>
+            <MudSelectItem Value="@("Spam or Scams")">@Loc["Spam or Scams"]</MudSelectItem>
+            <MudSelectItem Value="@("Inappropriate Content")">@Loc["Inappropriate Content"]</MudSelectItem>
+            <MudSelectItem Value="@("Other")">@Loc["Other"]</MudSelectItem>
+        </MudSelect>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Close">@Loc["Close"]</MudButton>
+        <MudButton Color="Color.Error" Variant="Variant.Filled" OnClick="Submit" Disabled="@(string.IsNullOrEmpty(_reason))">@Loc["Report"]</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = null!;
+    
+    [Parameter]
+    public ChatMessage Message { get; set; } = null!;
+    
+    [Parameter]
+    public string SnapshotContent { get; set; } = string.Empty;
+
+    private string _reason = string.Empty;
+
+    private void Close() => MudDialog.Cancel();
+
+    private void Submit()
+    {
+        var result = new ReportedMessage
+        {
+            MessageId = Message.Id,
+            ReportedUserId = Message.SenderId,
+            Reason = _reason,
+            SnapshotContent = SnapshotContent,
+            Attachments = Message.Attachments.ToList()
+        };
+        MudDialog.Close(DialogResult.Ok(result));
+    }
+}

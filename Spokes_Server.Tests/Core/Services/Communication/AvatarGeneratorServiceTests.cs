@@ -95,7 +95,7 @@ public class AvatarGeneratorServiceTests
             {
                 if (Directory.Exists(tempDir))
                 {
-                    try { Directory.Delete(tempDir, true); } catch { }
+                    try { Directory.Delete(tempDir, true); } catch (Exception ex) { System.Diagnostics.Debug.WriteLine(ex.Message); }
                 }
             }
         }

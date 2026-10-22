@@ -1,52 +1,12 @@
-using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.Logging;
-using Moq;
-using Spokes_Server.Core.Data;
 using Spokes_Server.Core.Data.Repositories.HR;
 using Spokes_Server.Core.Models.HR;
+using Spokes_Server.Tests.Helpers;
 using Xunit;
 
 namespace Spokes_Server.Tests.Core.Data.Repositories.HR;
 
-public class CalendarEventRepositoryTests : IDisposable
+public class CalendarEventRepositoryTests : RepositoryTestFixture<CalendarEventRepository>
 {
-    private readonly string _testDataDir;
-    private readonly DiskPersistenceService _writer;
-    private readonly CalendarEventRepository _repo;
-
-    public CalendarEventRepositoryTests()
-    {
-        _testDataDir = Path.Combine(Path.GetTempPath(), $"Spokes_Test_CalEvents_{Guid.NewGuid()}");
-
-        var mockConfig = new Mock<IConfiguration>();
-        mockConfig.Setup(c => c["DataPath"]).Returns(_testDataDir);
-
-        var mockPersistenceLogger = new Mock<ILogger<DiskPersistenceService>>();
-        _writer = new DiskPersistenceService(mockPersistenceLogger.Object);
-
-        _repo = new CalendarEventRepository(_writer, mockConfig.Object);
-    }
-
-    public void Dispose()
-    {
-        if (Directory.Exists(_testDataDir))
-        {
-            try { Directory.Delete(_testDataDir, true); } catch (Exception ex) { Console.WriteLine($"Cleanup failed: {ex.Message}"); }
-        }
-        _writer.Dispose();
-    }
-
-    [Fact]
-    public void Constructor_WithNullDataPath_UsesDefaultPath()
-    {
-        var mockConfig = new Mock<IConfiguration>();
-        mockConfig.Setup(c => c["DataPath"]).Returns((string?)null);
-
-        var repo = new CalendarEventRepository(_writer, mockConfig.Object);
-
-        Assert.NotNull(repo);
-    }
-
     [Fact]
     public void Save_And_GetById_ReturnsEvent()
     {
@@ -201,10 +161,7 @@ public class CalendarEventRepositoryTests : IDisposable
         var filePath = Path.Combine(yearDir, "event_emp-loaded_disk-evt.json");
         File.WriteAllText(filePath, System.Text.Json.JsonSerializer.Serialize(evt));
 
-        var mockConfig = new Mock<IConfiguration>();
-        mockConfig.Setup(c => c["DataPath"]).Returns(_testDataDir);
-
-        var newRepo = new CalendarEventRepository(_writer, mockConfig.Object);
+        var newRepo = new CalendarEventRepository(_writer, Config);
         newRepo.LoadFromDisk();
 
         var loaded = newRepo.GetById("disk-evt");

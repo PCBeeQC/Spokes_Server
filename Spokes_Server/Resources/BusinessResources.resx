@@ -1,0 +1,1456 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<root>
+  <xsd:schema id="root" xmlns="" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:msdata="urn:schemas-microsoft-com:xml-msdata">
+    <xsd:import namespace="http://www.w3.org/XML/1998/namespace" />
+    <xsd:element name="root" msdata:IsDataSet="true">
+      <xsd:complexType>
+        <xsd:choice maxOccurs="unbounded">
+          <xsd:element name="metadata">
+            <xsd:complexType>
+              <xsd:sequence>
+                <xsd:element name="value" type="xsd:string" minOccurs="0" />
+              </xsd:sequence>
+              <xsd:attribute name="name" use="required" type="xsd:string" />
+              <xsd:attribute name="type" type="xsd:string" />
+              <xsd:attribute name="mimetype" type="xsd:string" />
+              <xsd:attribute ref="xml:space" />
+            </xsd:complexType>
+          </xsd:element>
+          <xsd:element name="assembly">
+            <xsd:complexType>
+              <xsd:attribute name="alias" type="xsd:string" />
+              <xsd:attribute name="name" type="xsd:string" />
+            </xsd:complexType>
+          </xsd:element>
+          <xsd:element name="data">
+            <xsd:complexType>
+              <xsd:sequence>
+                <xsd:element name="value" type="xsd:string" minOccurs="0" msdata:Ordinal="1" />
+                <xsd:element name="comment" type="xsd:string" minOccurs="0" msdata:Ordinal="2" />
+              </xsd:sequence>
+              <xsd:attribute name="name" use="required" type="xsd:string" msdata:Ordinal="0" />
+              <xsd:attribute name="type" type="xsd:string" msdata:Ordinal="3" />
+              <xsd:attribute name="mimetype" type="xsd:string" msdata:Ordinal="4" />
+              <xsd:attribute ref="xml:space" />
+            </xsd:complexType>
+          </xsd:element>
+          <xsd:element name="resheader">
+            <xsd:complexType>
+              <xsd:sequence>
+                <xsd:element name="value" type="xsd:string" minOccurs="0" msdata:Ordinal="1" />
+              </xsd:sequence>
+              <xsd:attribute name="name" use="required" type="xsd:string" />
+            </xsd:complexType>
+          </xsd:element>
+        </xsd:choice>
+      </xsd:complexType>
+    </xsd:element>
+  </xsd:schema>
+  <resheader name="resmimetype">
+    <value>text/microsoft-resx</value>
+  </resheader>
+  <resheader name="version">
+    <value>2.0</value>
+  </resheader>
+  <resheader name="reader">
+    <value>System.Resources.ResXResourceReader, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
+  </resheader>
+  <resheader name="writer">
+    <value>System.Resources.ResXResourceWriter, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
+  </resheader>
+  <!-- Business Actions & Navigation -->
+  <data name="New Project" xml:space="preserve">
+    <value>New Project</value>
+  </data>
+  <data name="Log Time" xml:space="preserve">
+    <value>Log Time</value>
+  </data>
+  <data name="New Expense" xml:space="preserve">
+    <value>New Expense</value>
+  </data>
+  <data name="Start Timer" xml:space="preserve">
+    <value>Start Timer</value>
+  </data>
+  <data name="Stop Timer" xml:space="preserve">
+    <value>Stop Timer</value>
+  </data>
+  <data name="PROJECTS" xml:space="preserve">
+    <value>PROJECTS</value>
+  </data>
+  <data name="Linked to Project" xml:space="preserve">
+    <value>Linked to Project</value>
+  </data>
+  <data name="Select Project" xml:space="preserve">
+    <value>Select Project</value>
+  </data>
+  <data name="Access will be determined by the Project's settings." xml:space="preserve">
+    <value>Access will be determined by the Project's settings.</value>
+  </data>
+  <data name="Org Chart" xml:space="preserve">
+    <value>Org Chart</value>
+  </data>
+  <data name="Document Templates" xml:space="preserve">
+    <value>Document Templates</value>
+  </data>
+  <data name="Project Statuses" xml:space="preserve">
+    <value>Project Statuses</value>
+  </data>
+  <data name="Email Server" xml:space="preserve">
+    <value>Email Server</value>
+  </data>
+  <data name="Timesheets" xml:space="preserve">
+    <value>Timesheets</value>
+  </data>
+  <!-- HR & Employee Details -->
+  <data name="HR Details" xml:space="preserve">
+    <value>HR Details</value>
+  </data>
+  <data name="Email Password" xml:space="preserve">
+    <value>Email Password</value>
+  </data>
+  <data name="New Email Password" xml:space="preserve">
+    <value>New Email Password</value>
+  </data>
+  <data name="Position / Title" xml:space="preserve">
+    <value>Position / Title</value>
+  </data>
+  <data name="Weekly Capacity (Hours)" xml:space="preserve">
+    <value>Weekly Capacity (Hours)</value>
+  </data>
+  <data name="Hire Date" xml:space="preserve">
+    <value>Hire Date</value>
+  </data>
+  <data name="Termination Date" xml:space="preserve">
+    <value>Termination Date</value>
+  </data>
+  <data name="Date of Birth" xml:space="preserve">
+    <value>Date of Birth</value>
+  </data>
+  <!-- Profile & User Settings -->
+  <data name="Document Signature" xml:space="preserve">
+    <value>Document Signature</value>
+  </data>
+  <data name="Upload Signature" xml:space="preserve">
+    <value>Upload Signature</value>
+  </data>
+  <data name="Professional Information" xml:space="preserve">
+    <value>Professional Information</value>
+  </data>
+  <data name="Personal Phone" xml:space="preserve">
+    <value>Personal Phone</value>
+  </data>
+  <data name="Chat Messages" xml:space="preserve">
+    <value>Chat Messages</value>
+  </data>
+  <data name="Emails" xml:space="preserve">
+    <value>Emails</value>
+  </data>
+  <data name="Add Schedule" xml:space="preserve">
+    <value>Add Schedule</value>
+  </data>
+  <data name="Define historical expected hours. Leave End Date empty for the current ongoing schedule." xml:space="preserve">
+    <value>Define historical expected hours. Leave End Date empty for the current ongoing schedule.</value>
+  </data>
+  <data name="Emergency Contact Name" xml:space="preserve">
+    <value>Emergency Contact Name</value>
+  </data>
+  <data name="Emergency Contact Phone" xml:space="preserve">
+    <value>Emergency Contact Phone</value>
+  </data>
+  <data name="Link to Project (Optional)" xml:space="preserve">
+    <value>Link to Project (Optional)</value>
+  </data>
+  <data name="No schedules defined. System will use Weekly Capacity fallback." xml:space="preserve">
+    <value>No schedules defined. System will use Weekly Capacity fallback.</value>
+  </data>
+  <data name="No signature uploaded. This is used for document blocks." xml:space="preserve">
+    <value>No signature uploaded. This is used for document blocks.</value>
+  </data>
+  <data name="Note" xml:space="preserve">
+    <value>Note</value>
+  </data>
+  <data name="Personal Email" xml:space="preserve">
+    <value>Personal Email</value>
+  </data>
+  <data name="Stops hour bank accumulation when set" xml:space="preserve">
+    <value>Stops hour bank accumulation when set</value>
+  </data>
+  <data name="Used as hour bank start date" xml:space="preserve">
+    <value>Used as hour bank start date</value>
+  </data>
+  <data name="Weekly Hours" xml:space="preserve">
+    <value>Weekly Hours</value>
+  </data>
+  <data name="Work Schedules" xml:space="preserve">
+    <value>Work Schedules</value>
+  </data>
+  <data name="Hours Spent" xml:space="preserve">
+    <value>Hours Spent</value>
+  </data>
+  <data name="Labor Summary" xml:space="preserve">
+    <value>Labor Summary</value>
+  </data>
+  <data name="No labor entries found for this project." xml:space="preserve">
+    <value>No labor entries found for this project.</value>
+  </data>
+  <data name="Overview of hours logged per task and total project labor to date." xml:space="preserve">
+    <value>Overview of hours logged per task and total project labor to date.</value>
+  </data>
+  <data name="Subtask" xml:space="preserve">
+    <value>Subtask</value>
+  </data>
+  <data name="Task" xml:space="preserve">
+    <value>Task</value>
+  </data>
+  <data name="Total" xml:space="preserve">
+    <value>Total</value>
+  </data>
+  <data name="Total Project Labor" xml:space="preserve">
+    <value>Total Project Labor</value>
+  </data>
+  <data name="Total Time" xml:space="preserve">
+    <value>Total Time</value>
+  </data>
+  <data name="Week" xml:space="preserve">
+    <value>Week</value>
+  </data>
+  <data name="Bill #{0} is currently recorded as Paid. Reopening will return it to Unpaid status so payment can be re-attempted, attach this reminder document, and mark the email as processed. Proceed?" xml:space="preserve">
+    <value>Bill #{0} is currently recorded as Paid. Reopening will return it to Unpaid status so payment can be re-attempted, attach this reminder document, and mark the email as processed. Proceed?</value>
+  </data>
+  <data name="Bill #{0} returned to Unpaid status. Email marked as dealt with." xml:space="preserve">
+    <value>Bill #{0} returned to Unpaid status. Email marked as dealt with.</value>
+  </data>
+  <data name="Reopen Bill" xml:space="preserve">
+    <value>Reopen Bill</value>
+  </data>
+  <data name="Reopen Bill (Payment Failed)" xml:space="preserve">
+    <value>Reopen Bill (Payment Failed)</value>
+  </data>
+  <data name="Reopen Bill for Failed Payment?" xml:space="preserve">
+    <value>Reopen Bill for Failed Payment?</value>
+  </data>
+  <data name="This bill was recorded as paid on {0}. If this document is a reminder because the previous payment failed, you can reopen the bill." xml:space="preserve">
+    <value>This bill was recorded as paid on {0}. If this document is a reminder because the previous payment failed, you can reopen the bill.</value>
+  </data>
+  <data name="{0} Bills Already Entered" xml:space="preserve">
+    <value>{0} Bills Already Entered</value>
+  </data>
+  <data name="{0} Draft Bills Created Automatically" xml:space="preserve">
+    <value>{0} Draft Bills Created Automatically</value>
+  </data>
+  <data name="{0} Drafts" xml:space="preserve">
+    <value>{0} Drafts</value>
+  </data>
+  <data name="{0} Entered" xml:space="preserve">
+    <value>{0} Entered</value>
+  </data>
+  <data name="+ Link PO" xml:space="preserve">
+    <value>+ Link PO</value>
+  </data>
+  <data name="1 Draft" xml:space="preserve">
+    <value>1 Draft</value>
+  </data>
+  <data name="1 Entered" xml:space="preserve">
+    <value>1 Entered</value>
+  </data>
+  <data name="A prior payment of {0} was detected on this invoice reminder and automatically recorded. Remaining balance due: {1}." xml:space="preserve">
+    <value>A prior payment of {0} was detected on this invoice reminder and automatically recorded. Remaining balance due: {1}.</value>
+  </data>
+  <data name="Action Required ({0})" xml:space="preserve">
+    <value>Action Required ({0})</value>
+  </data>
+  <data name="Active Ingestion" xml:space="preserve">
+    <value>Active Ingestion</value>
+  </data>
+  <data name="All ({0})" xml:space="preserve">
+    <value>All ({0})</value>
+  </data>
+  <data name="All Action Required" xml:space="preserve">
+    <value>All Action Required</value>
+  </data>
+  <data name="All Completed" xml:space="preserve">
+    <value>All Completed</value>
+  </data>
+  <data name="Already Entered" xml:space="preserve">
+    <value>Already Entered</value>
+  </data>
+  <data name="Amount" xml:space="preserve">
+    <value>Amount</value>
+  </data>
+  <data name="Amount Discrepancy:" xml:space="preserve">
+    <value>Amount Discrepancy:</value>
+  </data>
+  <data name="Approve" xml:space="preserve">
+    <value>Approve</value>
+  </data>
+  <data name="Approve &amp; Mark Dealt With" xml:space="preserve">
+    <value>Approve &amp; Mark Dealt With</value>
+  </data>
+  <data name="Approve All ({0})" xml:space="preserve">
+    <value>Approve All ({0})</value>
+  </data>
+  <data name="Are you sure you want to block '{0}'? All future emails from this domain will be ignored, and this email will be moved to '{1}'." xml:space="preserve">
+    <value>Are you sure you want to block '{0}'? All future emails from this domain will be ignored, and this email will be moved to '{1}'.</value>
+  </data>
+  <data name="Are you sure you want to delete this email? It will be moved to '{0}' on the mail server and its {1} unapproved draft bill(s) will be permanently deleted." xml:space="preserve">
+    <value>Are you sure you want to delete this email? It will be moved to '{0}' on the mail server and its {1} unapproved draft bill(s) will be permanently deleted.</value>
+  </data>
+  <data name="Are you sure you want to delete this email? It will be moved to '{0}' on the mail server." xml:space="preserve">
+    <value>Are you sure you want to delete this email? It will be moved to '{0}' on the mail server.</value>
+  </data>
+  <data name="Attach PDF" xml:space="preserve">
+    <value>Attach PDF</value>
+  </data>
+  <data name="Attachment" xml:space="preserve">
+    <value>Attachment</value>
+  </data>
+  <data name="Auto-Drafted" xml:space="preserve">
+    <value>Auto-Drafted</value>
+  </data>
+  <data name="Auto-drafted bill record could not be loaded or was deleted. You can re-evaluate this email." xml:space="preserve">
+    <value>Auto-drafted bill record could not be loaded or was deleted. You can re-evaluate this email.</value>
+  </data>
+  <data name="Bill Already Entered" xml:space="preserve">
+    <value>Bill Already Entered</value>
+  </data>
+  <data name="Bill for" xml:space="preserve">
+    <value>Bill for</value>
+  </data>
+  <data name="Bill has no PDF" xml:space="preserve">
+    <value>Bill has no PDF</value>
+  </data>
+  <data name="Block &amp; Delete Email" xml:space="preserve">
+    <value>Block &amp; Delete Email</value>
+  </data>
+  <data name="Block Sender Domain" xml:space="preserve">
+    <value>Block Sender Domain</value>
+  </data>
+  <data name="Block Sender Domain?" xml:space="preserve">
+    <value>Block Sender Domain?</value>
+  </data>
+  <data name="Central billing mailbox:" xml:space="preserve">
+    <value>Central billing mailbox:</value>
+  </data>
+  <data name="Company Bill Inbox" xml:space="preserve">
+    <value>Company Bill Inbox</value>
+  </data>
+  <data name="Company Billing Inbox is Not Configured" xml:space="preserve">
+    <value>Company Billing Inbox is Not Configured</value>
+  </data>
+  <data name="Completed ({0})" xml:space="preserve">
+    <value>Completed ({0})</value>
+  </data>
+  <data name="Compose Email" xml:space="preserve">
+    <value>Compose Email</value>
+  </data>
+  <data name="Configure and enable the billing mailbox in Inbox Settings to sync emails." xml:space="preserve">
+    <value>Configure and enable the billing mailbox in Inbox Settings to sync emails.</value>
+  </data>
+  <data name="Configure Mailbox" xml:space="preserve">
+    <value>Configure Mailbox</value>
+  </data>
+  <data name="Confirm All Matches &amp; Mark Dealt With" xml:space="preserve">
+    <value>Confirm All Matches &amp; Mark Dealt With</value>
+  </data>
+  <data name="Create Bill from Email" xml:space="preserve">
+    <value>Create Bill from Email</value>
+  </data>
+  <data name="Credit Note" xml:space="preserve">
+    <value>Credit Note</value>
+  </data>
+  <data name="Date:" xml:space="preserve">
+    <value>Date:</value>
+  </data>
+  <data name="Dealt With" xml:space="preserve">
+    <value>Dealt With</value>
+  </data>
+  <data name="Delete Billing Email?" xml:space="preserve">
+    <value>Delete Billing Email?</value>
+  </data>
+  <data name="Delete email" xml:space="preserve">
+    <value>Delete email</value>
+  </data>
+  <data name="Detected as duplicate, but the linked bill could not be loaded." xml:space="preserve">
+    <value>Detected as duplicate, but the linked bill could not be loaded.</value>
+  </data>
+  <data name="Diff" xml:space="preserve">
+    <value>Diff</value>
+  </data>
+  <data name="Dismissed — not considered an actionable supplier bill." xml:space="preserve">
+    <value>Dismissed — not considered an actionable supplier bill.</value>
+  </data>
+  <data name="Domain '{0}' added to ignored list and email deleted." xml:space="preserve">
+    <value>Domain '{0}' added to ignored list and email deleted.</value>
+  </data>
+  <data name="Draft Bill Anyway" xml:space="preserve">
+    <value>Draft Bill Anyway</value>
+  </data>
+  <data name="Draft Bill Created Automatically" xml:space="preserve">
+    <value>Draft Bill Created Automatically</value>
+  </data>
+  <data name="Draft Separate Bill Anyway" xml:space="preserve">
+    <value>Draft Separate Bill Anyway</value>
+  </data>
+  <data name="Due: {0}" xml:space="preserve">
+    <value>Due: {0}</value>
+  </data>
+  <data name="Edit Draft" xml:space="preserve">
+    <value>Edit Draft</value>
+  </data>
+  <data name="Email linked to bill #{0} and marked as dealt with!" xml:space="preserve">
+    <value>Email linked to bill #{0} and marked as dealt with!</value>
+  </data>
+  <data name="Email moved to '{0}' and draft bills cleaned up." xml:space="preserve">
+    <value>Email moved to '{0}' and draft bills cleaned up.</value>
+  </data>
+  <data name="Exact Match" xml:space="preserve">
+    <value>Exact Match</value>
+  </data>
+  <data name="Existing Bill in Spokes" xml:space="preserve">
+    <value>Existing Bill in Spokes</value>
+  </data>
+  <data name="Existing bill is {0}, but incoming document indicates {1}." xml:space="preserve">
+    <value>Existing bill is {0}, but incoming document indicates {1}.</value>
+  </data>
+  <data name="Field" xml:space="preserve">
+    <value>Field</value>
+  </data>
+  <data name="File:" xml:space="preserve">
+    <value>File:</value>
+  </data>
+  <data name="Has PDF" xml:space="preserve">
+    <value>Has PDF</value>
+  </data>
+  <data name="Inbox Settings" xml:space="preserve">
+    <value>Inbox Settings</value>
+  </data>
+  <data name="Incoming Document / Email" xml:space="preserve">
+    <value>Incoming Document / Email</value>
+  </data>
+  <data name="Incoming Email" xml:space="preserve">
+    <value>Incoming Email</value>
+  </data>
+  <data name="Incoming reminder indicates a payment of {0} that is not yet recorded on this bill." xml:space="preserve">
+    <value>Incoming reminder indicates a payment of {0} that is not yet recorded on this bill.</value>
+  </data>
+  <data name="Invoice #" xml:space="preserve">
+    <value>Invoice #</value>
+  </data>
+  <data name="Last checked:" xml:space="preserve">
+    <value>Last checked:</value>
+  </data>
+  <data name="Link Email to Existing Bill" xml:space="preserve">
+    <value>Link Email to Existing Bill</value>
+  </data>
+  <data name="Link Purchase Order" xml:space="preserve">
+    <value>Link Purchase Order</value>
+  </data>
+  <data name="Link to Existing Bill" xml:space="preserve">
+    <value>Link to Existing Bill</value>
+  </data>
+  <data name="Link to Selected Bill" xml:space="preserve">
+    <value>Link to Selected Bill</value>
+  </data>
+  <data name="Linked PO: {0}" xml:space="preserve">
+    <value>Linked PO: {0}</value>
+  </data>
+  <data name="Mark Dealt With" xml:space="preserve">
+    <value>Mark Dealt With</value>
+  </data>
+  <data name="Match" xml:space="preserve">
+    <value>Match</value>
+  </data>
+  <data name="Matched File:" xml:space="preserve">
+    <value>Matched File:</value>
+  </data>
+  <data name="Matched PO: {0}" xml:space="preserve">
+    <value>Matched PO: {0}</value>
+  </data>
+  <data name="Missing" xml:space="preserve">
+    <value>Missing</value>
+  </data>
+  <data name="Move to Processed Folder" xml:space="preserve">
+    <value>Move to Processed Folder</value>
+  </data>
+  <data name="No matching bills found." xml:space="preserve">
+    <value>No matching bills found.</value>
+  </data>
+  <data name="No open purchase orders found." xml:space="preserve">
+    <value>No open purchase orders found.</value>
+  </data>
+  <data name="No PDF in email" xml:space="preserve">
+    <value>No PDF in email</value>
+  </data>
+  <data name="No PDF on existing bill" xml:space="preserve">
+    <value>No PDF on existing bill</value>
+  </data>
+  <data name="None recorded" xml:space="preserve">
+    <value>None recorded</value>
+  </data>
+  <data name="Not Configured" xml:space="preserve">
+    <value>Not Configured</value>
+  </data>
+  <data name="Not detected" xml:space="preserve">
+    <value>Not detected</value>
+  </data>
+  <data name="Paid: {0}" xml:space="preserve">
+    <value>Paid: {0}</value>
+  </data>
+  <data name="Payment Receipt Detected" xml:space="preserve">
+    <value>Payment Receipt Detected</value>
+  </data>
+  <data name="PDF attached: {0}" xml:space="preserve">
+    <value>PDF attached: {0}</value>
+  </data>
+  <data name="PO Number" xml:space="preserve">
+    <value>PO Number</value>
+  </data>
+  <data name="Processed on {0}" xml:space="preserve">
+    <value>Processed on {0}</value>
+  </data>
+  <data name="Purchase Order #{0} linked to draft bill." xml:space="preserve">
+    <value>Purchase Order #{0} linked to draft bill.</value>
+  </data>
+  <data name="Purchase Order unlinked from draft bill." xml:space="preserve">
+    <value>Purchase Order unlinked from draft bill.</value>
+  </data>
+  <data name="Receipt" xml:space="preserve">
+    <value>Receipt</value>
+  </data>
+  <data name="Receipts" xml:space="preserve">
+    <value>Receipts</value>
+  </data>
+  <data name="Record Payment &amp; Mark Dealt With" xml:space="preserve">
+    <value>Record Payment &amp; Mark Dealt With</value>
+  </data>
+  <data name="Recurring" xml:space="preserve">
+    <value>Recurring</value>
+  </data>
+  <data name="Recurring Expense Matched" xml:space="preserve">
+    <value>Recurring Expense Matched</value>
+  </data>
+  <data name="Re-evaluate" xml:space="preserve">
+    <value>Re-evaluate</value>
+  </data>
+  <data name="Remaining Balance Due: {0}" xml:space="preserve">
+    <value>Remaining Balance Due: {0}</value>
+  </data>
+  <data name="Reopen" xml:space="preserve">
+    <value>Reopen</value>
+  </data>
+  <data name="Reopen (Mark Unprocessed)" xml:space="preserve">
+    <value>Reopen (Mark Unprocessed)</value>
+  </data>
+  <data name="Review" xml:space="preserve">
+    <value>Review</value>
+  </data>
+  <data name="Scan bill inbox emails against manually entered bills to detect matches and clean up redundant drafts" xml:space="preserve">
+    <value>Scan bill inbox emails against manually entered bills to detect matches and clean up redundant drafts</value>
+  </data>
+  <data name="Scan for Existing Bills" xml:space="preserve">
+    <value>Scan for Existing Bills</value>
+  </data>
+  <data name="Scanning..." xml:space="preserve">
+    <value>Scanning...</value>
+  </data>
+  <data name="Search PO number, supplier, amount..." xml:space="preserve">
+    <value>Search PO number, supplier, amount...</value>
+  </data>
+  <data name="Search sender, subject..." xml:space="preserve">
+    <value>Search sender, subject...</value>
+  </data>
+  <data name="Search supplier, invoice #, amount..." xml:space="preserve">
+    <value>Search supplier, invoice #, amount...</value>
+  </data>
+  <data name="Select an open Purchase Order to link with this draft bill." xml:space="preserve">
+    <value>Select an open Purchase Order to link with this draft bill.</value>
+  </data>
+  <data name="Set up a dedicated email address (e.g. factures@company.com or bills@company.com) to automatically ingest supplier invoices, extract invoice line items, and match against purchase orders." xml:space="preserve">
+    <value>Set up a dedicated email address (e.g. factures@company.com or bills@company.com) to automatically ingest supplier invoices, extract invoice line items, and match against purchase orders.</value>
+  </data>
+  <data name="Statement" xml:space="preserve">
+    <value>Statement</value>
+  </data>
+  <data name="Statement of Account Detected" xml:space="preserve">
+    <value>Statement of Account Detected</value>
+  </data>
+  <data name="Statements" xml:space="preserve">
+    <value>Statements</value>
+  </data>
+  <data name="Status" xml:space="preserve">
+    <value>Status</value>
+  </data>
+  <data name="Supplier" xml:space="preserve">
+    <value>Supplier</value>
+  </data>
+  <data name="The existing bill in Spokes does not have a PDF invoice attached. You can attach the PDF from this email directly to it." xml:space="preserve">
+    <value>The existing bill in Spokes does not have a PDF invoice attached. You can attach the PDF from this email directly to it.</value>
+  </data>
+  <data name="This bill is currently recorded as {0} in Spokes (Due {1})." xml:space="preserve">
+    <value>This bill is currently recorded as {0} in Spokes (Due {1}).</value>
+  </data>
+  <data name="This bill is partially paid ({0} paid of {1}). Remaining balance due: {2}." xml:space="preserve">
+    <value>This bill is partially paid ({0} paid of {1}). Remaining balance due: {2}.</value>
+  </data>
+  <data name="This email contains multiple invoices. Review each draft or approve all at once." xml:space="preserve">
+    <value>This email contains multiple invoices. Review each draft or approve all at once.</value>
+  </data>
+  <data name="This email has not been processed into a bill. You can create a bill manually from this email or mark it as handled." xml:space="preserve">
+    <value>This email has not been processed into a bill. You can create a bill manually from this email or mark it as handled.</value>
+  </data>
+  <data name="Unlink PO" xml:space="preserve">
+    <value>Unlink PO</value>
+  </data>
+  <data name="Unprocessed" xml:space="preserve">
+    <value>Unprocessed</value>
+  </data>
+  <data name="Unprocessed Email" xml:space="preserve">
+    <value>Unprocessed Email</value>
+  </data>
+  <data name="Unrecorded Payment Detected:" xml:space="preserve">
+    <value>Unrecorded Payment Detected:</value>
+  </data>
+  <data name="Update Bill to {0} &amp; Mark Dealt With" xml:space="preserve">
+    <value>Update Bill to {0} &amp; Mark Dealt With</value>
+  </data>
+  <data name="Upload Invoice PDF" xml:space="preserve">
+    <value>Upload Invoice PDF</value>
+  </data>
+  <data name="View / Edit Draft" xml:space="preserve">
+    <value>View / Edit Draft</value>
+  </data>
+  <data name="View {0} ({1})" xml:space="preserve">
+    <value>View {0} ({1})</value>
+  </data>
+  <data name="View Bill" xml:space="preserve">
+    <value>View Bill</value>
+  </data>
+  <data name="View Bill ({0} {1})" xml:space="preserve">
+    <value>View Bill ({0} {1})</value>
+  </data>
+  <data name="An error occurred while blocking the sender domain." xml:space="preserve">
+    <value>An error occurred while blocking the sender domain.</value>
+  </data>
+  <data name="Approving..." xml:space="preserve">
+    <value>Approving...</value>
+  </data>
+  <data name="Bill for {0} approved! Marked as Unpaid." xml:space="preserve">
+    <value>Bill for {0} approved! Marked as Unpaid.</value>
+  </data>
+  <data name="Failed to approve bill." xml:space="preserve">
+    <value>Failed to approve bill.</value>
+  </data>
+  <data name="Failed to approve all draft bills." xml:space="preserve">
+    <value>Failed to approve all draft bills.</value>
+  </data>
+  <data name="An error occurred while deleting the email." xml:space="preserve">
+    <value>An error occurred while deleting the email.</value>
+  </data>
+  <data name="All {0} draft bills approved!" xml:space="preserve">
+    <value>All {0} draft bills approved!</value>
+  </data>
+  <data name="All {0} draft bills approved! Marked as Paid." xml:space="preserve">
+    <value>All {0} draft bills approved! Marked as Paid.</value>
+  </data>
+  <data name="Balance Due: {0}" xml:space="preserve">
+    <value>Balance Due: {0}</value>
+  </data>
+  <data name="Bill for {0} approved! Marked as Paid." xml:space="preserve">
+    <value>Bill for {0} approved! Marked as Paid.</value>
+  </data>
+  <data name="Paid (Balance: $0.00)" xml:space="preserve">
+    <value>Paid (Balance: $0.00)</value>
+  </data>
+  <data name="Payment of {0} was detected on this invoice (Balance due: {1}). Approving will record this bill directly as Paid." xml:space="preserve">
+    <value>Payment of {0} was detected on this invoice (Balance due: {1}). Approving will record this bill directly as Paid.</value>
+  </data>
+  <data name="{0} Possible Duplicate Bills Detected" xml:space="preserve">
+    <value>{0} Possible Duplicate Bills Detected</value>
+  </data>
+  <data name="Another bill for {0} with the same total amount ({1}) exists ({2}, dated {3}, Status: {4})." xml:space="preserve">
+    <value>Another bill for {0} with the same total amount ({1}) exists ({2}, dated {3}, Status: {4}).</value>
+  </data>
+  <data name="In Desc" xml:space="preserve">
+    <value>In Desc</value>
+  </data>
+  <data name="Matched Existing Bill:" xml:space="preserve">
+    <value>Matched Existing Bill:</value>
+  </data>
+  <data name="No ref" xml:space="preserve">
+    <value>No ref</value>
+  </data>
+  <data name="Possible Duplicate (Same Supplier &amp; Amount):" xml:space="preserve">
+    <value>Possible Duplicate (Same Supplier &amp; Amount):</value>
+  </data>
+  <data name="Possible Duplicate Amount" xml:space="preserve">
+    <value>Possible Duplicate Amount</value>
+  </data>
+  <data name="Possible Duplicate Bill Detected" xml:space="preserve">
+    <value>Possible Duplicate Bill Detected</value>
+  </data>
+  <data name="Possible Duplicate:" xml:space="preserve">
+    <value>Possible Duplicate:</value>
+  </data>
+  <data name="View Existing Bill" xml:space="preserve">
+    <value>View Existing Bill</value>
+  </data>
+  <data name="Attach invoice document from email to the existing bill" xml:space="preserve">
+    <value>Attach invoice document from email to the existing bill</value>
+  </data>
+  <data name="Draft bill for {0} rejected and discarded." xml:space="preserve">
+    <value>Draft bill for {0} rejected and discarded.</value>
+  </data>
+  <data name="Draft bill rejected and linked to existing bill as duplicate." xml:space="preserve">
+    <value>Draft bill rejected and linked to existing bill as duplicate.</value>
+  </data>
+  <data name="Draft Bill to Reject" xml:space="preserve">
+    <value>Draft Bill to Reject</value>
+  </data>
+  <data name="e.g. Price quote, payment confirmation, spam, or personal expense" xml:space="preserve">
+    <value>e.g. Price quote, payment confirmation, spam, or personal expense</value>
+  </data>
+  <data name="Failed to reject draft bill." xml:space="preserve">
+    <value>Failed to reject draft bill.</value>
+  </data>
+  <data name="Hide bill search" xml:space="preserve">
+    <value>Hide bill search</value>
+  </data>
+  <data name="Invalid bill / discard draft (not a duplicate)" xml:space="preserve">
+    <value>Invalid bill / discard draft (not a duplicate)</value>
+  </data>
+  <data name="No automatic duplicate candidate detected. You can search and link an existing bill below:" xml:space="preserve">
+    <value>No automatic duplicate candidate detected. You can search and link an existing bill below:</value>
+  </data>
+  <data name="Reason for Rejection (Optional)" xml:space="preserve">
+    <value>Reason for Rejection (Optional)</value>
+  </data>
+  <data name="Reject" xml:space="preserve">
+    <value>Reject</value>
+  </data>
+  <data name="Reject Draft" xml:space="preserve">
+    <value>Reject Draft</value>
+  </data>
+  <data name="Reject Draft Bill" xml:space="preserve">
+    <value>Reject Draft Bill</value>
+  </data>
+  <data name="Rejecting this draft bill will discard the unapproved draft liability from the ledger." xml:space="preserve">
+    <value>Rejecting this draft bill will discard the unapproved draft liability from the ledger.</value>
+  </data>
+  <data name="Rejecting..." xml:space="preserve">
+    <value>Rejecting...</value>
+  </data>
+  <data name="Search other existing bills in Spokes..." xml:space="preserve">
+    <value>Search other existing bills in Spokes...</value>
+  </data>
+  <data name="Select the matching existing bill:" xml:space="preserve">
+    <value>Select the matching existing bill:</value>
+  </data>
+  <data name="The draft bill will be permanently removed. If this email has no other drafts, the email will be marked as Dismissed." xml:space="preserve">
+    <value>The draft bill will be permanently removed. If this email has no other drafts, the email will be marked as Dismissed.</value>
+  </data>
+  <data name="This draft is a duplicate of a bill already entered in Spokes" xml:space="preserve">
+    <value>This draft is a duplicate of a bill already entered in Spokes</value>
+  </data>
+  <data name="A bill of {0} is already recorded for period {1} (Status: {2}). Adding this will record an additional bill for the same period." xml:space="preserve">
+    <value>A bill of {0} is already recorded for period {1} (Status: {2}). Adding this will record an additional bill for the same period.</value>
+  </data>
+  <data name="Add to Existing Recurring Bill" xml:space="preserve">
+    <value>Add to Existing Recurring Bill</value>
+  </data>
+  <data name="Add to Recurring Bill" xml:space="preserve">
+    <value>Add to Recurring Bill</value>
+  </data>
+  <data name="All Bills" xml:space="preserve">
+    <value>All Bills</value>
+  </data>
+  <data name="Attach file from email: {0}" xml:space="preserve">
+    <value>Attach file from email: {0}</value>
+  </data>
+  <data name="Bill added to recurring expense and email marked as dealt with!" xml:space="preserve">
+    <value>Bill added to recurring expense and email marked as dealt with!</value>
+  </data>
+  <data name="Bill Amount" xml:space="preserve">
+    <value>Bill Amount</value>
+  </data>
+  <data name="Create Standalone Bill" xml:space="preserve">
+    <value>Create Standalone Bill</value>
+  </data>
+  <data name="Date Paid" xml:space="preserve">
+    <value>Date Paid</value>
+  </data>
+  <data name="Date Received / Billing Date" xml:space="preserve">
+    <value>Date Received / Billing Date</value>
+  </data>
+  <data name="Draft Standalone Bill" xml:space="preserve">
+    <value>Draft Standalone Bill</value>
+  </data>
+  <data name="Due Date" xml:space="preserve">
+    <value>Due Date</value>
+  </data>
+  <data name="Email linked to recurring bill '{0}' and marked as dealt with!" xml:space="preserve">
+    <value>Email linked to recurring bill '{0}' and marked as dealt with!</value>
+  </data>
+  <data name="Filter by '{0}'" xml:space="preserve">
+    <value>Filter by '{0}'</value>
+  </data>
+  <data name="Invoice # / Ref" xml:space="preserve">
+    <value>Invoice # / Ref</value>
+  </data>
+  <data name="Invoice uploaded successfully." xml:space="preserve">
+    <value>Invoice uploaded successfully.</value>
+  </data>
+  <data name="Mark as Paid immediately" xml:space="preserve">
+    <value>Mark as Paid immediately</value>
+  </data>
+  <data name="No attachment in email (Portal Notification). You can record the bill with the amount due or upload an invoice PDF below." xml:space="preserve">
+    <value>No attachment in email (Portal Notification). You can record the bill with the amount due or upload an invoice PDF below.</value>
+  </data>
+  <data name="Paid" xml:space="preserve">
+    <value>Paid</value>
+  </data>
+  <data name="Pending" xml:space="preserve">
+    <value>Pending</value>
+  </data>
+  <data name="Record this incoming bill notification into an existing recurring bill profile. The bill amount and dates will be added to the recurring profile's billing history." xml:space="preserve">
+    <value>Record this incoming bill notification into an existing recurring bill profile. The bill amount and dates will be added to the recurring profile's billing history.</value>
+  </data>
+  <data name="Recurring Bill: {0}" xml:space="preserve">
+    <value>Recurring Bill: {0}</value>
+  </data>
+  <data name="Search supplier, invoice #, description, amount..." xml:space="preserve">
+    <value>Search supplier, invoice #, description, amount...</value>
+  </data>
+  <data name="Select a recurring bill profile above to configure the bill record details." xml:space="preserve">
+    <value>Select a recurring bill profile above to configure the bill record details.</value>
+  </data>
+  <data name="Select an existing bill in Spokes to link with this incoming email. The invoice attachment will be attached to the bill and the email will be marked as dealt with." xml:space="preserve">
+    <value>Select an existing bill in Spokes to link with this incoming email. The invoice attachment will be attached to the bill and the email will be marked as dealt with.</value>
+  </data>
+  <data name="Select Recurring Bill Profile" xml:space="preserve">
+    <value>Select Recurring Bill Profile</value>
+  </data>
+  <data name="This bill will be recorded for billing period: {0}." xml:space="preserve">
+    <value>This bill will be recorded for billing period: {0}.</value>
+  </data>
+  <data name="Unknown Supplier" xml:space="preserve">
+    <value>Unknown Supplier</value>
+  </data>
+  <data name="Unpaid / Open" xml:space="preserve">
+    <value>Unpaid / Open</value>
+  </data>
+  <data name="View Recurring Bill: {0}{1}" xml:space="preserve">
+    <value>View Recurring Bill: {0}{1}</value>
+  </data>
+  <data name="Attached Invoice" xml:space="preserve">
+    <value>Attached Invoice</value>
+  </data>
+  <data name="Attached Invoice / Receipt" xml:space="preserve">
+    <value>Attached Invoice / Receipt</value>
+  </data>
+  <data name="Attachment uploaded successfully" xml:space="preserve">
+    <value>Attachment uploaded successfully</value>
+  </data>
+  <data name="Balance Due" xml:space="preserve">
+    <value>Balance Due</value>
+  </data>
+  <data name="Billing Date / Date Received" xml:space="preserve">
+    <value>Billing Date / Date Received</value>
+  </data>
+  <data name="Manage Recurring Profile" xml:space="preserve">
+    <value>Manage Recurring Profile</value>
+  </data>
+  <data name="Marked as paid on {0} for {1}." xml:space="preserve">
+    <value>Marked as paid on {0} for {1}.</value>
+  </data>
+  <data name="Method" xml:space="preserve">
+    <value>Method</value>
+  </data>
+  <data name="No attachment uploaded." xml:space="preserve">
+    <value>No attachment uploaded.</value>
+  </data>
+  <data name="No payments recorded." xml:space="preserve">
+    <value>No payments recorded.</value>
+  </data>
+  <data name="No Supplier" xml:space="preserve">
+    <value>No Supplier</value>
+  </data>
+  <data name="Open in New Tab" xml:space="preserve">
+    <value>Open in New Tab</value>
+  </data>
+  <data name="Payments Recorded" xml:space="preserve">
+    <value>Payments Recorded</value>
+  </data>
+  <data name="Profile Notes" xml:space="preserve">
+    <value>Profile Notes</value>
+  </data>
+  <data name="Reference" xml:space="preserve">
+    <value>Reference</value>
+  </data>
+  <data name="Total Amount" xml:space="preserve">
+    <value>Total Amount</value>
+  </data>
+  <data name="Upload Attachment" xml:space="preserve">
+    <value>Upload Attachment</value>
+  </data>
+  <data name="Bill created and linked to email!" xml:space="preserve">
+    <value>Bill created and linked to email!</value>
+  </data>
+  <data name="Bills Approved" xml:space="preserve">
+    <value>Bills Approved</value>
+  </data>
+  <data name="Confirm Receipt" xml:space="preserve">
+    <value>Confirm Receipt</value>
+  </data>
+  <data name="Confirm Statement" xml:space="preserve">
+    <value>Confirm Statement</value>
+  </data>
+  <data name="Confirmed on {0}" xml:space="preserve">
+    <value>Confirmed on {0}</value>
+  </data>
+  <data name="Detection Signal:" xml:space="preserve">
+    <value>Detection Signal:</value>
+  </data>
+  <data name="Email confirmed as payment receipt and marked as dealt with!" xml:space="preserve">
+    <value>Email confirmed as payment receipt and marked as dealt with!</value>
+  </data>
+  <data name="Email confirmed as statement of account and marked as dealt with!" xml:space="preserve">
+    <value>Email confirmed as statement of account and marked as dealt with!</value>
+  </data>
+  <data name="Email dismissed" xml:space="preserve">
+    <value>Email dismissed</value>
+  </data>
+  <data name="Email marked as dealt with" xml:space="preserve">
+    <value>Email marked as dealt with</value>
+  </data>
+  <data name="Email marked as unprocessed" xml:space="preserve">
+    <value>Email marked as unprocessed</value>
+  </data>
+  <data name="Human Review Required" xml:space="preserve">
+    <value>Human Review Required</value>
+  </data>
+  <data name="PDF attached to existing bill and email marked as dealt with!" xml:space="preserve">
+    <value>PDF attached to existing bill and email marked as dealt with!</value>
+  </data>
+  <data name="Receipt Confirmed" xml:space="preserve">
+    <value>Receipt Confirmed</value>
+  </data>
+  <data name="Receipt Detected" xml:space="preserve">
+    <value>Receipt Detected</value>
+  </data>
+  <data name="Receipts Confirmed" xml:space="preserve">
+    <value>Receipts Confirmed</value>
+  </data>
+  <data name="Recorded payment of {0} on bill #{1}!" xml:space="preserve">
+    <value>Recorded payment of {0} on bill #{1}!</value>
+  </data>
+  <data name="Separate draft bill created for {0} ({1})!" xml:space="preserve">
+    <value>Separate draft bill created for {0} ({1})!</value>
+  </data>
+  <data name="Separate draft bill created for {0}!" xml:space="preserve">
+    <value>Separate draft bill created for {0}!</value>
+  </data>
+  <data name="Statement Confirmed" xml:space="preserve">
+    <value>Statement Confirmed</value>
+  </data>
+  <data name="Statement Detected" xml:space="preserve">
+    <value>Statement Detected</value>
+  </data>
+  <data name="Statements Confirmed" xml:space="preserve">
+    <value>Statements Confirmed</value>
+  </data>
+  <data name="The parser detected this email as a payment receipt or debit confirmation rather than an unpaid supplier invoice." xml:space="preserve">
+    <value>The parser detected this email as a payment receipt or debit confirmation rather than an unpaid supplier invoice.</value>
+  </data>
+  <data name="The parser detected this email as a statement of account or periodic balance summary. No draft bill was created automatically to prevent duplicate liability." xml:space="preserve">
+    <value>The parser detected this email as a statement of account or periodic balance summary. No draft bill was created automatically to prevent duplicate liability.</value>
+  </data>
+  <data name="Updated bill amount to {0} and linked document!" xml:space="preserve">
+    <value>Updated bill amount to {0} and linked document!</value>
+  </data>
+  <data name="View Linked Bill" xml:space="preserve">
+    <value>View Linked Bill</value>
+  </data>
+  <data name="15 minutes" xml:space="preserve">
+    <value>15 minutes</value>
+  </data>
+  <data name="30 minutes" xml:space="preserve">
+    <value>30 minutes</value>
+  </data>
+  <data name="5 minutes" xml:space="preserve">
+    <value>5 minutes</value>
+  </data>
+  <data name="6 minutes" xml:space="preserve">
+    <value>6 minutes</value>
+  </data>
+  <data name="Approval Workflow" xml:space="preserve">
+    <value>Approval Workflow</value>
+  </data>
+  <data name="Automatically lock timesheets after a set number of days to prevent edits to finalized periods." xml:space="preserve">
+    <value>Automatically lock timesheets after a set number of days to prevent edits to finalized periods.</value>
+  </data>
+  <data name="Automatically round reported durations according to your configured interval and direction." xml:space="preserve">
+    <value>Automatically round reported durations according to your configured interval and direction.</value>
+  </data>
+  <data name="Business Address" xml:space="preserve">
+    <value>Business Address</value>
+  </data>
+  <data name="Configure default rates, tax percentages, and supported billing currencies." xml:space="preserve">
+    <value>Configure default rates, tax percentages, and supported billing currencies.</value>
+  </data>
+  <data name="Configure how employee hour banks and overtime thresholds are calculated." xml:space="preserve">
+    <value>Configure how employee hour banks and overtime thresholds are calculated.</value>
+  </data>
+  <data name="Configure the statuses available for projects and their display colors." xml:space="preserve">
+    <value>Configure the statuses available for projects and their display colors.</value>
+  </data>
+  <data name="Control which fields employees must fill in when logging time." xml:space="preserve">
+    <value>Control which fields employees must fill in when logging time.</value>
+  </data>
+  <data name="Create templates for different languages (e.g. French Invoice, English PO)." xml:space="preserve">
+    <value>Create templates for different languages (e.g. French Invoice, English PO).</value>
+  </data>
+  <data name="Daily" xml:space="preserve">
+    <value>Daily</value>
+  </data>
+  <data name="Daily Overtime Threshold (Hours)" xml:space="preserve">
+    <value>Daily Overtime Threshold (Hours)</value>
+  </data>
+  <data name="Document Numbering" xml:space="preserve">
+    <value>Document Numbering</value>
+  </data>
+  <data name="Employees must include a text description when recording hours." xml:space="preserve">
+    <value>Employees must include a text description when recording hours.</value>
+  </data>
+  <data name="Employees must select a project task when recording hours." xml:space="preserve">
+    <value>Employees must select a project task when recording hours.</value>
+  </data>
+  <data name="Employees must select a project when recording hours." xml:space="preserve">
+    <value>Employees must select a project when recording hours.</value>
+  </data>
+  <data name="Enable Automatic Timesheet Locking" xml:space="preserve">
+    <value>Enable Automatic Timesheet Locking</value>
+  </data>
+  <data name="Enable Hour Bank" xml:space="preserve">
+    <value>Enable Hour Bank</value>
+  </data>
+  <data name="Enable or disable optional timesheet modules for your organization." xml:space="preserve">
+    <value>Enable or disable optional timesheet modules for your organization.</value>
+  </data>
+  <data name="Enable Time Rounding" xml:space="preserve">
+    <value>Enable Time Rounding</value>
+  </data>
+  <data name="Enable Weekly Plan" xml:space="preserve">
+    <value>Enable Weekly Plan</value>
+  </data>
+  <data name="Features" xml:space="preserve">
+    <value>Features</value>
+  </data>
+  <data name="Financial Defaults" xml:space="preserve">
+    <value>Financial Defaults</value>
+  </data>
+  <data name="HR &amp; Overtime" xml:space="preserve">
+    <value>HR &amp; Overtime</value>
+  </data>
+  <data name="Lock timesheets older than (days)" xml:space="preserve">
+    <value>Lock timesheets older than (days)</value>
+  </data>
+  <data name="Max Bankable Hours (0 for unlimited)" xml:space="preserve">
+    <value>Max Bankable Hours (0 for unlimited)</value>
+  </data>
+  <data name="Nearest" xml:space="preserve">
+    <value>Nearest</value>
+  </data>
+  <data name="New Template" xml:space="preserve">
+    <value>New Template</value>
+  </data>
+  <data name="Official postal address printed on invoices and billing documents." xml:space="preserve">
+    <value>Official postal address printed on invoices and billing documents.</value>
+  </data>
+  <data name="Overtime Calculation Mode" xml:space="preserve">
+    <value>Overtime Calculation Mode</value>
+  </data>
+  <data name="Prevent employees and managers from modifying entries older than the cutoff threshold." xml:space="preserve">
+    <value>Prevent employees and managers from modifying entries older than the cutoff threshold.</value>
+  </data>
+  <data name="Require manager approval before timesheets are finalized." xml:space="preserve">
+    <value>Require manager approval before timesheets are finalized.</value>
+  </data>
+  <data name="Require Note" xml:space="preserve">
+    <value>Require Note</value>
+  </data>
+  <data name="Require Project" xml:space="preserve">
+    <value>Require Project</value>
+  </data>
+  <data name="Require Task" xml:space="preserve">
+    <value>Require Task</value>
+  </data>
+  <data name="Require Timesheet Approval" xml:space="preserve">
+    <value>Require Timesheet Approval</value>
+  </data>
+  <data name="Required Fields" xml:space="preserve">
+    <value>Required Fields</value>
+  </data>
+  <data name="Round down" xml:space="preserve">
+    <value>Round down</value>
+  </data>
+  <data name="Round time entries in reports and exports. Raw timesheet data is not modified." xml:space="preserve">
+    <value>Round time entries in reports and exports. Raw timesheet data is not modified.</value>
+  </data>
+  <data name="Round up" xml:space="preserve">
+    <value>Round up</value>
+  </data>
+  <data name="Rounding Direction" xml:space="preserve">
+    <value>Rounding Direction</value>
+  </data>
+  <data name="Rounding Interval" xml:space="preserve">
+    <value>Rounding Interval</value>
+  </data>
+  <data name="Set standard prefix codes for generated quotes and invoices." xml:space="preserve">
+    <value>Set standard prefix codes for generated quotes and invoices.</value>
+  </data>
+  <data name="Time Rounding" xml:space="preserve">
+    <value>Time Rounding</value>
+  </data>
+  <data name="Timesheet Locking" xml:space="preserve">
+    <value>Timesheet Locking</value>
+  </data>
+  <data name="Track banked hours that employees can redeem or cash out." xml:space="preserve">
+    <value>Track banked hours that employees can redeem or cash out.</value>
+  </data>
+  <data name="Weekly (Default)" xml:space="preserve">
+    <value>Weekly (Default)</value>
+  </data>
+  <data name="When disabled, the weekly plan widget is hidden from employee timesheets and the Team Planning page is hidden from managers." xml:space="preserve">
+    <value>When disabled, the weekly plan widget is hidden from employee timesheets and the Team Planning page is hidden from managers.</value>
+  </data>
+  <data name="When enabled, employees must submit timesheets for manager approval. Approved timesheets become read-only." xml:space="preserve">
+    <value>When enabled, employees must submit timesheets for manager approval. Approved timesheets become read-only.</value>
+  </data>
+  <data name="Date Format" xml:space="preserve">
+    <value>Date Format</value>
+  </data>
+  <data name="System-wide date display format" xml:space="preserve">
+    <value>System-wide date display format</value>
+  </data>
+  <data name="1 = Canada" xml:space="preserve">
+    <value>1 = Canada</value>
+  </data>
+  <data name="12001 is universal for Sage 50 Canada" xml:space="preserve">
+    <value>12001 is universal for Sage 50 Canada</value>
+  </data>
+  <data name="Account #" xml:space="preserve">
+    <value>Account #</value>
+  </data>
+  <data name="Accounts Payable (A/P)" xml:space="preserve">
+    <value>Accounts Payable (A/P)</value>
+  </data>
+  <data name="Accounts Receivable (A/R)" xml:space="preserve">
+    <value>Accounts Receivable (A/R)</value>
+  </data>
+  <data name="All Payables" xml:space="preserve">
+    <value>All Payables</value>
+  </data>
+  <data name="Auto-Match Spokes Names to Baseline" xml:space="preserve">
+    <value>Auto-Match Spokes Names to Baseline</value>
+  </data>
+  <data name="Automatically create/update Spokes Suppliers when importing Sage Vendors" xml:space="preserve">
+    <value>Automatically create/update Spokes Suppliers when importing Sage Vendors</value>
+  </data>
+  <data name="Blocking Export Errors" xml:space="preserve">
+    <value>Blocking Export Errors</value>
+  </data>
+  <data name="Cannot export: please resolve blocking validation errors first." xml:space="preserve">
+    <value>Cannot export: please resolve blocking validation errors first.</value>
+  </data>
+  <data name="Chart of Accounts" xml:space="preserve">
+    <value>Chart of Accounts</value>
+  </data>
+  <data name="Click any payable row below to review or adjust its tax breakdown, invoice number, or GL account:" xml:space="preserve">
+    <value>Click any payable row below to review or adjust its tax breakdown, invoice number, or GL account:</value>
+  </data>
+  <data name="Client" xml:space="preserve">
+    <value>Client</value>
+  </data>
+  <data name="Client -&gt; Sage Customer Mappings" xml:space="preserve">
+    <value>Client -&gt; Sage Customer Mappings</value>
+  </data>
+  <data name="Client Invoices" xml:space="preserve">
+    <value>Client Invoices</value>
+  </data>
+  <data name="Combined Tax Code (QC)" xml:space="preserve">
+    <value>Combined Tax Code (QC)</value>
+  </data>
+  <data name="Commission" xml:space="preserve">
+    <value>Commission</value>
+  </data>
+  <data name="Commissions" xml:space="preserve">
+    <value>Commissions</value>
+  </data>
+  <data name="Configure how Spokes transactions map to your Sage 50 Canadian Edition Chart of Accounts, tax authorities, and customer/vendor records." xml:space="preserve">
+    <value>Configure how Spokes transactions map to your Sage 50 Canadian Edition Chart of Accounts, tax authorities, and customer/vendor records.</value>
+  </data>
+  <data name="Configure Sage GL &amp; Baseline" xml:space="preserve">
+    <value>Configure Sage GL &amp; Baseline</value>
+  </data>
+  <data name="Control Accounts &amp; Default GL Accounts" xml:space="preserve">
+    <value>Control Accounts &amp; Default GL Accounts</value>
+  </data>
+  <data name="Country Code" xml:space="preserve">
+    <value>Country Code</value>
+  </data>
+  <data name="Default Commissions GL" xml:space="preserve">
+    <value>Default Commissions GL</value>
+  </data>
+  <data name="Default Employee Expenses GL" xml:space="preserve">
+    <value>Default Employee Expenses GL</value>
+  </data>
+  <data name="Default Kilometrage GL" xml:space="preserve">
+    <value>Default Kilometrage GL</value>
+  </data>
+  <data name="Default Purchase / COGS GL" xml:space="preserve">
+    <value>Default Purchase / COGS GL</value>
+  </data>
+  <data name="Default Purchase Item / Service Code" xml:space="preserve">
+    <value>Default Purchase Item / Service Code</value>
+  </data>
+  <data name="Default Recurring Bills GL" xml:space="preserve">
+    <value>Default Recurring Bills GL</value>
+  </data>
+  <data name="Default Sales Item / Service Code" xml:space="preserve">
+    <value>Default Sales Item / Service Code</value>
+  </data>
+  <data name="Default Sales Revenue GL" xml:space="preserve">
+    <value>Default Sales Revenue GL</value>
+  </data>
+  <data name="Download Sage 50 (.imp)" xml:space="preserve">
+    <value>Download Sage 50 (.imp)</value>
+  </data>
+  <data name="Edit Expense Report" xml:space="preserve">
+    <value>Edit Expense Report</value>
+  </data>
+  <data name="Edit Recurring Bill" xml:space="preserve">
+    <value>Edit Recurring Bill</value>
+  </data>
+  <data name="Edit Supplier Bill" xml:space="preserve">
+    <value>Edit Supplier Bill</value>
+  </data>
+  <data name="Entity Mappings" xml:space="preserve">
+    <value>Entity Mappings</value>
+  </data>
+  <data name="Expense Report" xml:space="preserve">
+    <value>Expense Report</value>
+  </data>
+  <data name="Expense Reports" xml:space="preserve">
+    <value>Expense Reports</value>
+  </data>
+  <data name="Export client sales invoices, supplier bills, recurring bills, employee expense reports, and commissions directly into Sage 50 Canadian Edition (.imp format) or CSV." xml:space="preserve">
+    <value>Export client sales invoices, supplier bills, recurring bills, employee expense reports, and commissions directly into Sage 50 Canadian Edition (.imp format) or CSV.</value>
+  </data>
+  <data name="Export Invoices (CSV)" xml:space="preserve">
+    <value>Export Invoices (CSV)</value>
+  </data>
+  <data name="Export Payables (CSV)" xml:space="preserve">
+    <value>Export Payables (CSV)</value>
+  </data>
+  <data name="Exported" xml:space="preserve">
+    <value>Exported</value>
+  </data>
+  <data name="From Date" xml:space="preserve">
+    <value>From Date</value>
+  </data>
+  <data name="GL &amp; Tax Setup" xml:space="preserve">
+    <value>GL &amp; Tax Setup</value>
+  </data>
+  <data name="GL / Item" xml:space="preserve">
+    <value>GL / Item</value>
+  </data>
+  <data name="Imported GL Accounts" xml:space="preserve">
+    <value>Imported GL Accounts</value>
+  </data>
+  <data name="In Sage 50 Canadian Edition, use File &gt; Import/Export &gt; Export Records to export your Customers, Vendors, Chart of Accounts, or Inventory &amp; Services (.csv, .txt, or .imp), then upload them here to establish your baseline." xml:space="preserve">
+    <value>In Sage 50 Canadian Edition, use File &gt; Import/Export &gt; Export Records to export your Customers, Vendors, Chart of Accounts, or Inventory &amp; Services (.csv, .txt, or .imp), then upload them here to establish your baseline.</value>
+  </data>
+  <data name="Include &lt;customers&gt; &amp; &lt;vendors&gt; blocks in .imp" xml:space="preserve">
+    <value>Include &lt;customers&gt; &amp; &lt;vendors&gt; blocks in .imp</value>
+  </data>
+  <data name="Include Already Exported" xml:space="preserve">
+    <value>Include Already Exported</value>
+  </data>
+  <data name="Inventory &amp; Services" xml:space="preserve">
+    <value>Inventory &amp; Services</value>
+  </data>
+  <data name="Invoice / Ref #" xml:space="preserve">
+    <value>Invoice / Ref #</value>
+  </data>
+  <data name="Map Spokes Client and Supplier names to their exact 35-character Sage 50 names so imported transactions attach to existing Sage records." xml:space="preserve">
+    <value>Map Spokes Client and Supplier names to their exact 35-character Sage 50 names so imported transactions attach to existing Sage records.</value>
+  </data>
+  <data name="No client invoices match the filter criteria." xml:space="preserve">
+    <value>No client invoices match the filter criteria.</value>
+  </data>
+  <data name="No clients found." xml:space="preserve">
+    <value>No clients found.</value>
+  </data>
+  <data name="No payable transactions match the filter criteria." xml:space="preserve">
+    <value>No payable transactions match the filter criteria.</value>
+  </data>
+  <data name="No suppliers or payees found." xml:space="preserve">
+    <value>No suppliers or payees found.</value>
+  </data>
+  <data name="No transactions to export" xml:space="preserve">
+    <value>No transactions to export</value>
+  </data>
+  <data name="Payable Stream" xml:space="preserve">
+    <value>Payable Stream</value>
+  </data>
+  <data name="Payables &amp; Bills" xml:space="preserve">
+    <value>Payables &amp; Bills</value>
+  </data>
+  <data name="Pending Export" xml:space="preserve">
+    <value>Pending Export</value>
+  </data>
+  <data name="Please fill in all required GL and tax settings." xml:space="preserve">
+    <value>Please fill in all required GL and tax settings.</value>
+  </data>
+  <data name="Pre-flight validation passed: all transactions are ready for Sage 50 import." xml:space="preserve">
+    <value>Pre-flight validation passed: all transactions are ready for Sage 50 import.</value>
+  </data>
+  <data name="Pre-Flight Validation Warnings" xml:space="preserve">
+    <value>Pre-Flight Validation Warnings</value>
+  </data>
+  <data name="Quebec Tax Authorities (TPS &amp; TVQ)" xml:space="preserve">
+    <value>Quebec Tax Authorities (TPS &amp; TVQ)</value>
+  </data>
+  <data name="Recurring &amp; One-Time Bills" xml:space="preserve">
+    <value>Recurring &amp; One-Time Bills</value>
+  </data>
+  <data name="Recurring Bill" xml:space="preserve">
+    <value>Recurring Bill</value>
+  </data>
+  <data name="Sage 50 Accounting Export" xml:space="preserve">
+    <value>Sage 50 Accounting Export</value>
+  </data>
+  <data name="Sage 50 Baseline Import" xml:space="preserve">
+    <value>Sage 50 Baseline Import</value>
+  </data>
+  <data name="Sage 50 Customer Name" xml:space="preserve">
+    <value>Sage 50 Customer Name</value>
+  </data>
+  <data name="Sage 50 Export Configuration" xml:space="preserve">
+    <value>Sage 50 Export Configuration</value>
+  </data>
+  <data name="Sage 50 export settings saved" xml:space="preserve">
+    <value>Sage 50 export settings saved</value>
+  </data>
+  <data name="Sage 50 Inventory/Service Item code for purchase lines (falls back to Expense GL if blank)" xml:space="preserve">
+    <value>Sage 50 Inventory/Service Item code for purchase lines (falls back to Expense GL if blank)</value>
+  </data>
+  <data name="Sage 50 Inventory/Service Item code for sales lines (falls back to Revenue GL if blank)" xml:space="preserve">
+    <value>Sage 50 Inventory/Service Item code for sales lines (falls back to Revenue GL if blank)</value>
+  </data>
+  <data name="Sage 50 Service Item Codes (Detail Line Field 1)" xml:space="preserve">
+    <value>Sage 50 Service Item Codes (Detail Line Field 1)</value>
+  </data>
+  <data name="Sage 50 Vendor Name" xml:space="preserve">
+    <value>Sage 50 Vendor Name</value>
+  </data>
+  <data name="Sage 50 Version Code" xml:space="preserve">
+    <value>Sage 50 Version Code</value>
+  </data>
+  <data name="Sage Customers" xml:space="preserve">
+    <value>Sage Customers</value>
+  </data>
+  <data name="Sage Export Status" xml:space="preserve">
+    <value>Sage Export Status</value>
+  </data>
+  <data name="Sage Vendors" xml:space="preserve">
+    <value>Sage Vendors</value>
+  </data>
+  <data name="Selected transactions unmarked and ready for re-export." xml:space="preserve">
+    <value>Selected transactions unmarked and ready for re-export.</value>
+  </data>
+  <data name="Spokes Client" xml:space="preserve">
+    <value>Spokes Client</value>
+  </data>
+  <data name="Spokes Supplier / Payee" xml:space="preserve">
+    <value>Spokes Supplier / Payee</value>
+  </data>
+  <data name="Stream" xml:space="preserve">
+    <value>Stream</value>
+  </data>
+  <data name="SubTotal" xml:space="preserve">
+    <value>SubTotal</value>
+  </data>
+  <data name="Supplier &amp; PO Bills" xml:space="preserve">
+    <value>Supplier &amp; PO Bills</value>
+  </data>
+  <data name="Supplier / Payee -&gt; Sage Vendor Mappings" xml:space="preserve">
+    <value>Supplier / Payee -&gt; Sage Vendor Mappings</value>
+  </data>
+  <data name="Supplier Bill" xml:space="preserve">
+    <value>Supplier Bill</value>
+  </data>
+  <data name="The following errors must be resolved before generating a Sage 50 (.imp) file:" xml:space="preserve">
+    <value>The following errors must be resolved before generating a Sage 50 (.imp) file:</value>
+  </data>
+  <data name="To Date" xml:space="preserve">
+    <value>To Date</value>
+  </data>
+  <data name="TPS (5%)" xml:space="preserve">
+    <value>TPS (5%)</value>
+  </data>
+  <data name="TPS / GST GL Account" xml:space="preserve">
+    <value>TPS / GST GL Account</value>
+  </data>
+  <data name="TPS / GST Tax Authority Name" xml:space="preserve">
+    <value>TPS / GST Tax Authority Name</value>
+  </data>
+  <data name="TVQ (9.975%)" xml:space="preserve">
+    <value>TVQ (9.975%)</value>
+  </data>
+  <data name="TVQ / QST GL Account" xml:space="preserve">
+    <value>TVQ / QST GL Account</value>
+  </data>
+  <data name="TVQ / QST Tax Authority Name" xml:space="preserve">
+    <value>TVQ / QST Tax Authority Name</value>
+  </data>
+  <data name="Unmark Exported" xml:space="preserve">
+    <value>Unmark Exported</value>
+  </data>
+  <data name="Upload Accounts" xml:space="preserve">
+    <value>Upload Accounts</value>
+  </data>
+  <data name="Upload Customers" xml:space="preserve">
+    <value>Upload Customers</value>
+  </data>
+  <data name="Upload Items" xml:space="preserve">
+    <value>Upload Items</value>
+  </data>
+  <data name="Upload Vendors" xml:space="preserve">
+    <value>Upload Vendors</value>
+  </data>
+  <data name="Vendor / Payee" xml:space="preserve">
+    <value>Vendor / Payee</value>
+  </data>
+  <data name="All {0}" xml:space="preserve">
+    <value>All {0}</value>
+  </data>
+  <data name="Total hours spent on the project per week across all tasks." xml:space="preserve">
+    <value>Total hours spent on the project per week across all tasks.</value>
+  </data>
+  <data name="Unassigned" xml:space="preserve">
+    <value>Unassigned</value>
+  </data>
+  <data name="Weekly Labor Summary" xml:space="preserve">
+    <value>Weekly Labor Summary</value>
+  </data>
+  <data name="Weeks Logged" xml:space="preserve">
+    <value>Weeks Logged</value>
+  </data>
+  <data name="No labor entries found for the selected date range." xml:space="preserve">
+    <value>No labor entries found for the selected date range.</value>
+  </data>
+  <data name="Running Total" xml:space="preserve">
+    <value>Running Total</value>
+  </data>
+</root>

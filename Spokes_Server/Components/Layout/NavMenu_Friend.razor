@@ -1,12 +1,14 @@
 @using Spokes_Server.Core.Constants
+@using Spokes_Server.Core.Services.Security
 @using Microsoft.Extensions.Configuration
 @inject Database Db
 @inject IConfiguration Config
 @inject UserService UserService
+@inject IUserPrivacyService PrivacyService
 @inject AuthenticationStateProvider AuthStateProvider
 @inject ChatNotificationService ChatNotifications
 @inject EmailNotificationService EmailNotifications
-@inject Spokes_Server.Core.Services.Communication.Notifications.CalendarNotificationService CalendarNotifications
+@inject CalendarNotificationService CalendarNotifications
 @inject AppLabelService AppLabels
 @inject StartupTimingService StartupTimings
 @inject IJSRuntime JS
@@ -32,8 +34,12 @@
                 @if (_isEditingFavorites)
                 {
                     <span @onclick:stopPropagation="true" @onclick:preventDefault="true" class="d-flex">
-                        <MudIconButton Icon="@Icons.Material.Filled.ArrowUpward" Color="Color.Default" Size="Size.Small" OnClick="@(() => MoveFavoriteUp(href))" />
-                        <MudIconButton Icon="@Icons.Material.Filled.ArrowDownward" Color="Color.Default" Size="Size.Small" OnClick="@(() => MoveFavoriteDown(href))" />
+                        <MudTooltip Text="@Loc["MoveUp"]">
+                            <MudIconButton Icon="@Icons.Material.Filled.ArrowUpward" Color="Color.Default" Size="Size.Small" OnClick="@(() => MoveFavoriteUp(href))" />
+                        </MudTooltip>
+                        <MudTooltip Text="@Loc["MoveDown"]">
+                            <MudIconButton Icon="@Icons.Material.Filled.ArrowDownward" Color="Color.Default" Size="Size.Small" OnClick="@(() => MoveFavoriteDown(href))" />
+                        </MudTooltip>
                     </span>
                 }
             </div>
@@ -52,18 +58,18 @@
 
     private (string Title, string Icon) GetLinkMetadata(string href) => href switch
     {
-        "" => ("Home", Icons.Material.Filled.Home),
-        "chat" => ("Chat", Icons.Material.Filled.Chat),
-        "email" => ("Email", Icons.Material.Filled.Email),
-        "planning/calendar" => ("Calendar", Icons.Material.Filled.CalendarMonth),
+        "" => (Loc["Home"].Value, Icons.Material.Filled.Home),
+        "chat" => (Loc["Chat"].Value, Icons.Material.Filled.Chat),
+        "email" => (Loc["Email"].Value, Icons.Material.Filled.Email),
+        "planning/calendar" => (Loc["Calendar"].Value, Icons.Material.Filled.CalendarMonth),
         "organization" => ($"{AppLabels.Employees} & {AppLabels.Teams}", @Icons.Material.Filled.People),
-        "admin/definitions" => ("Task Definitions", Icons.Material.Filled.ListAlt),
-        "admin/standard-documents" => ("Standard Documents", Icons.Material.Filled.Description),
-        "admin/settings" => ("Settings", Icons.Material.Filled.Settings),
-        "admin/demo-settings" => ("Demo Settings", Icons.Material.Filled.Build),
-        "admin/moderation" => ("Moderation", Icons.Material.Filled.Security),
-        "albums" => ("Albums", @Icons.Material.Filled.PhotoLibrary),
-        _ => ("Unknown", Icons.Material.Filled.Link)
+        "admin/definitions" => (Loc["TaskDefinitions"].Value, Icons.Material.Filled.ListAlt),
+        "admin/standard-documents" => (Loc["StandardDocuments"].Value, Icons.Material.Filled.Description),
+        "admin/settings" => (Loc["Settings"].Value, Icons.Material.Filled.Settings),
+        "admin/demo-settings" => (Loc["DemoSettings"].Value, Icons.Material.Filled.Build),
+        "admin/moderation" => (Loc["Moderation"].Value, Icons.Material.Filled.Security),
+        "albums" => (Loc["Albums"].Value, @Icons.Material.Filled.PhotoLibrary),
+        _ => (Loc["Unknown"].Value, Icons.Material.Filled.Link)
     };
 
     private void MoveFavoriteUp(string href)
@@ -114,7 +120,10 @@
             if (HasPerm(AppPermissions.Calendar.View)) allowed.Add("planning/calendar");
             if (HasPerm(AppPermissions.Albums.View)) allowed.Add("albums");
             
-            allowed.Add("organization"); // Everyone in Friend edition should also see Members List
+            if (PrivacyService.CanViewDirectory(_currentUser))
+            {
+                allowed.Add("organization");
+            }
             
             if (HasPerm(AppPermissions.Chat.Moderator))
             {

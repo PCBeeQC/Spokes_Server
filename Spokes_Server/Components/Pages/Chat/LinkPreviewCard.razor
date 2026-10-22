@@ -23,6 +23,7 @@
                     @if (!string.IsNullOrEmpty(Preview.ImageUrl) && !_imageFailed)
                     {
                         <img src="@Preview.ImageUrl" alt="@Preview.Title"
+                            referrerpolicy="no-referrer"
                             style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; display: block;"
                             @onerror="@(() => _imageFailed = true)" />
                     }
@@ -39,6 +40,7 @@
                 {
                     <div style="height: 160px; overflow: hidden; background: var(--mud-palette-background-grey);">
                         <img src="@Preview.ImageUrl" alt="@Preview.Title"
+                            referrerpolicy="no-referrer"
                             style="width: 100%; height: 160px; object-fit: cover; display: block;"
                             @onerror="@(() => _imageFailed = true)" />
                     </div>
@@ -52,7 +54,7 @@
                 <div class="d-flex align-center gap-1 mb-1">
                     @if (!string.IsNullOrEmpty(Preview.FaviconUrl) && !_faviconFailed)
                     {
-                        <img src="@Preview.FaviconUrl" alt="" style="width: 14px; height: 14px; border-radius: 2px;"
+                        <img src="@Preview.FaviconUrl" alt="" referrerpolicy="no-referrer" style="width: 14px; height: 14px; border-radius: 2px;"
                             @onerror="@(() => _faviconFailed = true)" />
                     }
                     <MudText Typo="Typo.caption" Color="Color.Secondary">
@@ -79,14 +81,7 @@
     </MudPaper>
 }
 
-<style>
-    .link-preview-card:hover {
-        border-color: var(--mud-palette-primary) !important;
-    }
-    .yt-overlay:hover {
-        background: rgba(0,0,0,0.1) !important;
-    }
-</style>
+@* Styles live in wwwroot/css/chat.css: this component renders once per link preview, so inline style blocks would be re-sent and re-inserted per instance (AGENTS.md §3). *@
 
 @code {
     [Parameter] public LinkPreview? Preview { get; set; }
@@ -94,4 +89,16 @@
     private bool _imageFailed;
     private bool _faviconFailed;
     private bool _playVideo;
+    private string? _currentUrl;
+
+    protected override void OnParametersSet()
+    {
+        if (Preview?.Url != _currentUrl)
+        {
+            _currentUrl = Preview?.Url;
+            _imageFailed = false;
+            _faviconFailed = false;
+            _playVideo = false;
+        }
+    }
 }

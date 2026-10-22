@@ -17,17 +17,34 @@ public class CommissionLedgerRecord : IDataEntity
     public string? InvoiceId { get; set; } // Nullable if generated on a non-invoice milestone
     public string BeneficiaryId { get; set; } = string.Empty; // Name or EmployeeId to identify the payee
     public string BeneficiaryName { get; set; } = string.Empty;
-    public string Type { get; set; } = "Internal"; // Internal or External
+    public string Type { get; set; } = CommissionType.Internal; // Internal or External
 
     // Financials
     public decimal BaseAmount { get; set; } // The revenue or gross margin it was calculated on
     public decimal CommissionAmount { get; set; }
+    public bool ApplyTaxes { get; set; }
+    public decimal TpsAmount { get; set; }
+    public decimal TvqAmount { get; set; }
+    public string? GlAccountCode { get; set; }
+    public string? SageItemCode { get; set; }
+
+    // Accounting / Sage Export Tracking
+    public bool IsExported => ExportedToSageAt.HasValue;
+    public DateTime? ExportedToSageAt { get; set; }
+    public string? SageBatchId { get; set; }
 
     // Status Flow
     public string Status { get; set; } = CommissionStatus.Payable; // "Pending", "Payable", "Paid", "Clawback"
     public DateTime DateGenerated { get; set; } = DateTime.UtcNow;
     public DateTime? DatePaid { get; set; }
     public string? PaymentReference { get; set; }
+}
+
+public static class CommissionType
+{
+    public const string Internal = "Internal";
+    public const string External = "External";
+    public static readonly string[] All = [Internal, External];
 }
 
 public static class CommissionStatus

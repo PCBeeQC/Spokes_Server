@@ -1,8 +1,9 @@
-@inject Database Db
+@using Spokes_Server.Core.Data.Repositories.HR
+@inject TeamRepository TeamRepo
 
 @{
-    var team = Team ?? (!string.IsNullOrEmpty(TeamId) ? Db.Teams.GetById(TeamId) : null);
-    var displayName = team?.Name ?? TeamName ?? "Unknown";
+    var team = Team ?? (!string.IsNullOrEmpty(TeamId) ? TeamRepo.GetById(TeamId) : null);
+    var displayName = team?.Name ?? TeamName ?? Loc["Unknown"].Value;
     var avatarFontSize = Size switch
     {
         Size.Small => "0.625rem",

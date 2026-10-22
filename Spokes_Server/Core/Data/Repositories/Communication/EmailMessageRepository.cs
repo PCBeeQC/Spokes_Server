@@ -1,27 +1,52 @@
 using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Threading;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Spokes_Server.Core.Data;
 using Spokes_Server.Core.Models.Communication;
 
 namespace Spokes_Server.Core.Data.Repositories.Communication;
 
-public class EmailMessageRepository : JsonRepository<EmailMessage>
+/// <summary>
+/// Repository for managing email messages per employee.
+/// NOTE: This class intentionally does not inherit from JsonRepository&lt;EmailMessage&gt; because email messages
+/// are partitioned hierarchically on disk by employee ID (Data/Employees/{EmployeeId}/Email/Messages/{MessageId}.json).
+/// Decoupling from JsonRepository follows the architectural precedent established in PrivateContactRepository,
+/// ensuring all operations support explicit employee scoping while gracefully resolving across index entries on demand.
+/// </summary>
+public class EmailMessageRepository
 {
+    private readonly DiskPersistenceService _writer;
+    private readonly string _basePath;
+    private readonly ILogger<EmailMessageRepository>? _logger;
+    private readonly ConcurrentDictionary<string, EmailMessage> _cache = new();
+
     // The "Lightweight Index" - Maps (Employee + Folder + UID) -> MessageMetadata
     // This allows O(1) checks for existence and flags without loading the full message.
     private readonly ConcurrentDictionary<string, EmailFolderIndex> _indices = new();
 
+    public event Action<EmailMessage>? OnSaved;
+
     public EmailMessageRepository(DiskPersistenceService writer, IConfiguration config)
-        : base(writer, Path.Combine(config["DataPath"] ?? "Data", "Employees"), "EmailMessages.json")
+        : this(writer, config, null)
     {
     }
 
-    protected override string GetFilePath(EmailMessage item) =>
+    [ActivatorUtilitiesConstructor]
+    public EmailMessageRepository(DiskPersistenceService writer, IConfiguration config, ILogger<EmailMessageRepository>? logger)
+    {
+        _writer = writer;
+        _basePath = Path.Combine(config["DataPath"] ?? "Data", "Employees");
+        _logger = logger;
+    }
+
+    private string GetFilePath(EmailMessage item) =>
         Path.Combine(_basePath, item.EmployeeId, "Email", "Messages", $"{item.Id}.json");
 
     // Override LoadFromDisk to NOT load everything. 
     // Instead, we scan directories to build the Index.
-    public override void LoadFromDisk()
+    public virtual void LoadFromDisk()
     {
         if (!Directory.Exists(_basePath)) return;
 
@@ -55,7 +80,7 @@ public class EmailMessageRepository : JsonRepository<EmailMessage>
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine($"[EmailFolderRepo] Error loading index for {employeeId}: {ex.Message}");
+                    _logger?.LogWarning(ex, "[EmailMessageRepo] Error loading index for {EmployeeId}", employeeId);
                 }
             }
 
@@ -74,7 +99,7 @@ public class EmailMessageRepository : JsonRepository<EmailMessage>
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine($"[EmailMessageRepo] Error scanning message file {file}: {ex.Message}");
+                    _logger?.LogWarning(ex, "[EmailMessageRepo] Error scanning message file {File}", file);
                 }
             }
 
@@ -93,7 +118,8 @@ public class EmailMessageRepository : JsonRepository<EmailMessage>
             GlobalMessageId = item.GlobalMessageId,
             Date = item.Date,
             IsRead = item.IsRead,
-            IsFlagged = item.IsFlagged
+            IsFlagged = item.IsFlagged,
+            IsLocalOnly = item.IsLocalOnly
         };
 
         var folderIndex = _indices.GetOrAdd(folderKey, _ => new EmailFolderIndex());
@@ -116,7 +142,7 @@ public class EmailMessageRepository : JsonRepository<EmailMessage>
         _writer.QueueWrite(indexPath, employeeIndices);
     }
 
-    public override void Save(EmailMessage item)
+    public virtual void Save(EmailMessage item)
     {
         UpdateIndex(item);
 
@@ -125,9 +151,10 @@ public class EmailMessageRepository : JsonRepository<EmailMessage>
         _cache[item.Id] = item;
 
         SaveIndex(item.EmployeeId);
+        OnSaved?.Invoke(item);
     }
 
-    public void RenameFolder(string employeeId, string oldFolderPath, string newFolderPath)
+    public virtual void RenameFolder(string employeeId, string oldFolderPath, string newFolderPath)
     {
         var msgs = GetByFolder(employeeId, oldFolderPath);
         foreach (var msg in msgs)
@@ -143,13 +170,60 @@ public class EmailMessageRepository : JsonRepository<EmailMessage>
         }
     }
 
-    public override void Delete(string id) =>
-        throw new NotSupportedException("Use Delete(messageId, employeeId) instead to prevent state leaks and ensure correct file paths.");
+    /// <summary>
+    /// Gets a message by ID with explicit employee context (recommended, O(1)).
+    /// </summary>
+    public virtual EmailMessage? GetById(string employeeId, string messageId) =>
+        GetByIdOrLoad(employeeId, messageId);
 
-    public void Delete(string messageId, string employeeId)
+    /// <summary>
+    /// Gets a message by ID across all employees by checking cache and locating it across index entries or disk on demand.
+    /// </summary>
+    public virtual EmailMessage? GetById(string messageId)
+    {
+        if (_cache.TryGetValue(messageId, out var item)) return item;
+
+        foreach (var kvp in _indices)
+        {
+            var meta = kvp.Value.Messages.Values.FirstOrDefault(m => m.Id == messageId);
+            if (meta != null)
+            {
+                var employeeId = kvp.Key.Split(':')[0];
+                return GetByIdOrLoad(employeeId, messageId);
+            }
+        }
+
+        if (Directory.Exists(_basePath))
+        {
+            foreach (var empDir in Directory.GetDirectories(_basePath))
+            {
+                var empId = Path.GetFileName(empDir);
+                var candidatePath = Path.Combine(empDir, "Email", "Messages", $"{messageId}.json");
+                if (File.Exists(candidatePath))
+                {
+                    return GetByIdOrLoad(empId, messageId);
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Deletes a message with explicit employee context.
+    /// </summary>
+    public virtual void Delete(string employeeId, string messageId)
     {
         _cache.TryRemove(messageId, out _);
         var path = Path.Combine(_basePath, employeeId, "Email", "Messages", $"{messageId}.json");
+        try
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(ex, "Failed to immediately delete email message file {Path}", path);
+        }
         _writer.QueueDelete(path);
 
         foreach (var kvp in _indices)
@@ -166,6 +240,99 @@ public class EmailMessageRepository : JsonRepository<EmailMessage>
                 }
             }
         }
+    }
+
+    /// <summary>
+    /// Deletes a message by ID by resolving employee context from cache, index, or disk.
+    /// </summary>
+    public virtual void Delete(string messageId)
+    {
+        if (_cache.TryGetValue(messageId, out var cached))
+        {
+            Delete(cached.EmployeeId, messageId);
+            return;
+        }
+
+        foreach (var kvp in _indices)
+        {
+            var meta = kvp.Value.Messages.Values.FirstOrDefault(m => m.Id == messageId);
+            if (meta != null)
+            {
+                var employeeId = kvp.Key.Split(':')[0];
+                Delete(employeeId, messageId);
+                return;
+            }
+        }
+
+        if (Directory.Exists(_basePath))
+        {
+            foreach (var empDir in Directory.GetDirectories(_basePath))
+            {
+                var empId = Path.GetFileName(empDir);
+                var candidatePath = Path.Combine(empDir, "Email", "Messages", $"{messageId}.json");
+                if (File.Exists(candidatePath))
+                {
+                    Delete(empId, messageId);
+                    return;
+                }
+            }
+        }
+    }
+
+    public virtual List<EmailMessage> GetAllForEmployee(string employeeId)
+    {
+        var results = new List<EmailMessage>();
+        var seenIds = new HashSet<string>();
+
+        foreach (var kvp in _indices)
+        {
+            if (kvp.Key.StartsWith($"{employeeId}:"))
+            {
+                foreach (var meta in kvp.Value.Messages.Values)
+                {
+                    if (seenIds.Add(meta.Id))
+                    {
+                        var msg = GetByIdOrLoad(employeeId, meta.Id);
+                        if (msg != null) results.Add(msg);
+                    }
+                }
+            }
+        }
+
+        var msgDir = Path.Combine(_basePath, employeeId, "Email", "Messages");
+        if (Directory.Exists(msgDir))
+        {
+            foreach (var file in Directory.GetFiles(msgDir, "*.json"))
+            {
+                var id = Path.GetFileNameWithoutExtension(file);
+                if (seenIds.Add(id))
+                {
+                    var msg = GetByIdOrLoad(employeeId, id);
+                    if (msg != null) results.Add(msg);
+                }
+            }
+        }
+
+        return results;
+    }
+
+    public virtual List<EmailMessage> GetAll()
+    {
+        if (!Directory.Exists(_basePath)) return _cache.Values.ToList();
+
+        var results = new List<EmailMessage>();
+        foreach (var empDir in Directory.GetDirectories(_basePath))
+        {
+            var empId = Path.GetFileName(empDir);
+            results.AddRange(GetAllForEmployee(empId));
+        }
+        return results;
+    }
+
+    public virtual void Clear()
+    {
+        _cache.Clear();
+        _indices.Clear();
     }
 
     public bool Exists(string employeeId, string folderPath, uint uid) =>
@@ -189,16 +356,43 @@ public class EmailMessageRepository : JsonRepository<EmailMessage>
         return folderIndex.Messages.TryAdd(uid, placeholder);
     }
 
-    public EmailMessage? GetByUniqueId(string employeeId, string folderPath, uint uid)
+    public EmailMessage? GetByUid(string employeeId, string folderPath, uint uid)
     {
         if (_indices.TryGetValue($"{employeeId}:{folderPath}", out var index))
         {
             if (index.Messages.TryGetValue(uid, out var meta))
             {
-                return GetByIdOrLoad(meta.Id, employeeId);
+                return GetByIdOrLoad(employeeId, meta.Id);
             }
         }
         return null;
+    }
+
+    /// <summary>
+    /// Finds an email message by IMAP UniqueId for a specific employee across any folder using in-memory cache and indices, avoiding global disk scans.
+    /// </summary>
+    public virtual EmailMessage? GetByUniqueId(string employeeId, uint uniqueId)
+    {
+        if (uniqueId == 0) return null;
+
+        if (_cache.Values.FirstOrDefault(m => m.EmployeeId == employeeId && m.UniqueId == uniqueId) is { } cached)
+            return cached;
+
+        foreach (var kvp in _indices)
+        {
+            if (kvp.Key.StartsWith($"{employeeId}:", StringComparison.OrdinalIgnoreCase))
+            {
+                if (kvp.Value.Messages.TryGetValue(uniqueId, out var meta))
+                {
+                    return GetByIdOrLoad(employeeId, meta.Id);
+                }
+            }
+        }
+
+        var msgDir = Path.Combine(_basePath, employeeId, "Email", "Messages");
+        if (!Directory.Exists(msgDir)) return null;
+
+        return GetAllForEmployee(employeeId).FirstOrDefault(m => m.UniqueId == uniqueId);
     }
 
     public List<EmailMessage> GetAllByGlobalMessageId(string employeeId, string globalMessageId)
@@ -213,7 +407,7 @@ public class EmailMessageRepository : JsonRepository<EmailMessage>
                 var meta = kvp.Value.Messages.Values.FirstOrDefault(m => m.GlobalMessageId == globalMessageId);
                 if (meta != null)
                 {
-                    var msg = GetByIdOrLoad(meta.Id, employeeId);
+                    var msg = GetByIdOrLoad(employeeId, meta.Id);
                     if (msg != null) results.Add(msg);
                 }
             }
@@ -221,9 +415,14 @@ public class EmailMessageRepository : JsonRepository<EmailMessage>
         return results;
     }
 
-    public EmailMessage? GetByIdOrLoad(string id, string employeeId)
+    public EmailMessage? GetByIdOrLoad(string employeeId, string id)
     {
-        if (_cache.TryGetValue(id, out var item)) return item;
+        if (_cache.TryGetValue(id, out var item))
+        {
+            if (string.IsNullOrEmpty(employeeId) || item.EmployeeId == employeeId)
+                return item;
+            return null;
+        }
 
         var path = Path.Combine(_basePath, employeeId, "Email", "Messages", $"{id}.json");
         if (File.Exists(path))
@@ -245,11 +444,47 @@ public class EmailMessageRepository : JsonRepository<EmailMessage>
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[EmailMessageRepo] Error loading email {id}: {ex.Message}");
+                _logger?.LogWarning(ex, "[EmailMessageRepo] Error loading email {Id}", id);
             }
         }
         return null;
     }
+
+    public async Task<EmailMessage?> GetByIdOrLoadAsync(string employeeId, string id, CancellationToken cancellationToken = default)
+    {
+        if (_cache.TryGetValue(id, out var item))
+        {
+            if (string.IsNullOrEmpty(employeeId) || item.EmployeeId == employeeId)
+                return item;
+            return null;
+        }
+
+        var path = Path.Combine(_basePath, employeeId, "Email", "Messages", $"{id}.json");
+        if (File.Exists(path))
+        {
+            try
+            {
+                var json = await File.ReadAllTextAsync(path, cancellationToken);
+                item = JsonSerializer.Deserialize<EmailMessage>(json);
+                if (item != null)
+                {
+                    _cache[item.Id] = item;
+                    if (_cache.Count > 5000)
+                    {
+                        var keyToRemove = _cache.Keys.FirstOrDefault();
+                        if (keyToRemove != null) _cache.TryRemove(keyToRemove, out _);
+                    }
+                    return item;
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogWarning(ex, "[EmailMessageRepo] Error loading email {Id}", id);
+            }
+        }
+        return null;
+    }
+
 
     public List<EmailMessage> GetByFolder(string employeeId, string folderPath)
     {
@@ -258,7 +493,7 @@ public class EmailMessageRepository : JsonRepository<EmailMessage>
             var results = new List<EmailMessage>();
             foreach (var meta in index.Messages.Values)
             {
-                var msg = GetByIdOrLoad(meta.Id, employeeId);
+                var msg = GetByIdOrLoad(employeeId, meta.Id);
                 if (msg != null) results.Add(msg);
             }
             return results;
@@ -273,6 +508,25 @@ public class EmailMessageRepository : JsonRepository<EmailMessage>
             return index.Messages.Keys.ToList();
         }
         return new List<uint>();
+    }
+
+    /// <summary>
+    /// Generates the next sequential local UID for messages created or moved locally without server IMAP sync.
+    /// Uses structured monotonically increasing sequence starting above any existing non-sentinel UIDs in the folder.
+    /// </summary>
+    public virtual uint GetNextLocalUid(string employeeId, string folderPath)
+    {
+        if (_indices.TryGetValue($"{employeeId}:{folderPath}", out var index) && index.Messages.Count > 0)
+        {
+            // Filter out any legacy sentinel UIDs near uint.MaxValue when calculating next local sequence
+            var regularUids = index.Messages.Keys.Where(k => k < uint.MaxValue - 1000000).ToList();
+            if (regularUids.Count > 0)
+            {
+                var maxUid = regularUids.Max();
+                return maxUid + 1;
+            }
+        }
+        return 1;
     }
 
     public virtual int GetUnreadCount(string employeeId, string folderPath) =>
@@ -306,7 +560,29 @@ public class EmailMessageRepository : JsonRepository<EmailMessage>
             var results = new List<EmailMessage>();
             foreach (var meta in topMetas)
             {
-                var msg = GetByIdOrLoad(meta.Id, employeeId);
+                var msg = GetByIdOrLoad(employeeId, meta.Id);
+                if (msg != null) results.Add(msg);
+            }
+            return results;
+        }
+        return new List<EmailMessage>();
+    }
+
+    public List<EmailMessage> GetUnreadByFolderRecent(string employeeId, string folderPath, int count = 10)
+    {
+        if (_indices.TryGetValue($"{employeeId}:{folderPath}", out var index))
+        {
+            var unreadMetas = index.Messages.Values
+                .Where(m => !m.IsRead)
+                .OrderByDescending(m => m.Date)
+                .ThenByDescending(m => m.UniqueId)
+                .Take(count)
+                .ToList();
+
+            var results = new List<EmailMessage>();
+            foreach (var meta in unreadMetas)
+            {
+                var msg = GetByIdOrLoad(employeeId, meta.Id);
                 if (msg != null) results.Add(msg);
             }
             return results;
@@ -328,7 +604,7 @@ public class EmailMessageRepository : JsonRepository<EmailMessage>
             var results = new List<EmailMessage>();
             foreach (var meta in olderMetas)
             {
-                var msg = GetByIdOrLoad(meta.Id, employeeId);
+                var msg = GetByIdOrLoad(employeeId, meta.Id);
                 if (msg != null) results.Add(msg);
             }
             return results;
@@ -348,7 +624,7 @@ public class EmailMessageRepository : JsonRepository<EmailMessage>
                     return false;
                 }
 
-                var msg = GetByIdOrLoad(meta.Id, employeeId);
+                var msg = GetByIdOrLoad(employeeId, meta.Id);
                 if (msg != null)
                 {
                     msg.IsRead = isRead;
@@ -361,17 +637,17 @@ public class EmailMessageRepository : JsonRepository<EmailMessage>
         return false;
     }
 
-    public async Task<List<EmailMessage>> SearchAsync(string employeeId, string query, string dataPath, string? folderPath = null, IProgress<(int processed, int total)>? progress = null, CancellationToken cancellationToken = default)
+    public async Task<List<EmailMessage>> SearchAsync(string employeeId, string query, string? folderPath = null, IProgress<(int processed, int total)>? progress = null, CancellationToken cancellationToken = default)
     {
         var results = new List<EmailMessage>();
-        await foreach (var msg in SearchStreamingAsync(employeeId, query, dataPath, folderPath, progress, cancellationToken))
+        await foreach (var msg in SearchStreamingAsync(employeeId, query, folderPath, progress, cancellationToken))
         {
             results.Add(msg);
         }
         return results.OrderByDescending(m => m.Date).ToList();
     }
 
-    public async IAsyncEnumerable<EmailMessage> SearchStreamingAsync(string employeeId, string query, string dataPath, string? folderPath = null, IProgress<(int processed, int total)>? progress = null, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+    public async IAsyncEnumerable<EmailMessage> SearchStreamingAsync(string employeeId, string query, string? folderPath = null, IProgress<(int processed, int total)>? progress = null, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(query)) yield break;
         var lowerQuery = query.ToLower();
@@ -398,7 +674,7 @@ public class EmailMessageRepository : JsonRepository<EmailMessage>
         int processedCount = 0;
         progress?.Report((0, totalMessages));
 
-        var mimeFolder = Path.Combine(dataPath, "Employees", employeeId, "Email", "Mime");
+        var mimeFolder = Path.Combine(_basePath, employeeId, "Email", "Mime");
 
         foreach (var item in sortedMetas)
         {
@@ -421,8 +697,7 @@ public class EmailMessageRepository : JsonRepository<EmailMessage>
 
             if (msg == null)
             {
-                // Try to load just enough to check metadata? No, let's load it but maybe we can optimize this later.
-                msg = GetByIdOrLoad(id, employeeId);
+                msg = await GetByIdOrLoadAsync(employeeId, id, cancellationToken);
             }
 
             if (msg != null)
@@ -442,8 +717,7 @@ public class EmailMessageRepository : JsonRepository<EmailMessage>
                     {
                         try
                         {
-                            using var stream = File.OpenRead(mimeFilePath);
-                            var mime = MimeKit.MimeMessage.Load(stream);
+                            var mime = await MimeKit.MimeMessage.LoadAsync(mimeFilePath, cancellationToken);
                             var bodyText = mime.TextBody ?? "";
                             if (string.IsNullOrWhiteSpace(bodyText) && !string.IsNullOrWhiteSpace(mime.HtmlBody))
                             {
@@ -453,7 +727,7 @@ public class EmailMessageRepository : JsonRepository<EmailMessage>
                         }
                         catch (Exception ex)
                         {
-                            Console.WriteLine($"[EmailFolderRepo] Error reading MIME body for search {id}: {ex.Message}");
+                            _logger?.LogWarning(ex, "[EmailMessageRepo] Error reading MIME body for search {Id}", id);
                         }
                     }
                 }
@@ -468,9 +742,6 @@ public class EmailMessageRepository : JsonRepository<EmailMessage>
             if (currentProgress % 5 == 0 || currentProgress == totalMessages) progress?.Report((currentProgress, totalMessages));
         }
     }
-
-
-
 
     public bool HasMoreMessages(string employeeId, string folderPath) =>
         _indices.TryGetValue($"{employeeId}:{folderPath}", out var index) && index.Messages.Count > 50;
@@ -489,4 +760,5 @@ public class MessageMetadata
     public DateTimeOffset Date { get; set; }
     public bool IsRead { get; set; }
     public bool IsFlagged { get; set; }
+    public bool IsLocalOnly { get; set; }
 }

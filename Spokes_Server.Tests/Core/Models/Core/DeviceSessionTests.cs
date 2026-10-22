@@ -37,12 +37,12 @@ public class DeviceSessionTests
         Assert.Null(session.PushEndpoint);
         Assert.Equal(string.Empty, session.PushP256dh);
         Assert.Equal(string.Empty, session.PushAuth);
-        Assert.Equal("WebPush", session.PushSubscriptionType);
+        Assert.Equal(PushSubscriptionType.WebPush, session.PushSubscriptionType);
         Assert.Equal(string.Empty, session.PushPublicKey);
         Assert.False(session.PushEnabled);
         Assert.False(session.IsIdleDetectionEnabled);
         Assert.Null(session.PushSubscribedAt);
-        Assert.Equal("Desktop", session.DeviceType);
+        Assert.Equal(DeviceType.Desktop, session.DeviceType);
         Assert.Equal(string.Empty, session.DeviceName);
         Assert.Equal(string.Empty, session.PushUserAgent);
         Assert.False(session.IsCapacitor);
@@ -92,12 +92,12 @@ public class DeviceSessionTests
             PushEndpoint = "https://fcm.googleapis.com/fcm/send/device-key",
             PushP256dh = "p256dh-crypto-key",
             PushAuth = "auth-secret-string",
-            PushSubscriptionType = "NativeRelay",
+            PushSubscriptionType = PushSubscriptionType.NativeRelay,
             PushPublicKey = "rsa-public-key-blob",
             PushEnabled = true,
             IsIdleDetectionEnabled = true,
             PushSubscribedAt = pushSubscribed,
-            DeviceType = "Mobile",
+            DeviceType = DeviceType.Mobile,
             DeviceName = "Personal iPhone",
             PushUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)",
             IsCapacitor = true
@@ -118,12 +118,12 @@ public class DeviceSessionTests
         Assert.Equal("https://fcm.googleapis.com/fcm/send/device-key", session.PushEndpoint);
         Assert.Equal("p256dh-crypto-key", session.PushP256dh);
         Assert.Equal("auth-secret-string", session.PushAuth);
-        Assert.Equal("NativeRelay", session.PushSubscriptionType);
+        Assert.Equal(PushSubscriptionType.NativeRelay, session.PushSubscriptionType);
         Assert.Equal("rsa-public-key-blob", session.PushPublicKey);
         Assert.True(session.PushEnabled);
         Assert.True(session.IsIdleDetectionEnabled);
         Assert.Equal(pushSubscribed, session.PushSubscribedAt);
-        Assert.Equal("Mobile", session.DeviceType);
+        Assert.Equal(DeviceType.Mobile, session.DeviceType);
         Assert.Equal("Personal iPhone", session.DeviceName);
         Assert.Equal("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)", session.PushUserAgent);
         Assert.True(session.IsCapacitor);
@@ -134,6 +134,10 @@ public class DeviceSessionTests
     [Theory]
     [InlineData(true, "WebPush", "Chrome on Windows", "", true)]
     [InlineData(false, "NativeRelay", "Unknown Device", "", true)]
+    [InlineData(false, "NativeRelay", "Windows", "", false)]
+    [InlineData(false, "NativeRelay", "Windows (Desktop App)", "", false)]
+    [InlineData(false, "NativeRelay", "macOS", "", false)]
+    [InlineData(false, "NativeRelay", "Linux", "", false)]
     [InlineData(false, "WebPush", "iOS (App)", "", true)]
     [InlineData(false, "WebPush", "Android (App)", "", true)]
     [InlineData(false, "WebPush", "Unknown Device", "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0) Capacitor/6.0", true)]
@@ -216,5 +220,29 @@ public class DeviceSessionTests
         var session2 = new DeviceSession { Id = id };
 
         Assert.Equal(session1.GetHashCode(), session2.GetHashCode());
+    }
+
+    [Fact]
+    public void PushSubscriptionType_ConstantsAndAllList_AreValid()
+    {
+        Assert.Equal("WebPush", PushSubscriptionType.WebPush);
+        Assert.Equal("NativeRelay", PushSubscriptionType.NativeRelay);
+
+        var all = PushSubscriptionType.All;
+        Assert.Equal(2, all.Length);
+        Assert.Contains(PushSubscriptionType.WebPush, all);
+        Assert.Contains(PushSubscriptionType.NativeRelay, all);
+    }
+
+    [Fact]
+    public void DeviceType_ConstantsAndAllList_AreValid()
+    {
+        Assert.Equal("Desktop", DeviceType.Desktop);
+        Assert.Equal("Mobile", DeviceType.Mobile);
+
+        var all = DeviceType.All;
+        Assert.Equal(2, all.Length);
+        Assert.Contains(DeviceType.Desktop, all);
+        Assert.Contains(DeviceType.Mobile, all);
     }
 }

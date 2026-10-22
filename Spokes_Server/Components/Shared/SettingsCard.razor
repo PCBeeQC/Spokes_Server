@@ -1,0 +1,45 @@
+@namespace Spokes_Server.Components.Shared
+
+<MudPaper Elevation="0" Outlined="true" Class="@($"pa-4 rounded-lg {Class}".Trim())" Style="@Style">
+    @if (!string.IsNullOrEmpty(Title) || !string.IsNullOrEmpty(Icon) || HeaderActions != null)
+    {
+        <div class="d-flex align-center gap-2 mb-1">
+            @if (!string.IsNullOrEmpty(Icon))
+            {
+                <MudIcon Icon="@Icon" Color="@IconColor" />
+            }
+            @if (!string.IsNullOrEmpty(Title))
+            {
+                <MudText Typo="Typo.subtitle1"><b>@Title</b></MudText>
+            }
+            @if (HeaderActions != null)
+            {
+                <MudSpacer />
+                @HeaderActions
+            }
+        </div>
+    }
+    @if (!string.IsNullOrEmpty(Description))
+    {
+        <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-3">
+            @Description
+        </MudText>
+    }
+    @if (ShowDivider)
+    {
+        <MudDivider Class="mb-3" />
+    }
+    @ChildContent
+</MudPaper>
+
+@code {
+    [Parameter] public string? Title { get; set; }
+    [Parameter] public string? Description { get; set; }
+    [Parameter] public string? Icon { get; set; }
+    [Parameter] public Color IconColor { get; set; } = Color.Primary;
+    [Parameter] public bool ShowDivider { get; set; } = true;
+    [Parameter] public RenderFragment? HeaderActions { get; set; }
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+    [Parameter] public string Class { get; set; } = string.Empty;
+    [Parameter] public string Style { get; set; } = string.Empty;
+}

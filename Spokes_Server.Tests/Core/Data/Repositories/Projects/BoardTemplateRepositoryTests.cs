@@ -1,52 +1,12 @@
-using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.Logging;
-using Moq;
-using Spokes_Server.Core.Data;
 using Spokes_Server.Core.Data.Repositories.Projects;
 using Spokes_Server.Core.Models.Projects;
+using Spokes_Server.Tests.Helpers;
 using Xunit;
 
 namespace Spokes_Server.Tests.Core.Data.Repositories.Projects;
 
-public class BoardTemplateRepositoryTests : IDisposable
+public class BoardTemplateRepositoryTests : RepositoryTestFixture<BoardTemplateRepository>
 {
-    private readonly string _testDataDir;
-    private readonly DiskPersistenceService _writer;
-    private readonly BoardTemplateRepository _repo;
-
-    public BoardTemplateRepositoryTests()
-    {
-        _testDataDir = Path.Combine(Path.GetTempPath(), $"Spokes_Test_BoardTemplates_{Guid.NewGuid()}");
-
-        var mockConfig = new Mock<IConfiguration>();
-        mockConfig.Setup(c => c["DataPath"]).Returns(_testDataDir);
-
-        var mockPersistenceLogger = new Mock<ILogger<DiskPersistenceService>>();
-        _writer = new DiskPersistenceService(mockPersistenceLogger.Object);
-
-        _repo = new BoardTemplateRepository(_writer, mockConfig.Object);
-    }
-
-    public void Dispose()
-    {
-        if (Directory.Exists(_testDataDir))
-        {
-            try { Directory.Delete(_testDataDir, true); } catch (Exception ex) { Console.WriteLine($"Cleanup failed: {ex.Message}"); }
-        }
-        _writer.Dispose();
-    }
-
-    [Fact]
-    public void Constructor_WithNullDataPath_UsesDefaultPath()
-    {
-        var mockConfig = new Mock<IConfiguration>();
-        mockConfig.Setup(c => c["DataPath"]).Returns((string?)null);
-
-        var repo = new BoardTemplateRepository(_writer, mockConfig.Object);
-
-        Assert.NotNull(repo);
-    }
-
     [Fact]
     public void Save_And_GetById_ReturnsBoardTemplate()
     {
@@ -117,10 +77,7 @@ public class BoardTemplateRepositoryTests : IDisposable
         var template = new BoardTemplate { Id = "tmpl-disk", Name = "Disk Template" };
         File.WriteAllText(Path.Combine(targetDir, "tmpl-disk.json"), System.Text.Json.JsonSerializer.Serialize(template));
 
-        var mockConfig = new Mock<IConfiguration>();
-        mockConfig.Setup(c => c["DataPath"]).Returns(_testDataDir);
-
-        var newRepo = new BoardTemplateRepository(_writer, mockConfig.Object);
+        var newRepo = new BoardTemplateRepository(_writer, Config);
         newRepo.LoadFromDisk();
 
         var loaded = newRepo.GetById("tmpl-disk");

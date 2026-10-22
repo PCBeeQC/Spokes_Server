@@ -1,11 +1,22 @@
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Spokes_Server.Core.Models.Accounting;
 
 namespace Spokes_Server.Core.Data.Repositories.Accounting;
 
 public class PurchaseOrderRepository : JsonRepository<PurchaseOrder>
 {
-    public PurchaseOrderRepository(DiskPersistenceService writer, IConfiguration config)
+    private readonly SequenceService _sequenceService;
+
+    [ActivatorUtilitiesConstructor]
+    public PurchaseOrderRepository(DiskPersistenceService writer, IConfiguration config, SequenceService sequenceService)
         : base(writer, Path.Combine(config["DataPath"] ?? "Data", "Purchases"), "*.json")
+    {
+        _sequenceService = sequenceService;
+    }
+
+    public PurchaseOrderRepository(DiskPersistenceService writer, IConfiguration config)
+        : this(writer, config, new SequenceService(config))
     {
     }
 
@@ -22,17 +33,12 @@ public class PurchaseOrderRepository : JsonRepository<PurchaseOrder>
         base.Save(item);
     }
 
-    private string GeneratePoNumber(DateTime date)
+    public string GeneratePoNumber(DateTime date)
     {
-        // Format: PO2512-
-        string prefix = $"PO{date:yyMM}-";
-
-        // Find existing POs with this prefix to determine the increment
-        var existingCount = _cache.Values.Count(p => p.PoNumber.StartsWith(prefix));
-
-        // Format: PO2512-01
-        return $"{prefix}{(existingCount + 1):00}";
+        var seq = _sequenceService.GetNextSequence($"PurchaseOrder_{date:yyMM}");
+        return $"PO{date:yyMM}-{seq:00}";
     }
+
+    public string GeneratePoNumber(string prefix) =>
+        _sequenceService.GenerateNumber("PurchaseOrder", prefix);
 }
-
-

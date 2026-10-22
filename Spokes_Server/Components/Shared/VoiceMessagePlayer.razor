@@ -7,9 +7,11 @@
                        Size="Size.Medium"
                        Color="Color.Primary"
                        OnClick="TogglePlay" 
-                       Class="mr-2 pa-1" />
+                       Class="mr-2 pa-1"
+                       aria-label="@(_isPlaying ? Loc["Pause"] : Loc["Play"])"
+                       title="@(_isPlaying ? Loc["Pause"] : Loc["Play"])" />
 
-        <input type="range" min="0" max="100" value="@_progress" @oninput="OnProgressChanged" class="mud-slider voice-slider flex-grow-1" style="min-width: 150px;" />
+        <input type="range" min="0" max="100" value="@_progress" @oninput="OnProgressChanged" class="mud-slider voice-slider flex-grow-1" style="min-width: 150px;" aria-label="@Loc["Audio seek"]" />
     </div>
     
     <div class="d-flex justify-space-between px-2" style="margin-left: 32px; margin-top: -2px;">
@@ -21,33 +23,7 @@
     <audio @ref="_audioRef" src="@AudioUrl" @onloadedmetadata="OnLoadedMetadata" @ontimeupdate="OnTimeUpdate" @onended="OnEnded"></audio>
 </MudPaper>
 
-<style>
-    .voice-slider {
-        -webkit-appearance: none;
-        appearance: none;
-        background: var(--mud-palette-action-disabled);
-        height: 4px;
-        border-radius: 2px;
-        outline: none;
-    }
-    .voice-slider::-webkit-slider-thumb {
-        -webkit-appearance: none;
-        appearance: none;
-        width: 14px;
-        height: 14px;
-        border-radius: 50%;
-        background: var(--mud-palette-primary);
-        cursor: pointer;
-    }
-    .voice-slider::-moz-range-thumb {
-        width: 14px;
-        height: 14px;
-        border-radius: 50%;
-        background: var(--mud-palette-primary);
-        cursor: pointer;
-        border: none;
-    }
-</style>
+@* Styles live in wwwroot/css/app.css: this component renders once per voice message, so inline style blocks would be re-sent and re-inserted per instance (AGENTS.md §3). *@
 
 @code {
     [Parameter]

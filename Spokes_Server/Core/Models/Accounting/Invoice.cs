@@ -2,6 +2,7 @@ namespace Spokes_Server.Core.Models.Accounting;
 
 using System.Text.Json.Serialization;
 using Spokes_Server.Core.Data;
+using Spokes_Server.Core.Services.Accounting;
 
 public class Invoice : IDataEntity
 {
@@ -20,16 +21,39 @@ public class Invoice : IDataEntity
 
     public DateTime Date { get; set; } = DateTime.Today;
     public DateTime DueDate { get; set; } = DateTime.Today.AddDays(30);
-    public string Status { get; set; } = "Draft"; // Draft, Final, Paid, Void
+    public string Status { get; set; } = InvoiceStatus.Draft; // Draft, Final, Paid, Void
     public string PdfPath { get; set; } = string.Empty;
 
     // NEW: Template Override
     public string? TemplateId { get; set; }
     public bool HideCostAndMarkup { get; set; }
     public string Note { get; set; } = string.Empty; // Description/Memo
+    public string PaymentTerms { get; set; } = string.Empty;
+
+    // Accounting / Sage Export Tracking
+    public bool IsExported => ExportedToSageAt.HasValue;
+    public DateTime? ExportedToSageAt { get; set; }
+    public string? SageBatchId { get; set; }
 
     // The Line Items
-    public List<InvoiceLine> Lines { get; set; } = [];
+    public List<InvoiceLine> LineItems { get; set; } = [];
+
+    // Backward compatibility for legacy JSON files and existing call sites
+    [JsonPropertyName("Lines")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<InvoiceLine>? LegacyLines
+    {
+        get => null;
+        set { if (value != null && LineItems.Count == 0) LineItems = value; }
+    }
+
+    [Obsolete("Prefer LineItems for consistency across accounting models.")]
+    [JsonIgnore]
+    public List<InvoiceLine> Lines
+    {
+        get => LineItems;
+        set => LineItems = value;
+    }
 
     // TRACKING: Which original source items does this invoice cover?
     // We use this to calculate "Unbilled" items later.
@@ -38,24 +62,43 @@ public class Invoice : IDataEntity
     public List<string> BilledExpenseItemIds { get; set; } = [];
 
     // Financials
-    public decimal TaxRate { get; set; } = 0.14975m;
-    public decimal SubTotal => Lines.Sum(l => l.Total);
-    public decimal TotalCost => Lines.Sum(l => l.Quantity * l.OriginalUnitCost);
+    public decimal TaxRate { get; set; } = FinancialCalculationEngine.QuebecCombinedTaxRate;
+    public decimal SubTotal => LineItems.Sum(l => l.Total);
+    public decimal TotalCost => LineItems.Sum(l => l.Quantity * l.OriginalUnitCost);
     public decimal GrossMargin => SubTotal - TotalCost;
     public decimal TaxAmount => SubTotal * TaxRate;
+    public decimal TpsAmount => FinancialCalculationEngine.CalculateFromSubTotal(SubTotal, TaxRate).TpsAmount;
+    public decimal TvqAmount => FinancialCalculationEngine.CalculateFromSubTotal(SubTotal, TaxRate).TvqAmount;
     public decimal GrandTotal => SubTotal + TaxAmount;
 
     // Payment Tracking
-    [JsonPropertyName("AmountPaid")]
-    public decimal LegacyAmountPaid { get; set; }
-    
     public List<PaymentRecord> Payments { get; set; } = [];
     
     [JsonIgnore]
-    public decimal AmountPaid => Payments.Any() ? Payments.Sum(p => p.Amount) : LegacyAmountPaid;
+    public decimal AmountPaid => Payments.Sum(p => p.Amount);
     
     public decimal BalanceDue => GrandTotal - AmountPaid;
     public DateTime? DatePaid { get; set; }
+
+    [JsonPropertyName("AmountPaid")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public decimal? MigratedAmountPaid
+    {
+        get => null;
+        set
+        {
+            if (value.HasValue && value.Value > 0 && Payments.Count == 0)
+            {
+                Payments.Add(new PaymentRecord
+                {
+                    Amount = value.Value,
+                    Date = DatePaid ?? Date,
+                    Method = "Legacy",
+                    Notes = "Migrated from legacy AmountPaid"
+                });
+            }
+        }
+    }
 }
 
 public class InvoiceLine

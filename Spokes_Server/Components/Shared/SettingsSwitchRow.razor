@@ -1,0 +1,41 @@
+@namespace Spokes_Server.Components.Shared
+
+<div class="@($"d-flex flex-column flex-sm-row justify-space-between align-start align-sm-center py-2 gap-2 {Class}".Trim())">
+    <div class="flex-grow-1 mr-sm-4">
+        @if (TitleContent != null)
+        {
+            @TitleContent
+        }
+        else if (!string.IsNullOrEmpty(Title))
+        {
+            <MudText Typo="Typo.body2" Style="font-weight: 500;">@Title</MudText>
+        }
+
+        @if (DescriptionContent != null)
+        {
+            @DescriptionContent
+        }
+        else if (!string.IsNullOrEmpty(Description))
+        {
+            <MudText Typo="Typo.caption" Color="Color.Secondary">@Description</MudText>
+        }
+    </div>
+    <MudSwitch T="bool"
+               Color="@Color"
+               Value="@Value"
+               ValueChanged="@ValueChanged"
+               Disabled="@Disabled"
+               Class="ma-0" />
+</div>
+
+@code {
+    [Parameter] public string? Title { get; set; }
+    [Parameter] public RenderFragment? TitleContent { get; set; }
+    [Parameter] public string? Description { get; set; }
+    [Parameter] public RenderFragment? DescriptionContent { get; set; }
+    [Parameter] public bool Value { get; set; }
+    [Parameter] public EventCallback<bool> ValueChanged { get; set; }
+    [Parameter] public bool Disabled { get; set; }
+    [Parameter] public Color Color { get; set; } = Color.Primary;
+    [Parameter] public string Class { get; set; } = string.Empty;
+}

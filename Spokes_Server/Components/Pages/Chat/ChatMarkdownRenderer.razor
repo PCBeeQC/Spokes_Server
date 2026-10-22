@@ -1,7 +1,10 @@
 @using System.Text.RegularExpressions
 @using Spokes_Server.Core.Services.Security
+@using Spokes_Server.Core.Services.Communication.Presence
 @inject MarkdownSanitizerService MarkdownSanitizer
 @inject FileTokenService FileTokens
+@inject UserCircuitContext CircuitContext
+@inject ILogger<ChatMarkdownRenderer> Logger
 
 @* Render markdown content as sanitized HTML, with @mention support *@
 <div class="chat-markdown">
@@ -146,7 +149,7 @@
                     var contextId = fileMatch.Groups[2].Value;
                     var fileName = System.Net.WebUtility.UrlDecode(fileMatch.Groups[3].Value);
                     
-                    var token = FileTokens.GenerateAccessToken(category, contextId, fileName, ChannelKey);
+                    var token = FileTokens.GenerateAccessToken(category, contextId, fileName, ChannelKey, CurrentUserId, SessionId ?? CircuitContext?.SessionId);
                     rawUrl = rawUrl.Contains("?") ? $"{rawUrl}&t={token}" : $"{rawUrl}?t={token}";
                 }
 
@@ -189,15 +192,17 @@
 
                 var encodedData = System.Net.WebUtility.HtmlEncode(rawCode);
                 
+                var copyLabel = Loc["Copy"].Value;
+                var copiedLabel = Loc["Copied"].Value;
                 return $@"<div class=""code-block-wrapper"">
-                <button class=""copy-code-btn"" onclick=""var code = this.getAttribute('data-raw-code'); if(!code) {{ var target = this.parentElement.querySelector('code') || this.parentElement.querySelector('pre'); code = target ? target.textContent : ''; }} if (window.spokesCopyText) {{ window.spokesCopyText(code); }} else {{ navigator.clipboard.writeText(code); }} var originalText = this.innerHTML; this.innerHTML = '<svg style=\'width:14px;height:14px;margin-right:4px;fill:currentColor;\' viewBox=\'0 0 24 24\'><path d=\'M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z\'/></svg>Copied!'; setTimeout(() => this.innerHTML = originalText, 2000);"" data-raw-code=""{encodedData}"">
-                    <svg style=""width:14px;height:14px;margin-right:4px;fill:currentColor;"" viewBox=""0 0 24 24""><path d=""M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z""/></svg>Copy
+                <button class=""copy-code-btn"" onclick=""var code = this.getAttribute('data-raw-code'); if(!code) {{ var target = this.parentElement.querySelector('code') || this.parentElement.querySelector('pre'); code = target ? target.textContent : ''; }} if (window.spokesCopyText) {{ window.spokesCopyText(code); }} else {{ navigator.clipboard.writeText(code); }} var originalText = this.innerHTML; this.innerHTML = '<svg style=\'width:14px;height:14px;margin-right:4px;fill:currentColor;\' viewBox=\'0 0 24 24\'><path d=\'M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z\'/></svg>{copiedLabel}'; setTimeout(() => this.innerHTML = originalText, 2000);"" data-raw-code=""{encodedData}"">
+                    <svg style=""width:14px;height:14px;margin-right:4px;fill:currentColor;"" viewBox=""0 0 24 24""><path d=""M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z""/></svg>{copyLabel}
                 </button><pre>{preContent}</pre></div>";
             }, RegexOptions.Singleline);
 
             if (IsEdited)
             {
-                var insertHtml = @" <span class=""edited-tag"" style=""font-size: 0.65rem; color: var(--mud-palette-text-disabled); user-select: none; margin-left: 4px;"">(edited)</span>";
+                var insertHtml = $@" <span class=""edited-tag"" style=""font-size: 0.65rem; color: var(--mud-palette-text-disabled); user-select: none; margin-left: 4px;"">({Loc["Edited"].Value.ToLowerInvariant()})</span>";
                 html = html.TrimEnd();
                 if (html.EndsWith("</p>"))
                 {
@@ -213,7 +218,7 @@
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[ChatMarkdownRenderer] ERROR rendering markdown: {ex.Message}\n{ex.StackTrace}");
+            Logger.LogError(ex, "[ChatMarkdownRenderer] ERROR rendering markdown");
             return System.Net.WebUtility.HtmlEncode(content);
         }
     }

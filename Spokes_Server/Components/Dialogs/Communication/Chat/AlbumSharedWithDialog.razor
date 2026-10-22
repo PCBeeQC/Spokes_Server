@@ -1,0 +1,209 @@
+@using Spokes_Server.Core.Services.Communication.Chat
+@using Spokes_Server.Core.Services.Security
+@using Spokes_Server.Components.Shared
+
+@inject Database Db
+@inject IChatChannelAccessService ChatAccess
+@inject IChatAuthorizationService ChatAuth
+@inject IUserPrivacyService PrivacyService
+@inject AlbumService AlbumService
+@inject ISnackbar Snackbar
+
+<MudDialog>
+    <TitleContent>
+        <div class="d-flex align-center gap-2">
+            <MudIcon Icon="@Icons.Material.Filled.Share" Size="Size.Small" />
+            <MudText Typo="Typo.h6">@Loc["Album Shared With"]</MudText>
+        </div>
+    </TitleContent>
+    <DialogContent>
+        <div class="d-flex flex-column gap-4 pb-2" style="max-height: 80vh; min-height: 50vh; overflow-y: auto;">
+            
+            @if (_channels.Any())
+            {
+                <MudCard Elevation="0" Class="pa-0" Style="border-radius: 12px; overflow: hidden; border: 1px solid var(--mud-palette-divider); flex-shrink: 0;">
+                    <div class="d-flex align-center justify-space-between px-4 py-3" style="background-color: var(--mud-palette-background-grey);">
+                        <div class="d-flex align-center gap-2">
+                            <MudIcon Icon="@Icons.Material.Filled.Forum" Size="Size.Small" Color="Color.Primary" />
+                            <MudText Typo="Typo.subtitle1" Style="font-weight: 600;">@Loc["Shared Channels"]</MudText>
+                        </div>
+                        <MudChip T="string" Size="Size.Small" Color="Color.Primary" Variant="Variant.Outlined">
+                            @_channels.Count
+                        </MudChip>
+                    </div>
+                    <MudDivider />
+                    <MudList T="string" Dense="true" Class="px-2 py-2">
+                        @foreach (var channel in _channels)
+                        {
+                            <div class="d-flex align-center justify-space-between py-2 px-2 rounded hover-bg">
+                                <div class="d-flex align-center gap-3">
+                                    <MudAvatar Size="Size.Medium" Color="Color.Dark">#</MudAvatar>
+                                    <div class="d-flex flex-column">
+                                        <MudText Typo="Typo.body1" Style="font-weight: 600;">@channel.Name</MudText>
+                                        <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                            @(channel.IsAnnouncementOnly ? Loc["Announcement Channel"] : (channel.IsPublicChannel ? Loc["Public Channel"] : Loc["Channel"]))
+                                        </MudText>
+                                    </div>
+                                </div>
+                                @if (!IsReadOnly)
+                                {
+                                    <MudIconButton Icon="@Icons.Material.Filled.Close" Color="Color.Error" Size="Size.Small" OnClick="@(() => UnshareChannel(channel.Id))" title="@Loc["Unshare from channel"]" />
+                                }
+                            </div>
+                        }
+                    </MudList>
+                </MudCard>
+            }
+            else
+            {
+                <MudText Typo="Typo.body2" Color="Color.Secondary" Class="text-center pa-4">
+                    @Loc["This album is not shared with any channels."]
+                </MudText>
+            }
+
+            @if (_hasPublicAudience)
+            {
+                <MudCard Elevation="0" Outlined="true" Class="pa-3 rounded-lg mb-2" Style="background-color: var(--mud-palette-background-grey);">
+                    <div class="d-flex align-center gap-2">
+                        <MudIcon Icon="@Icons.Material.Filled.Campaign" Color="Color.Info" Size="Size.Small" />
+                        <MudText Typo="Typo.subtitle2">@Loc["Channel Audience"]</MudText>
+                    </div>
+                    <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mt-1">
+                        @Loc["This album is shared with an announcement or public channel and is accessible to all members with channel access."]
+                    </MudText>
+                </MudCard>
+            }
+
+            @if (_users.Any())
+            {
+                <MudCard Elevation="0" Class="pa-0 mt-2" Style="border-radius: 12px; overflow: hidden; border: 1px solid var(--mud-palette-divider); flex-shrink: 0;">
+                    <div class="d-flex align-center justify-space-between px-4 py-3" style="background-color: var(--mud-palette-background-grey);">
+                        <div class="d-flex align-center gap-2">
+                            <MudIcon Icon="@Icons.Material.Filled.People" Size="Size.Small" Color="Color.Secondary" />
+                            <MudText Typo="Typo.subtitle1" Style="font-weight: 600;">@Loc["Members with Access"]</MudText>
+                        </div>
+                        <MudChip T="string" Size="Size.Small" Color="Color.Secondary" Variant="Variant.Outlined">
+                            @(_users.Count == 1 ? string.Format(Loc["{0} person"].Value, _users.Count) : string.Format(Loc["{0} people"].Value, _users.Count))
+                        </MudChip>
+                    </div>
+                    <MudDivider />
+                    <MudList T="string" Dense="true" Class="px-2 py-2">
+                        @foreach (var emp in _users)
+                        {
+                            <div class="d-flex align-center gap-3 py-2 px-2 rounded hover-bg">
+                                <EmployeeAvatar Employee="@emp" Size="Size.Medium" />
+                                <div class="d-flex flex-column">
+                                    <MudText Typo="Typo.body1" Style="font-weight: 600;">@emp.FullName</MudText>
+                                    @if (!string.IsNullOrWhiteSpace(emp.Position))
+                                    {
+                                        <MudText Typo="Typo.caption" Color="Color.Secondary">@emp.Position</MudText>
+                                    }
+                                </div>
+                            </div>
+                        }
+                    </MudList>
+                </MudCard>
+            }
+        </div>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="CloseDialog" Color="Color.Default">@Loc["Close"]</MudButton>
+    </DialogActions>
+</MudDialog>
+
+<style>
+    .hover-bg {
+        transition: background-color 0.2s;
+    }
+    .hover-bg:hover {
+        background-color: var(--mud-palette-action-default-hover);
+    }
+</style>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
+    
+    [Parameter, EditorRequired] public string AlbumId { get; set; } = string.Empty;
+    [Parameter, EditorRequired] public string CurrentUserId { get; set; } = string.Empty;
+    /// <summary>When true the dialog is view-only: channels are listed but cannot be removed.</summary>
+    [Parameter] public bool IsReadOnly { get; set; } = false;
+
+    private Album? _album;
+    private List<ChatChannel> _channels = new();
+    private List<Employee> _users = new();
+    private bool _hasPublicAudience = false;
+
+    protected override void OnInitialized()
+    {
+        LoadData();
+    }
+
+    private void LoadData()
+    {
+        _album = Db.Albums.GetById(AlbumId);
+        if (_album == null) return;
+
+        var caller = Db.Employees.GetById(CurrentUserId);
+        var allSharedChannels = Db.ChatChannels.GetAll()
+            .Where(c => _album.SharedWithChannelIds.Contains(c.Id))
+            .ToList();
+
+        // Channel confidentiality: Non-owner/non-admin viewers only see channels they have permission to access
+        _channels = allSharedChannels
+            .Where(c => caller != null && (caller.Id == _album.OwnerId || caller.IsAdmin || ChatAuth.CanUserAccessChannel(c, caller)))
+            .ToList();
+
+        bool isAudienceRestricted = PrivacyService.ShouldRestrictAlbumAudience(_album, caller);
+        bool hasPublicOrAnnouncement = allSharedChannels.Any(c => c.IsPublicChannel || c.IsAnnouncementOnly);
+
+        if (isAudienceRestricted && hasPublicOrAnnouncement)
+        {
+            _hasPublicAudience = true;
+
+            // Only enumerate members from private / non-public channels that the caller can access
+            var privateChannelIds = _channels
+                .Where(c => !c.IsPublicChannel && !c.IsAnnouncementOnly)
+                .Select(c => c.Id)
+                .ToList();
+
+            var privateUserIds = privateChannelIds
+                .SelectMany(cId => ChatAccess.GetUsersForChannel(cId))
+                .Distinct()
+                .ToList();
+
+            _users = Db.Employees.GetAll()
+                .Where(e => privateUserIds.Contains(e.Id) && PrivacyService.CanDiscoverUser(caller, e))
+                .ToList();
+        }
+        else
+        {
+            _hasPublicAudience = false;
+
+            var userIds = _album.SharedWithChannelIds
+                .SelectMany(cId => ChatAccess.GetUsersForChannel(cId))
+                .Distinct()
+                .ToList();
+
+            _users = Db.Employees.GetAll()
+                .Where(e => userIds.Contains(e.Id) && (caller == null || PrivacyService.CanDiscoverUser(caller, e)))
+                .ToList();
+        }
+    }
+
+    private void UnshareChannel(string channelId)
+    {
+        var result = AlbumService.UnshareAlbumWithChannel(AlbumId, CurrentUserId, channelId);
+        if (result.IsSuccess)
+        {
+            Snackbar.Add(Loc["Channel access removed."].Value, Severity.Success);
+            LoadData();
+            StateHasChanged();
+        }
+        else
+        {
+            Snackbar.Add(result.ErrorMessage ?? Loc["Failed to unshare channel."].Value, Severity.Error);
+        }
+    }
+
+    private void CloseDialog() => MudDialog.Close();
+}

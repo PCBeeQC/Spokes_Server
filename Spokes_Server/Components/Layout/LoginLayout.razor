@@ -1,6 +1,6 @@
 @inherits LayoutComponentBase
 
-<MudThemeProvider />
+<MudThemeProvider Theme="@_theme" />
 <MudPopoverProvider />
 <MudDialogProvider />
 <MudSnackbarProvider />
@@ -8,3 +8,7 @@
 <div class="login-layout-background" style="height: 100vh; width: 100vw; overflow: hidden;">
     @Body
 </div> 
+
+@code {
+    private readonly MudTheme _theme = SpokesTheme.CreateTheme();
+}

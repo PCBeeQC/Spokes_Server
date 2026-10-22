@@ -4,11 +4,12 @@ using Microsoft.Extensions.Logging;
 using Moq;
 using Spokes_Server.Aggregate;
 using Spokes_Server.Core.Extensions;
-using Spokes_Server.Core.Services.Core;
 using Spokes_Server.Core.Services.Security;
+using Xunit;
 
 namespace Spokes_Server.Tests.Core.Services.Security;
 
+[Collection("EnvironmentVariableTests")]
 public class ServerEscrowServiceTests : TestDataTestBase
 {
     private readonly ServiceProvider _serviceProvider;
@@ -42,6 +43,9 @@ public class ServerEscrowServiceTests : TestDataTestBase
         base.Dispose();
     }
 
+    private ServerEscrowService CreateService() =>
+        new ServerEscrowService(_db.CompanyProfile, _db.ServerConfigs, _crypto);
+
     [Fact]
     public void Initialize_WhenNoMasterPassword_DoesNotInitializeEscrow()
     {
@@ -51,7 +55,7 @@ public class ServerEscrowServiceTests : TestDataTestBase
         profile.PublicChannelMasterPassword = string.Empty;
         _db.CompanyProfile.Save(profile);
 
-        var service = new ServerEscrowService(_db, _crypto);
+        var service = CreateService();
 
         // Act
         service.Initialize();
@@ -71,7 +75,7 @@ public class ServerEscrowServiceTests : TestDataTestBase
         profile.PublicChannelMasterPassword = "MasterPass123!";
         _db.CompanyProfile.Save(profile);
 
-        var service = new ServerEscrowService(_db, _crypto);
+        var service = CreateService();
 
         // Act
         service.Initialize();
@@ -104,14 +108,14 @@ public class ServerEscrowServiceTests : TestDataTestBase
         profile.PublicChannelMasterPassword = "MasterPass123!";
         _db.CompanyProfile.Save(profile);
 
-        var firstService = new ServerEscrowService(_db, _crypto);
+        var firstService = CreateService();
         firstService.Initialize();
 
         var originalPublicKey = firstService.EscrowPublicKey;
         var originalPrivateKey = firstService.DecryptedEscrowPrivateKey;
 
         // Act - instantiate new service with the same password configuration
-        var secondService = new ServerEscrowService(_db, _crypto);
+        var secondService = CreateService();
         secondService.Initialize();
 
         // Assert
@@ -129,7 +133,7 @@ public class ServerEscrowServiceTests : TestDataTestBase
         profile.PublicChannelMasterPassword = "Pass1";
         _db.CompanyProfile.Save(profile);
 
-        var firstService = new ServerEscrowService(_db, _crypto);
+        var firstService = CreateService();
         firstService.Initialize();
         var originalPublicKey = firstService.EscrowPublicKey;
         Assert.True(firstService.IsEscrowAvailable);
@@ -139,7 +143,7 @@ public class ServerEscrowServiceTests : TestDataTestBase
         profile.PublicChannelMasterPassword = "WrongPass";
         _db.CompanyProfile.Save(profile);
 
-        var secondService = new ServerEscrowService(_db, _crypto);
+        var secondService = CreateService();
 
         // Act
         secondService.Initialize();
@@ -159,7 +163,7 @@ public class ServerEscrowServiceTests : TestDataTestBase
         profile.PublicChannelMasterPassword = "OldPassword";
         _db.CompanyProfile.Save(profile);
 
-        var initialService = new ServerEscrowService(_db, _crypto);
+        var initialService = CreateService();
         initialService.Initialize();
         var originalPublicKey = initialService.EscrowPublicKey;
         var originalPrivateKey = initialService.DecryptedEscrowPrivateKey;
@@ -168,7 +172,7 @@ public class ServerEscrowServiceTests : TestDataTestBase
         // Set env variable to trigger migration
         Environment.SetEnvironmentVariable("SPOKES_MASTER_PASSWORD", "NewEnvPassword");
 
-        var migrationService = new ServerEscrowService(_db, _crypto);
+        var migrationService = CreateService();
 
         // Act
         migrationService.Initialize();
@@ -200,7 +204,7 @@ public class ServerEscrowServiceTests : TestDataTestBase
         profile.PublicChannelMasterPassword = string.Empty;
         _db.CompanyProfile.Save(profile);
 
-        var service = new ServerEscrowService(_db, _crypto);
+        var service = CreateService();
 
         // Act
         service.Initialize();
@@ -224,7 +228,7 @@ public class ServerEscrowServiceTests : TestDataTestBase
         profile.PublicChannelMasterPassword = "ActualEncryptionPassword";
         _db.CompanyProfile.Save(profile);
 
-        var initialService = new ServerEscrowService(_db, _crypto);
+        var initialService = CreateService();
         initialService.Initialize();
         Assert.True(initialService.IsEscrowAvailable);
 
@@ -236,7 +240,7 @@ public class ServerEscrowServiceTests : TestDataTestBase
         // Set env variable to trigger migration attempt
         Environment.SetEnvironmentVariable("SPOKES_MASTER_PASSWORD", "NewEnvPassword");
 
-        var failingService = new ServerEscrowService(_db, _crypto);
+        var failingService = CreateService();
 
         // Act
         failingService.Initialize();
@@ -259,7 +263,7 @@ public class ServerEscrowServiceTests : TestDataTestBase
         profile.PublicChannelMasterPassword = "SamePassword123";
         _db.CompanyProfile.Save(profile);
 
-        var initialService = new ServerEscrowService(_db, _crypto);
+        var initialService = CreateService();
         initialService.Initialize();
         var originalPublicKey = initialService.EscrowPublicKey;
         var originalPrivateKey = initialService.DecryptedEscrowPrivateKey;
@@ -267,7 +271,7 @@ public class ServerEscrowServiceTests : TestDataTestBase
         // Set env variable to identical password
         Environment.SetEnvironmentVariable("SPOKES_MASTER_PASSWORD", "SamePassword123");
 
-        var migrationService = new ServerEscrowService(_db, _crypto);
+        var migrationService = CreateService();
 
         // Act
         migrationService.Initialize();
@@ -301,7 +305,7 @@ public class ServerEscrowServiceTests : TestDataTestBase
         _db.ServerConfigs.Save(config);
 
         // Act - run service initialization
-        var service = new ServerEscrowService(_db, _crypto);
+        var service = CreateService();
         service.Initialize();
 
         // Assert
@@ -320,10 +324,46 @@ public class ServerEscrowServiceTests : TestDataTestBase
         Assert.Equal(priv, decryptedWithUpgradedKek);
 
         // Verify that a subsequent boot continues to load seamlessly with the upgraded salt
-        var subsequentService = new ServerEscrowService(_db, _crypto);
+        var subsequentService = CreateService();
         subsequentService.Initialize();
         Assert.True(subsequentService.IsEscrowAvailable);
         Assert.Equal(pub, subsequentService.EscrowPublicKey);
         Assert.Equal(priv, subsequentService.DecryptedEscrowPrivateKey);
+    }
+
+    [Fact]
+    public void LazyInitialization_OnPropertyAccess_InitializesEscrowWithoutExplicitCall()
+    {
+        // Arrange
+        Environment.SetEnvironmentVariable("SPOKES_MASTER_PASSWORD", null);
+        var profile = _db.CompanyProfile.Get();
+        profile.PublicChannelMasterPassword = "MasterPassLazy123!";
+        _db.CompanyProfile.Save(profile);
+
+        var service = CreateService();
+
+        // Act & Assert - Access properties without calling service.Initialize()
+        Assert.True(service.IsEscrowAvailable);
+        Assert.False(string.IsNullOrEmpty(service.EscrowPublicKey));
+        Assert.False(string.IsNullOrEmpty(service.DecryptedEscrowPrivateKey));
+        Assert.Equal(service.EscrowPublicKey, service.GetRequiredPublicKey());
+        Assert.Equal(service.DecryptedEscrowPrivateKey, service.GetRequiredDecryptedPrivateKey());
+    }
+
+    [Fact]
+    public void GetRequiredAccessors_WhenEscrowUnavailable_ThrowInvalidOperationException()
+    {
+        // Arrange
+        Environment.SetEnvironmentVariable("SPOKES_MASTER_PASSWORD", null);
+        var profile = _db.CompanyProfile.Get();
+        profile.PublicChannelMasterPassword = string.Empty;
+        _db.CompanyProfile.Save(profile);
+
+        var service = CreateService();
+
+        // Act & Assert
+        Assert.False(service.IsEscrowAvailable);
+        Assert.Throws<InvalidOperationException>(() => service.GetRequiredPublicKey());
+        Assert.Throws<InvalidOperationException>(() => service.GetRequiredDecryptedPrivateKey());
     }
 }

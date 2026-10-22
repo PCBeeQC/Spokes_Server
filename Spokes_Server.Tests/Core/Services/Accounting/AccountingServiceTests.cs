@@ -5,10 +5,11 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Moq;
 using Spokes_Server.Aggregate;
+using Spokes_Server.Core.Constants;
 using Spokes_Server.Core.Models.Accounting;
+using Spokes_Server.Core.Models.Communication;
 using Spokes_Server.Core.Models.Projects;
 using Spokes_Server.Core.Services.Accounting;
-using Spokes_Server.Core.Services.Core;
 using Spokes_Server.Tests;
 
 namespace Spokes_Server.Tests.Core.Services.Accounting;
@@ -17,7 +18,6 @@ public class AccountingServiceTests : TestDataTestBase
 {
     private readonly ServiceProvider _serviceProvider;
     private readonly Database _db;
-    private readonly FinancialCalculationEngine _calcEngine;
     private readonly AccountingService _service;
 
     public AccountingServiceTests()
@@ -34,8 +34,7 @@ public class AccountingServiceTests : TestDataTestBase
 
         _serviceProvider = services.BuildServiceProvider();
         _db = _serviceProvider.GetRequiredService<Database>();
-        _calcEngine = new FinancialCalculationEngine(_db.Invoices, _db.Quotes, _db.Projects);
-        _service = new AccountingService(_db, _calcEngine);
+        _service = new AccountingService(_db.AccountingContext, _db.ProjectsContext, _db.CoreContext);
 
         // Ensure CompanyProfile has proper system mappings for completion
         var profile = _db.CompanyProfile.Get();
@@ -134,7 +133,7 @@ public class AccountingServiceTests : TestDataTestBase
             }
         });
 
-        var grossMargin = _service.GetProjectGrossMargin(projectId);
+        var grossMargin = _service.CalculateProjectGrossMargin(projectId);
 
         // Revenue = 1000 + 750 = 1750, Purchases = 0, Expenses = 0
         Assert.Equal(1750m, grossMargin);
@@ -205,7 +204,7 @@ public class AccountingServiceTests : TestDataTestBase
             }
         });
 
-        var grossMargin = _service.GetProjectGrossMargin(projectId);
+        var grossMargin = _service.CalculateProjectGrossMargin(projectId);
 
         // Fallback revenue = 3000, Purchases = 0, Expenses = 0
         Assert.Equal(3000m, grossMargin);
@@ -251,7 +250,7 @@ public class AccountingServiceTests : TestDataTestBase
             }
         });
 
-        var grossMargin = _service.GetProjectGrossMargin(projectId);
+        var grossMargin = _service.CalculateProjectGrossMargin(projectId);
 
         Assert.Equal(0m, grossMargin);
     }
@@ -259,7 +258,7 @@ public class AccountingServiceTests : TestDataTestBase
     [Fact]
     public void GetProjectGrossMargin_WithEmptyDatabase_ReturnsZero()
     {
-        var grossMargin = _service.GetProjectGrossMargin("untracked-project-id");
+        var grossMargin = _service.CalculateProjectGrossMargin("untracked-project-id");
 
         Assert.Equal(0m, grossMargin);
     }
@@ -286,7 +285,7 @@ public class AccountingServiceTests : TestDataTestBase
         });
 
         // Non-void purchase order containing items for target project and another project
-        _db.Purchases.Save(new PurchaseOrder
+        _db.PurchaseOrders.Save(new PurchaseOrder
         {
             Id = "po-valid",
             Status = "Approved",
@@ -298,7 +297,7 @@ public class AccountingServiceTests : TestDataTestBase
         });
 
         // Void purchase order containing item for target project (must be ignored)
-        _db.Purchases.Save(new PurchaseOrder
+        _db.PurchaseOrders.Save(new PurchaseOrder
         {
             Id = "po-void",
             Status = "Void",
@@ -309,7 +308,7 @@ public class AccountingServiceTests : TestDataTestBase
         });
 
         // Non-void purchase order with no items for target project
-        _db.Purchases.Save(new PurchaseOrder
+        _db.PurchaseOrders.Save(new PurchaseOrder
         {
             Id = "po-other",
             Status = "Ordered",
@@ -319,7 +318,7 @@ public class AccountingServiceTests : TestDataTestBase
             }
         });
 
-        var grossMargin = _service.GetProjectGrossMargin(projectId);
+        var grossMargin = _service.CalculateProjectGrossMargin(projectId);
 
         // Revenue = 5000, Purchases = 400, Expenses = 0 -> 4600
         Assert.Equal(4600m, grossMargin);
@@ -363,7 +362,7 @@ public class AccountingServiceTests : TestDataTestBase
             }
         });
 
-        var grossMargin = _service.GetProjectGrossMargin(projectId);
+        var grossMargin = _service.CalculateProjectGrossMargin(projectId);
 
         // Revenue = 4000, Purchases = 0, Expenses = 250 + 60 = 310 -> 3690
         Assert.Equal(3690m, grossMargin);
@@ -387,7 +386,7 @@ public class AccountingServiceTests : TestDataTestBase
         });
 
         // Purchases: 2 items = 1500 + 500 = 2000
-        _db.Purchases.Save(new PurchaseOrder
+        _db.PurchaseOrders.Save(new PurchaseOrder
         {
             Id = "po-net",
             Status = "Received",
@@ -409,7 +408,7 @@ public class AccountingServiceTests : TestDataTestBase
             }
         });
 
-        var grossMargin = _service.GetProjectGrossMargin(projectId);
+        var grossMargin = _service.CalculateProjectGrossMargin(projectId);
 
         // Revenue: 10000 - (Purchases: 2000 + Expenses: 1500) = 6500
         Assert.Equal(6500m, grossMargin);
@@ -431,7 +430,7 @@ public class AccountingServiceTests : TestDataTestBase
             }
         });
 
-        _db.Purchases.Save(new PurchaseOrder
+        _db.PurchaseOrders.Save(new PurchaseOrder
         {
             Id = "po-high",
             Status = "Ordered",
@@ -450,10 +449,41 @@ public class AccountingServiceTests : TestDataTestBase
             }
         });
 
-        var grossMargin = _service.GetProjectGrossMargin(projectId);
+        var grossMargin = _service.CalculateProjectGrossMargin(projectId);
 
         // 1000 - (1500 + 700) = -1200
         Assert.Equal(-1200m, grossMargin);
+    }
+
+    [Fact]
+    public void CalculateProjectGrossMargin_MatchesStaticAndObsoleteMethod()
+    {
+        const string projectId = "proj-calc-consistency";
+
+        _db.Invoices.Save(new Invoice
+        {
+            Id = "inv-calc-1",
+            ProjectId = projectId,
+            Status = "Paid",
+            Lines = new List<InvoiceLine>
+            {
+                new() { Quantity = 1, UnitPrice = 5000m }
+            }
+        });
+
+        _db.PurchaseOrders.Save(new PurchaseOrder
+        {
+            Id = "po-calc-1",
+            Status = "Completed",
+            Items = new List<PoItem>
+            {
+                new() { ProjectId = projectId, Quantity = 1, UnitPrice = 1500m }
+            }
+        });
+
+        var instanceResult = _service.CalculateProjectGrossMargin(projectId);
+
+        Assert.Equal(3500m, instanceResult);
     }
 
     #endregion
@@ -723,7 +753,7 @@ public class AccountingServiceTests : TestDataTestBase
         });
 
         // Purchase order: 4,000
-        _db.Purchases.Save(new PurchaseOrder
+        _db.PurchaseOrders.Save(new PurchaseOrder
         {
             Id = "po-margin",
             Status = "Received",
@@ -788,6 +818,478 @@ public class AccountingServiceTests : TestDataTestBase
 
         var records = _db.CommissionLedgerRecords.GetByProject(projectId);
         Assert.Empty(records);
+    }
+
+    #endregion
+
+    #region Linearized Orchestration & Payment Recording
+
+    [Fact]
+    public void ProcessInvoiceStatusChange_OrchestratesCommissionsBeforeTimelineNotification()
+    {
+        const string projectId = "proj-linear-handoff";
+        var project = new Project
+        {
+            Id = projectId,
+            Name = "Linear Handoff Project",
+            Status = "Completed",
+            Commissions = new List<CommissionBeneficiary>
+            {
+                new() { Name = "Seller", Percentage = 10m, CommissionBasis = CommissionBasisTypes.Revenue }
+            }
+        };
+        _db.Projects.Save(project);
+
+        var invoice = new Invoice
+        {
+            Id = "inv-linear-1",
+            ProjectId = projectId,
+            InvoiceNumber = "INV-LIN-1",
+            Status = InvoiceStatus.Paid,
+            Lines = new List<InvoiceLine> { new() { Quantity = 1, UnitPrice = 5000m } }
+        };
+        _db.Invoices.Save(invoice);
+
+        bool commissionsEvaluatedPriorToTimelineNotification = false;
+        var mockTimeline = new Mock<Spokes_Server.Core.Services.Projects.ITimelineEventService>();
+        mockTimeline
+            .Setup(t => t.SyncInvoiceStatusTimelineEvent(It.IsAny<Invoice>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>()))
+            .Callback<Invoice, string, string, string?>((inv, oldSt, newSt, usr) =>
+            {
+                // Verify that commission evaluation happened BEFORE timeline event was notified
+                var records = _db.CommissionLedgerRecords.GetByProject(projectId);
+                commissionsEvaluatedPriorToTimelineNotification = records.Count == 1 && records[0].CommissionAmount == 500m;
+            });
+
+        var orchestratedService = new AccountingService(_db.AccountingContext, _db.ProjectsContext, _db.CoreContext, timelineEventService: mockTimeline.Object);
+        orchestratedService.ProcessInvoiceStatusChange(invoice, InvoiceStatus.Final, InvoiceStatus.Paid, "FinanceUser");
+
+        Assert.True(commissionsEvaluatedPriorToTimelineNotification, "AccountingService must evaluate commissions before notifying ITimelineEventService.");
+        mockTimeline.Verify(t => t.SyncInvoiceStatusTimelineEvent(invoice, InvoiceStatus.Final, InvoiceStatus.Paid, "FinanceUser"), Times.Once);
+    }
+
+    [Fact]
+    public void RecordInvoicePayment_FullPayment_MarksPaidAndOrchestratesStatusChange()
+    {
+        const string projectId = "proj-rec-pay-full";
+        _db.Projects.Save(new Project { Id = projectId, Name = "Payment Project" });
+
+        var invoice = new Invoice
+        {
+            Id = "inv-full-pay",
+            ProjectId = projectId,
+            InvoiceNumber = "INV-PAY-1",
+            Status = InvoiceStatus.Final,
+            TaxRate = 0m,
+            LineItems = new List<InvoiceLine> { new() { Quantity = 1, UnitPrice = 2500m } }
+        };
+        _db.Invoices.Save(invoice);
+
+        var payment = new PaymentRecord
+        {
+            Amount = 2500m,
+            Date = new DateTime(2026, 9, 30),
+            Method = "Check",
+            Reference = "CHK-9988"
+        };
+
+        _service.RecordInvoicePayment(invoice, payment, "BillingUser");
+
+        // Verify entity properties mutated and saved
+        var savedInvoice = _db.Invoices.GetById(invoice.Id);
+        Assert.NotNull(savedInvoice);
+        Assert.Equal(InvoiceStatus.Paid, savedInvoice.Status);
+        Assert.Equal(new DateTime(2026, 9, 30), savedInvoice.DatePaid);
+        Assert.Single(savedInvoice.Payments);
+        Assert.Equal(2500m, savedInvoice.Payments[0].Amount);
+
+        // Verify timeline event created
+        var notes = _db.ProjectNotes.GetByProject(projectId);
+        var paidNote = notes.FirstOrDefault(n => n.SystemReferenceId == $"Invoice_Paid_{invoice.Id}");
+        Assert.NotNull(paidNote);
+        Assert.Contains("Paid", paidNote.Title);
+        Assert.Equal("BillingUser", paidNote.CreatedBy);
+    }
+
+    [Fact]
+    public void RecordInvoicePayment_PartialPayment_MarksPartialAndSaves()
+    {
+        const string projectId = "proj-rec-pay-part";
+        _db.Projects.Save(new Project { Id = projectId, Name = "Partial Payment Project" });
+
+        var invoice = new Invoice
+        {
+            Id = "inv-part-pay",
+            ProjectId = projectId,
+            InvoiceNumber = "INV-PAY-2",
+            Status = InvoiceStatus.Final,
+            TaxRate = 0m,
+            LineItems = new List<InvoiceLine> { new() { Quantity = 1, UnitPrice = 3000m } }
+        };
+        _db.Invoices.Save(invoice);
+
+        var payment = new PaymentRecord
+        {
+            Amount = 1000m,
+            Date = new DateTime(2026, 9, 30),
+            Method = "Credit Card",
+            Reference = "CC-1234"
+        };
+
+        _service.RecordInvoicePayment(invoice, payment, "BillingUser");
+
+        var savedInvoice = _db.Invoices.GetById(invoice.Id);
+        Assert.NotNull(savedInvoice);
+        Assert.Equal(InvoiceStatus.Partial, savedInvoice.Status);
+        Assert.Null(savedInvoice.DatePaid);
+        Assert.Equal(2000m, savedInvoice.BalanceDue);
+    }
+
+    [Fact]
+    public void RecordBillPayment_FullPayment_MarksPaidAndSaves()
+    {
+        var bill = new Bill
+        {
+            Id = "bill-test-1",
+            Status = BillStatus.Unpaid,
+            Amount = 1200m
+        };
+        _db.Bills.Save(bill);
+
+        var payment = new PaymentRecord
+        {
+            Amount = 1200m,
+            Date = new DateTime(2026, 9, 30),
+            Method = "Wire",
+            Reference = "WIRE-5544"
+        };
+
+        _service.RecordBillPayment(bill, payment);
+
+        var savedBill = _db.Bills.GetById(bill.Id);
+        Assert.NotNull(savedBill);
+        Assert.Equal(BillStatus.Paid, savedBill.Status);
+        Assert.Equal(new DateTime(2026, 9, 30), savedBill.DatePaid);
+        Assert.Single(savedBill.Payments);
+        Assert.Equal(1200m, savedBill.Payments[0].Amount);
+    }
+
+    [Fact]
+    public void RecordInvoicePayment_And_RecordBillPayment_NullChecks()
+    {
+        Assert.Throws<ArgumentNullException>(() => _service.RecordInvoicePayment(null!, new PaymentRecord()));
+        Assert.Throws<ArgumentNullException>(() => _service.RecordInvoicePayment(new Invoice(), null!));
+
+        Assert.Throws<ArgumentNullException>(() => _service.RecordBillPayment(null!, new PaymentRecord()));
+        Assert.Throws<ArgumentNullException>(() => _service.RecordBillPayment(new Bill(), null!));
+        Assert.Throws<ArgumentNullException>(() => _service.VoidBill(null!, "Reason"));
+        Assert.Throws<ArgumentNullException>(() => _service.UnvoidBill(null!));
+    }
+
+    [Fact]
+    public void VoidBill_WithValidUnpaidBill_SetsVoidStatusAndAuditMetadata()
+    {
+        var bill = new Bill
+        {
+            Id = "bill-void-1",
+            Status = BillStatus.Unpaid,
+            Amount = 450m
+        };
+        _db.Bills.Save(bill);
+
+        _service.VoidBill(bill, "Vendor voided invoice - items returned", "Accountant1");
+
+        var savedBill = _db.Bills.GetById(bill.Id);
+        Assert.NotNull(savedBill);
+        Assert.Equal(BillStatus.Void, savedBill.Status);
+        Assert.Equal("Vendor voided invoice - items returned", savedBill.VoidReason);
+        Assert.Equal("Accountant1", savedBill.VoidedBy);
+        Assert.NotNull(savedBill.VoidedAt);
+        Assert.Equal(0m, savedBill.BalanceDue);
+    }
+
+    [Fact]
+    public void VoidBill_WithRecordedPayments_ThrowsInvalidOperationException()
+    {
+        var bill = new Bill
+        {
+            Id = "bill-void-payments",
+            Status = BillStatus.Unpaid,
+            Amount = 1000m,
+            Payments = [new PaymentRecord { Amount = 500m, Date = DateTime.Today }]
+        };
+        _db.Bills.Save(bill);
+
+        var ex = Assert.Throws<InvalidOperationException>(() => _service.VoidBill(bill, "Attempting to void paid bill", "User"));
+        Assert.Contains("payments", ex.Message, StringComparison.OrdinalIgnoreCase);
+
+        // Bill state remains unchanged
+        var untouched = _db.Bills.GetById(bill.Id);
+        Assert.Equal(BillStatus.Unpaid, untouched.Status);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData(null)]
+    public void VoidBill_WithMissingReason_ThrowsArgumentException(string? reason)
+    {
+        var bill = new Bill
+        {
+            Id = "bill-no-reason",
+            Status = BillStatus.Unpaid,
+            Amount = 200m
+        };
+
+        Assert.Throws<ArgumentException>(() => _service.VoidBill(bill, reason!, "User"));
+    }
+
+    [Fact]
+    public void VoidBill_LinkedToPurchaseOrder_RecalculatesPoTotalBilledAndRevertsStatus()
+    {
+        const string poId = "po-void-test";
+        var po = new PurchaseOrder
+        {
+            Id = poId,
+            PoNumber = "PO-9900",
+            ApplyTax = false,
+            LineItems = [new PoItem { Quantity = 1, UnitPrice = 1000m }],
+            TotalBilled = 1000m,
+            Status = PurchaseOrderStatus.FullyBilled
+        };
+        _db.PurchaseOrders.Save(po);
+
+        var bill1 = new Bill
+        {
+            Id = "bill-po-1",
+            PurchaseOrderId = poId,
+            Amount = 600m,
+            Status = BillStatus.Paid,
+            DatePaid = DateTime.Today
+        };
+        var bill2 = new Bill
+        {
+            Id = "bill-po-2",
+            PurchaseOrderId = poId,
+            Amount = 400m,
+            Status = BillStatus.Unpaid
+        };
+        _db.Bills.Save(bill1);
+        _db.Bills.Save(bill2);
+
+        // Void the unpaid bill
+        _service.VoidBill(bill2, "Returned materials to supplier", "Buyer");
+
+        var updatedPo = _db.PurchaseOrders.GetById(poId);
+        Assert.NotNull(updatedPo);
+        Assert.Equal(600m, updatedPo.TotalBilled); // 1000 - 400 = 600
+        Assert.Equal(PurchaseOrderStatus.PartiallyBilled, updatedPo.Status);
+
+        var updatedBill = _db.Bills.GetById(bill2.Id);
+        Assert.Equal(BillStatus.Void, updatedBill.Status);
+    }
+
+    [Fact]
+    public void VoidBill_WhenAllBillsVoidedOnPo_RevertsStatusToFinal()
+    {
+        const string poId = "po-all-void";
+        var po = new PurchaseOrder
+        {
+            Id = poId,
+            PoNumber = "PO-9901",
+            ApplyTax = false,
+            LineItems = [new PoItem { Quantity = 1, UnitPrice = 500m }],
+            TotalBilled = 500m,
+            Status = PurchaseOrderStatus.FullyBilled
+        };
+        _db.PurchaseOrders.Save(po);
+
+        var bill = new Bill
+        {
+            Id = "bill-po-sole",
+            PurchaseOrderId = poId,
+            Amount = 500m,
+            Status = BillStatus.Unpaid
+        };
+        _db.Bills.Save(bill);
+
+        _service.VoidBill(bill, "Entire shipment returned and cancelled", "Buyer");
+
+        var updatedPo = _db.PurchaseOrders.GetById(poId);
+        Assert.NotNull(updatedPo);
+        Assert.Equal(0m, updatedPo.TotalBilled);
+        Assert.Equal(PurchaseOrderStatus.Final, updatedPo.Status);
+    }
+
+    [Fact]
+    public void UnvoidBill_RestoresBillToUnpaidAndUpdatesPO()
+    {
+        const string poId = "po-unvoid-test";
+        var po = new PurchaseOrder
+        {
+            Id = poId,
+            PoNumber = "PO-9902",
+            ApplyTax = false,
+            LineItems = [new PoItem { Quantity = 1, UnitPrice = 800m }],
+            TotalBilled = 0m,
+            Status = PurchaseOrderStatus.Final
+        };
+        _db.PurchaseOrders.Save(po);
+
+        var bill = new Bill
+        {
+            Id = "bill-unvoid-1",
+            PurchaseOrderId = poId,
+            Amount = 800m,
+            Status = BillStatus.Void,
+            VoidReason = "Accidental void",
+            VoidedBy = "User1",
+            VoidedAt = DateTime.UtcNow
+        };
+        _db.Bills.Save(bill);
+
+        _service.UnvoidBill(bill, "AdminUser");
+
+        var restoredBill = _db.Bills.GetById(bill.Id);
+        Assert.NotNull(restoredBill);
+        Assert.Equal(BillStatus.Unpaid, restoredBill.Status);
+        Assert.Null(restoredBill.VoidReason);
+        Assert.Null(restoredBill.VoidedAt);
+        Assert.Null(restoredBill.VoidedBy);
+        Assert.Equal(800m, restoredBill.BalanceDue);
+
+        var updatedPo = _db.PurchaseOrders.GetById(poId);
+        Assert.NotNull(updatedPo);
+        Assert.Equal(800m, updatedPo.TotalBilled);
+        Assert.Equal(PurchaseOrderStatus.FullyBilled, updatedPo.Status);
+    }
+
+    [Fact]
+    public void ApproveBill_WithNullBill_ThrowsArgumentNullException()
+    {
+        Assert.Throws<ArgumentNullException>(() => _service.ApproveBill(null!));
+    }
+
+    [Fact]
+    public void ApproveBill_WithVoidedBill_ThrowsInvalidOperationException()
+    {
+        var bill = new Bill
+        {
+            Id = "bill-app-void",
+            Status = BillStatus.Void,
+            Amount = 100m
+        };
+        _db.Bills.Save(bill);
+
+        Assert.Throws<InvalidOperationException>(() => _service.ApproveBill(bill));
+    }
+
+    [Fact]
+    public void ApproveBill_WithUnpaidDraft_SetsStatusUnpaidAndSaves()
+    {
+        var bill = new Bill
+        {
+            Id = "bill-app-unpaid",
+            Status = BillStatus.AwaitingApproval,
+            Amount = 500m
+        };
+        _db.Bills.Save(bill);
+
+        _service.ApproveBill(bill, "Approver1");
+
+        var approved = _db.Bills.GetById(bill.Id);
+        Assert.NotNull(approved);
+        Assert.Equal(BillStatus.Unpaid, approved.Status);
+        Assert.Equal(500m, approved.BalanceDue);
+    }
+
+    [Fact]
+    public void ApproveBill_WithExistingPaymentsCoveringTotal_SetsStatusPaid()
+    {
+        var paymentDate = new DateTime(2026, 10, 1);
+        var bill = new Bill
+        {
+            Id = "bill-app-paid",
+            Status = BillStatus.AwaitingApproval,
+            Amount = 300m,
+            Payments = [new PaymentRecord { Amount = 300m, Date = paymentDate }]
+        };
+        _db.Bills.Save(bill);
+
+        _service.ApproveBill(bill, "Approver1");
+
+        var approved = _db.Bills.GetById(bill.Id);
+        Assert.NotNull(approved);
+        Assert.Equal(BillStatus.Paid, approved.Status);
+        Assert.Equal(paymentDate, approved.DatePaid);
+        Assert.Equal(0m, approved.BalanceDue);
+    }
+
+    [Fact]
+    public void ApproveBill_LinkedToPurchaseOrder_UpdatesPoTotalBilled()
+    {
+        const string poId = "po-app-test";
+        var po = new PurchaseOrder
+        {
+            Id = poId,
+            PoNumber = "PO-9903",
+            ApplyTax = false,
+            LineItems = [new PoItem { Quantity = 1, UnitPrice = 1200m }],
+            TotalBilled = 0m,
+            Status = PurchaseOrderStatus.Final
+        };
+        _db.PurchaseOrders.Save(po);
+
+        var bill = new Bill
+        {
+            Id = "bill-app-po",
+            PurchaseOrderId = poId,
+            Amount = 1200m,
+            Status = BillStatus.AwaitingApproval
+        };
+        _db.Bills.Save(bill);
+
+        _service.ApproveBill(bill, "Buyer");
+
+        var updatedPo = _db.PurchaseOrders.GetById(poId);
+        Assert.NotNull(updatedPo);
+        Assert.Equal(1200m, updatedPo.TotalBilled);
+        Assert.Equal(PurchaseOrderStatus.FullyBilled, updatedPo.Status);
+    }
+
+    [Fact]
+    public void ApproveBill_WithLinkedEmailInCommunicationContext_MarksEmailApproved()
+    {
+        var serviceWithComm = new AccountingService(
+            _db.AccountingContext,
+            _db.ProjectsContext,
+            _db.CoreContext,
+            communication: _db.CommunicationContext);
+
+        var bill = new Bill
+        {
+            Id = "bill-linked-email-1",
+            Status = BillStatus.AwaitingApproval,
+            Amount = 250m
+        };
+        _db.Bills.Save(bill);
+
+        var email = new EmailMessage
+        {
+            Id = "email-bill-1",
+            Subject = "Invoice 123",
+            BillingStatus = CompanyBillInboxConstants.BillingStatus.AutoDrafted,
+            LinkedBillId = bill.Id
+        };
+        _db.EmailMessages.Save(email);
+
+        serviceWithComm.ApproveBill(bill, "ManagerBob");
+
+        var updatedEmail = _db.EmailMessages.GetById(email.Id);
+        Assert.NotNull(updatedEmail);
+        Assert.Equal(CompanyBillInboxConstants.BillingStatus.Approved, updatedEmail.BillingStatus);
+        Assert.Equal("ManagerBob", updatedEmail.ProcessedByUserId);
+        Assert.NotNull(updatedEmail.ProcessedAt);
     }
 
     #endregion

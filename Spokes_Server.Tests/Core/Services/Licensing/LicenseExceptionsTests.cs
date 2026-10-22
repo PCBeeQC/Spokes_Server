@@ -18,9 +18,14 @@ public class LicenseExceptionsTests
     }
 
     [Fact]
-    public void LicenseExpiredException_InheritsFromException()
+    public void LicenseExpiredException_InheritsFromDomainException_AndSetsErrorCode()
     {
+        // Arrange
+        var ex = new LicenseExpiredException("Expired");
+
         // Assert
+        Assert.True(typeof(Spokes_Server.Core.Exceptions.DomainException).IsAssignableFrom(typeof(LicenseExpiredException)));
         Assert.True(typeof(Exception).IsAssignableFrom(typeof(LicenseExpiredException)));
+        Assert.Equal("LICENSE_EXPIRED", ex.ErrorCode);
     }
 }

@@ -87,7 +87,7 @@ public class DeviceSession : IDataEntity
     public string PushAuth { get; set; } = string.Empty;
 
     /// <summary>Type of subscription: "WebPush" or "NativeRelay".</summary>
-    public string PushSubscriptionType { get; set; } = "WebPush";
+    public string PushSubscriptionType { get; set; } = global::Spokes_Server.Core.Models.Core.PushSubscriptionType.WebPush;
 
     /// <summary>RSA Public Key for NativeRelay E2EE payloads.</summary>
     public string PushPublicKey { get; set; } = string.Empty;
@@ -102,7 +102,7 @@ public class DeviceSession : IDataEntity
     public DateTime? PushSubscribedAt { get; set; }
 
     /// <summary>Device type: "Desktop" or "Mobile".</summary>
-    public string DeviceType { get; set; } = "Desktop";
+    public string DeviceType { get; set; } = global::Spokes_Server.Core.Models.Core.DeviceType.Desktop;
 
     /// <summary>User-provided friendly name (e.g., "Work Laptop", "iPhone").</summary>
     public string DeviceName { get; set; } = string.Empty;
@@ -122,10 +122,31 @@ public class DeviceSession : IDataEntity
     /// <summary>
     /// Whether this session is identified as running in the Capacitor app, either via explicit
     /// flag or legacy heuristics (NativeRelay subscription, (App) device info, Capacitor User-Agent).
+    /// Desktop sessions and OS platforms (Windows, macOS, Linux) are not Capacitor apps.
     /// </summary>
     [JsonIgnore]
     public bool IsCapacitorApp => IsCapacitor
-        || PushSubscriptionType == "NativeRelay"
-        || (!string.IsNullOrEmpty(DeviceInfo) && DeviceInfo.Contains("(App)"))
-        || (!string.IsNullOrEmpty(PushUserAgent) && PushUserAgent.Contains("Capacitor", StringComparison.OrdinalIgnoreCase));
+        || (!string.IsNullOrEmpty(DeviceInfo) && DeviceInfo.Contains("(App)", StringComparison.OrdinalIgnoreCase))
+        || (!string.IsNullOrEmpty(PushUserAgent) && PushUserAgent.Contains("Capacitor", StringComparison.OrdinalIgnoreCase))
+        || (PushSubscriptionType == global::Spokes_Server.Core.Models.Core.PushSubscriptionType.NativeRelay
+            && !DeviceInfo.Contains("Desktop", StringComparison.OrdinalIgnoreCase)
+            && !DeviceName.Contains("Desktop", StringComparison.OrdinalIgnoreCase)
+            && !DeviceInfo.Contains("Windows", StringComparison.OrdinalIgnoreCase)
+            && !DeviceInfo.Contains("macOS", StringComparison.OrdinalIgnoreCase)
+            && !DeviceInfo.Contains("Linux", StringComparison.OrdinalIgnoreCase));
 }
+
+public static class PushSubscriptionType
+{
+    public const string WebPush = "WebPush";
+    public const string NativeRelay = "NativeRelay";
+    public static readonly string[] All = [WebPush, NativeRelay];
+}
+
+public static class DeviceType
+{
+    public const string Desktop = "Desktop";
+    public const string Mobile = "Mobile";
+    public static readonly string[] All = [Desktop, Mobile];
+}
+

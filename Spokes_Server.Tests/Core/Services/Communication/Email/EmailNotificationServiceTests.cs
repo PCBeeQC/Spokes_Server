@@ -14,6 +14,7 @@ using Spokes_Server.Core.Data.Repositories.Communication;
 using Spokes_Server.Core.Models.Communication;
 using Spokes_Server.Core.Services.Communication.Email;
 using Spokes_Server.Core.Services.Communication.Presence;
+using Spokes_Server.Core.Services.UI;
 
 namespace Spokes_Server.Tests.Core.Services.Communication.Email;
     public class EmailTestNavigationManager : NavigationManager
@@ -23,22 +24,7 @@ namespace Spokes_Server.Tests.Core.Services.Communication.Email;
         public void SetUri(string uri)
         {
             var absoluteUri = uri.StartsWith("http") ? uri : $"http://localhost{uri}";
-
-            // Use reflection to update the private Uri field since Initialize can only be called once
-            var type = typeof(NavigationManager);
-            var uriField = type.GetField("_uri", BindingFlags.Instance | BindingFlags.NonPublic)
-                        ?? type.GetField("<Uri>k__BackingField", BindingFlags.Instance | BindingFlags.NonPublic);
-
-            if (uriField != null)
-            {
-                uriField.SetValue(this, absoluteUri);
-            }
-            else
-            {
-                // Fallback for different .NET versions if field names change
-                var prop = type.GetProperty("Uri");
-                prop?.SetValue(this, absoluteUri);
-            }
+            Uri = absoluteUri;
         }
 
         protected override void NavigateToCore(string uri, bool forceLoad)
@@ -47,7 +33,7 @@ namespace Spokes_Server.Tests.Core.Services.Communication.Email;
         }
     }
 
-    public class EmailNotificationServiceTests : IDisposable
+    public class EmailNotificationServiceTests : IAsyncDisposable
     {
         private readonly string _testDataDir;
         private readonly IConfiguration _config;
@@ -80,32 +66,33 @@ namespace Spokes_Server.Tests.Core.Services.Communication.Email;
             _syncState = new EmailSyncStateService();
 
             _service = new EmailNotificationService(
-                _mockSnackbar.Object,
-                _nav,
+                new Spokes_Server.Components.UI.UiNotificationPresenter(_mockSnackbar.Object, _nav, new Mock<ISoundService>().Object),
                 _syncState,
                 _folders,
                 _messages);
         }
 
-        public void Dispose()
+        public async ValueTask DisposeAsync()
         {
             _persistence.Dispose();
             if (Directory.Exists(_testDataDir))
             {
                 try { Directory.Delete(_testDataDir, true); } catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"Cleanup error: {ex.Message}"); }
             }
-            _service.DisposeAsync().AsTask().Wait();
+            await _service.DisposeAsync();
         }
 
         private void SaveAndReload(EmailFolder folder)
         {
             _folders.Save(folder);
+            _persistence.FlushAll();
             _folders.LoadFromDisk();
         }
 
         private void SaveAndReload(EmailMessage msg)
         {
             _messages.Save(msg);
+            _persistence.FlushAll();
             _messages.LoadFromDisk();
         }
 
@@ -299,12 +286,17 @@ namespace Spokes_Server.Tests.Core.Services.Communication.Email;
                 IsFocused = false
             };
             var presenceState = new PresenceStateService(new Mock<ChatStateService>().Object);
-            presenceState.RegisterConnection(userId, "sub_email_mob_1", "Mobile", isFocused: false);
+            presenceState.RegisterConnection(new ConnectionRegistrationOptions
+            {
+                UserId = userId,
+                SubscriptionId = "sub_email_mob_1",
+                DeviceType = "Mobile",
+                IsFocused = false
+            });
 
             var snackbarMock = new Mock<ISnackbar>();
             var service = new EmailNotificationService(
-                snackbarMock.Object,
-                _nav,
+                new Spokes_Server.Components.UI.UiNotificationPresenter(snackbarMock.Object, _nav, new Mock<ISoundService>().Object),
                 _syncState,
                 _folders,
                 _messages,
@@ -353,12 +345,17 @@ namespace Spokes_Server.Tests.Core.Services.Communication.Email;
                 IsFocused = true
             };
             var presenceState = new PresenceStateService(new Mock<ChatStateService>().Object);
-            presenceState.RegisterConnection(userId, "sub_email_mob_2", "Mobile", isFocused: true);
+            presenceState.RegisterConnection(new ConnectionRegistrationOptions
+            {
+                UserId = userId,
+                SubscriptionId = "sub_email_mob_2",
+                DeviceType = "Mobile",
+                IsFocused = true
+            });
 
             var snackbarMock = new Mock<ISnackbar>();
             var service = new EmailNotificationService(
-                snackbarMock.Object,
-                _nav,
+                new Spokes_Server.Components.UI.UiNotificationPresenter(snackbarMock.Object, _nav, new Mock<ISoundService>().Object),
                 _syncState,
                 _folders,
                 _messages,

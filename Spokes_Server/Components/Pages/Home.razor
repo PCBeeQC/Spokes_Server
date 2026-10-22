@@ -8,14 +8,11 @@
 @inject UserService UserService
 @inject IDialogService DialogService
 @inject ISnackbar Snackbar
+@inject ILogger<Home> Logger
 
 <PageTitle>Home | Spokes</PageTitle>
 
-@if (IsFriendEdition)
-{
-    <Chat />
-}
-else
+@if (!IsFriendEdition)
 {
     <MudContainer MaxWidth="MaxWidth.Large" Class="mt-4">
         <div class="d-flex flex-column gap-4">
@@ -48,8 +45,13 @@ else
                             </div>
 
                             @if (WeekEvents.Count > 0)
-
                             {
+                                var viewingContext = new CalendarViewingContext(
+                                    _currentUser?.Id ?? "",
+                                    _currentUserTeamIds,
+                                    _employeeNames,
+                                    _teamNames,
+                                    Categories.ToDictionary(c => c.Id, c => c));
                                 <MudList T="string" Dense="true">
                                     @foreach (var group in WeekEvents.GroupBy(e => e.Start.Date))
                                     {
@@ -61,13 +63,7 @@ else
                                         
                                         @foreach (var evt in group)
                                         {
-                                            var effCat = CalendarEffectiveCategory.Resolve(
-                                                evt,
-                                                _currentUser?.Id ?? "",
-                                                _currentUserTeamIds,
-                                                _employeeNames,
-                                                _teamNames,
-                                                Categories.ToDictionary(c => c.Id, c => c));
+                                            var effCat = CalendarEffectiveCategory.Resolve(evt, viewingContext);
 
                                             <MudListItem T="string" Icon="@Icons.Material.Filled.Event" IconColor="@effCat.Color" OnClick="@(() => OpenEventDialog(evt))">
                                                 <div class="d-flex justify-space-between align-center" style="width: 100%">
@@ -109,7 +105,7 @@ else
 
                             @if (UnreadMessages.Any())
                             {
-                                <MudList T="string" Dense="true" Clickable="true">
+                                <MudList T="string" Dense="true" ReadOnly="false">
                                     @foreach (var msg in UnreadMessages)
                                     {
                                         bool isChat = msg.Type == "Chat";
@@ -293,6 +289,7 @@ else
     private List<CalendarCategory> Categories = new();
     private HashSet<string> _currentUserTeamIds = [];
     private Dictionary<string, string> _employeeNames = [];
+    private Dictionary<string, Employee> _employeesById = [];
     private Dictionary<string, string> _teamNames = [];
 
 
@@ -336,7 +333,9 @@ else
                 ? _currentUser.EnsureCalendarCategories(serverProfile)
                 : CalendarCategoryDefaults.CloneList(serverProfile?.CalendarCategories);
 
-            _employeeNames = Db.Employees.GetAll().ToDictionary(e => e.Id, e => e.FullName);
+            var allEmployees = Db.Employees.GetAll();
+            _employeeNames = allEmployees.ToDictionary(e => e.Id, e => e.FullName);
+            _employeesById = allEmployees.ToDictionary(e => e.Id, e => e);
             _teamNames = Db.Teams.GetAll().ToDictionary(t => t.Id, t => t.Name);
             _currentUserTeamIds.Clear();
             if (!string.IsNullOrEmpty(_currentUser?.TeamId))
@@ -362,6 +361,8 @@ else
     {
         try
         {
+            if (_currentUser == null) return;
+
             await Task.Run(() =>
             {
                 LoadWeekAgenda();
@@ -374,7 +375,7 @@ else
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[Home] Error loading dashboard: {ex.Message}");
+            Logger.LogError(ex, "Error loading dashboard data.");
         }
         finally
         {
@@ -413,7 +414,8 @@ else
 
 
 
-        if (_currentUser == null) return;
+        var currentUser = _currentUser;
+        if (currentUser == null) return;
 
 
 
@@ -487,8 +489,8 @@ else
 
 
         .Where(e => (e.IsCompanyWide || 
-                     e.EmployeeId == _currentUser.Id || 
-                     (e.Attendees != null && e.Attendees.Contains(_currentUser.Id)) || 
+                     e.EmployeeId == currentUser.Id || 
+                     (e.Attendees != null && e.Attendees.Contains(currentUser.Id)) || 
                      (e.InvitedTeamIds != null && e.InvitedTeamIds.Any(tId => _currentUserTeamIds.Contains(tId)))) &&
         e.Start < endOfWeek && e.End > today) // Overlaps this week
 
@@ -531,268 +533,93 @@ else
 
 
     private void LoadNotifications()
-
-
-
-
-
-
-
     {
-
-
-
-
-
-
-
-        if (_currentUser == null) return;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-        // Get unread messages logic
-
-
-
-
-
-
+        var currentUser = _currentUser;
+        if (currentUser == null) return;
 
         // 1. Get user channels
-
-
-
-
-
-
-
-        var channels = Db.ChatChannels.GetAll().Where(c => c.ParticipantIds.Contains(_currentUser.Id) || c.ChannelType ==
-
-
-
-        "General"); // Simplified
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+        var channels = Db.ChatChannels.GetAll()
+            .Where(c => c.ParticipantIds.Contains(currentUser.Id) || c.ChannelType == ChatChannelType.General);
 
         foreach (var channel in channels)
-
-
-
-
-
-
-
         {
-
-
-
-
-
-
-
-            var lastRead = Db.ChatReadStates.GetLastReadAt(_currentUser.Id, channel.Id);
-
-
-
-
-
-
-
-            var unreadMsgs = Db.ChatMessages.GetAll()
-
-
-
-
-
-
-
-            .Where(m => m.ChannelId == channel.Id && m.SentAt > lastRead && m.SenderId != _currentUser.Id)
-
-
-
-
-
-
-
-            .OrderByDescending(m => m.SentAt)
-
-
-
-
-
-
-
-            .Take(1) // Just take the latest per channel for summary
-
-
-
-
-
-
-
-            .ToList();
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-            foreach (var msg in unreadMsgs)
-
-
-
-
-
-
-
+            var lastRead = Db.ChatReadStates.GetLastReadAt(currentUser.Id, channel.Id);
+
+            // Fast path: check unread count using in-memory index without loading messages from disk
+            if (Db.ChatMessages.GetUnreadCountSince(channel.Id, lastRead, currentUser.Id) == 0)
+                continue;
+
+            // Existing method used by ChatSidebar for channel preview
+            var preview = Db.ChatMessages.GetChannelPreviewSummary(channel.Id);
+            if (preview != null && preview.SentAt > lastRead && preview.SenderId != currentUser.Id)
             {
+                var senderName = _employeeNames.GetValueOrDefault(preview.SenderId, "Unknown");
+                var channelName = ChatChannelFormatter.GetDisplayName(channel, currentUser.Id, id => _employeesById.GetValueOrDefault(id));
+                var content = preview.PreviewText ?? (preview.IsEncrypted ? "Encrypted message" : "");
 
-
-
-
-
-
-
-                var sender = Db.Employees.GetById(msg.SenderId);
-
-
-
-
-
-
-
-                var channelName = ChatChannelFormatter.GetDisplayName(channel, _currentUser?.Id, id => Db.Employees.GetById(id));
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+                if (string.IsNullOrEmpty(content))
+                {
+                    var msg = Db.ChatMessages.GetByIdOrLoad(channel.Id, preview.MessageId);
+                    content = msg?.Content ?? "";
+                }
 
                 UnreadMessages.Add(new NotificationViewModel
+                {
+                    ChannelId = channel.Id,
+                    ChannelName = channelName,
+                    SenderName = senderName,
+                    Content = content,
+                    SentAt = preview.SentAt,
+                    Type = "Chat",
+                    EmailId = "",
+                    FolderPath = ""
+                });
+            }
+            else
+            {
+                // Fallback to existing repository method: loads only unread messages for this specific channel
+                var latestUnread = Db.ChatMessages.GetUnreadMessagesSince(channel.Id, lastRead, currentUser.Id)
+                    .OrderByDescending(m => m.SentAt)
+                    .FirstOrDefault();
 
+                if (latestUnread != null)
+                {
+                    var senderName = _employeeNames.GetValueOrDefault(latestUnread.SenderId, "Unknown");
+                    var channelName = ChatChannelFormatter.GetDisplayName(channel, currentUser.Id, id => _employeesById.GetValueOrDefault(id));
 
-
-
-
-
-
+                    UnreadMessages.Add(new NotificationViewModel
                     {
-
-
-
-
-
-
-
                         ChannelId = channel.Id,
-
-
-
-
-
-
-
                         ChannelName = channelName,
-
-
-
-
-
-
-
-                        SenderName = sender?.FullName ?? "Unknown",
-
-
-
-
-
-
-
-                        Content = msg.Content,
-
-
-
-
-
-
-
-                        SentAt = msg.SentAt,
+                        SenderName = senderName,
+                        Content = latestUnread.Content,
+                        SentAt = latestUnread.SentAt,
                         Type = "Chat",
                         EmailId = "",
                         FolderPath = ""
                     });
+                }
             }
         }
 
-        // 2. Fetch unread emails from INBOX
-        var topEmails = Db.EmailMessages.GetByFolderRecent(_currentUser.Id, "INBOX", 50)
-            .Where(e => !e.IsRead)
-            .Take(10)
-            .ToList();
-
-        foreach (var email in topEmails)
+        // 2. Fetch unread emails from INBOX using in-memory index
+        if (Db.EmailMessages.GetUnreadCount(currentUser.Id, "INBOX") > 0)
         {
-            UnreadMessages.Add(new NotificationViewModel
+            var topEmails = Db.EmailMessages.GetUnreadByFolderRecent(currentUser.Id, "INBOX", 5);
+            foreach (var email in topEmails)
             {
-                ChannelId = "",
-                ChannelName = email.Subject,
-                SenderName = string.IsNullOrWhiteSpace(email.FromName) ? email.FromAddress : email.FromName,
-                Content = string.IsNullOrWhiteSpace(email.Snippet) ? "No snippet available" : email.Snippet,
-                SentAt = email.Date.DateTime,
-                Type = "Email",
-                EmailId = email.Id,
-                FolderPath = email.FolderPath
-            });
+                UnreadMessages.Add(new NotificationViewModel
+                {
+                    ChannelId = "",
+                    ChannelName = email.Subject,
+                    SenderName = string.IsNullOrWhiteSpace(email.FromName) ? email.FromAddress : email.FromName,
+                    Content = string.IsNullOrWhiteSpace(email.Snippet) ? "No snippet available" : email.Snippet,
+                    SentAt = email.Date.DateTime,
+                    Type = "Email",
+                    EmailId = email.Id,
+                    FolderPath = email.FolderPath
+                });
+            }
         }
 
         UnreadMessages = UnreadMessages.OrderByDescending(m => m.SentAt).Take(5).ToList();
@@ -828,7 +655,8 @@ else
 
 
 
-        if (_currentUser == null) return;
+        var currentUser = _currentUser;
+        if (currentUser == null) return;
 
 
 
@@ -868,7 +696,7 @@ else
 
 
 
-        CurrentPlan = Db.WeeklyPlans.GetByEmployeeAndWeek(_currentUser.Id, year, week);
+        CurrentPlan = Db.WeeklyPlans.GetOrStubByEmployeeAndWeek(currentUser.Id, year, week);
 
 
 
@@ -1036,7 +864,7 @@ else
 
 
 
-        public string ChannelId { get; set; }
+        public string ChannelId { get; set; } = string.Empty;
 
 
 
@@ -1044,7 +872,7 @@ else
 
 
 
-        public string ChannelName { get; set; }
+        public string ChannelName { get; set; } = string.Empty;
 
 
 
@@ -1052,7 +880,7 @@ else
 
 
 
-        public string SenderName { get; set; }
+        public string SenderName { get; set; } = string.Empty;
 
 
 
@@ -1060,7 +888,7 @@ else
 
 
 
-        public string Content { get; set; }
+        public string Content { get; set; } = string.Empty;
 
 
 
@@ -1089,17 +917,15 @@ else
 
         if (result != null && !result.Canceled)
         {
-            var resultEvent = result.Data as CalendarEvent;
-
-            if (resultEvent == null) // Deleted
-            {
-                Db.CalendarEvents.Delete(evt.Id);
-                Snackbar.Add("Event deleted", Severity.Success);
-            }
-            else // Saved
+            if (result.Data is CalendarEvent resultEvent) // Saved
             {
                 Db.CalendarEvents.Save(resultEvent);
                 Snackbar.Add("Event saved", Severity.Success);
+            }
+            else // Deleted
+            {
+                Db.CalendarEvents.Delete(evt.Id);
+                Snackbar.Add("Event deleted", Severity.Success);
             }
             LoadWeekAgenda();
             StateHasChanged();

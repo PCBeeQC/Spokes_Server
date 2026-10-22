@@ -9,23 +9,23 @@ public class OpenIdAccountRepository : JsonRepository<OpenIdAccount>
     {
     }
 
-    /// <summary>
-    /// Find an OpenID account by its OIDC subject claim.
-    /// </summary>
-    public OpenIdAccount? GetBySub(string sub) =>
-        _cache.Values.FirstOrDefault(a => a.Sub == sub);
+    public OpenIdAccount? GetBySub(string sub)
+    {
+        EnsureLoaded();
+        return _cache.Values.FirstOrDefault(a => a.Sub == sub);
+    }
 
-    /// <summary>
-    /// Get all OpenID accounts linked to a specific employee.
-    /// </summary>
-    public List<OpenIdAccount> GetByEmployeeId(string employeeId) =>
-        _cache.Values.Where(a => a.LinkedEmployeeId == employeeId).ToList();
+    public List<OpenIdAccount> GetByEmployeeId(string employeeId)
+    {
+        EnsureLoaded();
+        return _cache.Values.Where(a => a.LinkedEmployeeId == employeeId).ToList();
+    }
 
-    /// <summary>
-    /// Get all OpenID accounts that are not linked to any employee.
-    /// </summary>
-    public List<OpenIdAccount> GetUnlinked() =>
-        _cache.Values.Where(a => string.IsNullOrEmpty(a.LinkedEmployeeId)).ToList();
+    public List<OpenIdAccount> GetUnlinked()
+    {
+        EnsureLoaded();
+        return _cache.Values.Where(a => string.IsNullOrEmpty(a.LinkedEmployeeId)).ToList();
+    }
 
     protected override string GetFilePath(OpenIdAccount item) =>
         Path.Combine(_basePath, $"{item.Id}.json");

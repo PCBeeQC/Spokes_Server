@@ -1,42 +1,12 @@
-using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.Logging;
-using Moq;
-using Spokes_Server.Core.Data;
 using Spokes_Server.Core.Data.Repositories.Communication;
 using Spokes_Server.Core.Models.Communication;
+using Spokes_Server.Tests.Helpers;
 using Xunit;
 
 namespace Spokes_Server.Tests.Core.Data.Repositories.Communication;
 
-public class AlbumRepositoryTests : IDisposable
+public class AlbumRepositoryTests : RepositoryTestFixture<AlbumRepository>
 {
-    private readonly string _testDataDir;
-    private readonly DiskPersistenceService _writer;
-    private readonly Mock<IConfiguration> _mockConfig;
-    private readonly AlbumRepository _repo;
-
-    public AlbumRepositoryTests()
-    {
-        _testDataDir = Path.Combine(Path.GetTempPath(), $"Spokes_Test_Albums_{Guid.NewGuid()}");
-
-        _mockConfig = new Mock<IConfiguration>();
-        _mockConfig.Setup(c => c["DataPath"]).Returns(_testDataDir);
-
-        var mockLogger = new Mock<ILogger<DiskPersistenceService>>();
-        _writer = new DiskPersistenceService(mockLogger.Object);
-
-        _repo = new AlbumRepository(_writer, _mockConfig.Object);
-    }
-
-    public void Dispose()
-    {
-        if (Directory.Exists(_testDataDir))
-        {
-            try { Directory.Delete(_testDataDir, true); } catch { }
-        }
-        _writer.Dispose();
-    }
-
     [Fact]
     public void LoadFromDisk_WithAsteriskPattern_LoadsAlbums()
     {
@@ -45,24 +15,13 @@ public class AlbumRepositoryTests : IDisposable
         File.WriteAllText(Path.Combine(albumsDir, "album3.json"), "{\"Id\":\"album3\",\"Title\":\"Loaded Album\"}");
         File.WriteAllText(Path.Combine(albumsDir, "album4.json"), "{\"Id\":\"album4\",\"Title\":\"Another Album\"}");
 
-        var repo2 = new AlbumRepository(_writer, _mockConfig.Object);
+        var repo2 = new AlbumRepository(_writer, Config);
         repo2.LoadFromDisk();
         
         var loadedAlbums = repo2.GetAll();
         Assert.True(loadedAlbums.Count >= 2, "Should load at least the manually written albums");
         Assert.Contains(loadedAlbums, a => a.Id == "album3");
         Assert.Contains(loadedAlbums, a => a.Id == "album4");
-    }
-
-    [Fact]
-    public void Constructor_WithNullDataPath_UsesDefaultPath()
-    {
-        var mockConfig = new Mock<IConfiguration>();
-        mockConfig.Setup(c => c["DataPath"]).Returns((string?)null);
-
-        var repo = new AlbumRepository(_writer, mockConfig.Object);
-
-        Assert.NotNull(repo);
     }
 
     [Fact]

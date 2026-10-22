@@ -15,11 +15,6 @@ public class ProjectRepository : JsonRepository<Project>
         base.Save(item);
     }
 
-    public override Task SaveAsync(Project item)
-    {
-        item.LastEdited = DateTime.UtcNow;
-        return base.SaveAsync(item);
-    }
 
     protected override string GetFilePath(Project item) =>
         Path.Combine(_basePath, item.Id, "project.json");

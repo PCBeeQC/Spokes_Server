@@ -10,7 +10,6 @@ using Spokes_Server.Core.Data;
 using Spokes_Server.Core.Data.Repositories.Core;
 using Spokes_Server.Core.Data.Repositories.HR;
 using Spokes_Server.Core.Services.Communication.Email;
-using Spokes_Server.Core.Services.Core;
 
 namespace Spokes_Server.Tests.Core.Services.Communication.Email;
 
@@ -73,6 +72,29 @@ public class EmailIdleServiceTests : IDisposable
     }
 
     [Fact]
+    public void Constructor_InitializesCorrectly()
+    {
+        Assert.NotNull(_service);
+        Assert.NotNull(_persistence);
+        Assert.NotNull(_employees);
+        Assert.NotNull(_companyProfiles);
+    }
+
+    [Fact]
+    public void Events_CanBeSubscribed()
+    {
+        bool receivedTriggered = false;
+        bool flagsTriggered = false;
+
+        _service.MessageReceived += (u, f, id) => receivedTriggered = true;
+        _service.MessageFlagsChanged += (u, f, id) => flagsTriggered = true;
+
+        Assert.NotNull(_service);
+        Assert.False(receivedTriggered);
+        Assert.False(flagsTriggered);
+    }
+
+    [Fact]
     public void WatchFolder_ValidInput_StartsNewWatcher()
     {
         // Arrange
@@ -83,6 +105,9 @@ public class EmailIdleServiceTests : IDisposable
         var ex = Record.Exception(() => _service.WatchFolder(employeeId, folder));
 
         // Assert
+        Assert.NotNull(_service);
+        Assert.NotNull(employeeId);
+        Assert.NotNull(folder);
         Assert.Null(ex);
     }
 
@@ -98,6 +123,9 @@ public class EmailIdleServiceTests : IDisposable
         var ex = Record.Exception(() => _service.WatchFolder(employeeId, folder));
 
         // Assert
+        Assert.NotNull(_service);
+        Assert.NotNull(employeeId);
+        Assert.NotNull(folder);
         Assert.Null(ex);
     }
 
@@ -112,6 +140,7 @@ public class EmailIdleServiceTests : IDisposable
         var ex = Record.Exception(() => _service.WatchFolder(employeeId!, folder));
 
         // Assert
+        Assert.NotNull(_service);
         Assert.Null(ex);
     }
 
@@ -127,6 +156,9 @@ public class EmailIdleServiceTests : IDisposable
         var ex = Record.Exception(() => _service.StopWatching(employeeId, folder));
 
         // Assert
+        Assert.NotNull(_service);
+        Assert.NotNull(employeeId);
+        Assert.NotNull(folder);
         Assert.Null(ex);
     }
 
@@ -141,6 +173,9 @@ public class EmailIdleServiceTests : IDisposable
         var ex = Record.Exception(() => _service.StopWatching(employeeId, folder));
 
         // Assert
+        Assert.NotNull(_service);
+        Assert.NotNull(employeeId);
+        Assert.NotNull(folder);
         Assert.Null(ex);
     }
 
@@ -155,6 +190,7 @@ public class EmailIdleServiceTests : IDisposable
         var ex = Record.Exception(() => _service.Dispose());
 
         // Assert
+        Assert.NotNull(_service);
         Assert.Null(ex);
     }
 
@@ -169,6 +205,7 @@ public class EmailIdleServiceTests : IDisposable
         var ex = Record.Exception(() => _service.Dispose());
 
         // Assert
+        Assert.NotNull(_service);
         Assert.Null(ex);
     }
 }

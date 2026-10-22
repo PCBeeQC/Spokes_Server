@@ -18,7 +18,9 @@ public interface ICryptoService
 
     // Stream (AES)
     Task EncryptStreamAsync(Stream inputStream, Stream outputStream, string base64Key);
+    Task EncryptStreamAsync(Stream inputStream, Stream outputStream, string base64Key, CancellationToken cancellationToken);
     Task DecryptStreamAsync(Stream inputStream, Stream outputStream, string base64Key);
+    Task DecryptStreamAsync(Stream inputStream, Stream outputStream, string base64Key, CancellationToken cancellationToken);
 
     // KDF
     string DeriveKeyFromPassword(string password, string salt, int iterations = 100000);
@@ -103,7 +105,10 @@ public class CryptoService : ICryptoService
         return sr.ReadToEnd();
     }
 
-    public async Task EncryptStreamAsync(Stream inputStream, Stream outputStream, string base64Key)
+    public Task EncryptStreamAsync(Stream inputStream, Stream outputStream, string base64Key) =>
+        EncryptStreamAsync(inputStream, outputStream, base64Key, CancellationToken.None);
+
+    public async Task EncryptStreamAsync(Stream inputStream, Stream outputStream, string base64Key, CancellationToken cancellationToken)
     {
         var key = Convert.FromBase64String(base64Key);
         using var aes = Aes.Create();
@@ -111,28 +116,31 @@ public class CryptoService : ICryptoService
         aes.GenerateIV();
 
         // Write IV first
-        await outputStream.WriteAsync(aes.IV);
+        await outputStream.WriteAsync(aes.IV, cancellationToken);
 
         using var encryptor = aes.CreateEncryptor();
         await using var cs = new CryptoStream(outputStream, encryptor, CryptoStreamMode.Write, leaveOpen: true);
-        await inputStream.CopyToAsync(cs);
+        await inputStream.CopyToAsync(cs, cancellationToken);
     }
 
-    public async Task DecryptStreamAsync(Stream inputStream, Stream outputStream, string base64Key)
+    public Task DecryptStreamAsync(Stream inputStream, Stream outputStream, string base64Key) =>
+        DecryptStreamAsync(inputStream, outputStream, base64Key, CancellationToken.None);
+
+    public async Task DecryptStreamAsync(Stream inputStream, Stream outputStream, string base64Key, CancellationToken cancellationToken)
     {
         var key = Convert.FromBase64String(base64Key);
         using var aes = Aes.Create();
         aes.Key = key;
 
         var iv = new byte[16];
-        var bytesRead = await inputStream.ReadAsync(iv, 0, 16);
+        var bytesRead = await inputStream.ReadAsync(iv.AsMemory(0, 16), cancellationToken);
         if (bytesRead < 16) throw new InvalidDataException("Invalid encrypted stream (no IV).");
 
         aes.IV = iv;
 
         using var decryptor = aes.CreateDecryptor();
         await using var cs = new CryptoStream(inputStream, decryptor, CryptoStreamMode.Read, leaveOpen: true);
-        await cs.CopyToAsync(outputStream);
+        await cs.CopyToAsync(outputStream, cancellationToken);
     }
 
     public string DeriveKeyFromPassword(string password, string salt, int iterations = 100000)

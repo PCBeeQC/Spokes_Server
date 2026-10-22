@@ -6,8 +6,9 @@ using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Moq;
+using Spokes_Server.Core.Exceptions;
 using Spokes_Server.Core.Middleware;
-using Spokes_Server.Core.Utilities;
+using Spokes_Server.Core.Helpers;
 
 namespace Spokes_Server.Tests.Core.Middleware;
 
@@ -180,6 +181,71 @@ public class GlobalExceptionFilterTests
                 customException,
                 It.IsAny<Func<It.IsAnyType, Exception?, string>>()),
             Times.Once);
+    }
+
+    [Fact]
+    public void OnException_WhenDomainException_Returns400WithErrorCodeAndLogsWarning()
+    {
+        // Arrange
+        _mockEnv.Setup(e => e.EnvironmentName).Returns(Environments.Production);
+        var filter = new GlobalExceptionFilter(_mockLogger.Object, _mockEnv.Object);
+        var domainEx = new DomainException("Employee not found in organization", "EMPLOYEE_NOT_FOUND");
+        var context = CreateExceptionContext(domainEx);
+
+        // Act
+        filter.OnException(context);
+
+        // Assert
+        Assert.True(context.ExceptionHandled);
+        var objectResult = Assert.IsType<ObjectResult>(context.Result);
+        Assert.Equal(400, objectResult.StatusCode);
+
+        var spokesResult = Assert.IsType<SpokesResult>(objectResult.Value);
+        Assert.False(spokesResult.IsSuccess);
+        Assert.Equal("Employee not found in organization", spokesResult.ErrorMessage);
+        Assert.Equal("EMPLOYEE_NOT_FOUND", spokesResult.Code);
+
+        // Verify warning was logged (not error)
+        _mockLogger.Verify(
+            x => x.Log(
+                LogLevel.Warning,
+                It.IsAny<EventId>(),
+                It.Is<It.IsAnyType>((v, t) => v.ToString()!.Contains("Domain exception in API Controller")),
+                domainEx,
+                It.IsAny<Func<It.IsAnyType, Exception?, string>>()),
+            Times.Once);
+
+        _mockLogger.Verify(
+            x => x.Log(
+                LogLevel.Error,
+                It.IsAny<EventId>(),
+                It.IsAny<It.IsAnyType>(),
+                It.IsAny<Exception>(),
+                It.IsAny<Func<It.IsAnyType, Exception?, string>>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public void OnException_WhenDomainExceptionWithoutErrorCode_Returns400WithNullCode()
+    {
+        // Arrange
+        _mockEnv.Setup(e => e.EnvironmentName).Returns(Environments.Production);
+        var filter = new GlobalExceptionFilter(_mockLogger.Object, _mockEnv.Object);
+        var domainEx = new DomainException("Operation violates domain rules");
+        var context = CreateExceptionContext(domainEx);
+
+        // Act
+        filter.OnException(context);
+
+        // Assert
+        Assert.True(context.ExceptionHandled);
+        var objectResult = Assert.IsType<ObjectResult>(context.Result);
+        Assert.Equal(400, objectResult.StatusCode);
+
+        var spokesResult = Assert.IsType<SpokesResult>(objectResult.Value);
+        Assert.False(spokesResult.IsSuccess);
+        Assert.Equal("Operation violates domain rules", spokesResult.ErrorMessage);
+        Assert.Null(spokesResult.Code);
     }
 
     private class CustomTestException : Exception

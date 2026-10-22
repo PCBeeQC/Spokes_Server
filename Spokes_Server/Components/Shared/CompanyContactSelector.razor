@@ -6,7 +6,7 @@
 <MudGrid Spacing="2">
     <MudItem xs="12" sm="@(ShowEditButtons ? 8 : 12)">
         <MudAutocomplete T="Supplier" Label="@Label" Value="selectedCompany" ValueChanged="OnCompanySelected"
-            SearchFunc="SearchCompanies" ToStringFunc="@(s => s?.Info.BusinessName)" CoerceText="false"
+            SearchFunc="SearchCompanies" ToStringFunc="@(s => s?.ContactInfo.BusinessName)" CoerceText="false"
             ResetValueOnEmptyText="true" Dense="true" Variant="Variant.Outlined" AdornmentIcon="@Icon"
             Clearable="@Clearable" Required="@Required" HelperText="@GetCompanyHelperText()"
             Placeholder="@Placeholder" MaxItems="null" />
@@ -64,11 +64,11 @@
 
     protected override void OnInitialized()
     {
-        AllCompanies = Db.Suppliers.GetAll().OrderBy(s => s.Info.BusinessName).ToList();
+        AllCompanies = Db.Suppliers.GetAll().OrderBy(s => s.ContactInfo.BusinessName).ToList();
 
         if (!string.IsNullOrEmpty(InitialCompanyName))
         {
-            selectedCompany = AllCompanies.FirstOrDefault(s => s.Info.BusinessName == InitialCompanyName);
+            selectedCompany = AllCompanies.FirstOrDefault(s => s.ContactInfo.BusinessName == InitialCompanyName);
             if (selectedCompany != null)
             {
                 if (!string.IsNullOrEmpty(InitialContactName))
@@ -87,12 +87,12 @@
     private Task<IEnumerable<Supplier>> SearchCompanies(string value, CancellationToken token)
     {
         if (string.IsNullOrEmpty(value)) return Task.FromResult<IEnumerable<Supplier>>(AllCompanies);
-        return Task.FromResult(AllCompanies.Where(x => x.Info.BusinessName.Contains(value, StringComparison.InvariantCultureIgnoreCase)));
+        return Task.FromResult(AllCompanies.Where(x => x.ContactInfo.BusinessName.Contains(value, StringComparison.InvariantCultureIgnoreCase)));
     }
 
     private string GetCompanyHelperText() =>
         selectedCompany != null
-            ? $"{selectedCompany.Info.BusinessAdressStreet}, {selectedCompany.Info.BusinessAdressCity}"
+            ? $"{selectedCompany.ContactInfo.BusinessAddressStreet}, {selectedCompany.ContactInfo.BusinessAddressCity}"
             : HelperText;
 
     private async Task OnCompanySelected(Supplier s)
@@ -132,10 +132,10 @@
             }, options);
         var result = await dialog.Result;
 
-        if (!result.Canceled && result.Data is Supplier created)
+        if (result is { Canceled: false, Data: Supplier created })
         {
             Db.Suppliers.Save(created);
-            AllCompanies = Db.Suppliers.GetAll().OrderBy(s => s.Info.BusinessName).ToList();
+            AllCompanies = Db.Suppliers.GetAll().OrderBy(s => s.ContactInfo.BusinessName).ToList();
             await OnCompanySelected(created);
             Snackbar.Add("Company created", Severity.Success);
         }
@@ -153,10 +153,10 @@
             }, options);
         var result = await dialog.Result;
 
-        if (!result.Canceled && result.Data is Supplier updated)
+        if (result is { Canceled: false, Data: Supplier updated })
         {
             Db.Suppliers.Save(updated);
-            AllCompanies = Db.Suppliers.GetAll().OrderBy(s => s.Info.BusinessName).ToList();
+            AllCompanies = Db.Suppliers.GetAll().OrderBy(s => s.ContactInfo.BusinessName).ToList();
             await OnCompanySelected(updated);
             Snackbar.Add("Company updated", Severity.Success);
         }

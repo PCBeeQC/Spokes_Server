@@ -1,5 +1,6 @@
 @inject IJSRuntime JSRuntime
 @inject IDialogService DialogService
+@inject ILogger<EmailContentRenderer> Logger
 @implements IAsyncDisposable
 
 <div @ref="_container" class="email-content-renderer" style="width: 100%; height: 100%;"></div>
@@ -26,7 +27,7 @@
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Error initializing email renderer: {ex.Message}");
+                Logger.LogError(ex, "Error initializing email renderer.");
             }
         }
 
@@ -38,7 +39,7 @@
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Error rendering content: {ex.Message}");
+                Logger.LogError(ex, "Error rendering email content.");
             }
         }
     }

@@ -3,30 +3,24 @@ namespace Spokes_Server.Core.Constants;
 public static class SpokesConstants
 {
     public const string PushRelayUrl = "https://push.spokes.sh/api/relay-push";
+    public const string GifRelayUrl = "https://push.spokes.sh/api/relay-gif";
+    public const string TelemetryRelayUrl = "https://push.spokes.sh/api/relay-telemetry";
 
     /// <summary>
-    /// Push relay authentication key. Injected via environment variable in official Docker builds.
-    /// Self-compiled instances will not have push notification relay access without a valid key.
+    /// Legacy fallback for PushRelayKey. In official Docker builds, injected via environment variable SPOKES_RELAY_KEY.
+    /// Prefer injecting IOptions&lt;SpokesOptions&gt;.
     /// </summary>
+    [Obsolete("Prefer injecting IOptions<SpokesOptions> instead of reading static constants.")]
     public static string PushRelayKey =>
-        Environment.GetEnvironmentVariable("SPOKES_RELAY_KEY")
-        ?? "";
+        Environment.GetEnvironmentVariable("SPOKES_RELAY_KEY") ?? string.Empty;
 
     /// <summary>
-    /// Klipy GIF search API key. Injected via environment variable in official Docker builds.
-    /// Self-compiled instances should provide their own key or GIF search will be unavailable.
+    /// Legacy fallback for DefaultKlipyApiKey. In official Docker builds, injected via environment variable SPOKES_KLIPY_KEY.
+    /// Prefer injecting IOptions&lt;SpokesOptions&gt;.
     /// </summary>
+    [Obsolete("Prefer injecting IOptions<SpokesOptions> instead of reading static constants.")]
     public static string DefaultKlipyApiKey =>
-        Environment.GetEnvironmentVariable("SPOKES_KLIPY_KEY")
-        ?? "";
-
-    /// <summary>
-    /// HMAC salt used to sign demo creation version timestamps.
-    /// Injected via environment variable in official Docker builds to prevent demo clock tampering.
-    /// </summary>
-    public static string LicenseHMACSalt =>
-        Environment.GetEnvironmentVariable("SPOKES_HMAC_SALT")
-        ?? "default-development-salt";
+        Environment.GetEnvironmentVariable("SPOKES_KLIPY_KEY") ?? string.Empty;
 
     public const string LicensePublicKeyPem = @"-----BEGIN RSA PUBLIC KEY-----
 MIIBCgKCAQEAvVU8XQ1jra44+p7gvCmKPH9WgNBGLU0uwlFGJXMrlVmlHg770NsH

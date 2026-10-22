@@ -21,4 +21,9 @@ public class ChatIndexEntry
     /// MUST BE NULL if IsEncrypted is true to prevent plaintext leaks.
     /// </summary>
     public string? PreviewText { get; set; }
+
+    /// <summary>
+    /// IDs of any albums mentioned in this message. Stored in index metadata to avoid disk reads during album synchronization.
+    /// </summary>
+    public List<string> MentionedAlbumIds { get; set; } = [];
 }

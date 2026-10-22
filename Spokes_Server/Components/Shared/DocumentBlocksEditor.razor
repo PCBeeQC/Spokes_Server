@@ -125,7 +125,8 @@
 
     [Inject] private IDialogService DialogService { get; set; } = default!;
     [Inject] private ISnackbar Snackbar { get; set; } = default!;
-    [Inject] private Spokes_Server.Core.Services.Core.UserService UserService { get; set; } = default!;
+    [Inject] private UserService UserService { get; set; } = default!;
+    [Inject] private ILogger<DocumentBlocksEditor> Logger { get; set; } = default!;
 
     // Track block names by ID to detect renames (OnFocus doesn't fire on MudTextField)
     private Dictionary<string, string> _knownNames = new();
@@ -144,10 +145,10 @@
     private async Task HandleNameBlur(DocumentBlockInstance block)
     {
         var oldName = _knownNames.TryGetValue(block.Id, out var n) ? n : block.Name;
-        Console.WriteLine($"[HandleNameBlur] oldName='{oldName}' currentName='{block.Name}'");
+        Logger.LogDebug("HandleNameBlur: oldName='{OldName}' currentName='{CurrentName}'", oldName, block.Name);
         if (oldName != block.Name)
         {
-            Console.WriteLine($"[HandleNameBlur] Name changed! Firing OnBlockRenamed");
+            Logger.LogDebug("HandleNameBlur: Name changed! Firing OnBlockRenamed.");
             await OnBlockRenamed.InvokeAsync((oldName, block.Name));
             _knownNames[block.Id] = block.Name; // Update snapshot
         }
@@ -204,7 +205,7 @@
             });
         var result = await dialog.Result;
 
-        if (!result.Canceled && result.Data is IDocumentBlock selectedBlock)
+        if (result is { Canceled: false, Data: IDocumentBlock selectedBlock })
         {
             var newBlock = new DocumentBlockInstance
                 {

@@ -1,9 +1,12 @@
 @inherits SpokesComponentBase
+@using Microsoft.Extensions.Localization
+@using Spokes_Server.Resources
+@inject IStringLocalizer<AppResources> Loc
 
 <MudTextField T="string" 
               Value="@Value" 
               ValueChanged="@HandleValueChanged" 
-              Placeholder="@Placeholder" 
+              Placeholder="@(Placeholder ?? Loc["Search..."].Value)" 
               Adornment="Adornment.Start" 
               AdornmentIcon="@Icons.Material.Filled.Search" 
               IconSize="Size.Medium" 
@@ -14,7 +17,7 @@
 @code {
     [Parameter] public string Value { get; set; } = "";
     [Parameter] public EventCallback<string> ValueChanged { get; set; }
-    [Parameter] public string Placeholder { get; set; } = "Search...";
+    [Parameter] public string? Placeholder { get; set; }
     [Parameter] public string Class { get; set; } = "mt-0";
     [Parameter] public int DebounceInterval { get; set; } = 500;
 

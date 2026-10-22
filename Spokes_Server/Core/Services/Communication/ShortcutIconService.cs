@@ -2,6 +2,8 @@ using SkiaSharp;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Caching.Memory;
+using Microsoft.Extensions.Logging;
+using Spokes_Server.Core.Helpers;
 using Spokes_Server.Core.Models.HR;
 using Spokes_Server.Core.Models.Core;
 
@@ -12,13 +14,28 @@ public class ShortcutIconService
     private readonly IConfiguration _config;
     private readonly AvatarGeneratorService _avatarGenerator;
     private readonly IMemoryCache _cache;
+    private readonly ILogger<ShortcutIconService>? _logger;
 
-    public ShortcutIconService(IWebHostEnvironment env, IConfiguration config, AvatarGeneratorService avatarGenerator, IMemoryCache cache)
+    public ShortcutIconService(
+        IWebHostEnvironment env,
+        IConfiguration config,
+        AvatarGeneratorService avatarGenerator,
+        IMemoryCache cache)
+        : this(env, config, avatarGenerator, cache, null)
     {
-        _ = env;
+    }
+
+    public ShortcutIconService(
+        IWebHostEnvironment _,
+        IConfiguration config,
+        AvatarGeneratorService avatarGenerator,
+        IMemoryCache cache,
+        ILogger<ShortcutIconService>? logger)
+    {
         _config = config;
         _avatarGenerator = avatarGenerator;
         _cache = cache;
+        _logger = logger;
     }
 
     public string GetShortcutIconBase64(Employee? employee)
@@ -45,7 +62,10 @@ public class ShortcutIconService
                         originalBytes = File.ReadAllBytes(path);
                     }
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    _logger?.LogWarning(ex, "[ShortcutIconService] Failed to read avatar file for employee {EmployeeId}: {Message}", employee.Id, ex.Message);
+                }
             }
 
             if (originalBytes == null)
@@ -69,10 +89,11 @@ public class ShortcutIconService
 
             try
             {
-                var commaIndex = logoBase64.IndexOf(',');
-                var base64Data = commaIndex >= 0 ? logoBase64[(commaIndex + 1)..] : logoBase64;
-                var originalBytes = Convert.FromBase64String(base64Data);
-                return ResizeAndEncodeBase64(originalBytes, size);
+                if (DataUriHelper.TryParse(logoBase64, out var originalBytes, out _))
+                {
+                    return ResizeAndEncodeBase64(originalBytes, size);
+                }
+                return string.Empty;
             }
             catch { return string.Empty; }
         }) ?? string.Empty;

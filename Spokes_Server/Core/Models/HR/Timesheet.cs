@@ -19,8 +19,8 @@ public class Timesheet : IDataEntity
     public int Year { get; set; }
     public int WeekNumber { get; set; }
 
-    // Status: "Draft", "Submitted", "Approved", "Rejected"
-    public string Status { get; set; } = "Draft";
+    // Status: Draft, Submitted, Approved, Rejected
+    public string Status { get; set; } = TimesheetStatus.Draft;
 
     // Approval metadata
     public DateTime? SubmittedAt { get; set; }
@@ -48,6 +48,17 @@ public class TimeEntry
     public decimal Hours { get; set; }
     public string Description { get; set; } = string.Empty;
     public bool IsBillable { get; set; } = true;
+}
+
+/// <summary>
+/// Authoritative domain lifecycle statuses for Timesheets.
+/// </summary>
+public static class TimesheetStatus
+{
+    public const string Draft = "Draft";
+    public const string Submitted = "Submitted";
+    public const string Approved = "Approved";
+    public const string Rejected = "Rejected";
 }
 
 

@@ -1,0 +1,25 @@
+@using MudBlazor
+
+@if (Items != null && Items.Any())
+{
+    var list = Items.Select(x => new BreadcrumbItem(x.Text, x.Href, disabled: string.IsNullOrEmpty(x.Href))).ToList();
+    <div class="d-flex align-center spokes-breadcrumbs mb-2">
+        <MudBreadcrumbs Items="list" Separator="/" Class="pa-0">
+            <ItemTemplate Context="item">
+                @if (item.Disabled || string.IsNullOrEmpty(item.Href))
+                {
+                    <MudText Typo="Typo.caption" Style="color: var(--mud-palette-text-primary); font-weight: 600;">@item.Text</MudText>
+                }
+                else
+                {
+                    <MudLink Href="@item.Href" Typo="Typo.caption" Color="Color.Secondary" Underline="Underline.Hover">@item.Text</MudLink>
+                }
+            </ItemTemplate>
+        </MudBreadcrumbs>
+    </div>
+}
+
+@code {
+    [Parameter] public IEnumerable<(string Text, string? Href)> Items { get; set; } = [];
+}
+

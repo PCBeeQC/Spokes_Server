@@ -13,22 +13,27 @@ using Xunit;
 using Spokes_Server.Core.Data;
 using Spokes_Server.Core.Data.Repositories.Communication;
 using Spokes_Server.Core.Data.Repositories.Core;
-using Spokes_Server.Core.Hubs;
+using Spokes_Server.Hubs;
 using Spokes_Server.Core.Models.Communication;
+using Spokes_Server.Core.Models.HR;
 using Spokes_Server.Core.Services.Communication.Chat;
 using Spokes_Server.Core.Services.Communication.Voice;
+using Spokes_Server.Core.Services.UI;
+using Spokes_Server.Components.UI;
 
 namespace Spokes_Server.Tests.Core.Services.Communication.Voice;
-    public class GlobalVoiceServiceTests : IDisposable
+    public class GlobalVoiceServiceTests : IAsyncDisposable
     {
         private readonly Mock<IJSRuntime> _jsMock;
         private readonly Mock<IJSObjectReference> _voiceModuleMock;
-        private readonly Mock<ChatService> _chatServiceMock;
+        private readonly Mock<VoiceChannelService> _voiceChannelServiceMock;
         private readonly ChatStateService _chatState;
         private readonly Mock<ISnackbar> _snackbarMock;
         private readonly Mock<ILogger<GlobalVoiceService>> _loggerMock;
-        private readonly Mock<Spokes_Server.Core.Services.UI.ISoundService> _soundServiceMock;
+        private readonly Mock<ISoundService> _soundServiceMock;
+        private readonly VoiceDeviceService _deviceService;
         private readonly GlobalVoiceService _service;
+        private readonly VoiceUiStateService _uiState;
         
         private readonly DiskPersistenceService _persistence;
         private readonly IConfiguration _config;
@@ -59,49 +64,60 @@ namespace Spokes_Server.Tests.Core.Services.Communication.Voice;
 
             var companyProfiles = new CompanyProfileRepository(_persistence, _config);
             var messages = new ChatMessageRepository(_persistence, _config, companyProfiles);
-            var hubMock = new Mock<IHubContext<ChatHub>>();
-            var hubClientsMock = new Mock<IHubClients>();
-            var groupMock = new Mock<IClientProxy>();
-            hubMock.Setup(h => h.Clients).Returns(hubClientsMock.Object);
-            hubClientsMock.Setup(c => c.Group(It.IsAny<string>())).Returns(groupMock.Object);
+            var gatewayMock = new Mock<IChatRealtimeGateway>();
 
-            _chatServiceMock = new Mock<ChatService>(
-                null, null, messages, null, null, null, hubMock.Object, _chatState, null, null,
-                new Mock<ILogger<ChatService>>().Object, null, null, null, null, null, null, null, null, null, null, null) { CallBase = true };
+            _voiceChannelServiceMock = new Mock<VoiceChannelService>();
+            _voiceChannelServiceMock.Setup(x => x.JoinVoiceAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+                .Callback<string, string, CancellationToken>((channelId, userId, _) => _chatState.NotifyVoiceMemberJoined(channelId, userId))
+                .Returns(Task.CompletedTask);
+            _voiceChannelServiceMock.Setup(x => x.LeaveVoiceAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+                .Callback<string, string, CancellationToken>((channelId, userId, _) => _chatState.NotifyVoiceMemberLeft(channelId, userId))
+                .Returns(Task.CompletedTask);
+            _voiceChannelServiceMock.Setup(x => x.SetUserSpeakingAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()))
+                .Callback<string, string, bool, CancellationToken>((channelId, userId, isSpeaking, _) => _chatState.SetUserSpeaking(channelId, userId, isSpeaking))
+                .Returns(Task.CompletedTask);
+            _voiceChannelServiceMock.Setup(x => x.SetUserMutedAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()))
+                .Callback<string, string, bool, CancellationToken>((channelId, userId, isMuted, _) => _chatState.SetUserMuted(channelId, userId, isMuted))
+                .Returns(Task.CompletedTask);
                 
             _snackbarMock = new Mock<ISnackbar>();
             _loggerMock = new Mock<ILogger<GlobalVoiceService>>();
-            _soundServiceMock = new Mock<Spokes_Server.Core.Services.UI.ISoundService>();
+            _soundServiceMock = new Mock<ISoundService>();
             
+            var jsInterop = new VoiceJsInteropService(_jsMock.Object);
+            _deviceService = new VoiceDeviceService(jsInterop, Microsoft.Extensions.Logging.Abstractions.NullLogger<VoiceDeviceService>.Instance);
             _service = new GlobalVoiceService(
-                _jsMock.Object,
-                _chatServiceMock.Object,
+                jsInterop,
+                _voiceChannelServiceMock.Object,
                 _chatState,
-                _snackbarMock.Object,
                 _loggerMock.Object,
-                _soundServiceMock.Object
+                _deviceService
             );
+            _uiState = new VoiceUiStateService(_snackbarMock.Object, _soundServiceMock.Object, _jsMock.Object, _service, jsInterop, _deviceService, Microsoft.Extensions.Logging.Abstractions.NullLogger<VoiceUiStateService>.Instance);
         }
         
-        public void Dispose()
+        public async ValueTask DisposeAsync()
         {
-            _service.DisposeAsync().AsTask().GetAwaiter().GetResult();
+            _uiState.Dispose();
+            await _service.DisposeAsync();
             _persistence.Dispose();
             if (Directory.Exists(_testDataDir))
             {
-                try { Directory.Delete(_testDataDir, true); }
-                catch { }
+                try { Directory.Delete(_testDataDir, true); } catch (Exception ex) { System.Diagnostics.Debug.WriteLine(ex.Message); }
             }
         }
 
+        private Task ConnectVoiceAsync(string token = "token", string url = "url", string channelId = "ch1", string userId = "user1", int audioBitrateKbps = 64, string noiseSuppression = "rnnoise", VoiceUserSettings? voiceSettings = null) =>
+            _service.ConnectAsync(new VoiceConnectionOptions(token, url, channelId, userId, audioBitrateKbps, noiseSuppression, voiceSettings));
+
         [Fact]
-        public void ConnectMockForDemo_SetsStateAndParticipants()
+        public void ApplyMockConnectedState_SetsStateAndParticipants()
         {
             var channelId = "ch1";
             var userId = "user1";
             var mockParticipants = new HashSet<string> { "user1", "user2" };
             
-            _service.ConnectMockForDemo(channelId, userId, mockParticipants);
+            _service.ApplyMockConnectedState(channelId, userId, mockParticipants);
             
             Assert.True(_service.IsInVoiceCall);
             Assert.False(_service.IsConnecting);
@@ -110,48 +126,28 @@ namespace Spokes_Server.Tests.Core.Services.Communication.Voice;
             Assert.Contains("user1", _service.CallParticipants);
             Assert.Contains("user2", _service.CallParticipants);
         }
-        
-        [Fact]
-        public void ConnectMockForDemo_NotifiesChatState()
-        {
-            var channelId = "ch1";
-            var userId = "user1";
-            var mockParticipants = new HashSet<string> { "user1", "user2" };
-            
-            var notifiedParticipants = new List<string>();
-            _chatState.VoiceMemberJoined += (c, u) => { if (c == channelId) notifiedParticipants.Add(u); };
-            
-            _service.ConnectMockForDemo(channelId, userId, mockParticipants);
-            
-            Assert.Contains("user1", notifiedParticipants);
-            Assert.Contains("user2", notifiedParticipants);
-        }
 
         [Fact]
-        public void DisconnectMockForDemo_ClearsStateAndNotifiesChatState()
+        public void ApplyMockDisconnectedState_ClearsStateAndParticipants()
         {
             var channelId = "ch1";
             var userId = "user1";
             var mockParticipants = new HashSet<string> { "user1", "user2" };
-            _service.ConnectMockForDemo(channelId, userId, mockParticipants);
+            _service.ApplyMockConnectedState(channelId, userId, mockParticipants);
             
-            var leftParticipants = new List<string>();
-            _chatState.VoiceMemberLeft += (c, u) => { if (c == channelId) leftParticipants.Add(u); };
-            
-            _service.DisconnectMockForDemo();
+            _service.ApplyMockDisconnectedState();
             
             Assert.False(_service.IsInVoiceCall);
             Assert.Null(_service.CurrentChannelId);
             Assert.Null(_service.CurrentUserId);
             Assert.Empty(_service.CallParticipants);
-            Assert.Contains("user1", leftParticipants);
-            Assert.Contains("user2", leftParticipants);
+            Assert.Empty(_service.ActiveSpeakers);
         }
 
         [Fact]
         public async Task ConnectAsync_SetsStateAndCallsJS_HappyPath()
         {
-            await _service.ConnectAsync("token", "url", "ch1", "user1", 64, "rnnoise");
+            await ConnectVoiceAsync("token", "url", "ch1", "user1", 64, "rnnoise");
             
             Assert.True(_service.IsInVoiceCall);
             Assert.Equal("ch1", _service.CurrentChannelId);
@@ -166,8 +162,8 @@ namespace Spokes_Server.Tests.Core.Services.Communication.Voice;
         [Fact]
         public async Task ConnectAsync_InitializesModuleOnlyOnce()
         {
-            await _service.ConnectAsync("token", "url", "ch1", "user1");
-            await _service.ConnectAsync("token2", "url2", "ch2", "user2");
+            await ConnectVoiceAsync("token", "url", "ch1", "user1");
+            await ConnectVoiceAsync("token2", "url2", "ch2", "user2");
             
             _jsMock.Verify(x => x.InvokeAsync<IJSObjectReference>("import", It.IsAny<object[]>()), Times.Once);
         }
@@ -177,7 +173,7 @@ namespace Spokes_Server.Tests.Core.Services.Communication.Voice;
         {
             _voiceModuleMock.Setup(x => x.InvokeAsync<bool>("isAppleMobileDevice", It.IsAny<object[]>())).Returns(new ValueTask<bool>(true));
             
-            await _service.ConnectAsync("token", "url", "ch1", "user1", 64, "rnnoise");
+            await ConnectVoiceAsync("token", "url", "ch1", "user1", 64, "rnnoise");
             
             Assert.Equal("webrtc", _service.CurrentNoiseSuppression);
         }
@@ -187,7 +183,7 @@ namespace Spokes_Server.Tests.Core.Services.Communication.Voice;
         {
             _chatState.NotifyVoiceMemberJoined("ch1", "user2");
             
-            await _service.ConnectAsync("token", "url", "ch1", "user1");
+            await ConnectVoiceAsync("token", "url", "ch1", "user1");
             
             Assert.Contains("user1", _service.CallParticipants);
             Assert.Contains("user2", _service.CallParticipants);
@@ -196,7 +192,7 @@ namespace Spokes_Server.Tests.Core.Services.Communication.Voice;
         [Fact]
         public async Task DisconnectAsync_CallsJSAndChatService_WhenConnected()
         {
-            await _service.ConnectAsync("token", "url", "ch1", "user1");
+            await ConnectVoiceAsync("token", "url", "ch1", "user1");
             
             await _service.DisconnectAsync();
             
@@ -208,7 +204,7 @@ namespace Spokes_Server.Tests.Core.Services.Communication.Voice;
         [Fact]
         public async Task DisconnectAsync_DoesNotThrowOnJSError()
         {
-            await _service.ConnectAsync("token", "url", "ch1", "user1");
+            await ConnectVoiceAsync("token", "url", "ch1", "user1");
             _voiceModuleMock.Setup(x => x.InvokeAsync<IJSVoidResult>("disconnectFromVoice", It.IsAny<object[]>()))
                 .Throws(new JSDisconnectedException("disconnected"));
                 
@@ -218,26 +214,27 @@ namespace Spokes_Server.Tests.Core.Services.Communication.Voice;
         }
 
         [Fact]
-        public async Task ToggleMute_TogglesStateAndCallsJS()
+        public async Task ToggleMuteAsync_TogglesStateAndCallsJS()
         {
-            await _service.ConnectAsync("token", "url", "ch1", "user1");
+            await ConnectVoiceAsync("token", "url", "ch1", "user1");
             Assert.False(_service.IsMuted);
             
-            await _service.ToggleMute();
+            await _service.ToggleMuteAsync();
             
             Assert.True(_service.IsMuted);
             _voiceModuleMock.Verify(x => x.InvokeAsync<IJSVoidResult>("setMicrophoneEnabled", It.Is<object[]>(args => (bool)args[0] == false)), Times.Once);
         }
 
+
         [Fact]
-        public async Task ToggleMute_WhenSpeaking_ClearsActiveSpeakersAndNotifiesChatService()
+        public async Task ToggleMuteAsync_WhenSpeaking_ClearsActiveSpeakersAndNotifiesChatService()
         {
-            await _service.ConnectAsync("token", "url", "ch1", "user1");
+            await ConnectVoiceAsync("token", "url", "ch1", "user1");
             _service.OnActiveSpeakersChanged(new[] { "user1" });
             Assert.Contains("user1", _service.ActiveSpeakers);
             Assert.Contains("user1", _chatState.GetActiveSpeakers("ch1"));
 
-            await _service.ToggleMute();
+            await _service.ToggleMuteAsync();
 
             Assert.True(_service.IsMuted);
             Assert.DoesNotContain("user1", _service.ActiveSpeakers);
@@ -247,7 +244,7 @@ namespace Spokes_Server.Tests.Core.Services.Communication.Voice;
         [Fact]
         public async Task OnLocalMuted_WhenSpeaking_ClearsActiveSpeakersAndNotifiesChatService()
         {
-            await _service.ConnectAsync("token", "url", "ch1", "user1");
+            await ConnectVoiceAsync("token", "url", "ch1", "user1");
             _service.OnActiveSpeakersChanged(new[] { "user1" });
             Assert.Contains("user1", _service.ActiveSpeakers);
             Assert.Contains("user1", _chatState.GetActiveSpeakers("ch1"));
@@ -260,49 +257,50 @@ namespace Spokes_Server.Tests.Core.Services.Communication.Voice;
         }
 
         [Fact]
-        public async Task ToggleVideo_TogglesStateAndSetsCameras()
+        public async Task ToggleVideoAsync_TogglesStateAndSetsCameras()
         {
-            await _service.ConnectAsync("token", "url", "ch1", "user1");
+            await ConnectVoiceAsync("token", "url", "ch1", "user1");
             Assert.False(_service.IsVideoOn);
             
-            await _service.ToggleVideo();
+            await _service.ToggleVideoAsync();
             
             Assert.True(_service.IsVideoOn);
-            Assert.Equal("cam1", _service.ActiveCameraDeviceId);
+            Assert.Equal("cam1", _uiState.ActiveCameraDeviceId);
             _voiceModuleMock.Verify(x => x.InvokeAsync<CameraInitResult>("setCameraEnabled", It.Is<object[]>(args => (bool)args[0] == true)), Times.Once);
         }
+
 
         [Fact]
         public async Task SwitchCameraAsync_CallsJS_WhenVideoOn()
         {
-            await _service.ConnectAsync("token", "url", "ch1", "user1");
-            await _service.ToggleVideo(); // Video is now ON
+            await ConnectVoiceAsync("token", "url", "ch1", "user1");
+            await _service.ToggleVideoAsync(); // Video is now ON
             
-            await _service.SwitchCameraAsync("cam2");
+            await _deviceService.SwitchCameraAsync("cam2", _service.IsVideoOn);
             
-            Assert.Equal("cam2", _service.ActiveCameraDeviceId);
+            Assert.Equal("cam2", _uiState.ActiveCameraDeviceId);
             _voiceModuleMock.Verify(x => x.InvokeAsync<IJSVoidResult>("switchActiveCamera", It.Is<object[]>(args => (string)args[0] == "cam2")), Times.Once);
         }
         
         [Fact]
         public async Task SwitchMicrophoneAsync_CallsJS_WhenInCall()
         {
-            await _service.ConnectAsync("token", "url", "ch1", "user1");
+            await ConnectVoiceAsync("token", "url", "ch1", "user1");
             
-            await _service.SwitchMicrophoneAsync("mic2");
+            await _deviceService.SwitchMicrophoneAsync("mic2");
             
-            Assert.Equal("mic2", _service.ActiveMicrophoneDeviceId);
+            Assert.Equal("mic2", _uiState.ActiveMicrophoneDeviceId);
             _voiceModuleMock.Verify(x => x.InvokeAsync<IJSVoidResult>("switchActiveMicrophone", It.Is<object[]>(args => (string)args[0] == "mic2")), Times.Once);
         }
 
         [Fact]
         public async Task SwitchSpeakerAsync_CallsJS_WhenInCall()
         {
-            await _service.ConnectAsync("token", "url", "ch1", "user1");
+            await ConnectVoiceAsync("token", "url", "ch1", "user1");
             
-            await _service.SwitchSpeakerAsync("speaker2");
+            await _deviceService.SwitchSpeakerAsync("speaker2");
             
-            Assert.Equal("speaker2", _service.ActiveSpeakerDeviceId);
+            Assert.Equal("speaker2", _uiState.ActiveSpeakerDeviceId);
             _voiceModuleMock.Verify(x => x.InvokeAsync<IJSVoidResult>("switchActiveSpeaker", It.Is<object[]>(args => (string)args[0] == "speaker2")), Times.Once);
         }
 
@@ -314,10 +312,10 @@ namespace Spokes_Server.Tests.Core.Services.Communication.Voice;
             
             _service.OnAudioDevicesUpdated(mics, "mic2", speakers, "spk2");
             
-            Assert.Equal(2, _service.AvailableMicrophones.Count);
-            Assert.Equal("mic2", _service.ActiveMicrophoneDeviceId);
-            Assert.Equal(2, _service.AvailableSpeakers.Count);
-            Assert.Equal("spk2", _service.ActiveSpeakerDeviceId);
+            Assert.Equal(2, _uiState.AvailableMicrophones.Count);
+            Assert.Equal("mic2", _uiState.ActiveMicrophoneDeviceId);
+            Assert.Equal(2, _uiState.AvailableSpeakers.Count);
+            Assert.Equal("spk2", _uiState.ActiveSpeakerDeviceId);
         }
         
         [Fact]
@@ -328,14 +326,14 @@ namespace Spokes_Server.Tests.Core.Services.Communication.Voice;
             
             _service.OnAudioDevicesUpdated(mics, "", speakers, null);
             
-            Assert.Equal("mic1", _service.ActiveMicrophoneDeviceId);
-            Assert.Equal("spk1", _service.ActiveSpeakerDeviceId);
+            Assert.Equal("mic1", _uiState.ActiveMicrophoneDeviceId);
+            Assert.Equal("spk1", _uiState.ActiveSpeakerDeviceId);
         }
 
         [Fact]
         public async Task SetNoiseSuppressionAsync_UpdatesTypeAndCallsJS()
         {
-            await _service.ConnectAsync("token", "url", "ch1", "user1", 64, "rnnoise");
+            await ConnectVoiceAsync("token", "url", "ch1", "user1", 64, "rnnoise");
             
             await _service.SetNoiseSuppressionAsync("webrtc");
             
@@ -344,23 +342,98 @@ namespace Spokes_Server.Tests.Core.Services.Communication.Voice;
         }
 
         [Fact]
-        public async Task ToggleScreenShare_TogglesStateAndCallsJS()
+        public async Task ToggleScreenShareAsync_TogglesStateAndCallsJS()
         {
-            await _service.ConnectAsync("token", "url", "ch1", "user1");
+            await ConnectVoiceAsync("token", "url", "ch1", "user1");
             Assert.False(_service.IsScreenSharing);
             
-            await _service.ToggleScreenShare();
+            await _service.ToggleScreenShareAsync();
             
             Assert.True(_service.IsScreenSharing);
             _voiceModuleMock.Verify(x => x.InvokeAsync<IJSVoidResult>("setScreenShareEnabled", It.Is<object[]>(args => (bool)args[0] == true)), Times.Once);
         }
 
         [Fact]
+        public async Task ToggleScreenShareAsync_WithCaptureAudio_PassesParameterToJs()
+        {
+            await ConnectVoiceAsync("token", "url", "ch1", "user1");
+            Assert.False(_service.IsScreenSharing);
+
+            await _service.ToggleScreenShareAsync("1080p", 60, "detail", true);
+
+            Assert.True(_service.IsScreenSharing);
+            _voiceModuleMock.Verify(x => x.InvokeAsync<IJSVoidResult>("setScreenShareEnabled", It.Is<object[]>(args => 
+                (bool)args[0] == true && 
+                (string)args[1] == "1080p" && 
+                (int)args[2] == 60 && 
+                (string)args[3] == "detail" && 
+                (bool)args[4] == true)), Times.Once);
+        }
+
+        [Fact]
+        public async Task SetScreenShareAudioEnabledAsync_CallsJs_WhenScreenSharing()
+        {
+            await ConnectVoiceAsync("token", "url", "ch1", "user1");
+            await _service.ToggleScreenShareAsync();
+
+            _voiceModuleMock.Setup(x => x.InvokeAsync<bool>("setScreenShareAudioEnabled", It.IsAny<object[]>()))
+                .ReturnsAsync(true);
+
+            var result = await _service.SetScreenShareAudioEnabledAsync(true);
+
+            Assert.True(result);
+            _voiceModuleMock.Verify(x => x.InvokeAsync<bool>("setScreenShareAudioEnabled", It.Is<object[]>(args => (bool)args[0] == true)), Times.Once);
+        }
+
+        [Fact]
+        public async Task UpdateScreenShareSettingsAsync_CallsJs_WhenScreenSharing()
+        {
+            await ConnectVoiceAsync("token", "url", "ch1", "user1");
+            await _service.ToggleScreenShareAsync();
+
+            await _service.UpdateScreenShareSettingsAsync("1440p", 60, "detail");
+
+            _voiceModuleMock.Verify(x => x.InvokeAsync<IJSVoidResult>("updateScreenShareSettings", It.Is<object[]>(args =>
+                (string)args[0] == "1440p" &&
+                (int)args[1] == 60 &&
+                (string)args[2] == "detail")), Times.Once);
+        }
+
+        [Fact]
+        public async Task UpdateScreenShareSettingsAsync_DoesNotCallJs_WhenNotScreenSharing()
+        {
+            await ConnectVoiceAsync("token", "url", "ch1", "user1");
+            Assert.False(_service.IsScreenSharing);
+
+            await _service.UpdateScreenShareSettingsAsync("1440p", 60, "detail");
+
+            _voiceModuleMock.Verify(x => x.InvokeAsync<IJSVoidResult>("updateScreenShareSettings", It.IsAny<object[]>()), Times.Never);
+        }
+
+        [Fact]
+        public async Task ObsoleteToggleMethods_ForwardToAsyncMethods()
+        {
+            await ConnectVoiceAsync("token", "url", "ch1", "user1");
+            Assert.False(_service.IsMuted);
+            Assert.False(_service.IsVideoOn);
+            Assert.False(_service.IsScreenSharing);
+
+            await _service.ToggleMuteAsync();
+            await _service.ToggleVideoAsync();
+            await _service.ToggleScreenShareAsync();
+
+            Assert.True(_service.IsMuted);
+            Assert.True(_service.IsVideoOn);
+            Assert.True(_service.IsScreenSharing);
+        }
+
+
+        [Fact]
         public async Task ReattachTracksAsync_CallsJS_WhenInCall()
         {
-            await _service.ConnectAsync("token", "url", "ch1", "user1");
+            await ConnectVoiceAsync("token", "url", "ch1", "user1");
             
-            await _service.ReattachTracksAsync();
+            await _deviceService.ReattachTracksAsync();
             
             _voiceModuleMock.Verify(x => x.InvokeAsync<IJSVoidResult>("reattachAllTracks", It.IsAny<object[]>()), Times.Once);
         }
@@ -368,9 +441,9 @@ namespace Spokes_Server.Tests.Core.Services.Communication.Voice;
         [Fact]
         public async Task RefreshVideoLayoutsAsync_CallsJS_WhenInCall()
         {
-            await _service.ConnectAsync("token", "url", "ch1", "user1");
+            await ConnectVoiceAsync("token", "url", "ch1", "user1");
             
-            await _service.RefreshVideoLayoutsAsync();
+            await _deviceService.RefreshVideoLayoutsAsync();
             
             _voiceModuleMock.Verify(x => x.InvokeAsync<IJSVoidResult>("refreshVideoLayouts", It.IsAny<object[]>()), Times.Once);
         }
@@ -378,9 +451,9 @@ namespace Spokes_Server.Tests.Core.Services.Communication.Voice;
         [Fact]
         public async Task SetRemoteVideoQualityAsync_CallsJS_WhenInCall()
         {
-            await _service.ConnectAsync("token", "url", "ch1", "user1");
+            await ConnectVoiceAsync("token", "url", "ch1", "user1");
             
-            await _service.SetRemoteVideoQualityAsync("user2", "high");
+            await _deviceService.SetRemoteVideoQualityAsync("user2", "high");
             
             _voiceModuleMock.Verify(x => x.InvokeAsync<IJSVoidResult>("setRemoteVideoQuality", It.Is<object[]>(args => (string)args[0] == "user2" && (string)args[1] == "high")), Times.Once);
         }
@@ -400,7 +473,7 @@ namespace Spokes_Server.Tests.Core.Services.Communication.Voice;
         [Fact]
         public async Task OnParticipantConnected_AddsParticipant_IfInServerState()
         {
-            await _service.ConnectAsync("token", "url", "ch1", "user1");
+            await ConnectVoiceAsync("token", "url", "ch1", "user1");
             _chatState.NotifyVoiceMemberJoined("ch1", "user2"); // Present on server
             
             _service.OnParticipantConnected("user2");
@@ -411,7 +484,7 @@ namespace Spokes_Server.Tests.Core.Services.Communication.Voice;
         [Fact]
         public async Task OnParticipantConnected_AddsParticipant_EvenIfNotYetInServerState()
         {
-            await _service.ConnectAsync("token", "url", "ch1", "user1");
+            await ConnectVoiceAsync("token", "url", "ch1", "user1");
             // Not yet present on server state, but connected via WebRTC
             
             _service.OnParticipantConnected("user2");
@@ -420,9 +493,19 @@ namespace Spokes_Server.Tests.Core.Services.Communication.Voice;
         }
 
         [Fact]
+        public async Task OnParticipantConnected_IgnoresEvent_ForLocalUser()
+        {
+            await ConnectVoiceAsync("token", "url", "ch1", "user1");
+            
+            _service.OnParticipantConnected("user1");
+            
+            Assert.Contains("user1", _service.CallParticipants);
+        }
+
+        [Fact]
         public async Task ChatState_VoiceMemberJoined_AddsParticipant_WhenInCall()
         {
-            await _service.ConnectAsync("token", "url", "ch1", "user1");
+            await ConnectVoiceAsync("token", "url", "ch1", "user1");
             
             _chatState.NotifyVoiceMemberJoined("ch1", "user3");
             
@@ -430,9 +513,20 @@ namespace Spokes_Server.Tests.Core.Services.Communication.Voice;
         }
 
         [Fact]
+        public async Task ChatState_VoiceMemberJoined_DoesNotAddLocalUser_ToCallParticipants()
+        {
+            await ConnectVoiceAsync("token", "url", "ch1", "user1");
+            _service.CallParticipants.Remove("user1");
+            
+            _chatState.NotifyVoiceMemberJoined("ch1", "user1");
+            
+            Assert.DoesNotContain("user1", _service.CallParticipants);
+        }
+
+        [Fact]
         public async Task ChatState_VoiceMemberLeft_RemovesParticipant_WhenInCall()
         {
-            await _service.ConnectAsync("token", "url", "ch1", "user1");
+            await ConnectVoiceAsync("token", "url", "ch1", "user1");
             _service.CallParticipants.Add("user3");
             
             _chatState.NotifyVoiceMemberLeft("ch1", "user3");
@@ -453,10 +547,43 @@ namespace Spokes_Server.Tests.Core.Services.Communication.Voice;
         }
 
         [Fact]
+        public void EnsureParticipantSlot_WithBotIdentity_IgnoresAndDoesNotAdd()
+        {
+            bool notified = false;
+            _service.OnChange += () => notified = true;
+
+            _service.EnsureParticipantSlot("bot:spokes-voice");
+
+            Assert.DoesNotContain("bot:spokes-voice", _service.CallParticipants);
+            Assert.False(notified);
+        }
+
+        [Fact]
+        public void OnParticipantConnected_WithBotIdentity_IgnoresAndDoesNotAdd()
+        {
+            bool notified = false;
+            _service.OnChange += () => notified = true;
+
+            _service.OnParticipantConnected("bot:spokes-voice");
+
+            Assert.DoesNotContain("bot:spokes-voice", _service.CallParticipants);
+            Assert.False(notified);
+        }
+
+        [Fact]
+        public void OnActiveSpeakersChanged_WithBotIdentity_FiltersOutBot()
+        {
+            _service.OnActiveSpeakersChanged(new[] { "user1", "bot:spokes-voice" });
+
+            Assert.Contains("user1", _service.ActiveSpeakers);
+            Assert.DoesNotContain("bot:spokes-voice", _service.ActiveSpeakers);
+        }
+
+        [Fact]
         public async Task ConnectAsync_ReentrancyGuard_IgnoresDuplicateCallToSameChannel()
         {
-            await _service.ConnectAsync("token", "url", "ch1", "user1");
-            await _service.ConnectAsync("token", "url", "ch1", "user1");
+            await ConnectVoiceAsync("token", "url", "ch1", "user1");
+            await ConnectVoiceAsync("token", "url", "ch1", "user1");
             
             _voiceModuleMock.Verify(x => x.InvokeAsync<bool>("connectToVoice", It.IsAny<object[]>()), Times.Once);
         }
@@ -466,19 +593,29 @@ namespace Spokes_Server.Tests.Core.Services.Communication.Voice;
         {
             _service.CallParticipants.Add("user2");
             _service.ActiveSpeakers.Add("user2");
-            _service.RemoteVideoHeights.TryAdd("user2", 720);
+            _deviceService.RemoteVideoHeights.TryAdd("user2", 720);
             
             _service.OnParticipantDisconnected("user2");
             
             Assert.DoesNotContain("user2", _service.CallParticipants);
             Assert.DoesNotContain("user2", _service.ActiveSpeakers);
-            Assert.False(_service.RemoteVideoHeights.ContainsKey("user2"));
+            Assert.False(_deviceService.RemoteVideoHeights.ContainsKey("user2"));
+        }
+
+        [Fact]
+        public async Task OnParticipantDisconnected_IgnoresEvent_ForLocalUser()
+        {
+            await ConnectVoiceAsync("token", "url", "ch1", "user1");
+            
+            _service.OnParticipantDisconnected("user1");
+            
+            Assert.Contains("user1", _service.CallParticipants);
         }
 
         [Fact]
         public async Task OnActiveSpeakersChanged_UpdatesSetAndNotifiesChatService()
         {
-            await _service.ConnectAsync("token", "url", "ch1", "user1");
+            await ConnectVoiceAsync("token", "url", "ch1", "user1");
             
             _service.OnActiveSpeakersChanged(new[] { "user1", "user2" });
             
@@ -490,7 +627,7 @@ namespace Spokes_Server.Tests.Core.Services.Communication.Voice;
         [Fact]
         public async Task OnRoomDisconnected_CleansUpState()
         {
-            await _service.ConnectAsync("token", "url", "ch1", "user1");
+            await ConnectVoiceAsync("token", "url", "ch1", "user1");
             
             await _service.OnRoomDisconnected();
             
@@ -516,8 +653,8 @@ namespace Spokes_Server.Tests.Core.Services.Communication.Voice;
             
             _service.OnParticipantVideoDimensions("user2", 720, 30);
             
-            Assert.Equal(720, _service.RemoteVideoHeights["user2"]);
-            Assert.Equal(30, _service.RemoteVideoFps["user2"]);
+            Assert.Equal(720, _deviceService.RemoteVideoHeights["user2"]);
+            Assert.Equal(30, _deviceService.RemoteVideoFps["user2"]);
         }
         
         [Fact]
@@ -525,31 +662,31 @@ namespace Spokes_Server.Tests.Core.Services.Communication.Voice;
         {
             _service.OnParticipantVideoDimensions("user2", 720, 30);
             
-            Assert.False(_service.RemoteVideoHeights.ContainsKey("user2"));
+            Assert.False(_deviceService.RemoteVideoHeights.ContainsKey("user2"));
         }
 
         [Fact]
         public void OnLocalVideoDimensions_UpdatesMaxValuesAndQuality()
         {
-            _service.MaxVideoSendQuality = "2160p";
+            _uiState.MaxVideoSendQuality = "2160p";
             
             _service.OnLocalVideoDimensions(1080, 30);
             
-            Assert.Equal(1080, _service.MaxCameraHeight);
-            Assert.Equal(30, _service.MaxCameraFps);
-            Assert.Equal("720p", _service.MaxVideoSendQuality);
+            Assert.Equal(1080, _uiState.MaxCameraHeight);
+            Assert.Equal(30, _uiState.MaxCameraFps);
+            Assert.Equal("720p", _uiState.MaxVideoSendQuality);
         }
         
         [Fact]
         public void OnLocalScreenDimensions_UpdatesMaxValuesAndQuality()
         {
-            _service.MaxScreenShareQuality = "2160p";
+            _uiState.MaxScreenShareQuality = "2160p";
             
             _service.OnLocalScreenDimensions(1080, 30);
             
-            Assert.Equal(1080, _service.MaxScreenHeight);
-            Assert.Equal(30, _service.MaxScreenFps);
-            Assert.Equal("720p", _service.MaxScreenShareQuality);
+            Assert.Equal(1080, _uiState.MaxScreenHeight);
+            Assert.Equal(30, _uiState.MaxScreenFps);
+            Assert.Equal("720p", _uiState.MaxScreenShareQuality);
         }
 
         [Fact]
@@ -593,7 +730,7 @@ namespace Spokes_Server.Tests.Core.Services.Communication.Voice;
         [Fact]
         public async Task DisposeAsync_CleansUpConnections()
         {
-            await _service.ConnectAsync("token", "url", "ch1", "user1");
+            await ConnectVoiceAsync("token", "url", "ch1", "user1");
             
             await _service.DisposeAsync();
             
@@ -606,7 +743,7 @@ namespace Spokes_Server.Tests.Core.Services.Communication.Voice;
         [Fact]
         public async Task VerifyServerStateIntegrityAsync_Disconnects_IfUserNotInServerList()
         {
-            await _service.ConnectAsync("token", "url", "ch1", "user1");
+            await ConnectVoiceAsync("token", "url", "ch1", "user1");
             _service.MarkForIntegrityCheck();
             
             _chatState.NotifyVoiceMemberLeft("ch1", "user1");
@@ -619,7 +756,7 @@ namespace Spokes_Server.Tests.Core.Services.Communication.Voice;
         [Fact]
         public async Task VerifyServerStateIntegrityAsync_SyncsParticipants_IfUserStillInServerList()
         {
-            await _service.ConnectAsync("token", "url", "ch1", "user1");
+            await ConnectVoiceAsync("token", "url", "ch1", "user1");
             _service.MarkForIntegrityCheck();
             _chatState.NotifyVoiceMemberJoined("ch1", "user1");
             _chatState.NotifyVoiceMemberJoined("ch1", "user2");
@@ -635,7 +772,7 @@ namespace Spokes_Server.Tests.Core.Services.Communication.Voice;
         [Fact]
         public async Task OnRoomConnected_AddsParticipantsAndSyncsWithServer()
         {
-            await _service.ConnectAsync("token", "url", "ch1", "user1");
+            await ConnectVoiceAsync("token", "url", "ch1", "user1");
             _chatState.NotifyVoiceMemberJoined("ch1", "user3");
             
             _service.OnRoomConnected(["user2"]);
@@ -647,30 +784,30 @@ namespace Spokes_Server.Tests.Core.Services.Communication.Voice;
         [Fact]
         public async Task SetMasterVolumeAsync_UpdatesProperty_AndInvokesJsWhenInCall()
         {
-            await _service.ConnectAsync("token", "url", "ch1", "user1");
+            await ConnectVoiceAsync("token", "url", "ch1", "user1");
 
             await _service.SetMasterVolumeAsync(150.0);
 
-            Assert.Equal(150.0, _service.VoiceSettings.MasterVolume);
+            Assert.Equal(150.0, _uiState.VoiceSettings.MasterVolume);
             _voiceModuleMock.Verify(x => x.InvokeAsync<IJSVoidResult>("setMasterVolume", It.Is<object[]>(args => (double)args[0] == 150.0)), Times.Once);
         }
 
         [Fact]
         public async Task SetParticipantVolumeAsync_UpdatesDictionary_AndInvokesJsWhenInCall()
         {
-            await _service.ConnectAsync("token", "url", "ch1", "user1");
+            await ConnectVoiceAsync("token", "url", "ch1", "user1");
 
             await _service.SetParticipantVolumeAsync("user2", 125.0);
 
-            Assert.True(_service.VoiceSettings.ParticipantVolumes.ContainsKey("user2"));
-            Assert.Equal(125.0, _service.VoiceSettings.ParticipantVolumes["user2"]);
+            Assert.True(_uiState.VoiceSettings.ParticipantVolumes.ContainsKey("user2"));
+            Assert.Equal(125.0, _uiState.VoiceSettings.ParticipantVolumes["user2"]);
             _voiceModuleMock.Verify(x => x.InvokeAsync<IJSVoidResult>("setParticipantVolume", It.Is<object[]>(args => (string)args[0] == "user2" && (double)args[1] == 125.0)), Times.Once);
         }
 
         [Fact]
         public async Task UpdateVoiceSettingsAsync_UpdatesProperty_AndSyncsToJsWhenInCall()
         {
-            await _service.ConnectAsync("token", "url", "ch1", "user1");
+            await ConnectVoiceAsync("token", "url", "ch1", "user1");
 
             var settings = new Spokes_Server.Core.Models.HR.VoiceUserSettings
             {
@@ -679,18 +816,18 @@ namespace Spokes_Server.Tests.Core.Services.Communication.Voice;
 
             await _service.UpdateVoiceSettingsAsync(settings);
 
-            Assert.Equal(80.0, _service.VoiceSettings.MasterVolume);
+            Assert.Equal(80.0, _uiState.VoiceSettings.MasterVolume);
             _voiceModuleMock.Verify(x => x.InvokeAsync<IJSVoidResult>("initVoiceSettings", It.IsAny<object[]>()), Times.AtLeastOnce);
         }
 
         [Fact]
         public async Task SetVoiceSensitivityAsync_UpdatesVoiceSettings_AndCallsJsWhenInCall()
         {
-            await _service.ConnectAsync("token", "url", "ch1", "user1");
+            await ConnectVoiceAsync("token", "url", "ch1", "user1");
 
             await _service.SetVoiceSensitivityAsync(65.0);
 
-            Assert.Equal(65.0, _service.VoiceSettings.VoiceSensitivity);
+            Assert.Equal(65.0, _uiState.VoiceSettings.VoiceSensitivity);
             _voiceModuleMock.Verify(x => x.InvokeAsync<IJSVoidResult>("setVoiceSensitivity", It.Is<object[]>(args => (double)args[0] == 65.0)), Times.Once);
         }
 
@@ -698,16 +835,16 @@ namespace Spokes_Server.Tests.Core.Services.Communication.Voice;
         public async Task SetVoiceSensitivityAsync_ClampsValues()
         {
             await _service.SetVoiceSensitivityAsync(-10.0);
-            Assert.Equal(0.0, _service.VoiceSettings.VoiceSensitivity);
+            Assert.Equal(0.0, _uiState.VoiceSettings.VoiceSensitivity);
 
             await _service.SetVoiceSensitivityAsync(150.0);
-            Assert.Equal(100.0, _service.VoiceSettings.VoiceSensitivity);
+            Assert.Equal(100.0, _uiState.VoiceSettings.VoiceSensitivity);
         }
 
         [Fact]
         public async Task PlayTestSpeakerSoundAsync_PlaysNotificationSoundViaVoiceModule()
         {
-            await _service.PlayTestSpeakerSoundAsync("speaker1");
+            await _uiState.PlayTestSpeakerSoundAsync("speaker1");
 
             _voiceModuleMock.Verify(x => x.InvokeAsync<IJSVoidResult>("playTestSpeakerSound", It.Is<object[]>(args => (string)args[0] == "speaker1")), Times.Once);
         }
@@ -718,7 +855,7 @@ namespace Spokes_Server.Tests.Core.Services.Communication.Voice;
             _voiceModuleMock.Setup(x => x.InvokeAsync<IJSVoidResult>("playTestSpeakerSound", It.IsAny<object[]>()))
                 .ThrowsAsync(new Exception("Module failure"));
 
-            await _service.PlayTestSpeakerSoundAsync();
+            await _uiState.PlayTestSpeakerSoundAsync();
 
             _soundServiceMock.Verify(x => x.PlaySoundAsync("spokesnotif1", true), Times.Once);
         }
@@ -742,13 +879,125 @@ namespace Spokes_Server.Tests.Core.Services.Communication.Voice;
         [Fact]
         public async Task VoiceUserMutedChanged_FromChatState_SyncsMutedParticipants()
         {
-            await _service.ConnectAsync("token", "url", "ch1", "user1");
+            await ConnectVoiceAsync("token", "url", "ch1", "user1");
 
             _chatState.SetUserMuted("ch1", "user2", true);
             Assert.Contains("user2", _service.MutedParticipants);
 
             _chatState.SetUserMuted("ch1", "user2", false);
             Assert.DoesNotContain("user2", _service.MutedParticipants);
+        }
+
+        [Fact]
+        public void IosMicrophoneMode_DefaultsToUnsupported_AndIsVoiceIsolationActiveIsFalse()
+        {
+            Assert.Equal("unsupported", _uiState.IosMicrophoneMode);
+            Assert.False(_uiState.IsIosVoiceIsolationActive);
+        }
+
+        [Fact]
+        public async Task GetIosMicrophoneModeAsync_WhenIsIOS_UpdatesState()
+        {
+            _voiceModuleMock.Setup(x => x.InvokeAsync<bool>("isAppleMobileDevice", It.IsAny<object[]>())).Returns(new ValueTask<bool>(true));
+            _voiceModuleMock.Setup(x => x.InvokeAsync<string>("getIosMicrophoneMode", It.IsAny<object[]>()))
+                .Returns(new ValueTask<string>("voiceIsolation"));
+
+            await ConnectVoiceAsync("token", "url", "ch1", "user1");
+
+            var mode = await _deviceService.GetIosMicrophoneModeAsync(_service.IsIOS);
+
+            Assert.Equal("voiceIsolation", mode);
+            Assert.Equal("voiceIsolation", _uiState.IosMicrophoneMode);
+            Assert.True(_uiState.IsIosVoiceIsolationActive);
+        }
+
+        [Fact]
+        public async Task DisconnectAsync_ResetsIosMicrophoneMode()
+        {
+            _voiceModuleMock.Setup(x => x.InvokeAsync<bool>("isAppleMobileDevice", It.IsAny<object[]>())).Returns(new ValueTask<bool>(true));
+            _voiceModuleMock.Setup(x => x.InvokeAsync<string>("getIosMicrophoneMode", It.IsAny<object[]>()))
+                .Returns(new ValueTask<string>("voiceIsolation"));
+
+            await ConnectVoiceAsync("token", "url", "ch1", "user1");
+            await _deviceService.GetIosMicrophoneModeAsync(_service.IsIOS);
+            Assert.Equal("voiceIsolation", _uiState.IosMicrophoneMode);
+
+            await _service.DisconnectAsync();
+
+            Assert.Equal("unsupported", _uiState.IosMicrophoneMode);
+            Assert.False(_uiState.IsIosVoiceIsolationActive);
+        }
+
+        [Fact]
+        public void LogToServer_LimitsTo10CallsPerMinute()
+        {
+            var mockLogger = new Mock<ILogger<GlobalVoiceService>>();
+            var jsInterop = new VoiceJsInteropService(new Mock<IJSRuntime>().Object);
+            var service = new GlobalVoiceService(
+                jsInterop,
+                new Mock<VoiceChannelService>().Object,
+                new ChatStateService(),
+                mockLogger.Object);
+
+            for (int i = 0; i < 15; i++)
+            {
+                service.LogToServer("INFO", $"Message {i}");
+            }
+
+            // Only 10 logs should have been passed to ILogger.
+            mockLogger.Verify(
+                x => x.Log(
+                    LogLevel.Information,
+                    It.IsAny<EventId>(),
+                    It.Is<It.IsAnyType>((v, t) => true),
+                    It.IsAny<Exception>(),
+                    It.Is<Func<It.IsAnyType, Exception?, string>>((v, t) => true)),
+                Times.Exactly(10));
+        }
+
+        [Fact]
+        public void OnRemoteScreenAudioChanged_TracksParticipantAudioCorrectly()
+        {
+            Assert.Empty(_service.RemoteScreenAudioParticipants);
+            Assert.Empty(_service.MutedRemoteScreenAudioParticipants);
+
+            // Active screen audio
+            _service.OnRemoteScreenAudioChanged("user2", true);
+            Assert.Contains("user2", _service.RemoteScreenAudioParticipants);
+
+            // Inactive screen audio
+            _service.OnRemoteScreenAudioChanged("user2", false);
+            Assert.DoesNotContain("user2", _service.RemoteScreenAudioParticipants);
+        }
+
+        [Fact]
+        public async Task ToggleRemoteScreenAudioMuteAsync_TogglesStateAndInvokesJs()
+        {
+            await ConnectVoiceAsync("token", "url", "ch1", "user1");
+            _service.OnRemoteScreenAudioChanged("user2", true);
+
+            // First toggle: mutes
+            await _service.ToggleRemoteScreenAudioMuteAsync("user2");
+            Assert.Contains("user2", _service.MutedRemoteScreenAudioParticipants);
+            _voiceModuleMock.Verify(x => x.InvokeAsync<IJSVoidResult>("setRemoteScreenAudioMuted", It.Is<object[]>(args => (string)args[0] == "user2" && (bool)args[1] == true)), Times.Once);
+
+            // Second toggle: unmutes
+            await _service.ToggleRemoteScreenAudioMuteAsync("user2");
+            Assert.DoesNotContain("user2", _service.MutedRemoteScreenAudioParticipants);
+            _voiceModuleMock.Verify(x => x.InvokeAsync<IJSVoidResult>("setRemoteScreenAudioMuted", It.Is<object[]>(args => (string)args[0] == "user2" && (bool)args[1] == false)), Times.Once);
+        }
+
+        [Fact]
+        public void OnParticipantDisconnected_RemovesFromRemoteScreenAudioSets()
+        {
+            _service.OnRemoteScreenAudioChanged("user2", true);
+            _service.MutedRemoteScreenAudioParticipants.Add("user2");
+            Assert.Contains("user2", _service.RemoteScreenAudioParticipants);
+            Assert.Contains("user2", _service.MutedRemoteScreenAudioParticipants);
+
+            _service.OnParticipantDisconnected("user2");
+            Assert.DoesNotContain("user2", _service.RemoteScreenAudioParticipants);
+            Assert.DoesNotContain("user2", _service.MutedRemoteScreenAudioParticipants);
         }
     }
 

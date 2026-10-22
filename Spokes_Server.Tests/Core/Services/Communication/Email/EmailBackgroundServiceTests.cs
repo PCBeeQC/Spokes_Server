@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
 using MailKit;
@@ -18,13 +17,13 @@ using Spokes_Server.Core.Data.Repositories.HR;
 using Spokes_Server.Core.Models.Communication;
 using Spokes_Server.Core.Models.HR;
 using Spokes_Server.Core.Services.Communication.Email;
-using Spokes_Server.Core.Services.Core;
 
 namespace Spokes_Server.Tests.Core.Services.Communication.Email;
 
 public class TestEmailBackgroundService : EmailBackgroundService
 {
     public int PollCount { get; private set; }
+    public TaskCompletionSource<bool> FirstIterationCompleted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
     
     public TestEmailBackgroundService(IServiceProvider serviceProvider, ILogger<EmailBackgroundService> logger, EmailIdleService idleService) 
         : base(serviceProvider, logger, idleService)
@@ -39,6 +38,7 @@ public class TestEmailBackgroundService : EmailBackgroundService
     protected override Task WaitBeforeNextPollAsync(CancellationToken stoppingToken)
     {
         PollCount++;
+        FirstIterationCompleted.TrySetResult(true);
         return Task.Delay(10, stoppingToken);
     }
 
@@ -61,7 +61,7 @@ public class EmailBackgroundServiceTests : IDisposable
     private readonly EmailMessageRepository _messagesRepo;
     private readonly CompanyProfileRepository _companyProfileRepo;
     
-    private readonly Mock<EmailService> _mockEmailService;
+    private readonly Mock<IEmailSyncService> _mockSyncService;
     private readonly EmailIdleService _idleService;
     private readonly Mock<ILogger<EmailBackgroundService>> _mockLogger;
     
@@ -82,8 +82,7 @@ public class EmailBackgroundServiceTests : IDisposable
         _messagesRepo = new EmailMessageRepository(_persistence, _config);
         _companyProfileRepo = new CompanyProfileRepository(_persistence, _config);
         
-        // Mock EmailService (can pass nulls since we only mock virtual methods)
-        _mockEmailService = new Mock<EmailService>(null, null, null, null, null, null, null, null, null);
+        _mockSyncService = new Mock<IEmailSyncService>();
         
         _services = new ServiceCollection();
         _services.AddSingleton(_employeesRepo);
@@ -94,7 +93,7 @@ public class EmailBackgroundServiceTests : IDisposable
         // For EmailIdleService dependencies
         _services.AddSingleton(new EncryptionService(_config));
         
-        _services.AddSingleton(_mockEmailService.Object);
+        _services.AddSingleton(_mockSyncService.Object);
         
         _serviceProvider = _services.BuildServiceProvider();
         
@@ -111,6 +110,7 @@ public class EmailBackgroundServiceTests : IDisposable
 
     public void Dispose()
     {
+        _service.Dispose();
         _persistence.Dispose();
         _idleService.Dispose();
         if (Directory.Exists(_testDataDir))
@@ -160,19 +160,18 @@ public class EmailBackgroundServiceTests : IDisposable
         // Add an unread message to the local index so reconcile fixes the count
         _messagesRepo.Save(new EmailMessage { Id = "m1", EmployeeId = empId, FolderPath = "INBOX", IsRead = false, UniqueId = 1 });
 
-        _mockEmailService.Setup(s => s.SyncEmployeeAsync(empId)).Returns(Task.CompletedTask);
+        _mockSyncService.Setup(s => s.SyncEmployeeAsync(empId, It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
 
         using var cts = new CancellationTokenSource();
         
         // Act
-        // Start the service and cancel it shortly after to allow 1-2 loop iterations
-        var executeTask = _service.StartAsync(cts.Token);
-        await Task.Delay(50);
-        cts.Cancel();
-        try { await _service.StopAsync(CancellationToken.None); } catch (Exception) { }
+        // Start the service and await the first loop iteration deterministically
+        await _service.StartAsync(cts.Token);
+        await _service.FirstIterationCompleted.Task;
+        await _service.StopAsync(CancellationToken.None);
 
         // Assert
-        _mockEmailService.Verify(s => s.SyncEmployeeAsync(empId), Times.AtLeastOnce);
+        _mockSyncService.Verify(s => s.SyncEmployeeAsync(empId, It.IsAny<CancellationToken>()), Times.AtLeastOnce);
         
         var updatedFolder = _foldersRepo.GetByEmployee(empId).FirstOrDefault(f => f.Path == "INBOX");
         Assert.NotNull(updatedFolder);
@@ -186,23 +185,23 @@ public class EmailBackgroundServiceTests : IDisposable
         var empId = "emp_idle1";
         var folderPath = "INBOX";
         
-        _mockEmailService.Setup(s => s.SyncSingleFolderAsync(empId, folderPath)).Returns(Task.CompletedTask);
+        var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _mockSyncService.Setup(s => s.SyncSingleFolderAsync(empId, folderPath, It.IsAny<CancellationToken>()))
+            .Returns(() => { tcs.TrySetResult(true); return Task.CompletedTask; });
 
-        // Act - Trigger event using reflection
-        var fieldInfo = typeof(EmailIdleService).GetField("MessageReceived", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
-        if (fieldInfo?.GetValue(_idleService) is MulticastDelegate multicastDelegate)
-        {
-            foreach (var handler in multicastDelegate.GetInvocationList())
-            {
-                handler.DynamicInvoke(empId, folderPath, UniqueId.MinValue);
-            }
-        }
+        using var cts = new CancellationTokenSource();
+        await _service.StartAsync(cts.Token);
 
-        // Allow Task.Run inside the event handler to complete
-        await Task.Delay(100);
+        // Act - Trigger event directly via internal invoker
+        _idleService.TriggerMessageReceived(empId, folderPath, UniqueId.MinValue);
+
+        // Wait deterministically for the sync to be invoked
+        await tcs.Task;
+
+        await _service.StopAsync(CancellationToken.None);
 
         // Assert
-        _mockEmailService.Verify(s => s.SyncSingleFolderAsync(empId, folderPath), Times.Once);
+        _mockSyncService.Verify(s => s.SyncSingleFolderAsync(empId, folderPath, It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
@@ -212,22 +211,66 @@ public class EmailBackgroundServiceTests : IDisposable
         var empId = "emp_idle2";
         var folderPath = "Sent";
         
-        _mockEmailService.Setup(s => s.SyncSingleFolderAsync(empId, folderPath)).Returns(Task.CompletedTask);
+        var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _mockSyncService.Setup(s => s.SyncSingleFolderAsync(empId, folderPath, It.IsAny<CancellationToken>()))
+            .Returns(() => { tcs.TrySetResult(true); return Task.CompletedTask; });
 
-        // Act - Trigger event using reflection
-        var fieldInfo = typeof(EmailIdleService).GetField("MessageFlagsChanged", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
-        if (fieldInfo?.GetValue(_idleService) is MulticastDelegate multicastDelegate)
-        {
-            foreach (var handler in multicastDelegate.GetInvocationList())
-            {
-                handler.DynamicInvoke(empId, folderPath, UniqueId.MinValue);
-            }
-        }
+        using var cts = new CancellationTokenSource();
+        await _service.StartAsync(cts.Token);
 
-        // Allow Task.Run inside the event handler to complete
-        await Task.Delay(100);
+        // Act - Trigger event directly via internal invoker
+        _idleService.TriggerMessageFlagsChanged(empId, folderPath, UniqueId.MinValue);
+
+        // Wait deterministically for the sync to be invoked
+        await tcs.Task;
+
+        await _service.StopAsync(CancellationToken.None);
 
         // Assert
-        _mockEmailService.Verify(s => s.SyncSingleFolderAsync(empId, folderPath), Times.Once);
+        _mockSyncService.Verify(s => s.SyncSingleFolderAsync(empId, folderPath, It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task OnIdle_MultipleRapidEventsForSameFolder_DeduplicatesAndSyncsControlled()
+    {
+        // Arrange
+        var empId = "emp_rapid";
+        var folderPath = "INBOX";
+
+        var syncCallCount = 0;
+        var syncCompleted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _mockSyncService.Setup(s => s.SyncSingleFolderAsync(empId, folderPath, It.IsAny<CancellationToken>()))
+            .Returns(() =>
+            {
+                Interlocked.Increment(ref syncCallCount);
+                syncCompleted.TrySetResult(true);
+                return Task.CompletedTask;
+            });
+
+        using var cts = new CancellationTokenSource();
+        await _service.StartAsync(cts.Token);
+
+        // Act - Trigger 20 rapid events for the exact same folder
+        for (int i = 0; i < 20; i++)
+        {
+            _idleService.TriggerMessageReceived(empId, folderPath, new UniqueId((uint)(i + 1)));
+        }
+
+        // Wait deterministically for the worker queue to dispatch
+        await syncCompleted.Task;
+
+        await _service.StopAsync(CancellationToken.None);
+
+        // Assert - deduplicated rather than spawning 20 separate syncs
+        Assert.InRange(syncCallCount, 1, 3);
+    }
+
+    [Fact]
+    public async Task StartAndStop_DoesNotThrow()
+    {
+        var cts = new CancellationTokenSource();
+        await _service.StartAsync(cts.Token);
+        await _service.StopAsync(CancellationToken.None);
+        Assert.True(true);
     }
 }

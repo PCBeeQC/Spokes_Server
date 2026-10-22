@@ -1,7 +1,9 @@
 @using Spokes_Server.Core.Constants
 @using Spokes_Server.Core.Services.Communication.Chat
 @using static Spokes_Server.Core.Helpers.FileHelper
+@using static Spokes_Server.Components.UI.FileUiHelper
 @inject ChatService ChatService
+@inject IChatChannelAccessService ChatAccess
 @inject UserClientStateService UserClientStateService
 @inject IFileService FileService
 @inject ISnackbar Snackbar
@@ -9,6 +11,7 @@
 @inject Database Db
 @inject ShareTargetStateService ShareTargetStateService
 @inject NavigationManager NavigationManager
+@inject StartupTimingService StartupTimings
 @implements IAsyncDisposable
 
 @* Archived Channel Notice *@
@@ -18,7 +21,7 @@
         Style="border-top: 1px solid var(--mud-palette-divider);">
         <MudIcon Icon="@Icons.Material.Filled.Archive" Class="mr-2" Color="Color.Secondary" />
         <MudText Typo="Typo.body2" Color="Color.Secondary">
-            This channel is archived and read-only.
+            @Loc["This channel is archived and read-only."]
         </MudText>
     </MudPaper>
 }
@@ -28,7 +31,7 @@ else if (IsAnnouncementOnly && !CanPost)
         Style="border-top: 1px solid var(--mud-palette-divider);">
         <MudIcon Icon="@Icons.Material.Filled.Campaign" Class="mr-2" Color="Color.Secondary" />
         <MudText Typo="Typo.body2" Color="Color.Secondary">
-            This is an announcement channel. Only authorized users can post.
+            @Loc["This is an announcement channel. Only authorized users can post."]
         </MudText>
     </MudPaper>
 }
@@ -46,7 +49,7 @@ else
                  style="background: var(--mud-palette-background-grey); border-left: 3px solid var(--mud-palette-primary);">
                 <MudIcon Icon="@Icons.Material.Filled.Reply" Size="Size.Small" Color="Color.Primary" Style="transform: scaleX(-1);" />
                 <MudText Typo="Typo.caption" Style="font-weight: 600; color: var(--mud-palette-primary);">
-                    Replying to @(ReplyToSenderName ?? "Unknown")
+                    @string.Format(Loc["Replying to {0}"].Value, ReplyToSenderName ?? Loc["Unknown"].Value)
                 </MudText>
                 <MudText Typo="Typo.caption" Style="color: var(--mud-palette-text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1;">
                     @TruncateContent(DecryptedReplyContent ?? ReplyingTo?.Content ?? "", 80)
@@ -62,25 +65,20 @@ else
             <div class="d-flex flex-wrap gap-2 mb-2">
                 @foreach (var file in _pendingFiles)
                 {
-                    <MudChip T="string" Size="Size.Small" Color="@(IsImageFile(file.FileName) ? Color.Info : Color.Default)"
-                        OnClose="@(async () => await RemovePendingFile(file))" CloseIcon="@Icons.Material.Filled.Close">
-                        @if (file.IsUploading)
-                        {
-                        <MudProgressCircular Size="Size.Small" Indeterminate="@(file.UploadProgress < 0)" Value="@(file.UploadProgress < 0 ? 0 : file.UploadProgress)" Max="100" Color="Color.Primary" Class="mr-1" />
-                        }
-                        else
-                        {
-                            <MudIcon Icon="@GetFileIcon(file.FileName)" Size="Size.Small" Class="mr-1" />
-                        }
-                        @file.FileName
-                    </MudChip>
+                    <FileAttachmentChip Attachment="@file.Attachment"
+                                        FileName="@file.FileName"
+                                        StageText="@file.StageText"
+                                        IsUploading="@file.IsUploading"
+                                        UploadProgress="@file.UploadProgress"
+                                        OnRemove="@(async _ => await RemovePendingFile(file))"
+                                        OnCancel="@(async () => await RemovePendingFile(file))" />
                 }
             </div>
         }
 
         @* Mention Autocomplete Popover (shared) *@
         <MudPaper id="@($"mention-popover-container-{IdSuffix}")" Elevation="4" Class="pa-1" 
-                      Style="@($"position: absolute; bottom: 100%; left: 0; right: 0; max-height: 200px; overflow-y: auto; z-index: 100; margin-bottom: 4px; display: {(_showMentionPopover && _filteredMentions.Any() ? "block" : "none")};")">
+                      Style="@($"position: absolute; bottom: 100%; left: 0; right: 0; max-height: 200px; overflow-y: auto; -webkit-overflow-scrolling: touch; touch-action: pan-y; z-index: 100; margin-bottom: 4px; display: {(_showMentionPopover && _filteredMentions.Any() ? "block" : "none")};")">
                 @if (_showMentionPopover && _filteredMentions.Any())
                 {
                     @for (int i = 0; i < _filteredMentions.Count; i++)
@@ -135,7 +133,7 @@ else
 
             @* HashTag Autocomplete Popover (shared for Events and Albums) *@
             <MudPaper id="@($"event-popover-container-{IdSuffix}")" Elevation="4" Class="pa-1" 
-                      Style="@($"position: absolute; bottom: 100%; left: 0; right: 0; max-height: 200px; overflow-y: auto; z-index: 100; margin-bottom: 4px; display: {(_showEventPopover && _filteredHashTags.Any() ? "block" : "none")};")">
+                      Style="@($"position: absolute; bottom: 100%; left: 0; right: 0; max-height: 200px; overflow-y: auto; -webkit-overflow-scrolling: touch; touch-action: pan-y; z-index: 100; margin-bottom: 4px; display: {(_showEventPopover && _filteredHashTags.Any() ? "block" : "none")};")">
                 @if (_showEventPopover && _filteredHashTags.Any())
                 {
                     @for (int i = 0; i < _filteredHashTags.Count; i++)
@@ -162,7 +160,7 @@ else
 
             @* Snippet Autocomplete Popover *@
             <MudPaper id="@($"snippet-popover-container-{IdSuffix}")" Elevation="4" Class="pa-1" 
-                      Style="@($"position: absolute; bottom: 100%; left: 0; right: 0; max-height: 200px; overflow-y: auto; z-index: 100; margin-bottom: 4px; display: {(_showSnippetPopover && _filteredSnippets.Any() ? "block" : "none")};")">
+                      Style="@($"position: absolute; bottom: 100%; left: 0; right: 0; max-height: 200px; overflow-y: auto; -webkit-overflow-scrolling: touch; touch-action: pan-y; z-index: 100; margin-bottom: 4px; display: {(_showSnippetPopover && _filteredSnippets.Any() ? "block" : "none")};")">
                 @if (_showSnippetPopover && _filteredSnippets.Any())
                 {
                     @for (int i = 0; i < _filteredSnippets.Count; i++)
@@ -178,7 +176,7 @@ else
                             </MudAvatar>
                             <div>
                                 <MudText Typo="Typo.body2" Style="font-weight: 600;">@snippet</MudText>
-                                <MudText Typo="Typo.caption" Color="Color.Secondary">Insert a code block</MudText>
+                                <MudText Typo="Typo.caption" Color="Color.Secondary">@Loc["Insert a code block"]</MudText>
                             </div>
                         </div>
                     }
@@ -187,7 +185,7 @@ else
 
             @* Emoji Autocomplete Popover *@
             <MudPaper id="@($"emoji-autocomplete-popover-container-{IdSuffix}")" Elevation="4" Class="pa-1" 
-                      Style="@($"position: absolute; bottom: 100%; left: 0; right: 0; max-height: 200px; overflow-y: auto; z-index: 100; margin-bottom: 4px; display: {(_showEmojiAutocompletePopover && _filteredEmojis.Any() ? "block" : "none")};")">
+                      Style="@($"position: absolute; bottom: 100%; left: 0; right: 0; max-height: 200px; overflow-y: auto; -webkit-overflow-scrolling: touch; touch-action: pan-y; z-index: 100; margin-bottom: 4px; display: {(_showEmojiAutocompletePopover && _filteredEmojis.Any() ? "block" : "none")};")">
                 @if (_showEmojiAutocompletePopover && _filteredEmojis.Any())
                 {
                     @for (int i = 0; i < _filteredEmojis.Count; i++)
@@ -208,207 +206,223 @@ else
             </MudPaper>
 
             @* Emoji Picker (anchored above the composer via global popover portal) *@
-            <MudPopover Open="@_showEmojiPicker" AnchorOrigin="Origin.TopRight" TransformOrigin="Origin.BottomRight" OverflowBehavior="OverflowBehavior.FlipAlways">
-                <EmojiPicker IsOpen="@true"
-                             AutoFocusSearch="_autoFocusEmojiSearch"
-                             OnEmojiSelected="InsertEmoji"
-                             OnGifSelected="InsertGif"
-                             OnClose="@(() => _showEmojiPicker = false)"
-                             ContainerStyle="position: relative;"
-                             Class="my-0 mx-0" />
-            </MudPopover>
+            @if (_showEmojiPicker)
+            {
+                <MudPopover Open="@_showEmojiPicker" AnchorOrigin="Origin.TopRight" TransformOrigin="Origin.BottomRight" OverflowBehavior="OverflowBehavior.FlipAlways">
+                    <EmojiPicker IsOpen="@true"
+                                 AutoFocusSearch="_autoFocusEmojiSearch"
+                                 OnEmojiSelected="InsertEmoji"
+                                 OnGifSelected="InsertGif"
+                                 OnClose="@(() => _showEmojiPicker = false)"
+                                 ContainerStyle="position: relative;"
+                                 Class="my-0 mx-0" />
+                </MudPopover>
+            }
 
-            @* ═══════════════════════════════════════════════════════════════
-               MOBILE COMPOSER — compact single-row layout (Discord/Element style)
-               Visible on mobile layout (<960px, below md breakpoint)
-               ═══════════════════════════════════════════════════════════════ *@
-            <div class="mobile-composer d-flex flex-row flex-grow-1 d-md-none align-center gap-1">
-                <div class="@(_isRecordingVoice && !_isDesktopRecording ? "d-flex" : "d-none") align-center flex-grow-1 px-2 rounded-pill" style="background: var(--mud-palette-error-hover); animation: pulse-bg 2s infinite;">
-                    <MudIcon Icon="@Icons.Material.Filled.Mic" Color="Color.Error" Class="mr-2" Style="animation: pulse 1s infinite;" />
-                    <MudText Typo="Typo.body2" Color="Color.Error" Style="font-weight: 600;">@_recordingDurationText</MudText>
-                    <canvas id="@($"voice-soundwave-mobile-{IdSuffix}")" width="160" height="32" class="mx-2 flex-grow-1" style="width: 160px; max-width: 200px; opacity: 0.8;"></canvas>
-                    <MudSpacer />
-                    <MudIconButton Icon="@Icons.Material.Filled.Delete" Color="Color.Secondary" Size="Size.Small" OnClick="CancelVoiceRecording" />
-                    <MudIconButton Icon="@Icons.Material.Filled.Send" Color="Color.Error" Size="Size.Medium" OnClick="SendVoiceRecording" />
-                </div>
-                
-                <div class="@(_isRecordingVoice && !_isDesktopRecording ? "d-none" : "d-flex") flex-row flex-grow-1 align-center gap-1 w-100">
-                    @* + Attach button *@
-                    @if (!IsEditMode)
-                    {
-                        <div style="margin-left: -4px;">
-                            <MudFabMenu StartIcon="@Icons.Material.Filled.Add" DropShadow="false"  AlignItems="AlignItems.Start" Color="Color.Default" Size="Size.Small" DampenItemsBackgroundColor="false" UseCloseIcon="false">
-                                <MudFabMenuItem StartIcon="@Icons.Material.Filled.PhotoLibrary"  Color="Color.Primary" Size="Size.Small" Label="Photo" OnClick="@(() => TriggerMobileUpload("chat-mobile-pic-upload"))" />
-                                <MudFabMenuItem StartIcon="@Icons.Material.Filled.AttachFile" Color="Color.Primary" Size="Size.Small" Label="File" OnClick="@(() => TriggerMobileUpload("chat-mobile-file-upload"))" />
-                                <MudFabMenuItem StartIcon="@Icons.Material.Filled.Mic" Color="Color.Primary" Size="Size.Small" Label="Memo" OnClick="@(() => StartVoiceRecording(false))" />
-                            </MudFabMenu>
-                        </div>
-                    }
-                    else
-                    {
-                        <MudIconButton Icon="@Icons.Material.Filled.Close" 
-                                       Size="Size.Medium"
-                                       Class="pa-n2"
-                                       Color="Color.Secondary" 
-                                       OnClick="CancelEdit" />
-                    }
-
-                    @* Input box with inline emoji adornment *@
-                    <MudTextField @ref="_messageField" id="@($"chat-message-input-{IdSuffix}")" @bind-Value="_messageText"
-                        Placeholder="Message..." Variant="Variant.Outlined" FullWidth="true"
-                        Lines="1" MaxLines="10" Sizing="InputSizing.Auto"
-                        Class="flex-grow-1 rounded-pill"
-                        Adornment="Adornment.End" AdornmentIcon="@Icons.Material.Filled.EmojiEmotions"
-                        OnAdornmentClick="ToggleEmojiPickerMobile"
-                        Immediate="true"
-                        Margin="Margin.Dense"
-                        TextChanged="HandleTextChanged" />
-
-                    @* Send button (wrapped to prevent keyboard collapse on mobile) *@
-                    <div id="@($"mobile-send-btn-{IdSuffix}")"
-                         class="d-flex align-center cursor-pointer"
-                         style="opacity: @(string.IsNullOrWhiteSpace(_messageText) && !_pendingFiles.Any() || ChannelId == null || _pendingFiles.Any(f => f.IsUploading) ? "0.5" : "1"); pointer-events: @(string.IsNullOrWhiteSpace(_messageText) && !_pendingFiles.Any() || ChannelId == null || _pendingFiles.Any(f => f.IsUploading) ? "none" : "auto");">
-                        <MudIconButton Icon="@Icons.Material.Filled.Send" 
-                                       Size="Size.Medium" 
-                                       Class="pa-n2"
-                                       Color="Color.Primary"
-                                       Style="pointer-events: none;" />
-                    </div>
-                </div>
-            </div>
-            
-            <div style="display:none;">
-                <ApiFileUpload @ref="_mobilePictureUpload" Id="chat-mobile-pic-upload" Category="chat" ContextId="@ChannelId" MaximumFileCount="5"
-                    UploadUrl="@UploadUrl"
-                    Accept="image/*,video/*"
-                    Style="display:none;"
-                    OnUploadStarted="HandleApiUploadStarted"
-                    OnUploadCompleted="HandleApiUploadCompleted"
-                    OnUploadError="HandleApiUploadError"
-                    OnDetailedProgressUpdate="OnDetailedProgressUpdateHandler" />
-
-                <ApiFileUpload @ref="_mobileFileUpload" Id="chat-mobile-file-upload" Category="chat" ContextId="@ChannelId" MaximumFileCount="5"
-                    UploadUrl="@UploadUrl"
-                    Style="display:none;"
-                    OnUploadStarted="HandleApiUploadStarted"
-                    OnUploadCompleted="HandleApiUploadCompleted"
-                    OnUploadError="HandleApiUploadError"
-                    OnDetailedProgressUpdate="OnDetailedProgressUpdateHandler" />
-
-                <ApiFileUpload @ref="_mobileVoiceUpload" Id="chat-mobile-voice-upload" Category="chat" ContextId="@ChannelId" MaximumFileCount="1"
-                    UploadUrl="@UploadUrl"
-                    Style="display:none;"
-                    OnUploadStarted="HandleApiUploadStarted"
-                    OnUploadCompleted="HandleVoiceUploadCompleted"
-                    OnUploadError="HandleApiUploadError"
-                    OnDetailedProgressUpdate="OnDetailedProgressUpdateHandler" />
-
-                <ApiFileUpload @ref="_desktopVoiceUpload" Id="chat-desktop-voice-upload" Category="chat" ContextId="@ChannelId" MaximumFileCount="1"
-                    UploadUrl="@UploadUrl"
-                    Style="display:none;"
-                    OnUploadStarted="HandleApiUploadStarted"
-                    OnUploadCompleted="HandleVoiceUploadCompleted"
-                    OnUploadError="HandleApiUploadError"
-                    OnDetailedProgressUpdate="OnDetailedProgressUpdateHandler" />
-            </div>
-
-            @* ═══════════════════════════════════════════════════════════════
-               DESKTOP COMPOSER — full layout with formatting toolbar
-               Hidden on mobile layout (d-none d-md-block)
-               ═══════════════════════════════════════════════════════════════ *@
-            <div class="d-none d-md-block">
-                <div class="composer-box">
-                    <div class="@(_isRecordingVoice && _isDesktopRecording ? "d-none" : "d-block")">
-                        @* Text input area *@
-                        <div class="composer-textarea">
-                            <MudTextField @ref="_messageFieldDesktop" id="@($"chat-message-input-desktop-{IdSuffix}")" @bind-Value="_messageText"
-                                Placeholder="@(IsEditMode ? "Edit message..." : "Type a message...")" Variant="Variant.Text" FullWidth="true"
-                                Lines="2" MaxLines="10" Sizing="InputSizing.Auto"
-                                OnKeyDown="HandleKeyPress"
-                                Immediate="true"
-                                Underline="false" Class="px-2 py-1"
-                                TextChanged="HandleTextChanged" />
-                        </div>
-
-                        @* Formatting toolbar inside the box *@
-                        <div class="composer-toolbar d-flex align-center">
-                            <MudTooltip Text="Bold" Placement="Placement.Top">
-                                <MudIconButton Icon="@Icons.Material.Filled.FormatBold" Size="Size.Small" 
-                                               Color="Color.Default" OnClick="@(() => ApplyFormatting("**", "**"))" />
-                            </MudTooltip>
-                            <MudTooltip Text="Italic" Placement="Placement.Top">
-                                <MudIconButton Icon="@Icons.Material.Filled.FormatItalic" Size="Size.Small" 
-                                               Color="Color.Default" OnClick="@(() => ApplyFormatting("_", "_"))" />
-                            </MudTooltip>
-                            <MudTooltip Text="Strikethrough" Placement="Placement.Top">
-                                <MudIconButton Icon="@Icons.Material.Filled.FormatStrikethrough" Size="Size.Small" 
-                                               Color="Color.Default" OnClick="@(() => ApplyFormatting("~~", "~~"))" />
-                            </MudTooltip>
-                            <MudTooltip Text="Code (Type [ for more languages)" Placement="Placement.Top">
-                                <MudIconButton Icon="@Icons.Material.Filled.Code" Size="Size.Small" 
-                                               Color="Color.Default" OnClick="@(() => ApplyFormatting("[code]\n", "\n[/code]"))" />
-                            </MudTooltip>
-                            <MudTooltip Text="Quote" Placement="Placement.Top">
-                                <MudIconButton Icon="@Icons.Material.Filled.FormatQuote" Size="Size.Small" 
-                                               Color="Color.Default" OnClick="@(() => ApplyLinePrefix("> "))" />
-                            </MudTooltip>
-                            <MudTooltip Text="Bulleted list" Placement="Placement.Top">
-                                <MudIconButton Icon="@Icons.Material.Filled.FormatListBulleted" Size="Size.Small" 
-                                               Color="Color.Default" OnClick="@(() => ApplyLinePrefix("- "))" />
-                            </MudTooltip>
-                            <div style="width: 1px; height: 18px; background: var(--mud-palette-divider); margin: 0 2px;"></div>
-                            <MudTooltip Text="Emoji" Placement="Placement.Top">
-                                <MudIconButton Icon="@Icons.Material.Filled.EmojiEmotions" Size="Size.Small" 
-                                               Color="Color.Default" OnClick="@(() => { _autoFocusEmojiSearch = true; _showEmojiPicker = !_showEmojiPicker; })" />
-                            </MudTooltip>
-
-                            <div style="flex: 1;"></div>
-
-                            @if (!IsEditMode)
-                            {
-                                <MudTooltip Text="Record Voice Memo" Placement="Placement.Top">
-                                    <MudIconButton Icon="@Icons.Material.Filled.Mic" Size="Size.Small" Color="Color.Default" OnClick="@(() => StartVoiceRecording(true))" />
-                                </MudTooltip>
-
-                                <ApiFileUpload @ref="_desktopUpload" Id="chat-desktop-upload" Category="chat" ContextId="@ChannelId" MaximumFileCount="5"
-                                    UploadUrl="@UploadUrl"
-                                    OnUploadStarted="HandleApiUploadStarted"
-                                    OnUploadCompleted="HandleApiUploadCompleted"
-                                    OnUploadError="HandleApiUploadError"
-                                    OnDetailedProgressUpdate="OnDetailedProgressUpdateHandler">
-                                    <CustomContent>
-                                        <MudTooltip Text="Attach files" Placement="Placement.Top">
-                                            <MudIconButton Icon="@Icons.Material.Filled.AttachFile" Size="Size.Small" Color="Color.Default" />
-                                        </MudTooltip>
-                                    </CustomContent>
-                                </ApiFileUpload>
-                            }
-
-                            <MudTooltip Text="Send (Enter)" Placement="Placement.Left">
-                                <MudIconButton Icon="@Icons.Material.Filled.Send" Size="Size.Small" Color="Color.Primary" OnClick="SendMessage"
-                                    Disabled="@(string.IsNullOrWhiteSpace(_messageText) && !_pendingFiles.Any() || ChannelId == null || _pendingFiles.Any(f => f.IsUploading))" />
-                            </MudTooltip>
-                            @if (IsEditMode)
-                            {
-                                <MudButton Variant="Variant.Text" Size="Size.Small" Color="Color.Secondary" OnClick="CancelEdit">Cancel</MudButton>
-                            }
-                        </div>
-                    </div>
-                    
-                    <div class="@(_isRecordingVoice && _isDesktopRecording ? "d-flex" : "d-none") align-center flex-grow-1 px-4 py-2" style="background: var(--mud-palette-error-hover); animation: pulse-bg 2s infinite;">
+            @if (IsMobile)
+            {
+                @* ═══════════════════════════════════════════════════════════════
+                   MOBILE COMPOSER — compact single-row layout (Discord/Element style)
+                   Visible on mobile layout (<960px, below md breakpoint)
+                   ═══════════════════════════════════════════════════════════════ *@
+                <div class="mobile-composer d-flex flex-row flex-grow-1 d-md-none align-center gap-1">
+                    <div class="@(_isRecordingVoice && !_isDesktopRecording ? "d-flex" : "d-none") align-center flex-grow-1 px-2 rounded-pill" style="background: var(--mud-palette-error-hover); animation: pulse-bg 2s infinite;">
                         <MudIcon Icon="@Icons.Material.Filled.Mic" Color="Color.Error" Class="mr-2" Style="animation: pulse 1s infinite;" />
                         <MudText Typo="Typo.body2" Color="Color.Error" Style="font-weight: 600;">@_recordingDurationText</MudText>
-                        <canvas id="@($"voice-soundwave-desktop-{IdSuffix}")" width="200" height="32" class="mx-4 flex-grow-1" style="width: 200px; opacity: 0.8;"></canvas>
+                        <canvas id="@($"voice-soundwave-mobile-{IdSuffix}")" width="160" height="32" class="mx-2 flex-grow-1" style="width: 160px; max-width: 200px; opacity: 0.8;"></canvas>
                         <MudSpacer />
                         <MudIconButton Icon="@Icons.Material.Filled.Delete" Color="Color.Secondary" Size="Size.Small" OnClick="CancelVoiceRecording" />
                         <MudIconButton Icon="@Icons.Material.Filled.Send" Color="Color.Error" Size="Size.Medium" OnClick="SendVoiceRecording" />
                     </div>
+                    
+                    <div class="@(_isRecordingVoice && !_isDesktopRecording ? "d-none" : "d-flex") flex-row flex-grow-1 align-center gap-1 w-100">
+                        @* + Attach button *@
+                        @if (!IsEditMode)
+                        {
+                            <div style="margin-left: -4px;">
+                                <MudFabMenu StartIcon="@Icons.Material.Filled.Add" DropShadow="false"  AlignItems="AlignItems.Start" Color="Color.Default" Size="Size.Small" DampenItemsBackgroundColor="false" UseCloseIcon="false">
+                                    <MudFabMenuItem StartIcon="@Icons.Material.Filled.PhotoLibrary"  Color="Color.Primary" Size="Size.Small" Label="@Loc["Photo"]" OnClick="@(() => TriggerMobileUpload("chat-mobile-pic-upload"))" />
+                                    <MudFabMenuItem StartIcon="@Icons.Material.Filled.AttachFile" Color="Color.Primary" Size="Size.Small" Label="@Loc["File"]" OnClick="@(() => TriggerMobileUpload("chat-mobile-file-upload"))" />
+                                    <MudFabMenuItem StartIcon="@Icons.Material.Filled.Mic" Color="Color.Primary" Size="Size.Small" Label="@Loc["Memo"]" OnClick="@(() => StartVoiceRecording(false))" />
+                                </MudFabMenu>
+                            </div>
+                        }
+                        else
+                        {
+                            <MudIconButton Icon="@Icons.Material.Filled.Close" 
+                                           Size="Size.Medium"
+                                           Class="pa-n2"
+                                           Color="Color.Secondary" 
+                                           OnClick="CancelEdit" />
+                        }
+
+                        @* Input box with inline emoji adornment *@
+                        <MudTextField @ref="_messageField" id="@($"chat-message-input-{IdSuffix}")" @bind-Value="_messageText"
+                            Placeholder="@Loc["Message..."]" Variant="Variant.Outlined" FullWidth="true"
+                            Lines="1" MaxLines="10" Sizing="InputSizing.Auto"
+                            Class="flex-grow-1 rounded-pill"
+                            Adornment="Adornment.End" AdornmentIcon="@Icons.Material.Filled.EmojiEmotions"
+                            OnAdornmentClick="ToggleEmojiPickerMobile"
+                            Immediate="true"
+                            Margin="Margin.Dense"
+                            TextChanged="HandleTextChanged" />
+
+                        @* Send button (wrapped to prevent keyboard collapse on mobile) *@
+                        <div id="@($"mobile-send-btn-{IdSuffix}")"
+                             class="d-flex align-center cursor-pointer"
+                             style="opacity: @(string.IsNullOrWhiteSpace(_messageText) && !_pendingFiles.Any() || ChannelId == null || _pendingFiles.Any(f => f.IsUploading) ? "0.5" : "1"); pointer-events: @(string.IsNullOrWhiteSpace(_messageText) && !_pendingFiles.Any() || ChannelId == null || _pendingFiles.Any(f => f.IsUploading) ? "none" : "auto");">
+                            <MudIconButton Icon="@Icons.Material.Filled.Send" 
+                                           Size="Size.Medium" 
+                                           Class="pa-n2"
+                                           Color="Color.Primary"
+                                           Style="pointer-events: none;" />
+                        </div>
+                    </div>
                 </div>
-            </div>
-        @* Hide helper text on mobile *@
-        <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mt-1 d-none d-md-block">
-            Enter to send • Shift+Enter for new line • @@ to mention • # for events and Albums
-        </MudText>
+                
+                @if (!IsEditMode)
+                {
+                    <div style="display:none;">
+                        <ApiFileUpload @ref="_mobilePictureUpload" Id="chat-mobile-pic-upload" Category="chat" ContextId="@ChannelId" MaximumFileCount="5"
+                            UploadUrl="@UploadUrl"
+                            Accept="image/*,video/*"
+                            Style="display:none;"
+                            OnUploadStarted="HandleApiUploadStarted"
+                            OnUploadCompleted="HandleApiUploadCompleted"
+                            OnUploadError="HandleApiUploadError"
+                            OnDetailedProgressUpdate="OnDetailedProgressUpdateHandler" />
+
+                        <ApiFileUpload @ref="_mobileFileUpload" Id="chat-mobile-file-upload" Category="chat" ContextId="@ChannelId" MaximumFileCount="5"
+                            UploadUrl="@UploadUrl"
+                            Style="display:none;"
+                            OnUploadStarted="HandleApiUploadStarted"
+                            OnUploadCompleted="HandleApiUploadCompleted"
+                            OnUploadError="HandleApiUploadError"
+                            OnDetailedProgressUpdate="OnDetailedProgressUpdateHandler" />
+
+                        <ApiFileUpload @ref="_mobileVoiceUpload" Id="chat-mobile-voice-upload" Category="chat" ContextId="@ChannelId" MaximumFileCount="1"
+                            UploadUrl="@UploadUrl"
+                            Style="display:none;"
+                            OnUploadStarted="HandleApiUploadStarted"
+                            OnUploadCompleted="HandleVoiceUploadCompleted"
+                            OnUploadError="HandleApiUploadError"
+                            OnDetailedProgressUpdate="OnDetailedProgressUpdateHandler" />
+                    </div>
+                }
+            }
+            else
+            {
+                @if (!IsEditMode)
+                {
+                    <div style="display:none;">
+                        <ApiFileUpload @ref="_desktopVoiceUpload" Id="chat-desktop-voice-upload" Category="chat" ContextId="@ChannelId" MaximumFileCount="1"
+                            UploadUrl="@UploadUrl"
+                            Style="display:none;"
+                            OnUploadStarted="HandleApiUploadStarted"
+                            OnUploadCompleted="HandleVoiceUploadCompleted"
+                            OnUploadError="HandleApiUploadError"
+                            OnDetailedProgressUpdate="OnDetailedProgressUpdateHandler" />
+                    </div>
+                }
+
+                @* ═══════════════════════════════════════════════════════════════
+                   DESKTOP COMPOSER — full layout with formatting toolbar
+                   Hidden on mobile layout (d-none d-md-block)
+                   ═══════════════════════════════════════════════════════════════ *@
+                <div class="d-none d-md-block">
+                    <div class="composer-box">
+                        <div class="@(_isRecordingVoice && _isDesktopRecording ? "d-none" : "d-block")">
+                            @* Text input area *@
+                            <div class="composer-textarea">
+                                <MudTextField @ref="_messageFieldDesktop" id="@($"chat-message-input-desktop-{IdSuffix}")" @bind-Value="_messageText"
+                                    Placeholder="@(IsEditMode ? Loc["Edit message..."].Value : Loc["Type a message..."].Value)" Variant="Variant.Text" FullWidth="true"
+                                    Lines="2" MaxLines="10" Sizing="InputSizing.Auto"
+                                    OnKeyDown="HandleKeyPress"
+                                    Immediate="true"
+                                    Underline="false" Class="px-2 py-1"
+                                    TextChanged="HandleTextChanged" />
+                            </div>
+
+                            @* Formatting toolbar inside the box *@
+                            <div class="composer-toolbar d-flex align-center">
+                                <MudTooltip Text="@Loc["Bold"]" Placement="Placement.Top">
+                                    <MudIconButton Icon="@Icons.Material.Filled.FormatBold" Size="Size.Small" 
+                                                   Color="Color.Default" OnClick="@(() => ApplyFormatting("**", "**"))" />
+                                </MudTooltip>
+                                <MudTooltip Text="@Loc["Italic"]" Placement="Placement.Top">
+                                    <MudIconButton Icon="@Icons.Material.Filled.FormatItalic" Size="Size.Small" 
+                                                   Color="Color.Default" OnClick="@(() => ApplyFormatting("_", "_"))" />
+                                </MudTooltip>
+                                <MudTooltip Text="@Loc["Strikethrough"]" Placement="Placement.Top">
+                                    <MudIconButton Icon="@Icons.Material.Filled.FormatStrikethrough" Size="Size.Small" 
+                                                   Color="Color.Default" OnClick="@(() => ApplyFormatting("~~", "~~"))" />
+                                </MudTooltip>
+                                <MudTooltip Text="@Loc["Code (Type [ for more languages)"]" Placement="Placement.Top">
+                                    <MudIconButton Icon="@Icons.Material.Filled.Code" Size="Size.Small" 
+                                                   Color="Color.Default" OnClick="@(() => ApplyFormatting("[code]\n", "\n[/code]"))" />
+                                </MudTooltip>
+                                <MudTooltip Text="@Loc["Quote"]" Placement="Placement.Top">
+                                    <MudIconButton Icon="@Icons.Material.Filled.FormatQuote" Size="Size.Small" 
+                                                   Color="Color.Default" OnClick="@(() => ApplyLinePrefix("> "))" />
+                                </MudTooltip>
+                                <MudTooltip Text="@Loc["Bulleted list"]" Placement="Placement.Top">
+                                    <MudIconButton Icon="@Icons.Material.Filled.FormatListBulleted" Size="Size.Small" 
+                                                   Color="Color.Default" OnClick="@(() => ApplyLinePrefix("- "))" />
+                                </MudTooltip>
+                                <div style="width: 1px; height: 18px; background: var(--mud-palette-divider); margin: 0 2px;"></div>
+                                <MudTooltip Text="@Loc["Emoji"]" Placement="Placement.Top">
+                                    <MudIconButton Icon="@Icons.Material.Filled.EmojiEmotions" Size="Size.Small" 
+                                                   Color="Color.Default" OnClick="@(() => { _autoFocusEmojiSearch = true; _showEmojiPicker = !_showEmojiPicker; })" />
+                                </MudTooltip>
+
+                                <div style="flex: 1;"></div>
+
+                                @if (!IsEditMode)
+                                {
+                                    <MudTooltip Text="@Loc["Record Voice Memo"]" Placement="Placement.Top">
+                                        <MudIconButton Icon="@Icons.Material.Filled.Mic" Size="Size.Small" Color="Color.Default" OnClick="@(() => StartVoiceRecording(true))" />
+                                    </MudTooltip>
+
+                                    <ApiFileUpload @ref="_desktopUpload" Id="chat-desktop-upload" Category="chat" ContextId="@ChannelId" MaximumFileCount="5"
+                                        UploadUrl="@UploadUrl"
+                                        OnUploadStarted="HandleApiUploadStarted"
+                                        OnUploadCompleted="HandleApiUploadCompleted"
+                                        OnUploadError="HandleApiUploadError"
+                                        OnDetailedProgressUpdate="OnDetailedProgressUpdateHandler">
+                                        <CustomContent>
+                                            <MudTooltip Text="@Loc["Attach files"]" Placement="Placement.Top">
+                                                <MudIconButton Icon="@Icons.Material.Filled.AttachFile" Size="Size.Small" Color="Color.Default" />
+                                            </MudTooltip>
+                                        </CustomContent>
+                                    </ApiFileUpload>
+                                }
+
+                                <MudTooltip Text="@Loc["Send (Enter)"]" Placement="Placement.Left">
+                                    <MudIconButton Icon="@Icons.Material.Filled.Send" Size="Size.Small" Color="Color.Primary" OnClick="SendMessage"
+                                        Disabled="@(string.IsNullOrWhiteSpace(_messageText) && !_pendingFiles.Any() || ChannelId == null || _pendingFiles.Any(f => f.IsUploading))" />
+                                </MudTooltip>
+                                @if (IsEditMode)
+                                {
+                                    <MudButton Variant="Variant.Text" Size="Size.Small" Color="Color.Secondary" OnClick="CancelEdit">@Loc["Cancel"]</MudButton>
+                                }
+                            </div>
+                        </div>
+                        
+                        <div class="@(_isRecordingVoice && _isDesktopRecording ? "d-flex" : "d-none") align-center flex-grow-1 px-4 py-2" style="background: var(--mud-palette-error-hover); animation: pulse-bg 2s infinite;">
+                            <MudIcon Icon="@Icons.Material.Filled.Mic" Color="Color.Error" Class="mr-2" Style="animation: pulse 1s infinite;" />
+                            <MudText Typo="Typo.body2" Color="Color.Error" Style="font-weight: 600;">@_recordingDurationText</MudText>
+                            <canvas id="@($"voice-soundwave-desktop-{IdSuffix}")" width="200" height="32" class="mx-4 flex-grow-1" style="width: 200px; opacity: 0.8;"></canvas>
+                            <MudSpacer />
+                            <MudIconButton Icon="@Icons.Material.Filled.Delete" Color="Color.Secondary" Size="Size.Small" OnClick="CancelVoiceRecording" />
+                            <MudIconButton Icon="@Icons.Material.Filled.Send" Color="Color.Error" Size="Size.Medium" OnClick="SendVoiceRecording" />
+                        </div>
+                    </div>
+                </div>
+                @* Hide helper text on mobile *@
+                <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mt-1 d-none d-md-block">
+                    @Loc["Enter to send • Shift+Enter for new line • @ to mention • # for events and Albums"]
+                </MudText>
+            }
     </MudPaper>
 }
 
@@ -479,6 +493,7 @@ else
     [Parameter] public EventCallback OnEditLastMessage { get; set; }
     [Parameter] public EventCallback OnCancelEdit { get; set; }
     [Parameter] public string? UploadUrl { get; set; }
+    [Parameter] public bool IsMobile { get; set; }
 
     private string? _lastComposerFingerprint;
     private bool _forceComposerRender = true;
@@ -493,7 +508,7 @@ else
         bool isTextEmpty = string.IsNullOrWhiteSpace(_messageText);
         int pendingCount = _pendingFiles.Count;
         bool isUploading = _pendingFiles.Any(f => f.IsUploading);
-        var fingerprint = $"{ChannelId}|{UploadUrl}|{IsArchived}|{Disabled}|{ReplyingTo?.Id}|{IsEditMode}|{InitialText}|{isTextEmpty}|{pendingCount}|{isUploading}|{_showMentionPopover}|{_mentionSearchText}|{_mentionSelectedIndex}|{_showEventPopover}|{_eventSearchText}|{_eventSelectedIndex}|{_showEmojiAutocompletePopover}|{_emojiSearchText}|{_emojiSelectedIndex}|{_showSnippetPopover}|{_snippetSearchText}|{_snippetSelectedIndex}|{_showEmojiPicker}|{_isRecordingVoice}|{_isDesktopRecording}|{_recordingDurationText}";
+        var fingerprint = $"{ChannelId}|{UploadUrl}|{IsArchived}|{Disabled}|{ReplyingTo?.Id}|{IsEditMode}|{IsMobile}|{InitialText}|{isTextEmpty}|{pendingCount}|{isUploading}|{_showMentionPopover}|{_mentionSearchText}|{_mentionSelectedIndex}|{_showEventPopover}|{_eventSearchText}|{_eventSelectedIndex}|{_showEmojiAutocompletePopover}|{_emojiSearchText}|{_emojiSelectedIndex}|{_showSnippetPopover}|{_snippetSearchText}|{_snippetSelectedIndex}|{_showEmojiPicker}|{_isRecordingVoice}|{_isDesktopRecording}|{_recordingDurationText}";
         if (fingerprint == _lastComposerFingerprint) return false;
         _lastComposerFingerprint = fingerprint;
         return true;
@@ -530,8 +545,11 @@ else
         }
     }
 
+    private readonly string _diagTag = Guid.NewGuid().ToString("N")[..4]; // DIAG-TEMP
+
     protected override void OnInitialized()
     {
+        StartupTimings.AddChatTransition($"Server: ChatComposer[{_diagTag}] OnInitialized (IsEditMode={IsEditMode})"); // DIAG-TEMP
         if (IsEditMode && !string.IsNullOrEmpty(InitialText))
         {
             _messageText = InitialText;
@@ -687,7 +705,7 @@ else
             var targetUpload = isDesktop ? _desktopVoiceUpload : _mobileVoiceUpload;
             if (targetUpload == null || targetUpload.ObjRef == null)
             {
-                Snackbar.Add("Voice upload not initialized yet.", Severity.Warning);
+                Snackbar.Add(Loc["Voice upload not initialized yet."].Value, Severity.Warning);
                 return;
             }
 
@@ -710,7 +728,7 @@ else
             if (!started)
             {
                 await CancelVoiceRecording();
-                Snackbar.Add("Could not access microphone.", Severity.Error);
+                Snackbar.Add(Loc["Could not access microphone."].Value, Severity.Error);
             }
             StateHasChanged();
         });
@@ -741,32 +759,20 @@ else
         try { await JS.InvokeVoidAsync("spokesVoiceRecorder.stopAndUploadRecording", uploadUrl, targetUpload?.ObjRef); } catch { }
     }
 
+    private bool? _lastInitializedIsMobile;
+
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (firstRender)
+        if (firstRender || _lastInitializedIsMobile != IsMobile)
         {
+            _lastInitializedIsMobile = IsMobile;
+            using var diagSpan = StartupTimings.Span($"Server: ChatComposer[{_diagTag}] Init chain (import + initComposerAll)"); // DIAG-TEMP
             try
             {
-                _objRef = DotNetObjectReference.Create(this);
-                _jsModule = await JS.InvokeAsync<IJSObjectReference>(
+                _objRef ??= DotNetObjectReference.Create(this);
+                _jsModule ??= await JS.InvokeAsync<IJSObjectReference>(
                     "import", $"./{Assets.Bypassed("Components/Pages/Chat/ChatComposer.razor.js")}");
-                // Initialize Enter key prevention and paste handling on BOTH fields
-                // (only the one actually rendered in DOM will succeed)
-                try { await _jsModule.InvokeVoidAsync("initComposer", $"chat-message-input-{IdSuffix}", false, !Disabled, _objRef); } catch { }
-                try { await _jsModule.InvokeVoidAsync("initComposer", $"chat-message-input-desktop-{IdSuffix}", true, !Disabled, _objRef); } catch { }
-                
-                // Initialize the mobile send button with active (non-passive) touch listeners to permanently prevent keyboard drops
-                // Initialize mobile send button touch listeners
-                try { await _jsModule.InvokeVoidAsync("initMobileSendButton", $"mobile-send-btn-{IdSuffix}", _objRef); } catch { }
-                
-                // Initialize mention popover touch listeners to securely prevent focus loss
-                try { await _jsModule.InvokeVoidAsync("initMentionPopover", $"mention-popover-container-{IdSuffix}", _objRef); } catch { }
-                // Initialize event popover touch listeners
-                try { await _jsModule.InvokeVoidAsync("initEventPopover", $"event-popover-container-{IdSuffix}", _objRef); } catch { }
-                // Initialize emoji autocomplete popover touch listeners
-                try { await _jsModule.InvokeVoidAsync("initEmojiAutocompletePopover", $"emoji-autocomplete-popover-container-{IdSuffix}", _objRef); } catch { }
-                // Initialize snippet autocomplete popover touch listeners
-                try { await _jsModule.InvokeVoidAsync("initSnippetPopover", $"snippet-popover-container-{IdSuffix}", _objRef); } catch { }
+                await _jsModule.InvokeVoidAsync("initComposerAll", IdSuffix, !Disabled, _objRef);
             }
             catch { /* ignore during prerender */ }
         }
@@ -787,6 +793,10 @@ else
         var pendingBackup = _pendingFiles.ToList();
 
         _messageText = string.Empty;
+        if (_messageField != null)
+        {
+            _ = _messageField.ClearAsync();
+        }
         _pendingFiles.Clear();
         _showMentionPopover = false;
         _showEventPopover = false;
@@ -811,7 +821,7 @@ else
                 UserClientStateService.UpdateDraftInMemory(CurrentUserId, ChannelId, contentToSend);
             }
             StateHasChanged();
-            Snackbar.Add($"Error sending message: {ex.Message}", Severity.Error);
+            Snackbar.Add($"{Loc["Error sending message"].Value}: {ex.Message}", Severity.Error);
         }
 
         // Stop typing indicator
@@ -827,8 +837,12 @@ else
     }
 
     [JSInvokable]
-    public async Task TriggerSendMobile()
+    public async Task TriggerSendMobile(string? clientText = null)
     {
+        if (!string.IsNullOrWhiteSpace(clientText) && string.IsNullOrWhiteSpace(_messageText))
+        {
+            _messageText = clientText;
+        }
         bool disableSendMobile = string.IsNullOrWhiteSpace(_messageText) && !_pendingFiles.Any() || ChannelId == null || _pendingFiles.Any(f => f.IsUploading);
         if (!disableSendMobile)
         {
@@ -836,109 +850,59 @@ else
         }
     }
 
+    private bool HandleAutocompleteKeyNavigation<T>(
+        KeyboardEventArgs e,
+        bool isShown,
+        IReadOnlyList<T> items,
+        ref int selectedIndex,
+        Action<T> onSelect,
+        Action onClose,
+        Action? onIndexChanged = null)
+    {
+        if (!isShown || items.Count == 0) return false;
+
+        switch (e.Key)
+        {
+            case "ArrowDown":
+                selectedIndex = Math.Min(selectedIndex + 1, items.Count - 1);
+                onIndexChanged?.Invoke();
+                return true;
+            case "ArrowUp":
+                selectedIndex = Math.Max(selectedIndex - 1, 0);
+                onIndexChanged?.Invoke();
+                return true;
+            case "Enter" or "Tab":
+                if (selectedIndex >= 0 && selectedIndex < items.Count)
+                {
+                    onSelect(items[selectedIndex]);
+                }
+                return true;
+            case "Escape":
+                onClose();
+                return true;
+            default:
+                return false;
+        }
+    }
+
     private async Task HandleKeyPress(KeyboardEventArgs e)
     {
-        // Mention popup keyboard navigation
-        if (_showMentionPopover && _filteredMentions.Any())
-        {
-            if (e.Key == "ArrowDown")
-            {
-                _mentionSelectedIndex = Math.Min(_mentionSelectedIndex + 1, _filteredMentions.Count - 1);
-                return;
-            }
-            if (e.Key == "ArrowUp")
-            {
-                _mentionSelectedIndex = Math.Max(_mentionSelectedIndex - 1, 0);
-                return;
-            }
-            if (e.Key == "Enter" || e.Key == "Tab")
-            {
-                InsertMention(_filteredMentions[_mentionSelectedIndex]);
-                return;
-            }
-            if (e.Key == "Escape")
-            {
-                _showMentionPopover = false;
-                return;
-            }
-        }
+        if (HandleAutocompleteKeyNavigation(e, _showMentionPopover, _filteredMentions, ref _mentionSelectedIndex,
+            m => InsertMention(m), () => _showMentionPopover = false))
+            return;
 
-        // Event popup keyboard navigation
-        if (_showEventPopover && _filteredHashTags.Any())
-        {
-            if (e.Key == "ArrowDown")
-            {
-                _eventSelectedIndex = Math.Min(_eventSelectedIndex + 1, _filteredHashTags.Count - 1);
-                return;
-            }
-            if (e.Key == "ArrowUp")
-            {
-                _eventSelectedIndex = Math.Max(_eventSelectedIndex - 1, 0);
-                return;
-            }
-            if (e.Key == "Enter" || e.Key == "Tab")
-            {
-                InsertHashTag(_filteredHashTags[_eventSelectedIndex]);
-                return;
-            }
-            if (e.Key == "Escape")
-            {
-                _showEventPopover = false;
-                return;
-            }
-        }
+        if (HandleAutocompleteKeyNavigation(e, _showEventPopover, _filteredHashTags, ref _eventSelectedIndex,
+            ev => InsertHashTag(ev), () => _showEventPopover = false))
+            return;
 
-        // Emoji popup keyboard navigation
-        if (_showEmojiAutocompletePopover && _filteredEmojis.Any())
-        {
-            if (e.Key == "ArrowDown")
-            {
-                _emojiSelectedIndex = Math.Min(_emojiSelectedIndex + 1, _filteredEmojis.Count - 1);
-                return;
-            }
-            if (e.Key == "ArrowUp")
-            {
-                _emojiSelectedIndex = Math.Max(_emojiSelectedIndex - 1, 0);
-                return;
-            }
-            if (e.Key == "Enter" || e.Key == "Tab")
-            {
-                InsertEmojiAutocomplete(_filteredEmojis[_emojiSelectedIndex]);
-                return;
-            }
-            if (e.Key == "Escape")
-            {
-                _showEmojiAutocompletePopover = false;
-                return;
-            }
-        }
+        if (HandleAutocompleteKeyNavigation(e, _showEmojiAutocompletePopover, _filteredEmojis, ref _emojiSelectedIndex,
+            em => InsertEmojiAutocomplete(em), () => _showEmojiAutocompletePopover = false))
+            return;
 
-        // Snippet popup keyboard navigation
-        if (_showSnippetPopover && _filteredSnippets.Any())
-        {
-            if (e.Key == "ArrowDown")
-            {
-                _snippetSelectedIndex = Math.Min(_snippetSelectedIndex + 1, _filteredSnippets.Count - 1);
-                if (_jsModule != null) _ = _jsModule.InvokeVoidAsync("scrollSnippetPopoverToSelected", $"snippet-popover-container-{IdSuffix}");
-                return;
-            }
-            if (e.Key == "ArrowUp")
-            {
-                _snippetSelectedIndex = Math.Max(_snippetSelectedIndex - 1, 0);
-                if (_jsModule != null) _ = _jsModule.InvokeVoidAsync("scrollSnippetPopoverToSelected", $"snippet-popover-container-{IdSuffix}");
-                return;
-            }
-            if (e.Key == "Enter" || e.Key == "Tab")
-            {
-                _ = InsertSnippet(_filteredSnippets[_snippetSelectedIndex]);
-                return;
-            }
-            if (e.Key == "Escape")
-            {
-                _showSnippetPopover = false;
-                return;
-            }
-        }
+        if (HandleAutocompleteKeyNavigation(e, _showSnippetPopover, _filteredSnippets, ref _snippetSelectedIndex,
+            sn => _ = InsertSnippet(sn), () => _showSnippetPopover = false,
+            () => { if (_jsModule != null) _ = _jsModule.InvokeVoidAsync("scrollSnippetPopoverToSelected", $"snippet-popover-container-{IdSuffix}"); }))
+            return;
 
         if (e.Key == "Enter" && !e.ShiftKey)
         {
@@ -1207,7 +1171,7 @@ else
         if (currentUser != null && currentUser.HasPermission(AppPermissions.Albums.View))
         {
             var albums = Db.Albums.GetAll()
-                .Where(a => a.OwnerId == CurrentUserId || a.ContributorUserIds.Contains(CurrentUserId) || a.SharedWithChannelIds.Any(cId => ChatService.GetUsersForChannel(cId).Contains(CurrentUserId)))
+                .Where(a => a.OwnerId == CurrentUserId || a.ContributorUserIds.Contains(CurrentUserId) || a.SharedWithChannelIds.Any(cId => ChatAccess.GetUsersForChannel(cId).Contains(CurrentUserId)))
                 .OrderByDescending(a => a.CreatedAt)
                 .ToList();
                 
@@ -1482,7 +1446,7 @@ else
 
     private async Task HandleApiUploadStarted()
     {
-        _pendingFiles.Add(new PendingFile { FileName = "Uploading Files...", IsUploading = true, UploadProgress = 0 });
+        _pendingFiles.Add(new PendingFile { FileName = "Uploading...", StageText = "Uploading...", IsUploading = true, UploadProgress = 0 });
         StateHasChanged();
 
         if (_messageFieldDesktop != null)
@@ -1553,7 +1517,7 @@ else
                     _pendingFiles.Add(new PendingFile { FileName = v.FileName, IsUploading = false, Attachment = v });
                 }
                 StateHasChanged();
-                Snackbar.Add($"Error sending voice message: {ex.Message}", Severity.Error);
+                Snackbar.Add($"{Loc["Error sending voice message"].Value}: {ex.Message}", Severity.Error);
             }
         });
     }
@@ -1563,7 +1527,7 @@ else
         var placeholder = _pendingFiles.FirstOrDefault(f => f.IsUploading);
         if (placeholder != null) _pendingFiles.Remove(placeholder);
         
-        Snackbar.Add($"Upload failed: {error}", Severity.Error);
+        Snackbar.Add($"{Loc["Upload failed"].Value}: {error}", Severity.Error);
         StateHasChanged();
     }
 
@@ -1586,7 +1550,8 @@ else
             _pendingFiles.Add(placeholder);
         }
         
-        placeholder.FileName = progress < 0 ? "Preparing..." : $"Compressing... {Math.Round(progress)}%";
+        placeholder.StageText = progress < 0 ? "Preparing..." : "Compressing...";
+        placeholder.FileName = placeholder.StageText;
         placeholder.UploadProgress = progress;
         _forceComposerRender = true;
         StateHasChanged();
@@ -1602,7 +1567,8 @@ else
             _pendingFiles.Add(placeholder);
         }
         
-        placeholder.FileName = progress < 0 ? "Preparing..." : $"Uploading... {Math.Round(progress)}%";
+        placeholder.StageText = progress < 0 ? "Preparing..." : "Uploading...";
+        placeholder.FileName = placeholder.StageText;
         placeholder.UploadProgress = progress;
         _forceComposerRender = true;
         StateHasChanged();
@@ -1617,18 +1583,9 @@ else
             _pendingFiles.Add(placeholder);
         }
 
-        if (update.State == "Preparing...") {
-            placeholder.FileName = "Preparing...";
-        } else if (update.State == "Downloading from iCloud...") {
-            placeholder.FileName = $"Downloading from iCloud... {Math.Round(update.Progress)}%";
-        } else if (update.State == "Compressing...") {
-            placeholder.FileName = $"Compressing... {Math.Round(update.Progress)}%";
-        } else if (update.State == "Finishing up...") {
-            placeholder.FileName = "Finishing up...";
-        } else {
-            placeholder.FileName = $"Uploading... {Math.Round(update.Progress)}%";
-        }
-        
+        var stateText = string.IsNullOrWhiteSpace(update.State) ? "Uploading..." : update.State;
+        placeholder.StageText = stateText;
+        placeholder.FileName = stateText;
         placeholder.UploadProgress = update.Progress;
         _forceComposerRender = true;
         StateHasChanged();
@@ -1705,6 +1662,7 @@ else
 
     public async ValueTask DisposeAsync()
     {
+        StartupTimings.AddChatTransition($"Server: ChatComposer[{_diagTag}] DisposeAsync"); // DIAG-TEMP
         ShareTargetStateService.OnPayloadReceived -= HandlePayloadReceived;
         if (_typingTimer != null && _typingTimer.Enabled && ChannelId != null && CurrentUserId != null)
         {

@@ -31,7 +31,7 @@ public abstract class SpokesComponentBase : ComponentBase, IAsyncDisposable
             }
             catch (Exception ex) when (ex is ObjectDisposedException || ex.GetType().Name == "JSDisconnectedException")
             {
-                // Gracefully ignore disconnections during render
+                // Expected lifecycle event: circuit disconnected or component disposed during render
             }
         });
     }
@@ -53,7 +53,7 @@ public abstract class SpokesComponentBase : ComponentBase, IAsyncDisposable
             }
             catch (Exception ex) when (ex is ObjectDisposedException || ex.GetType().Name == "JSDisconnectedException" || ex is TaskCanceledException)
             {
-                // Gracefully ignore disconnections during async render
+                // Expected lifecycle event: circuit disconnected, component disposed, or task canceled during async render
             }
         });
     }

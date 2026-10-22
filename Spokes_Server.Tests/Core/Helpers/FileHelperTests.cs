@@ -1,4 +1,3 @@
-using MudBlazor;
 using Spokes_Server.Core.Helpers;
 
 namespace Spokes_Server.Tests.Core.Helpers;
@@ -115,98 +114,47 @@ public class FileHelperTests
     }
 
     [Theory]
-    [InlineData(null)]
-    [InlineData("")]
-    public void GetFileIcon_WhenFileNameIsNullOrEmpty_ReturnsInsertDriveFile(string? fileName)
+    [InlineData(null, null, false)]
+    [InlineData("", "", false)]
+    [InlineData("photo.jpg", null, true)]
+    [InlineData("clip.mp4", null, true)]
+    [InlineData("doc.pdf", null, false)]
+    [InlineData("file.bin", "image/png", true)]
+    [InlineData("file.bin", "video/mp4", true)]
+    [InlineData("file.bin", "application/pdf", false)]
+    [InlineData("file.bin", "text/plain", false)]
+    public void IsMediaFile_ValidatesContentTypeAndExtension(string? fileName, string? contentType, bool expected)
     {
-        var icon = FileHelper.GetFileIcon(fileName!);
-        Assert.Equal(Icons.Material.Filled.InsertDriveFile, icon);
+        var result = FileHelper.IsMediaFile(fileName, contentType);
+        Assert.Equal(expected, result);
     }
 
     [Theory]
-    [InlineData("photo.jpg")]
-    [InlineData("image.jpeg")]
-    [InlineData("pic.png")]
-    [InlineData("animation.gif")]
-    [InlineData("modern.webp")]
-    [InlineData("bitmap.bmp")]
-    [InlineData("PHOTO.JPG")]
-    [InlineData("IMAGE.PNG")]
-    public void GetFileIcon_WhenExtensionIsImage_ReturnsImage(string fileName)
+    [InlineData("photo.jpg", null, "image/jpeg")]
+    [InlineData("image.png", null, "image/png")]
+    [InlineData("video.mp4", null, "video/mp4")]
+    [InlineData("document.pdf", null, "application/pdf")]
+    [InlineData("custom.unknown", "custom/mime", "custom/mime")]
+    [InlineData("custom.unknown", null, "application/octet-stream")]
+    public void GetContentType_ResolvesAccurately(string fileName, string? fallback, string expected)
     {
-        var icon = FileHelper.GetFileIcon(fileName);
-        Assert.Equal(Icons.Material.Filled.Image, icon);
+        var result = FileHelper.GetContentType(fileName, fallback);
+        Assert.Equal(expected, result);
     }
 
     [Theory]
-    [InlineData("document.pdf")]
-    [InlineData("REPORT.PDF")]
-    public void GetFileIcon_WhenExtensionIsPdf_ReturnsPictureAsPdf(string fileName)
+    [InlineData("photo.jpg", null, MudBlazor.Icons.Material.Filled.Image)]
+    [InlineData("video.mp4", null, MudBlazor.Icons.Material.Filled.Videocam)]
+    [InlineData("audio.mp3", null, MudBlazor.Icons.Material.Filled.AudioFile)]
+    [InlineData("doc.pdf", null, MudBlazor.Icons.Material.Filled.PictureAsPdf)]
+    [InlineData("sheet.xlsx", null, MudBlazor.Icons.Material.Filled.TableChart)]
+    [InlineData("archive.zip", null, MudBlazor.Icons.Material.Filled.FolderZip)]
+    [InlineData("file.bin", "image/webp", MudBlazor.Icons.Material.Filled.Image)]
+    [InlineData("file.bin", "video/webm", MudBlazor.Icons.Material.Filled.Videocam)]
+    [InlineData("other.xyz", null, MudBlazor.Icons.Material.Filled.AttachFile)]
+    public void GetFileIcon_ReturnsExpectedIcon(string fileName, string? contentType, string expectedIcon)
     {
-        var icon = FileHelper.GetFileIcon(fileName);
-        Assert.Equal(Icons.Material.Filled.PictureAsPdf, icon);
-    }
-
-    [Theory]
-    [InlineData("document.doc")]
-    [InlineData("report.docx")]
-    [InlineData("DOCUMENT.DOCX")]
-    public void GetFileIcon_WhenExtensionIsWord_ReturnsDescription(string fileName)
-    {
-        var icon = FileHelper.GetFileIcon(fileName);
-        Assert.Equal(Icons.Material.Filled.Description, icon);
-    }
-
-    [Theory]
-    [InlineData("sheet.xls")]
-    [InlineData("budget.xlsx")]
-    [InlineData("DATA.XLSX")]
-    public void GetFileIcon_WhenExtensionIsExcel_ReturnsTableChart(string fileName)
-    {
-        var icon = FileHelper.GetFileIcon(fileName);
-        Assert.Equal(Icons.Material.Filled.TableChart, icon);
-    }
-
-    [Theory]
-    [InlineData("archive.zip")]
-    [InlineData("compressed.rar")]
-    [InlineData("backup.7z")]
-    [InlineData("FILES.ZIP")]
-    public void GetFileIcon_WhenExtensionIsArchive_ReturnsFolderZip(string fileName)
-    {
-        var icon = FileHelper.GetFileIcon(fileName);
-        Assert.Equal(Icons.Material.Filled.FolderZip, icon);
-    }
-
-    [Theory]
-    [InlineData("movie.mp4")]
-    [InlineData("clip.webm")]
-    [InlineData("recording.ogg")]
-    [InlineData("film.mov")]
-    [InlineData("VIDEO.MP4")]
-    public void GetFileIcon_WhenExtensionIsVideo_ReturnsVideoFile(string fileName)
-    {
-        var icon = FileHelper.GetFileIcon(fileName);
-        Assert.Equal(Icons.Material.Filled.VideoFile, icon);
-    }
-
-    [Theory]
-    [InlineData("readme.txt")]
-    [InlineData("NOTES.TXT")]
-    public void GetFileIcon_WhenExtensionIsText_ReturnsTextSnippet(string fileName)
-    {
-        var icon = FileHelper.GetFileIcon(fileName);
-        Assert.Equal(Icons.Material.Filled.TextSnippet, icon);
-    }
-
-    [Theory]
-    [InlineData("unknown.xyz")]
-    [InlineData("script.sh")]
-    [InlineData("program.exe")]
-    [InlineData("fileWithoutExtension")]
-    public void GetFileIcon_WhenExtensionIsUnknown_ReturnsInsertDriveFile(string fileName)
-    {
-        var icon = FileHelper.GetFileIcon(fileName);
-        Assert.Equal(Icons.Material.Filled.InsertDriveFile, icon);
+        var result = FileHelper.GetFileIcon(fileName, contentType);
+        Assert.Equal(expectedIcon, result);
     }
 }

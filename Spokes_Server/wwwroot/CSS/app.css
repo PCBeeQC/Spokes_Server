@@ -268,7 +268,7 @@ video.livekit-screenshare::-webkit-media-controls-overlay-play-button {
 
     /* 9. TABLE BORDER FIXES */
     /* Force table borders and backgrounds to show despite browser "ink saving" settings */
-    .mud-table-cell, .mud-table-row, tr {
+    .mud-table-cell, .mud-table-row, tr, .mud-paper {
         -webkit-print-color-adjust: exact !important;
         print-color-adjust: exact !important;
     }
@@ -338,4 +338,116 @@ video.livekit-screenshare::-webkit-media-controls-overlay-play-button {
     }
 }
 
+/* Employee presence indicator badge on avatars */
+.presence-dot {
+    position: absolute;
+    top: 0;
+    right: 0;
+    /* Proportional scale: forces the badge to always equal ~30% of the avatar's actual dimensions */
+    width: 30%;
+    height: 30%;
+    min-width: 8px;
+    min-height: 8px;
+    border-radius: 50%;
+    /* Translate precisely slightly outwards so the dot rests on the circular rim (angle offset) */
+    transform: translate(25%, -25%);
+    border: 1px solid var(--mud-palette-surface);
+    z-index: 10;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+}
 
+.presence-mobile-badge {
+    position: absolute;
+    top: 0;
+    right: 0;
+    width: 42%;
+    height: 42%;
+    min-width: 14px;
+    min-height: 14px;
+    border-radius: 4px;
+    transform: translate(30%, -25%);
+    background-color: var(--mud-palette-surface);
+    border: 1px solid var(--mud-palette-surface);
+    z-index: 10;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.25);
+}
+
+.presence-mobile-badge .presence-mobile-icon {
+    color: var(--mud-palette-success) !important;
+    width: 100% !important;
+    height: 100% !important;
+    font-size: inherit !important;
+}
+
+/* ═══ Shared components rendered many times per page ═══════════════════════
+   Kept here instead of an inline style block in the component, which would be
+   duplicated per instance (see AGENTS.md §3). */
+
+/* ─── NotificationBadge ─────────────────────────────────────────── */
+.notification-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 9999px; /* Ensures a perfect pill/circle shape */
+    color: white;
+    font-weight: 700;
+    flex-shrink: 0;
+    box-sizing: border-box;
+    line-height: normal; /* Better vertical centering than fixed line-height: 1 */
+}
+
+.notification-badge-medium {
+    min-width: 21px;
+    height: 21px;
+    padding: 0 7px;
+    font-size: 11px;
+}
+
+.notification-badge-small {
+    min-width: 18px;
+    height: 18px;
+    padding: 0 6px;
+    font-size: 9px;
+}
+
+/* ─── VoiceMessagePlayer ────────────────────────────────────────── */
+.voice-slider {
+    -webkit-appearance: none;
+    appearance: none;
+    background: var(--mud-palette-action-disabled);
+    height: 4px;
+    border-radius: 2px;
+    outline: none;
+}
+.voice-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: var(--mud-palette-primary);
+    cursor: pointer;
+}
+.voice-slider::-moz-range-thumb {
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: var(--mud-palette-primary);
+    cursor: pointer;
+    border: none;
+}
+
+/* ─── Directory & Contact Cards ──────────────────────────────────── */
+.directory-card {
+    transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+    border: 1px solid var(--mud-palette-lines-default);
+    min-height: 180px;
+}
+.directory-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08) !important;
+    border-color: var(--mud-palette-primary-hover);
+}

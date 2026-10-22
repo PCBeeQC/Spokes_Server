@@ -17,7 +17,7 @@
             This project is part of a <b>project group</b>. Invoicing is managed at the group level.
         </MudText>
         <MudButton Variant="Variant.Outlined" Color="Color.Primary" Class="mt-2"
-            Href="@($"/project-groups/{Project.ProjectGroupId}")">
+            Href="@($"/project-groups/{Project?.ProjectGroupId}")">
             Go to Project Group
         </MudButton>
     </MudAlert>
@@ -74,7 +74,7 @@ else
 
     </MudGrid>
 
-    @if (Project.BillingMethod == BillingMethods.TimeAndMaterials)
+    @if (Project != null && Project.BillingMethod == BillingMethods.TimeAndMaterials)
     {
         <MudAlert Severity="Severity.Info" Class="mb-4">
             Unbilled Work Available: <b>@UnbilledLabor.ToString("C")</b> (Labor) + <b>@UnbilledExpenses.ToString("C")</b>
@@ -110,8 +110,8 @@ else
 }
 
 @code {
-    [Parameter] public string ProjectId { get; set; }
-    private Project Project;
+    [Parameter] public string ProjectId { get; set; } = string.Empty;
+    private Project? Project;
     private List<Invoice> Invoices = [];
 
     // Unbilled Tracking
@@ -135,7 +135,7 @@ else
     private void Refresh()
     {
         Invoices = Db.Invoices.GetByProject(ProjectId);
-        if (Project.BillingMethod == BillingMethods.TimeAndMaterials)
+        if (Project != null && Project.BillingMethod == BillingMethods.TimeAndMaterials)
         {
             CalculateUnbilled();
         }
@@ -158,25 +158,25 @@ else
         {
             var task = Db.WorkTypes.GetById(t.WorkTypeId);
             // We use the Billing Rate here (Revenue), not the Cost Rate
-            var rate = Project.GetEffectiveRate(t.WorkTypeId, task?.DefaultRate ?? 0);
+            var rate = Project?.GetEffectiveRate(t.WorkTypeId, task?.DefaultRate ?? 0) ?? (task?.DefaultRate ?? 0);
             UnbilledLabor += t.Hours * rate;
         }
 
         // 3. Scan POs
-        var allPos = Db.Purchases.GetAll();
-        var poItems = allPos.SelectMany(p => p.Items.Where(i => i.ProjectId == ProjectId));
+        var allPos = Db.PurchaseOrders.GetAll();
+        var poItems = allPos.SelectMany(p => p.LineItems.Where(i => i.ProjectId == ProjectId));
         var unbilledPoItems = poItems.Where(i => !billedPoItemIds.Contains(i.Id));
 
         // 4. Scan Expense Reports
         var allReports = Db.ExpenseReports.GetAll();
         var expenseItems = allReports
         .Where(r => r.DateSubmitted.HasValue)
-        .SelectMany(r => r.Items.Where(i => i.ProjectId == ProjectId));
+        .SelectMany(r => r.LineItems.Where(i => i.ProjectId == ProjectId));
         var unbilledExpenseItems = expenseItems.Where(i => !billedExpenseItemIds.Contains(i.Id));
 
         // For Cost+, we usually markup expenses. Let's assume 15% markup for estimation
         decimal markupRate = 0.15m;
-        if (!string.IsNullOrEmpty(Project.RateCardId))
+        if (Project != null && !string.IsNullOrEmpty(Project.RateCardId))
         {
             var card = Db.RateCards.GetById(Project.RateCardId);
             if (card != null) markupRate = card.MarkupRate;
@@ -189,7 +189,7 @@ else
     private async Task CreateInvoice()
     {
         var profile = Db.CompanyProfile.Get();
-        var template = (!string.IsNullOrEmpty(Project.DefaultTemplateId))
+        var template = (Project != null && !string.IsNullOrEmpty(Project.DefaultTemplateId))
             ? Db.DocumentTemplates.GetById(Project.DefaultTemplateId)
             : Db.DocumentTemplates.GetDefault();
         if (template == null) template = Db.DocumentTemplates.GetDefault();
@@ -199,8 +199,9 @@ else
             ProjectId = ProjectId,
             InvoiceNumber = Db.Invoices.GenerateInvoiceNumber(profile.InvoicePrefix),
             Date = DateTime.Today,
-            Status = "Draft",
-            TaxRate = template.TaxRate
+            Status = InvoiceStatus.Draft,
+            TaxRate = template.TaxRate,
+            PaymentTerms = template.DefaultPaymentTerms
         };
 
         var parameters = new DialogParameters { ["Invoice"] = invoice };
@@ -209,7 +210,7 @@ else
         var dialog = await DialogService.ShowAsync<InvoiceMasterDialog>("Create Invoice", parameters, options);
         var result = await dialog.Result;
 
-        if (!result.Canceled)
+        if (result is { Canceled: false })
         {
             Refresh();
             Snackbar.Add("Invoice Created", Severity.Success);

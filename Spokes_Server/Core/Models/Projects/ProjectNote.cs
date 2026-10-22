@@ -1,8 +1,12 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using Spokes_Server.Core.Data;
+using Spokes_Server.Core.Models.Common;
+
 namespace Spokes_Server.Core.Models.Projects;
 
-using Spokes_Server.Core.Data;
-
-public class ProjectNote : IDataEntity
+public class ProjectNote : IDataEntity, IHasAssociatedFiles
 {
     public string Id { get; set; } = Guid.NewGuid().ToString();
 
@@ -29,14 +33,26 @@ public class ProjectNote : IDataEntity
 
     // Attachments
     public List<NoteAttachment> Attachments { get; set; } = [];
+
+    public IEnumerable<string> GetAssociatedFilePaths()
+    {
+        var paths = Attachments?.Select(a => a.FilePath).Where(p => !string.IsNullOrWhiteSpace(p)) ?? Enumerable.Empty<string>();
+        if (!string.IsNullOrWhiteSpace(EmailHtmlPath))
+        {
+            paths = paths.Concat(new[] { EmailHtmlPath });
+        }
+        return paths;
+    }
 }
 
-public class NoteAttachment
+public class NoteAttachment : IFileAttachment
 {
     public string Id { get; set; } = Guid.NewGuid().ToString();
     public string FileName { get; set; } = string.Empty;
     public string FilePath { get; set; } = string.Empty; // Relative or absolute path
     public string ContentType { get; set; } = string.Empty;
+    public long FileSizeBytes { get; set; }
+    public bool HasServerThumbnail { get; set; }
 }
 
 

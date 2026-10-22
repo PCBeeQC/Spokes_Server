@@ -1,0 +1,263 @@
+@typeparam TItem where TItem : class, IFileAttachment, new()
+@using Spokes_Server.Core.Helpers
+@using Spokes_Server.Core.Models.Common
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Services.Storage
+@using Microsoft.Extensions.Localization
+@inject IFileService FileService
+@inject ISnackbar Snackbar
+@inject IStringLocalizer<AppResources> Loc
+@inject IJSRuntime JS
+@implements IAsyncDisposable
+
+<div class="spokes-file-attachment-manager @Class" style="@Style">
+    @if ((Files != null && Files.Any()) || _isUploading)
+    {
+        <div class="d-flex flex-wrap gap-2 mb-2 align-center">
+            @if (Files != null)
+            {
+                @foreach (var file in Files)
+                {
+                    <FileAttachmentChip Attachment="@file"
+                                        ReadOnly="@(ReadOnly || !AllowRemove)"
+                                        ShowSize="@ShowSize"
+                                        AllowDownload="@AllowDownload"
+                                        OnClick="@HandleClickFile"
+                                        OnRemove="@HandleRemoveFile" />
+                }
+            }
+            @if (_isUploading)
+            {
+                <FileAttachmentChip IsUploading="true"
+                                    UploadProgress="@_uploadProgress"
+                                    StageText="@_uploadStage"
+                                    FileName="@_uploadingFileName"
+                                    OnCancel="@AbortCurrentUploadAsync" />
+            }
+        </div>
+    }
+
+    @if (!ReadOnly && (Files == null || Files.Count < MaximumFileCount))
+    {
+        <ApiFileUpload @ref="_apiUpload"
+                       Category="@Category"
+                       ContextId="@ContextId"
+                       MaximumFileCount="@Math.Max(1, MaximumFileCount - (Files?.Count ?? 0))"
+                       Accept="@Accept"
+                       Capture="@Capture"
+                       OnUploadStarted="@HandleUploadStarted"
+                       OnDetailedProgressUpdate="@HandleProgressUpdate"
+                       OnUploadCompleted="@HandleUploadCompletedInternal"
+                       OnUploadError="@HandleUploadError">
+            <CustomContent>
+                @if (TriggerContent != null)
+                {
+                    @TriggerContent
+                }
+                else
+                {
+                    <MudButton Variant="@ButtonVariant"
+                               Color="@ButtonColor"
+                               StartIcon="@Icons.Material.Filled.CloudUpload"
+                               Disabled="@_isUploading"
+                               Size="Size.Small">
+                        @(string.IsNullOrEmpty(ButtonText) ? Loc["Attach Files"].Value : ButtonText)
+                    </MudButton>
+                }
+            </CustomContent>
+        </ApiFileUpload>
+    }
+</div>
+
+@code {
+    [Parameter] public List<TItem>? Files { get; set; }
+    [Parameter] public EventCallback<List<TItem>> FilesChanged { get; set; }
+
+    [Parameter] public string Category { get; set; } = "general";
+    [Parameter] public string ContextId { get; set; } = "default";
+    [Parameter] public int MaximumFileCount { get; set; } = 10;
+    [Parameter] public string Accept { get; set; } = "*/*";
+    [Parameter] public string? Capture { get; set; }
+
+    [Parameter] public bool ReadOnly { get; set; } = false;
+    [Parameter] public bool AllowRemove { get; set; } = true;
+    [Parameter] public bool ShowSize { get; set; } = true;
+    [Parameter] public bool AllowDownload { get; set; } = true;
+    [Parameter] public bool AutoCleanupSessionUploadsOnCancel { get; set; } = true;
+
+    [Parameter] public RenderFragment? TriggerContent { get; set; }
+    [Parameter] public string ButtonText { get; set; } = "";
+    [Parameter] public Color ButtonColor { get; set; } = Color.Default;
+    [Parameter] public Variant ButtonVariant { get; set; } = Variant.Outlined;
+
+    [Parameter] public string Class { get; set; } = "";
+    [Parameter] public string Style { get; set; } = "";
+
+    [Parameter] public EventCallback<TItem> OnFileClicked { get; set; }
+    [Parameter] public EventCallback<TItem> OnFileRemoved { get; set; }
+    [Parameter] public EventCallback<List<TItem>> OnUploadFinished { get; set; }
+
+    private ApiFileUpload? _apiUpload;
+    private bool _isUploading;
+    private double _uploadProgress;
+    private string _uploadStage = "";
+    private string _uploadingFileName = "Uploading...";
+    private readonly HashSet<string> _sessionUploadedPaths = [];
+    private bool _isCommitted;
+
+    private void HandleUploadStarted()
+    {
+        _isUploading = true;
+        _uploadProgress = 0;
+        _uploadStage = Loc["Uploading..."].Value;
+        _uploadingFileName = Loc["Uploading..."].Value;
+        StateHasChanged();
+    }
+
+    private void HandleProgressUpdate((string State, double Progress) args)
+    {
+        _uploadStage = args.State;
+        _uploadProgress = args.Progress;
+        StateHasChanged();
+    }
+
+    private async Task HandleUploadCompletedInternal(List<ApiFileUpload.UploadResult> results)
+    {
+        _isUploading = false;
+        if (results == null || results.Count == 0)
+        {
+            StateHasChanged();
+            return;
+        }
+
+        Files ??= [];
+
+        foreach (var result in results)
+        {
+            var item = new TItem
+            {
+                Id = Guid.NewGuid().ToString(),
+                FileName = result.FileName,
+                FilePath = result.FilePath,
+                ContentType = result.ContentType,
+                FileSizeBytes = result.FileSizeBytes
+            };
+
+            if (item is NoteAttachment noteAtt)
+            {
+                noteAtt.HasServerThumbnail = result.HasThumbnail;
+            }
+            else if (item is ChatAttachment chatAtt)
+            {
+                chatAtt.HasServerThumbnail = result.HasThumbnail;
+                chatAtt.ImageWidth = result.ImageWidth;
+                chatAtt.ImageHeight = result.ImageHeight;
+            }
+
+            Files.Add(item);
+            if (!string.IsNullOrWhiteSpace(result.FilePath))
+            {
+                _sessionUploadedPaths.Add(result.FilePath);
+            }
+        }
+
+        await FilesChanged.InvokeAsync(Files);
+        if (OnUploadFinished.HasDelegate)
+        {
+            await OnUploadFinished.InvokeAsync(Files);
+        }
+        StateHasChanged();
+    }
+
+    private void HandleUploadError(string error)
+    {
+        _isUploading = false;
+        Snackbar.Add(string.Format(Loc["Upload failed: {0}"].Value, error), Severity.Error);
+        StateHasChanged();
+    }
+
+    private async Task AbortCurrentUploadAsync()
+    {
+        if (_apiUpload != null)
+        {
+            await _apiUpload.AbortUpload();
+        }
+        _isUploading = false;
+        Snackbar.Add(Loc["Upload cancelled"].Value, Severity.Info);
+        StateHasChanged();
+    }
+
+    private async Task HandleClickFile(IFileAttachment? att)
+    {
+        if (att == null) return;
+        var item = Files?.FirstOrDefault(f => f.Id == att.Id || f.FilePath == att.FilePath);
+        if (item != null && OnFileClicked.HasDelegate)
+        {
+            await OnFileClicked.InvokeAsync(item);
+            return;
+        }
+
+        if (AllowDownload && !string.IsNullOrWhiteSpace(att.FilePath))
+        {
+            await JS.InvokeVoidAsync("open", att.FilePath, "_blank");
+        }
+    }
+
+    private async Task HandleRemoveFile(IFileAttachment? att)
+    {
+        if (att == null || Files == null) return;
+        var item = Files.FirstOrDefault(f => f.Id == att.Id || f.FilePath == att.FilePath);
+        if (item == null) return;
+
+        if (_sessionUploadedPaths.Contains(item.FilePath))
+        {
+            await FileService.DeleteAsync(item.FilePath);
+            _sessionUploadedPaths.Remove(item.FilePath);
+        }
+
+        Files.Remove(item);
+        await FilesChanged.InvokeAsync(Files);
+        if (OnFileRemoved.HasDelegate)
+        {
+            await OnFileRemoved.InvokeAsync(item);
+        }
+        StateHasChanged();
+    }
+
+    /// <summary>
+    /// Confirms that current uploads are saved/persisted with the entity, preventing automatic rollback on dispose.
+    /// </summary>
+    public void CommitSession()
+    {
+        _isCommitted = true;
+        _sessionUploadedPaths.Clear();
+    }
+
+    /// <summary>
+    /// Explicitly aborts and deletes all uncommitted files uploaded in this session.
+    /// </summary>
+    public async Task RollbackSessionAsync()
+    {
+        if (_sessionUploadedPaths.Count > 0)
+        {
+            foreach (var path in _sessionUploadedPaths.ToList())
+            {
+                try
+                {
+                    await FileService.DeleteAsync(path);
+                }
+                catch { /* Ignore cleanup errors */ }
+            }
+            _sessionUploadedPaths.Clear();
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (AutoCleanupSessionUploadsOnCancel && !_isCommitted && _sessionUploadedPaths.Count > 0)
+        {
+            await RollbackSessionAsync();
+        }
+    }
+}

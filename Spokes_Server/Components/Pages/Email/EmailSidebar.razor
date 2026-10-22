@@ -1,7 +1,8 @@
 @using Spokes_Server.Components.Dialogs
+@using Spokes_Server.Core.Services.Communication.Email
 @inject UserService UserService
 @inject IDialogService _dialogService
-@inject EmailService EmailService
+@inject IEmailFolderService FolderService
 @inject ISnackbar Snackbar
 
 <style>
@@ -36,21 +37,23 @@
                     <MudIcon Icon="@treeItem.Icon" Class="ml-0 mr-2" Color="@Color.Default" />
                     <MudText>@treeItem.Text</MudText>
                     <MudSpacer></MudSpacer>
-                    <div class="folder-actions" @onclick:stopPropagation="true">
-                        <MudMenu Icon="@Icons.Material.Filled.MoreVert" Size="Size.Small" Dense="true" AnchorOrigin="Origin.BottomRight" TransformOrigin="Origin.TopRight" ListClass="pa-0">
-                            <MudMenuItem Icon="@Icons.Material.Filled.CreateNewFolder" OnClick="@(() => CreateSubfolder(treeItem.Value))">New Subfolder</MudMenuItem>
-                            @if (!treeItem.Value.IsInbox && !treeItem.Value.IsSent && !treeItem.Value.IsTrash && !treeItem.Value.IsDrafts && !treeItem.Value.IsArchive && !treeItem.Value.IsJunk)
-                            {
-                                <MudMenuItem Icon="@Icons.Material.Filled.DriveFileRenameOutline" OnClick="@(() => RenameFolder(treeItem.Value))">Rename</MudMenuItem>
-                                <MudMenuItem Icon="@Icons.Material.Filled.Delete" Color="Color.Error" OnClick="@(() => DeleteFolder(treeItem.Value))">Delete</MudMenuItem>
-                            }
-                        </MudMenu>
-                    </div>
-                    @if (treeItem.Value.UnreadCount > 0 && !treeItem.Value.IsDrafts)
+                    @if (treeItem.Value is { } folder)
                     {
-                        <MudChip Color="Color.Warning" Size="Size.Small" Class="ml-1">@treeItem.Value.UnreadCount</MudChip>
+                        <div class="folder-actions" @onclick:stopPropagation="true">
+                            <MudMenu Icon="@Icons.Material.Filled.MoreVert" Size="Size.Small" Dense="true" AnchorOrigin="Origin.BottomRight" TransformOrigin="Origin.TopRight" ListClass="pa-0">
+                                <MudMenuItem Icon="@Icons.Material.Filled.CreateNewFolder" OnClick="@(() => CreateSubfolder(folder))">New Subfolder</MudMenuItem>
+                                @if (!folder.IsInbox && !folder.IsSent && !folder.IsTrash && !folder.IsDrafts && !folder.IsArchive && !folder.IsJunk)
+                                {
+                                    <MudMenuItem Icon="@Icons.Material.Filled.DriveFileRenameOutline" OnClick="@(() => RenameFolder(folder))">Rename</MudMenuItem>
+                                    <MudMenuItem Icon="@Icons.Material.Filled.Delete" IconColor="Color.Error" OnClick="@(() => DeleteFolder(folder))">Delete</MudMenuItem>
+                                }
+                            </MudMenu>
+                        </div>
+                        @if (folder.UnreadCount > 0 && !folder.IsDrafts)
+                        {
+                            <MudChip Color="Color.Warning" Size="Size.Small" Class="ml-1">@folder.UnreadCount</MudChip>
+                        }
                     }
-                    
                 </Content>
             </MudTreeViewItem>
         </ItemTemplate>
@@ -194,65 +197,68 @@
         var dialog = await _dialogService.ShowAsync<FolderManageDialog>("New Folder", parameters);
         var result = await dialog.Result;
 
-        if (!result.Canceled && result.Data is string name)
+        if (result is { Canceled: false, Data: string name })
         {
-            var newFolder = await EmailService.CreateFolderAsync(_currentEmployeeId, "", name);
-            if (newFolder != null)
+            var createResult = await FolderService.CreateFolderAsync(_currentEmployeeId, "", name);
+            if (createResult.IsSuccess && createResult.Value != null)
             {
                 Snackbar.Add($"Folder '{name}' created.", Severity.Success);
                 if (OnFoldersChanged.HasDelegate) await OnFoldersChanged.InvokeAsync();
             }
             else
             {
-                Snackbar.Add("Failed to create folder. (Check logs/IMAP permissions)", Severity.Error);
+                Snackbar.Add(createResult.ErrorMessage ?? "Failed to create folder.", Severity.Error);
             }
         }
     }
 
-    private async Task CreateSubfolder(EmailFolder parentFolder)
+    private async Task CreateSubfolder(EmailFolder? parentFolder)
     {
+        if (parentFolder == null) return;
         var parameters = new DialogParameters { ["SubmitText"] = "Create" };
         var dialog = await _dialogService.ShowAsync<FolderManageDialog>($"New subfolder in {parentFolder.Name}", parameters);
         var result = await dialog.Result;
         
-        if (!result.Canceled && result.Data is string name)
+        if (result is { Canceled: false, Data: string name })
         {
-            var newFolder = await EmailService.CreateFolderAsync(_currentEmployeeId, parentFolder.Path, name);
-            if (newFolder != null)
+            var createResult = await FolderService.CreateFolderAsync(_currentEmployeeId, parentFolder.Path, name);
+            if (createResult.IsSuccess && createResult.Value != null)
             {
                 Snackbar.Add($"Folder '{name}' created.", Severity.Success);
                 if (OnFoldersChanged.HasDelegate) await OnFoldersChanged.InvokeAsync();
             }
             else
             {
-                Snackbar.Add("Failed to create folder. (Check logs/IMAP permissions)", Severity.Error);
+                Snackbar.Add(createResult.ErrorMessage ?? "Failed to create folder.", Severity.Error);
             }
         }
     }
 
-    private async Task RenameFolder(EmailFolder folder)
+    private async Task RenameFolder(EmailFolder? folder)
     {
+        if (folder == null) return;
         var parameters = new DialogParameters { ["CurrentFolderName"] = folder.Name, ["SubmitText"] = "Rename" };
         var dialog = await _dialogService.ShowAsync<FolderManageDialog>($"Rename {folder.Name}", parameters);
         var result = await dialog.Result;
         
-        if (!result.Canceled && result.Data is string name && name != folder.Name)
+        if (result is { Canceled: false, Data: string name } && name != folder.Name)
         {
-            var success = await EmailService.RenameFolderAsync(_currentEmployeeId, folder.Path, name);
-            if (success)
+            var renameResult = await FolderService.RenameFolderAsync(_currentEmployeeId, folder.Path, name);
+            if (renameResult.IsSuccess)
             {
                 Snackbar.Add($"Folder renamed to '{name}'.", Severity.Success);
                 if (OnFoldersChanged.HasDelegate) await OnFoldersChanged.InvokeAsync();
             }
             else
             {
-                Snackbar.Add("Failed to rename folder.", Severity.Error);
+                Snackbar.Add(renameResult.ErrorMessage ?? "Failed to rename folder.", Severity.Error);
             }
         }
     }
 
-    private async Task DeleteFolder(EmailFolder folder)
+    private async Task DeleteFolder(EmailFolder? folder)
     {
+        if (folder == null) return;
         bool? result = await _dialogService.ShowMessageBoxAsync(
             "Delete Folder",
             $"Are you sure you want to delete '{folder.Name}' and all its contents? This cannot be undone.",
@@ -260,15 +266,15 @@
 
         if (result == true)
         {
-            var success = await EmailService.DeleteFolderAsync(_currentEmployeeId, folder.Path);
-            if (success)
+            var deleteResult = await FolderService.DeleteFolderAsync(_currentEmployeeId, folder.Path);
+            if (deleteResult.IsSuccess)
             {
                 Snackbar.Add("Folder deleted.", Severity.Success);
                 if (OnFoldersChanged.HasDelegate) await OnFoldersChanged.InvokeAsync();
             }
             else
             {
-                Snackbar.Add("Failed to delete folder.", Severity.Error);
+                Snackbar.Add(deleteResult.ErrorMessage ?? "Failed to delete folder.", Severity.Error);
             }
         }
     }

@@ -12,9 +12,13 @@ public class SystemConfigRepository : JsonRepository<SystemConfig>
     protected override string GetFilePath(SystemConfig item) =>
         Path.Combine(_basePath, "system_config.json");
 
-    // Helper to get the ONE system config (creates default if missing)
-    public SystemConfig Get()
+    /// <summary>
+    /// Bootstraps the system configuration: creates and persists default configuration if missing from disk.
+    /// </summary>
+    public SystemConfig GetOrCreate()
     {
+        EnsureLoaded();
+
         var config = _cache.Values.FirstOrDefault();
         if (config == null)
         {
@@ -22,5 +26,15 @@ public class SystemConfigRepository : JsonRepository<SystemConfig>
             Save(config);
         }
         return config;
+    }
+
+    /// <summary>
+    /// Pure query accessor to retrieve the active system configuration from memory without mutating disk state.
+    /// Returns the cached configuration or a default in-memory instance if not yet initialized.
+    /// </summary>
+    public SystemConfig Get()
+    {
+        EnsureLoaded();
+        return _cache.Values.FirstOrDefault() ?? new SystemConfig();
     }
 }

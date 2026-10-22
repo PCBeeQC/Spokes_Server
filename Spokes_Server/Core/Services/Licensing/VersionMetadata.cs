@@ -22,7 +22,7 @@ public class VersionMetadata
     /// <summary>
     /// The release channel: "server", "beta", "test", or "unknown" (dev builds).
     /// </summary>
-    public string Channel { get; }
+    public string Channel { get; internal set; }
 
     /// <summary>
     /// True if this build is tagged as a security patch release.
@@ -53,7 +53,13 @@ public class VersionMetadata
         CleanVersion = GetCleanVersion(RawVersion);
     }
 
-    private static string GetCleanVersion(string version)
+    // Internal constructor for unit testing with explicit version string and channel
+    internal VersionMetadata(string rawVersion, string channel) : this(rawVersion)
+    {
+        Channel = channel;
+    }
+
+    public static string GetCleanVersion(string version)
     {
         if (string.IsNullOrEmpty(version)) return "0.0.0";
 

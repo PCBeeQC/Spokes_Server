@@ -1,8 +1,9 @@
-@inject Database Db
+@using Spokes_Server.Core.Data.Repositories.HR
+@inject EmployeeRepository EmployeeRepo
 
 @{
-    var emp = Employee ?? (!string.IsNullOrEmpty(UserId) ? Db.Employees.GetById(UserId) : null);
-    var displayName = emp?.FullName ?? Text ?? "Unknown";
+    var emp = Employee ?? (!string.IsNullOrEmpty(UserId) ? EmployeeRepo.GetById(UserId) : null);
+    var displayName = emp?.FullName ?? Text ?? Loc["Unknown"].Value;
     var avatarFontSize = Size switch
     {
         Size.Small => "0.625rem",

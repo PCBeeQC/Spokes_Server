@@ -1,52 +1,12 @@
-using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.Logging;
-using Moq;
-using Spokes_Server.Core.Data;
 using Spokes_Server.Core.Data.Repositories.Core;
 using Spokes_Server.Core.Models.Core;
+using Spokes_Server.Tests.Helpers;
 using Xunit;
 
 namespace Spokes_Server.Tests.Core.Data.Repositories.Core;
 
-public class DeviceSessionRepositoryTests : IDisposable
+public class DeviceSessionRepositoryTests : RepositoryTestFixture<DeviceSessionRepository>
 {
-    private readonly string _testDataDir;
-    private readonly DiskPersistenceService _writer;
-    private readonly DeviceSessionRepository _repo;
-
-    public DeviceSessionRepositoryTests()
-    {
-        _testDataDir = Path.Combine(Path.GetTempPath(), $"Spokes_Test_DeviceSessions_{Guid.NewGuid()}");
-
-        var mockConfig = new Mock<IConfiguration>();
-        mockConfig.Setup(c => c["DataPath"]).Returns(_testDataDir);
-
-        var mockPersistenceLogger = new Mock<ILogger<DiskPersistenceService>>();
-        _writer = new DiskPersistenceService(mockPersistenceLogger.Object);
-
-        _repo = new DeviceSessionRepository(_writer, mockConfig.Object);
-    }
-
-    public void Dispose()
-    {
-        if (Directory.Exists(_testDataDir))
-        {
-            try { Directory.Delete(_testDataDir, true); } catch (Exception ex) { Console.WriteLine($"Cleanup failed: {ex.Message}"); }
-        }
-        _writer.Dispose();
-    }
-
-    [Fact]
-    public void Constructor_WithNullDataPath_UsesDefaultPath()
-    {
-        var mockConfig = new Mock<IConfiguration>();
-        mockConfig.Setup(c => c["DataPath"]).Returns((string?)null);
-
-        var repo = new DeviceSessionRepository(_writer, mockConfig.Object);
-
-        Assert.NotNull(repo);
-    }
-
     [Fact]
     public void GetByEmployeeId_ReturnsAllSessionsForEmployee()
     {
@@ -193,5 +153,30 @@ public class DeviceSessionRepositoryTests : IDisposable
 
         var expectedPath = Path.Combine(_testDataDir, "DeviceSessions", "sess-disk.json");
         Assert.True(File.Exists(expectedPath));
+    }
+
+    [Fact]
+    public void GetByTokenHash_WithoutPriorLoad_LazilyLoadsFromDisk()
+    {
+        var session = new DeviceSession
+        {
+            Id = "lazy-token-sess",
+            TokenHash = "hash12345",
+            EmployeeId = "emp1",
+            ExpiresAt = DateTime.UtcNow.AddHours(1)
+        };
+        var dir = Path.Combine(_testDataDir, "DeviceSessions");
+        Directory.CreateDirectory(dir);
+        File.WriteAllText(Path.Combine(dir, $"{session.Id}.json"), System.Text.Json.JsonSerializer.Serialize(session));
+
+        var freshRepo = new DeviceSessionRepository(_persistence, _config);
+
+        var retrieved = freshRepo.GetByTokenHash("hash12345");
+        Assert.NotNull(retrieved);
+        Assert.Equal("lazy-token-sess", retrieved.Id);
+
+        var activeRetrieved = freshRepo.GetActiveByTokenHash("hash12345");
+        Assert.NotNull(activeRetrieved);
+        Assert.Equal("lazy-token-sess", activeRetrieved.Id);
     }
 }

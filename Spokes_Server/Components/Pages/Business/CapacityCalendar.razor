@@ -203,11 +203,11 @@
     private bool ShowInvoices = true;
     private bool ShowBills = true;
 
-    protected override async Task OnInitializedAsync()
+    protected override void OnInitialized()
     {
         // Go to first of month
         CurrentMonth = new DateOnly(CurrentMonth.Year, CurrentMonth.Month, 1);
-        await LoadData();
+        LoadData();
     }
 
     private bool ShouldShow(CalendarEvent evt)
@@ -226,26 +226,26 @@
         StateHasChanged();
     }
 
-    private async Task PrevMonth()
+    private void PrevMonth()
     {
         CurrentMonth = CurrentMonth.AddMonths(-1);
-        await LoadData();
+        LoadData();
     }
 
-    private async Task NextMonth()
+    private void NextMonth()
     {
         CurrentMonth = CurrentMonth.AddMonths(1);
-        await LoadData();
+        LoadData();
     }
 
-    private async Task GoToToday()
+    private void GoToToday()
     {
         var today = DateOnly.FromDateTime(DateTime.Today);
         CurrentMonth = new DateOnly(today.Year, today.Month, 1);
-        await LoadData();
+        LoadData();
     }
 
-    private async Task LoadData()
+    private void LoadData()
     {
         Loading = true;
         BuildGrid();
@@ -291,7 +291,7 @@
         }
 
         // 2. Invoices (Receivable)
-        var invoices = Db.Invoices.GetAll().Where(i => i.Status != "Paid" && i.Status != "Void").ToList();
+        var invoices = Db.Invoices.GetAll().Where(i => i.Status != InvoiceStatus.Paid && i.Status != InvoiceStatus.Void).ToList();
         foreach (var inv in invoices)
         {
             var d = DateOnly.FromDateTime(inv.DueDate);
@@ -309,7 +309,7 @@
         }
 
         // 3. Bills (Payable)
-        var bills = Db.Bills.GetAll().Where(b => b.Status != "Paid" && b.Status != "Void").ToList();
+        var bills = Db.Bills.GetAll().Where(b => b.Status != BillStatus.Paid && b.Status != BillStatus.Void).ToList();
         foreach (var bill in bills)
         {
             var d = DateOnly.FromDateTime(bill.DueDate);

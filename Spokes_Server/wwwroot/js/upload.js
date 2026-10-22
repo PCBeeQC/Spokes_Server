@@ -40,6 +40,8 @@ window.spokesUpload = {
                     await window.spokesUpload.robustInvoke(activeRef, 'OnDownloadingCallback', [currentInfo.percent], 3);
                 } else if (currentInfo.compressing) {
                     await window.spokesUpload.robustInvoke(activeRef, 'OnCompressingCallback', [currentInfo.percent], 3);
+                } else if (currentInfo.state === 'processing') {
+                    await window.spokesUpload.robustInvoke(activeRef, 'OnProcessingCallback', [currentInfo.statusText || "Finishing up..."], 3);
                 } else {
                     await window.spokesUpload.robustInvoke(activeRef, 'OnProgressUpdateCallback', [currentInfo.percent], 3);
                 }
@@ -122,20 +124,24 @@ window.spokesUpload = {
             // Get auth token for native HTTP request (Bearer token from Capacitor Preferences)
             const authToken = await window.spokesAuth.getRefreshToken();
 
+            const maxDimension = input.dataset.maxDimension !== undefined ? parseInt(input.dataset.maxDimension, 10) : undefined;
+            const quality = input.dataset.quality !== undefined ? parseInt(input.dataset.quality, 10) : undefined;
+            const videoMaxDim = input.dataset.videoMaxDimension !== undefined ? parseInt(input.dataset.videoMaxDimension, 10) : undefined;
+            const videoBitrate = input.dataset.videoBitrate !== undefined ? parseInt(input.dataset.videoBitrate, 10) : undefined;
+
             window.Capacitor.Plugins.BridgeManager.uploadFiles({
                 url: absoluteUrl,
                 accept: accept,
                 multiple: multiple,
-                authToken: authToken
+                authToken: authToken,
+                maxDimension: maxDimension,
+                quality: quality,
+                videoMaxDim: videoMaxDim,
+                videoBitrate: videoBitrate
             }).then(async (result) => {
                 if (result.cancelled) {
                     console.log('[spokesUpload] Native upload cancelled');
                     return; // Gracefully exit, leaving UI untouched
-                }
-                
-                // Re-prime cookies to repair Capacitor wiping the WebView cookie jar
-                if (window.spokesAuth && typeof window.spokesAuth.refreshSessionAsync === 'function') {
-                    await window.spokesAuth.refreshSessionAsync();
                 }
                 
                 const activeId = window.spokesUpload.activeInputId;
@@ -194,6 +200,19 @@ window.spokesUpload = {
     },
 
     /**
+     * Handles dropping files directly onto an element linked to a file input
+     * @param {DragEvent} event The drag event
+     * @param {string} inputId The ID of the file input element
+     */
+    handleDrop: function(event, inputId) {
+        event.preventDefault();
+        const input = document.getElementById(inputId);
+        if (!input || !event.dataTransfer || !event.dataTransfer.files || event.dataTransfer.files.length === 0) return;
+        input.files = event.dataTransfer.files;
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+    },
+
+    /**
      * Aborts an active upload if one is running
      */
     abortUpload: function() {
@@ -213,7 +232,7 @@ window.spokesUpload = {
      * @param {string} uploadUrl The API endpoint url
      * @param {object} dotNetRef DotNet reference to trigger callback methods
      */
-    uploadNativeFiles: function(uris, uploadUrl, dotNetRef) {
+    uploadNativeFiles: function(uris, uploadUrl, dotNetRef, options = {}) {
         return new Promise(async (resolve, reject) => {
             if (!window.Capacitor?.isNativePlatform?.() || !window.Capacitor?.Plugins?.BridgeManager?.uploadSharedFiles) {
                 reject(new Error("Native upload not supported"));
@@ -236,17 +255,16 @@ window.spokesUpload = {
             window.Capacitor.Plugins.BridgeManager.uploadSharedFiles({
                 url: absoluteUrl,
                 uris: uris,
-                authToken: authToken
+                authToken: authToken,
+                maxDimension: options.maxDimension,
+                quality: options.quality,
+                videoMaxDim: options.videoMaxDim,
+                videoBitrate: options.videoBitrate
             }).then(async (result) => {
                 if (result.cancelled) {
                     console.log('[spokesUpload] Native shared upload cancelled');
                     resolve({ cancelled: true });
                     return;
-                }
-                
-                // Re-prime cookies to repair Capacitor wiping the WebView cookie jar
-                if (window.spokesAuth && typeof window.spokesAuth.refreshSessionAsync === 'function') {
-                    await window.spokesAuth.refreshSessionAsync();
                 }
                 
                 if (dotNetRef) {
@@ -294,6 +312,13 @@ window.spokesUpload = {
         const input = document.getElementById(inputId);
         if (!input) return;
 
+        // Store/update dynamic limits on the input element
+        if (maxAllowedSize != null) {
+            input.dataset.maxAllowedSize = maxAllowedSize;
+        }
+        input.dataset.compressionMaxDim = compressionMaxDim;
+        input.dataset.compressionQuality = compressionQuality;
+
         if (input.dataset.spokesInitialized === 'true') return;
         input.dataset.spokesInitialized = 'true';
 
@@ -303,17 +328,21 @@ window.spokesUpload = {
             const uploadUrl = input.getAttribute('data-upload-url');
             if (!uploadUrl) return;
 
+            const effectiveLimit = Number(input.dataset.maxAllowedSize) || maxAllowedSize;
+            const effectiveMaxDim = Number(input.dataset.compressionMaxDim) || compressionMaxDim;
+            const effectiveQuality = Number(input.dataset.compressionQuality) || compressionQuality;
+
             // Notify Blazor that we are starting
             dotNetRef.invokeMethodAsync('OnUploadStartedCallback', input.files.length).catch(() => {});
 
-            window.spokesUpload.executeUploadFromInput(input, uploadUrl, dotNetRef, maxAllowedSize, compressionMaxDim, compressionQuality)
-                .then(results => {
+            window.spokesUpload.executeUploadFromInput(input, uploadUrl, dotNetRef, effectiveLimit, effectiveMaxDim, effectiveQuality)
+                .then(async results => {
                     const jsonStr = typeof results === 'string' ? results : JSON.stringify(results);
-                    dotNetRef.invokeMethodAsync('OnUploadCompletedCallback', jsonStr).catch(() => {});
+                    await window.spokesUpload.robustInvoke(dotNetRef, 'OnUploadCompletedCallback', [jsonStr], 60);
                     input.value = ''; // clear input
                 })
-                .catch(err => {
-                    dotNetRef.invokeMethodAsync('OnUploadErrorCallback', err.message).catch(() => {});
+                .catch(async err => {
+                    await window.spokesUpload.robustInvoke(dotNetRef, 'OnUploadErrorCallback', [err.message || "Upload failed"], 60);
                     input.value = ''; // clear input
                 });
         });
@@ -350,15 +379,17 @@ window.spokesUpload = {
             console.log(`[spokesUpload] Read ${files.length} file(s) from input. Total size validation...`);
             
             // Check size limits
-            let totalSize = 0;
             for (const file of files) {
-                totalSize += file.size;
                 console.log(`[spokesUpload] File: ${file.name} - Size: ${file.size} bytes`);
-            }
-            if (totalSize > maxAllowedSize) {
-                console.error(`[spokesUpload] Size limit exceeded. Total: ${totalSize}, Max: ${maxAllowedSize}`);
-                reject(new Error(`Total file size exceeds the allowed limit of ${Math.round(maxAllowedSize/1024/1024)}MB`));
-                return;
+                if (file.size > maxAllowedSize) {
+                    console.error(`[spokesUpload] Size limit exceeded. File: ${file.name} (${file.size} bytes), Max: ${maxAllowedSize}`);
+                    const limitMb = Math.round(maxAllowedSize / 1024 / 1024);
+                    const errorMsg = files.length > 1
+                        ? `File "${file.name}" exceeds the allowed limit of ${limitMb}MB`
+                        : `Total file size exceeds the allowed limit of ${limitMb}MB`;
+                    reject(new Error(errorMsg));
+                    return;
+                }
             }
 
             const formData = new FormData();
@@ -457,6 +488,9 @@ window.spokesUpload = {
                     const transferSec = (transferDoneTime - startTime) / 1000;
                     const mbps = ((totalBytes * 8) / transferSec / 1000000).toFixed(1);
                     console.log(`[UPLOAD DIAG] Transfer complete: ${(totalBytes/1024/1024).toFixed(2)} MB in ${transferSec.toFixed(2)}s = ${mbps} Mbps`);
+                    if (dotNetRef) {
+                        dotNetRef.invokeMethodAsync('OnProcessingCallback', 'Processing...').catch(() => {});
+                    }
                 }
             }
         });
@@ -476,10 +510,14 @@ window.spokesUpload = {
                         const thumbStart = performance.now();
                         try {
                             const thumbs = await Promise.all(thumbnailPromises);
+                            const totalThumbs = response.length;
                             for (let i = 0; i < response.length; i++) {
                                 const res = response[i];
                                 const matchingThumb = thumbs.find(t => t && t.fileName === res.fileName && t.blob);
                                 if (matchingThumb) {
+                                    if (dotNetRef) {
+                                        dotNetRef.invokeMethodAsync('OnProcessingCallback', `Thumbnails (${i + 1}/${totalThumbs})...`).catch(() => {});
+                                    }
                                     const safeName = res.filePath.substring(res.filePath.lastIndexOf('/') + 1);
                                     const parsedUrl = new URL(uploadUrl, window.location.origin);
                                     parsedUrl.pathname = parsedUrl.pathname.replace('/spokesapi/files/', '/spokesapi/files/thumbnail/') + '/' + encodeURIComponent(safeName);
@@ -499,6 +537,10 @@ window.spokesUpload = {
                         console.log(`[UPLOAD DIAG] Thumbnail phase: ${((performance.now() - thumbStart)/1000).toFixed(2)}s`);
                     }
                     
+                    if (dotNetRef) {
+                        dotNetRef.invokeMethodAsync('OnProcessingCallback', 'Saving...').catch(() => {});
+                    }
+                    
                     const endTime = performance.now();
                     console.log(`[UPLOAD DIAG] TOTAL end-to-end: ${((endTime - startTime)/1000).toFixed(2)}s for ${(totalBytes/1024/1024).toFixed(2)} MB`);
                     resolve(response);
@@ -508,7 +550,14 @@ window.spokesUpload = {
                 }
             } else {
                 console.error('[spokesUpload] Upload failed with status', xhr.status, xhr.responseText);
-                reject(new Error(`Upload failed with status ${xhr.status}: ${xhr.responseText}`));
+                let message = `Upload failed with status ${xhr.status}`;
+                try {
+                    const parsed = JSON.parse(xhr.responseText);
+                    if (parsed.error) message = parsed.error;
+                    else if (parsed.message) message = parsed.message;
+                    else if (parsed.ErrorMessage) message = parsed.ErrorMessage;
+                } catch {}
+                reject(new Error(message));
             }
             if (window.spokesUpload.activeXhr === xhr) window.spokesUpload.activeXhr = null;
         });
@@ -584,9 +633,9 @@ window.spokesUpload = {
                         const canvas = document.createElement('canvas');
                         let w = video.videoWidth;
                         let h = video.videoHeight;
-                        if (w > 800) {
-                            h = Math.floor(h * (800 / w));
-                            w = 800;
+                        if (w > 1280) {
+                            h = Math.floor(h * (1280 / w));
+                            w = 1280;
                         }
                         canvas.width = w;
                         canvas.height = h;
@@ -596,7 +645,7 @@ window.spokesUpload = {
                         canvas.toBlob((blob) => {
                             cleanup();
                             resolve(blob);
-                        }, 'image/jpeg', 0.7);
+                        }, 'image/jpeg', 0.85);
                     } catch (e) {
                         cleanup();
                         resolve(null);
@@ -618,6 +667,10 @@ window.spokesUpload = {
     },
 
     compressImage: function(file, maxDim = 3840, quality = 0.9) {
+        if (maxDim <= 0) {
+            return Promise.resolve(file);
+        }
+        const numericQuality = quality > 1 ? quality / 100 : quality;
         return new Promise((resolve, reject) => {
             const img = new Image();
             const url = URL.createObjectURL(file);
@@ -647,7 +700,7 @@ window.spokesUpload = {
                 ctx.drawImage(img, 0, 0, width, height);
                 
                 const mimeType = isPng ? 'image/png' : 'image/jpeg';
-                const finalQuality = isPng ? undefined : quality;
+                const finalQuality = isPng ? undefined : numericQuality;
                 
                 canvas.toBlob((blob) => {
                     if (blob) resolve(blob);

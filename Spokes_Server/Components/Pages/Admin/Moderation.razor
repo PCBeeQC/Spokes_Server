@@ -1,17 +1,25 @@
 @page "/admin/moderation"
 @using Spokes_Server.Core.Constants
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Services.Communication.Chat
+@using Spokes_Server.Components.Shared
+@using Microsoft.Extensions.Localization
+@using Spokes_Server.Resources
 @attribute [Authorize(Policy = AppPermissions.Chat.Moderator)]
+@implements IDisposable
 @inject Database Db
 @inject ChatService ChatService
+@inject ChatStateService ChatState
 @inject ISnackbar Snackbar
 @inject UserService UserService
+@inject IStringLocalizer<AppResources> Loc
 
-<PageTitle>Moderation Dashboard</PageTitle>
+<PageTitle>@Loc["Moderation Dashboard"]</PageTitle>
 
 <MudContainer MaxWidth="MaxWidth.Large" Class="mt-8 pb-8">
     <div class="d-flex flex-wrap justify-space-between align-center mb-6 gap-4">
-        <MudText Typo="Typo.h4">Moderation Dashboard</MudText>
-        <MudTextField @bind-Value="searchString" Placeholder="Search Reports..." Variant="Variant.Outlined" Margin="Margin.Dense" Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search" IconSize="Size.Medium" Style="max-width: 300px; background-color: var(--mud-palette-surface);" />
+        <MudText Typo="Typo.h4">@Loc["Moderation Dashboard"]</MudText>
+        <MudTextField @bind-Value="searchString" Placeholder="@Loc["Search Reports..."]" Variant="Variant.Outlined" Margin="Margin.Dense" Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search" IconSize="Size.Medium" Style="max-width: 300px; background-color: var(--mud-palette-surface);" />
     </div>
 
     @if (_loading)
@@ -22,8 +30,8 @@
     {
         <div class="d-flex flex-column align-center justify-center pa-8 text-center" style="background: var(--mud-palette-background-grey); border-radius: 16px;">
             <MudIcon Icon="@Icons.Material.Filled.CheckCircleOutline" Size="Size.Large" Color="Color.Success" Style="font-size: 64px; opacity: 0.8;" Class="mb-4" />
-            <MudText Typo="Typo.h5" Class="mb-2">All Clear!</MudText>
-            <MudText Typo="Typo.body1" Color="Color.Secondary">There are no reported messages to review.</MudText>
+            <MudText Typo="Typo.h5" Class="mb-2">@Loc["All Clear!"]</MudText>
+            <MudText Typo="Typo.body1" Color="Color.Secondary">@Loc["There are no reported messages to review."]</MudText>
         </div>
     }
     else
@@ -35,27 +43,27 @@
                     <MudCard Elevation="0" Outlined="true" Class="h-100 d-flex flex-column moderation-card" Style="border-radius: 16px;">
                         <MudCardContent Class="pa-4 flex-grow-1">
                             <div class="d-flex justify-space-between align-start mb-3">
-                                <MudChip T="string" Size="Size.Small" Color="@(report.Status == "Open" ? Color.Error : (report.Status == "Dismissed" ? Color.Default : Color.Success))" Class="ma-0">@report.Status</MudChip>
+                                <MudChip T="string" Size="Size.Small" Color="@(report.Status == ReportedMessageStatus.Open ? Color.Error : (report.Status == ReportedMessageStatus.Dismissed ? Color.Default : Color.Success))" Class="ma-0">@(report.Status == ReportedMessageStatus.Open ? Loc["Open"] : (report.Status == ReportedMessageStatus.Dismissed ? Loc["Dismissed"] : Loc["Resolved"]))</MudChip>
                                 <MudText Typo="Typo.caption" Color="Color.Secondary">@report.ReportedAt.ToLocalTime().ToString("MMM dd, h:mm tt")</MudText>
                             </div>
 
-                            <MudText Typo="Typo.subtitle1" Style="font-weight: 700;" Class="mb-3">Reason: @report.Reason</MudText>
+                            <MudText Typo="Typo.subtitle1" Style="font-weight: 700;" Class="mb-3">@string.Format(Loc["Reason: {0}"].Value, report.Reason)</MudText>
                             
                             <div class="d-flex align-center gap-2 mb-2">
-                                <MudIcon Icon="@Icons.Material.Filled.Report" Size="Size.Small" Color="Color.Error" />
+                                <EmployeeAvatar Employee="@GetEmployee(report.ReportedUserId)" Size="Size.Small" ShowPresence="false" />
                                 <MudText Typo="Typo.body2" Color="Color.Secondary">
-                                    Reported User: <strong style="color: var(--mud-palette-text-primary);">@GetUserName(report.ReportedUserId)</strong>
+                                    @Loc["Reported User:"] <strong style="color: var(--mud-palette-text-primary);">@GetUserName(report.ReportedUserId)</strong>
                                 </MudText>
                             </div>
 
                             <div class="d-flex align-center gap-2 mb-4">
-                                <MudIcon Icon="@Icons.Material.Filled.Person" Size="Size.Small" Color="Color.Secondary" />
+                                <EmployeeAvatar Employee="@GetEmployee(report.ReporterId)" Size="Size.Small" ShowPresence="false" />
                                 <MudText Typo="Typo.body2" Color="Color.Secondary">
-                                    Reported By: <strong style="color: var(--mud-palette-text-primary);">@GetUserName(report.ReporterId)</strong>
+                                    @Loc["Reported By:"] <strong style="color: var(--mud-palette-text-primary);">@GetUserName(report.ReporterId)</strong>
                                 </MudText>
                             </div>
 
-                            <MudText Typo="Typo.subtitle2" Class="mb-1" Style="font-weight: 600; color: var(--mud-palette-text-secondary);">Message Snapshot</MudText>
+                            <MudText Typo="Typo.subtitle2" Class="mb-1" Style="font-weight: 600; color: var(--mud-palette-text-secondary);">@Loc["Message Snapshot"]</MudText>
                             <div class="pa-3 rounded" style="background-color: var(--mud-palette-background-grey); max-height: 200px; overflow-y: auto; border: 1px solid var(--mud-palette-lines-default);">
                                 <MudText Typo="Typo.body2" Style="word-break: break-word;">
                                     @report.SnapshotContent
@@ -81,31 +89,31 @@
                                     </div>
                                 }
                             </div>
-                            @if (report.Status != "Open")
+                            @if (report.Status != ReportedMessageStatus.Open)
                             {
                                 <div class="mt-4 pt-3" style="border-top: 1px solid var(--mud-palette-lines-default);">
-                                    <MudText Typo="Typo.caption" Color="Color.Secondary" Style="font-weight: 600;">RESOLUTION</MudText>
+                                    <MudText Typo="Typo.caption" Color="Color.Secondary" Style="font-weight: 600;">@Loc["RESOLUTION"]</MudText>
                                     <div class="d-flex align-center justify-space-between mt-1">
-                                        <MudText Typo="Typo.body2">Action: <strong>@report.ResolutionAction</strong></MudText>
-                                        <MudText Typo="Typo.body2">By: <strong>@report.ResolvedBy</strong></MudText>
+                                        <MudText Typo="Typo.body2">@Loc["Action:"] <strong>@(report.ResolutionAction == "Dismissed" ? Loc["Dismissed"] : (report.ResolutionAction == "Deleted Message" ? Loc["Deleted Message"] : report.ResolutionAction))</strong></MudText>
+                                        <MudText Typo="Typo.body2">@Loc["By:"] <strong>@report.ResolvedBy</strong></MudText>
                                     </div>
                                 </div>
                             }
                         </MudCardContent>
                         <MudCardActions Class="px-4 pb-4 pt-0 justify-end gap-2 flex-wrap">
-                            @if (report.Status == "Open")
+                            @if (report.Status == ReportedMessageStatus.Open)
                             {
-                                <MudButton Size="Size.Small" Variant="Variant.Text" Color="Color.Default" OnClick="@(() => DismissReport(report))">Dismiss</MudButton>
-                                <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Error" StartIcon="@Icons.Material.Filled.Delete" DisableElevation="true" Style="font-weight: 600;" OnClick="@(() => DeleteMessage(report))">Delete Message</MudButton>
+                                <MudButton Size="Size.Small" Variant="Variant.Text" Color="Color.Default" OnClick="@(() => DismissReport(report))">@Loc["Dismiss"]</MudButton>
+                                <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Error" StartIcon="@Icons.Material.Filled.Delete" DropShadow="false" Style="font-weight: 600;" OnClick="@(() => DeleteMessage(report))">@Loc["Delete Message"]</MudButton>
                                 
                                 var reportedUser = Db.Employees.GetById(report.ReportedUserId);
                                 if (reportedUser != null && !(reportedUser.IsAdmin || reportedUser.HasPermission(AppPermissions.Chat.Moderator)))
                                 {
                                     <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="@(reportedUser.IsSuspended ? Color.Success : Color.Warning)" OnClick="@(() => ToggleSuspend(report.ReportedUserId))">
-                                        @(reportedUser.IsSuspended ? "Unsuspend User" : "Suspend User")
+                                        @(reportedUser.IsSuspended ? Loc["Unsuspend User"] : Loc["Suspend User"])
                                     </MudButton>
                                     <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="@(reportedUser.IsBanned ? Color.Success : Color.Error)" OnClick="@(() => ToggleBan(report.ReportedUserId))">
-                                        @(reportedUser.IsBanned ? "Unban User" : "Ban User")
+                                        @(reportedUser.IsBanned ? Loc["Unban User"] : Loc["Ban User"])
                                     </MudButton>
                                 }
                             }
@@ -139,6 +147,30 @@
     {
         _currentUser = await UserService.GetEmployeeAsync();
         LoadData();
+
+        if (ChatState != null)
+        {
+            ChatState.ModerationAlertReceived += HandleReportChanged;
+            ChatState.ModerationReportUpdated += HandleReportChanged;
+        }
+    }
+
+    private void HandleReportChanged(ReportedMessage report)
+    {
+        InvokeAsync(() =>
+        {
+            LoadData();
+            StateHasChanged();
+        });
+    }
+
+    public void Dispose()
+    {
+        if (ChatState != null)
+        {
+            ChatState.ModerationAlertReceived -= HandleReportChanged;
+            ChatState.ModerationReportUpdated -= HandleReportChanged;
+        }
     }
 
     private void LoadData()
@@ -147,10 +179,16 @@
         _loading = false;
     }
 
+    private Employee? GetEmployee(string? employeeId)
+    {
+        if (string.IsNullOrEmpty(employeeId)) return null;
+        return Db.Employees.GetById(employeeId);
+    }
+
     private string GetUserName(string employeeId)
     {
         var emp = Db.Employees.GetById(employeeId);
-        return emp != null ? emp.FullName : "Unknown";
+        return emp != null ? emp.FullName : Loc["Unknown"].Value;
     }
 
     private bool FilterFunc(ReportedMessage element)
@@ -166,25 +204,33 @@
 
     private void DismissReport(ReportedMessage report)
     {
-        report.Status = "Dismissed";
+        report.Status = ReportedMessageStatus.Dismissed;
         report.ResolutionAction = "Dismissed";
-        report.ResolvedBy = _currentUser?.FullName ?? "Moderator";
+        report.ResolvedBy = _currentUser?.FullName ?? Loc["Moderator"].Value;
         Db.ReportedMessages.Save(report);
-        Snackbar.Add("Report dismissed.", Severity.Info);
+        ChatState.NotifyModerationReportUpdated(report);
+        Snackbar.Add(Loc["Report dismissed."].Value, Severity.Info);
         LoadData();
     }
 
     private async Task DeleteMessage(ReportedMessage report)
     {
-        await ChatService.AdminDeleteMessageAsync(report.MessageId);
-        Snackbar.Add("Message deleted globally.", Severity.Success);
+        var result = await ChatService.AdminDeleteMessageAsync(report.MessageId);
+        if (!result.IsSuccess)
+        {
+            Snackbar.Add(result.ErrorMessage ?? Loc["Failed to delete message."].Value, Severity.Error);
+            return;
+        }
+
+        Snackbar.Add(Loc["Message deleted globally."].Value, Severity.Success);
         
-        report.Status = "Resolved";
+        report.Status = ReportedMessageStatus.Resolved;
         report.ResolutionAction = "Deleted Message";
-        report.ResolvedBy = _currentUser?.FullName ?? "Moderator";
-        report.SnapshotContent = "content deleted";
+        report.ResolvedBy = _currentUser?.FullName ?? Loc["Moderator"].Value;
+        report.SnapshotContent = Loc["content deleted"].Value;
         report.Attachments.Clear();
         Db.ReportedMessages.Save(report);
+        ChatState.NotifyModerationReportUpdated(report);
         LoadData();
     }
 
@@ -195,12 +241,12 @@
         {
             if (emp.IsAdmin || emp.HasPermission(AppPermissions.Chat.Moderator))
             {
-                Snackbar.Add("Cannot suspend another moderator or admin.", Severity.Error);
+                Snackbar.Add(Loc["Cannot suspend another moderator or admin."].Value, Severity.Error);
                 return;
             }
             emp.IsSuspended = !emp.IsSuspended;
             Db.Employees.Save(emp);
-            Snackbar.Add(emp.IsSuspended ? "User suspended." : "User unsuspended.", Severity.Success);
+            Snackbar.Add(emp.IsSuspended ? Loc["User suspended."].Value : Loc["User unsuspended."].Value, Severity.Success);
             StateHasChanged();
         }
     }
@@ -212,12 +258,12 @@
         {
             if (emp.IsAdmin || emp.HasPermission(AppPermissions.Chat.Moderator))
             {
-                Snackbar.Add("Cannot ban another moderator or admin.", Severity.Error);
+                Snackbar.Add(Loc["Cannot ban another moderator or admin."].Value, Severity.Error);
                 return;
             }
             emp.IsBanned = !emp.IsBanned;
             Db.Employees.Save(emp);
-            Snackbar.Add(emp.IsBanned ? "User banned." : "User unbanned.", Severity.Success);
+            Snackbar.Add(emp.IsBanned ? Loc["User banned."].Value : Loc["User unbanned."].Value, Severity.Success);
             StateHasChanged();
         }
     }

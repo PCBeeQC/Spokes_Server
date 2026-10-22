@@ -8,6 +8,7 @@ using Microsoft.Extensions.Logging;
 using Moq;
 using MudBlazor;
 using Xunit;
+using Spokes_Server.Aggregate.Contexts;
 using Spokes_Server.Core.Data.Repositories.Core;
 using Spokes_Server.Core.Data.Repositories.Communication;
 using Spokes_Server.Core.Data.Repositories.Projects;
@@ -15,12 +16,17 @@ using Spokes_Server.Core.Data.Repositories.HR;
 using Spokes_Server.Core.Models.Core;
 using Spokes_Server.Core.Models.Communication;
 using Spokes_Server.Core.Services.Communication.Chat;
-using Spokes_Server.Core.Services.Core;
 using Spokes_Server.Core.Data;
 using Spokes_Server.Core.Services.Communication.Presence;
 using Spokes_Server.Core.Services.UI;
+using Spokes_Server.Core.Services.Communication.Notifications.InApp;
+using Spokes_Server.Core.Services.Communication.Notifications.Presentation;
+using Spokes_Server.Core.Services.Communication.Notifications.Routing;
+using Spokes_Server.Core.Services.Communication.Notifications.WebPush;
 using Spokes_Server.Core.Models.Communication.Notifications;
 using Spokes_Server.Core.Models.HR;
+using Microsoft.AspNetCore.DataProtection;
+using Spokes_Server.Core.Services.Security;
 
 namespace Spokes_Server.Tests.Core.Services.Communication.Chat;
 
@@ -52,7 +58,7 @@ public class ChatNotificationServiceTests : IDisposable
     private readonly Mock<GlobalKeystoreService> _keystoreMock;
     private readonly Mock<ICryptoService> _cryptoMock;
     private readonly Mock<IWebPushService> _webPushMock;
-    private readonly Mock<ChatService> _chatServiceMock;
+    private readonly Mock<IChatChannelAccessService> _chatAccessMock;
 
     private readonly ChatNotificationService _service;
 
@@ -82,26 +88,47 @@ public class ChatNotificationServiceTests : IDisposable
         _cryptoMock = new Mock<ICryptoService>();
         _webPushMock = new Mock<IWebPushService>();
 
-        _chatServiceMock = new Mock<ChatService>(
-            null, null, null, null, null, null, null, null, null, null,
-            null, null, null, null, null, null, null, null, null, null, null, null);
+        _chatAccessMock = new Mock<IChatChannelAccessService>();
 
-        _service = new ChatNotificationService(
-            _snackbarMock.Object,
-            _nav,
+        _service = CreateChatNotificationService(
+            new Spokes_Server.Components.UI.UiNotificationPresenter(_snackbarMock.Object, _nav, new Mock<ISoundService>().Object),
+            new NotificationRecipientFilter(_readStates, _messages),
+            new NotificationContentDecryptor(_keystoreMock.Object, _cryptoMock.Object),
+            new Mock<ISoundService>().Object);
+    }
+
+    private ChatNotificationService CreateChatNotificationService(
+        IUiNotificationPresenter presenter,
+        NotificationRecipientFilter recipientFilter,
+        NotificationContentDecryptor contentDecryptor,
+        ISoundService soundService,
+        UserCircuitContext? circuitContext = null,
+        PresenceStateService? presenceState = null,
+        IInAppNotificationDispatcher? inAppDispatcher = null,
+        ScopedKeystoreService? scopedKeystore = null)
+    {
+        var commContext = new Mock<CommunicationContext>();
+        commContext.Setup(c => c.ChatChannels).Returns(_channels);
+        commContext.Setup(c => c.ChatMessages).Returns(_messages);
+        commContext.Setup(c => c.ChatReadStates).Returns(_readStates);
+
+        var hrContext = new Mock<HrContext>();
+        hrContext.Setup(h => h.Employees).Returns(_employees);
+
+        return new ChatNotificationService(
+            commContext.Object,
+            hrContext.Object,
+            presenter,
             _chatState,
-            _readStates,
-            _messages,
-            _channels,
-            _employees,
-            _teams,
-            _projects,
-            _keystoreMock.Object,
-            _cryptoMock.Object,
+            recipientFilter,
+            contentDecryptor,
             _webPushMock.Object,
-            _chatServiceMock.Object,
-            new Mock<Spokes_Server.Core.Services.UI.ISoundService>().Object
-        );
+            _chatAccessMock.Object,
+            soundService,
+            circuitContext,
+            presenceState,
+            inAppDispatcher,
+            scopedKeystore);
     }
 
     public void Dispose()
@@ -109,8 +136,7 @@ public class ChatNotificationServiceTests : IDisposable
         _persistence.Dispose();
         if (Directory.Exists(_testDataDir))
         {
-            try { Directory.Delete(_testDataDir, true); }
-            catch { }
+            try { Directory.Delete(_testDataDir, true); } catch (Exception ex) { System.Diagnostics.Debug.WriteLine(ex.Message); }
         }
     }
 
@@ -143,7 +169,7 @@ public class ChatNotificationServiceTests : IDisposable
             var channel = new ChatChannel { Id = "ch3", Name = "Gen", ChannelType = ChatChannelType.General };
             _channels.Save(channel);
 
-            _chatServiceMock.Setup(c => c.GetChannelsForUser("user2")).Returns([channel]);
+            _chatAccessMock.Setup(c => c.GetChannelsForUser("user2")).Returns([channel]);
 
             // Act
             await _service.InitializeAsync("user2");
@@ -220,10 +246,8 @@ public class ChatNotificationServiceTests : IDisposable
             _channels.Save(new ChatChannel { Id = channelId, ChannelType = ChatChannelType.General });
             await _service.InitializeAsync("user1", [channelId]);
             
-            _readStates.MarkAsRead("user1", channelId, "General", false);
-            _readStates.SetNotificationLevel("user1", channelId, "None");
+            _readStates.Save(new ChatReadState { Id = ChatReadState.CreateId("user1", channelId), UserId = "user1", ChannelId = channelId, LastReadAt = DateTime.UtcNow.AddMinutes(-5), NotificationLevel = "None" });
             
-            await Task.Delay(100);
             var msg = new ChatMessage { Id = "msg2", ChannelId = channelId, SenderId = "other", Content = "Hi", SentAt = DateTime.UtcNow };
             _messages.Save(msg);
 
@@ -243,9 +267,8 @@ public class ChatNotificationServiceTests : IDisposable
             _channels.Save(new ChatChannel { Id = channelId, ChannelType = ChatChannelType.General });
             await _service.InitializeAsync("user1", [channelId]);
             
-            _readStates.SetNotificationLevel("user1", channelId, "Mentions");
+            _readStates.Save(new ChatReadState { Id = ChatReadState.CreateId("user1", channelId), UserId = "user1", ChannelId = channelId, LastReadAt = DateTime.UtcNow.AddMinutes(-5), NotificationLevel = "Mentions" });
             
-            await Task.Delay(100);
             var msg = new ChatMessage { Id = "msg3", ChannelId = channelId, SenderId = "other", Content = "Hi", MentionedUserIds = ["user1"], SentAt = DateTime.UtcNow };
             _messages.Save(msg);
 
@@ -265,9 +288,8 @@ public class ChatNotificationServiceTests : IDisposable
             _channels.Save(new ChatChannel { Id = channelId, ChannelType = ChatChannelType.General });
             await _service.InitializeAsync("user1", [channelId]);
             
-            _readStates.SetNotificationLevel("user1", channelId, "Mentions");
+            _readStates.Save(new ChatReadState { Id = ChatReadState.CreateId("user1", channelId), UserId = "user1", ChannelId = channelId, LastReadAt = DateTime.UtcNow.AddMinutes(-5), NotificationLevel = "Mentions" });
             
-            await Task.Delay(100);
             var msg = new ChatMessage { Id = "msg4", ChannelId = channelId, SenderId = "other", Content = "Hi", SentAt = DateTime.UtcNow };
             _messages.Save(msg);
 
@@ -298,13 +320,13 @@ public class ChatNotificationServiceTests : IDisposable
         }
 
         [Fact]
-        public async Task SubscribeToChannel_AddsToSubscribedChannels()
+        public async Task SubscribeToChannelAsync_AddsToSubscribedChannels()
         {
             // Arrange
             await _service.InitializeAsync("user1", []);
             
             // Act
-            await _service.SubscribeToChannel("ch_new");
+            await _service.SubscribeToChannelAsync("ch_new");
             await _service.MarkAsReadAsync();
 
             // Assert
@@ -313,7 +335,7 @@ public class ChatNotificationServiceTests : IDisposable
         }
 
         [Fact]
-        public async Task SubscribeToChannel_CalculatesUnreadCountForNewChannel()
+        public async Task SubscribeToChannelAsync_CalculatesUnreadCountForNewChannel()
         {
             // Arrange
             await _service.InitializeAsync("user1", []);
@@ -322,7 +344,7 @@ public class ChatNotificationServiceTests : IDisposable
             _messages.Save(msg);
 
             // Act
-            await _service.SubscribeToChannel("ch_new");
+            await _service.SubscribeToChannelAsync("ch_new");
 
             // Assert
             Assert.Equal(1, _service.GetUnreadCount("ch_new"));
@@ -357,11 +379,45 @@ public class ChatNotificationServiceTests : IDisposable
             // Act
             await _service.MarkChannelAsReadAsync(channelId);
             
-            // Give async background task a moment
-            await Task.Delay(50);
+            // Wait for push task to complete deterministically without arbitrary delays or races
+            if (_service.LastBackgroundTask != null)
+            {
+                await _service.LastBackgroundTask;
+            }
 
             // Assert
             _webPushMock.Verify(x => x.SendClearNotificationAsync("user1", channelId), Times.Once);
+        }
+
+        [Fact]
+        public async Task MarkChannelAsReadAsync_ConsecutiveCallsWithoutNewMessages_SendsSilentPushOnlyOnce()
+        {
+            // Arrange
+            var channelId = "ch_dedup_push";
+            _service.BackgroundTaskRunner = work => work();
+            await _service.InitializeAsync("user1", [channelId]);
+
+            // Act: Call MarkChannelAsReadAsync three times in a row with no new messages
+            await _service.MarkChannelAsReadAsync(channelId);
+            await _service.MarkChannelAsReadAsync(channelId);
+            await _service.MarkChannelAsReadAsync(channelId);
+
+            // Assert: SendClearNotificationAsync was only invoked once
+            _webPushMock.Verify(x => x.SendClearNotificationAsync("user1", channelId), Times.Once);
+
+            // Act 2: Receive a new message in that channel and mark as read again
+            _chatState.NotifyMessageReceived(new ChatMessage
+            {
+                Id = "msg_new",
+                ChannelId = channelId,
+                SenderId = "other",
+                Content = "New message",
+                SentAt = DateTime.UtcNow.AddSeconds(1)
+            });
+            await _service.MarkChannelAsReadAsync(channelId);
+
+            // Assert 2: SendClearNotificationAsync is invoked a second time for the new message
+            _webPushMock.Verify(x => x.SendClearNotificationAsync("user1", channelId), Times.Exactly(2));
         }
 
         [Fact]
@@ -397,12 +453,35 @@ public class ChatNotificationServiceTests : IDisposable
             // Act
             await _service.MarkAsReadAsync();
             
-            // Give async background task a moment
-            await Task.Delay(50);
+            // Wait for background tasks to complete deterministically without countdown timeouts
+            if (_service.LastBackgroundTask != null)
+            {
+                await _service.LastBackgroundTask;
+            }
 
             // Assert
             _webPushMock.Verify(x => x.SendClearNotificationAsync("user1", "chA"), Times.Once);
             _webPushMock.Verify(x => x.SendClearNotificationAsync("user1", "chB"), Times.Once);
+        }
+
+        [Fact]
+        public async Task MarkAsReadAsync_WithCustomBackgroundTaskRunner_ExecutesInlineSynchronously()
+        {
+            // Arrange
+            var customRunnerInvoked = false;
+            _service.BackgroundTaskRunner = async work =>
+            {
+                await work();
+                customRunnerInvoked = true;
+            };
+            await _service.InitializeAsync("user1", ["chCustom"]);
+
+            // Act
+            await _service.MarkAsReadAsync();
+
+            // Assert
+            Assert.True(customRunnerInvoked);
+            _webPushMock.Verify(x => x.SendClearNotificationAsync("user1", "chCustom"), Times.Once);
         }
 
         [Fact]
@@ -431,25 +510,21 @@ public class ChatNotificationServiceTests : IDisposable
                 IsFocused = false
             };
             var presenceState = new PresenceStateService(_chatState);
-            presenceState.RegisterConnection("user1", "sub_mob_1", "Mobile", isFocused: false);
+            presenceState.RegisterConnection(new ConnectionRegistrationOptions
+            {
+                UserId = "user1",
+                SubscriptionId = "sub_mob_1",
+                DeviceType = "Mobile",
+                IsFocused = false
+            });
 
             var soundMock = new Mock<ISoundService>();
             var snackbarMock = new Mock<ISnackbar>();
 
-            var service = new ChatNotificationService(
-                snackbarMock.Object,
-                _nav,
-                _chatState,
-                _readStates,
-                _messages,
-                _channels,
-                _employees,
-                _teams,
-                _projects,
-                _keystoreMock.Object,
-                _cryptoMock.Object,
-                _webPushMock.Object,
-                _chatServiceMock.Object,
+            var service = CreateChatNotificationService(
+                new Spokes_Server.Components.UI.UiNotificationPresenter(snackbarMock.Object, _nav, soundMock.Object),
+                new NotificationRecipientFilter(_readStates, _messages),
+                new NotificationContentDecryptor(_keystoreMock.Object, _cryptoMock.Object),
                 soundMock.Object,
                 circuitContext,
                 presenceState);
@@ -496,28 +571,26 @@ public class ChatNotificationServiceTests : IDisposable
                 IsFocused = true
             };
             var presenceState = new PresenceStateService(_chatState);
-            presenceState.RegisterConnection("user1", "sub_mob_2", "Mobile", isFocused: true);
+            presenceState.RegisterConnection(new ConnectionRegistrationOptions
+            {
+                UserId = "user1",
+                SubscriptionId = "sub_mob_2",
+                DeviceType = "Mobile",
+                IsFocused = true
+            });
 
             var soundMock = new Mock<ISoundService>();
             var snackbarMock = new Mock<ISnackbar>();
+            var inAppDispatcher = new InAppNotificationDispatcher();
 
-            var service = new ChatNotificationService(
-                snackbarMock.Object,
-                _nav,
-                _chatState,
-                _readStates,
-                _messages,
-                _channels,
-                _employees,
-                _teams,
-                _projects,
-                _keystoreMock.Object,
-                _cryptoMock.Object,
-                _webPushMock.Object,
-                _chatServiceMock.Object,
+            var service = CreateChatNotificationService(
+                new Spokes_Server.Components.UI.UiNotificationPresenter(snackbarMock.Object, _nav, soundMock.Object),
+                new NotificationRecipientFilter(_readStates, _messages),
+                new NotificationContentDecryptor(_keystoreMock.Object, _cryptoMock.Object),
                 soundMock.Object,
                 circuitContext,
-                presenceState);
+                presenceState,
+                inAppDispatcher);
 
             await service.InitializeAsync("user1", [channelId]);
             _channels.Save(new ChatChannel { Id = channelId, ChannelType = ChatChannelType.General });
@@ -534,6 +607,17 @@ public class ChatNotificationServiceTests : IDisposable
 
             // Act
             _chatState.NotifyMessageReceived(msg);
+            inAppDispatcher.Dispatch(new InAppNotification
+            {
+                RecipientUserId = "user1",
+                SenderName = "other_user",
+                Title = "other_user",
+                Content = "Hello focused mobile",
+                Initials = "OU",
+                ChannelId = channelId,
+                ChannelName = "General",
+                Category = NotificationCategories.Chat
+            });
 
             // Assert
             Assert.Equal(1, service.GetUnreadCount(channelId));
@@ -562,20 +646,10 @@ public class ChatNotificationServiceTests : IDisposable
             var soundMock = new Mock<ISoundService>();
             var snackbarMock = new Mock<ISnackbar>();
 
-            var service = new ChatNotificationService(
-                snackbarMock.Object,
-                _nav,
-                _chatState,
-                _readStates,
-                _messages,
-                _channels,
-                _employees,
-                _teams,
-                _projects,
-                _keystoreMock.Object,
-                _cryptoMock.Object,
-                _webPushMock.Object,
-                _chatServiceMock.Object,
+            var service = CreateChatNotificationService(
+                new Spokes_Server.Components.UI.UiNotificationPresenter(snackbarMock.Object, _nav, soundMock.Object),
+                new NotificationRecipientFilter(_readStates, _messages),
+                new NotificationContentDecryptor(_keystoreMock.Object, _cryptoMock.Object),
                 soundMock.Object,
                 circuitContext,
                 presenceState);
@@ -601,4 +675,485 @@ public class ChatNotificationServiceTests : IDisposable
             Assert.Empty(snackbarMock.Invocations);
             soundMock.Verify(s => s.PlayNotificationSoundAsync(It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<bool>()), Times.Never);
         }
+
+        [Fact]
+        public async Task InitializeAsync_LoadsUnreadCounts()
+        {
+            var userId = "user-1";
+            var channelId = "chan-1";
+            _channels.Save(new ChatChannel { Id = channelId, ChannelType = ChatChannelType.General });
+
+            // 1. Setup persistent unread state (Yesterday)
+            var yesterday = DateTime.UtcNow.AddDays(-1);
+            var stateId = ChatReadState.CreateId(userId, channelId);
+            var state = new ChatReadState
+            {
+                Id = stateId,
+                UserId = userId,
+                ChannelId = channelId,
+                LastReadAt = yesterday
+            };
+            _readStates.Save(state);
+
+            // 2. Add a message TODAY (different sender)
+            var msg = new ChatMessage
+            {
+                ChannelId = channelId,
+                SenderId = "user-2",
+                Content = "Hi",
+                SentAt = DateTime.UtcNow
+            };
+            _messages.Save(msg);
+
+            // Re-initialize to ensure fresh state
+            await _persistence.FlushAllAsync();
+            _messages.LoadFromDisk();
+            _readStates.LoadFromDisk();
+
+            // Act
+            await _service.InitializeAsync(userId, [channelId]);
+
+            // Assert
+            Assert.Equal(1, _service.GetUnreadCount(channelId));
+        }
+
+        [Fact]
+        public async Task OnMessageReceived_MentionsOnly_WhenConfigured()
+        {
+            var userId = "user-1";
+            var chanId = "chan-1";
+            _channels.Save(new ChatChannel { Id = chanId, ChannelType = ChatChannelType.General });
+            await _service.InitializeAsync(userId, [chanId]);
+
+            // Set notification level to Mentions
+            _readStates.SetNotificationLevel(userId, chanId, "Mentions");
+
+            // 1. Message with NO mention
+            var msg1 = new ChatMessage { ChannelId = chanId, SenderId = "user-2", Content = "No mention" };
+            _chatState.NotifyMessageReceived(msg1);
+
+            Assert.Equal(1, _service.GetUnreadCount(chanId)); // Still unread in sidebar
+            Assert.Equal(0, _service.TotalUnreadCount); // But NO notification
+
+            // 2. Message WITH mention
+            var msg2 = new ChatMessage { ChannelId = chanId, SenderId = "user-2", Content = "Hi @user-1", MentionedUserIds = [userId] };
+            _chatState.NotifyMessageReceived(msg2);
+
+            Assert.Equal(2, _service.GetUnreadCount(chanId));
+            Assert.Equal(1, _service.TotalUnreadCount);
+        }
+
+        [Fact]
+        public async Task ChatNotificationService_PrimaryConstructor_UsesInjectedFilterAndDecryptor()
+        {
+            var mockFilter = new Mock<NotificationRecipientFilter>();
+            var mockDecryptor = new Mock<NotificationContentDecryptor>();
+            var mockPresenter = new Mock<IUiNotificationPresenter>();
+            var soundMock = new Mock<ISoundService>();
+
+            var service = CreateChatNotificationService(
+                mockPresenter.Object,
+                mockFilter.Object,
+                mockDecryptor.Object,
+                soundMock.Object);
+
+            var userId = "user_primary";
+            var chanId = "chan_primary";
+            _channels.Save(new ChatChannel { Id = chanId, ChannelType = ChatChannelType.General });
+            _readStates.SetNotificationLevel(userId, chanId, "Mentions");
+            await service.InitializeAsync(userId, [chanId]);
+
+            var msg = new ChatMessage { Id = "m_prim", ChannelId = chanId, SenderId = "sender1", Content = "Test content" };
+
+            // Setup mock filter to return true
+            mockFilter.Setup(f => f.IsUserMentioned(userId, It.IsAny<Employee?>(), msg, null))
+                .Returns(true);
+
+            _chatState.NotifyMessageReceived(msg);
+
+            // Verify filter was consulted for notified unread count
+            mockFilter.Verify(f => f.IsUserMentioned(userId, It.IsAny<Employee?>(), msg, null), Times.Once);
+            Assert.Equal(1, service.TotalUnreadCount);
+
+            // Verify presenter is NOT called on NotifyMessageReceived because in-app alerts are unified via NotificationRoutingService
+            mockPresenter.Verify(p => p.ShowChatNotification(It.IsAny<InAppNotification>()), Times.Never);
+        }
+
+        [Fact]
+        public async Task ChatNotificationService_BoundedContextConstructor_InitializesCorrectly()
+        {
+            var mockCommContext = new Mock<CommunicationContext>();
+            mockCommContext.Setup(c => c.ChatReadStates).Returns(_readStates);
+            mockCommContext.Setup(c => c.ChatMessages).Returns(_messages);
+            mockCommContext.Setup(c => c.ChatChannels).Returns(_channels);
+
+            var mockHrContext = new Mock<HrContext>();
+            mockHrContext.Setup(h => h.Employees).Returns(_employees);
+
+            var mockPresenter = new Mock<IUiNotificationPresenter>();
+            var mockFilter = new Mock<NotificationRecipientFilter>();
+            var mockDecryptor = new Mock<NotificationContentDecryptor>();
+            var soundMock = new Mock<ISoundService>();
+
+            var service = new ChatNotificationService(
+                mockCommContext.Object,
+                mockHrContext.Object,
+                mockPresenter.Object,
+                _chatState,
+                mockFilter.Object,
+                mockDecryptor.Object,
+                _webPushMock.Object,
+                _chatAccessMock.Object,
+                soundMock.Object);
+
+            var userId = "user_bounded";
+            var chanId = "chan_bounded";
+            _channels.Save(new ChatChannel { Id = chanId, ChannelType = ChatChannelType.General });
+            await service.InitializeAsync(userId, [chanId]);
+
+            Assert.Equal(0, service.TotalUnreadCount);
+        }
+
+        [Fact]
+        public async Task HandleInAppNotification_WhenDifferentUser_DoesNotShowSnackbar()
+        {
+            // Arrange
+            var mockPresenter = new Mock<IUiNotificationPresenter>();
+            var mockSound = new Mock<ISoundService>();
+            var inAppDispatcher = new InAppNotificationDispatcher();
+
+            var service = CreateChatNotificationService(
+                mockPresenter.Object,
+                new NotificationRecipientFilter(_readStates, _messages),
+                new NotificationContentDecryptor(_keystoreMock.Object, _cryptoMock.Object),
+                mockSound.Object,
+                inAppDispatcher: inAppDispatcher);
+
+            await service.InitializeAsync("user1", ["ch1"]);
+
+            var notification = new InAppNotification
+            {
+                RecipientUserId = "user2",
+                SenderName = "Bob",
+                Title = "Bob reacted 👍 to:",
+                Content = "\"Hello\"",
+                Initials = "BA",
+                ChannelId = "ch1",
+                ChannelName = "General",
+                IsReaction = true,
+                IsGroupChat = false
+            };
+
+            // Act
+            inAppDispatcher.Dispatch(notification);
+
+            // Assert
+            mockPresenter.Verify(p => p.ShowChatNotification(It.IsAny<InAppNotification>()), Times.Never);
+            mockSound.Verify(s => s.PlayNotificationSoundAsync(It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<bool>()), Times.Never);
+        }
+
+        [Fact]
+        public async Task HandleInAppNotification_WhenOnSameChannelAndActive_SuppressesSnackbar()
+        {
+            // Arrange
+            var mockPresenter = new Mock<IUiNotificationPresenter>();
+            mockPresenter.Setup(p => p.IsOnChatChannel("ch1")).Returns(true);
+
+            var mockSound = new Mock<ISoundService>();
+            var inAppDispatcher = new InAppNotificationDispatcher();
+            var circuitContext = new UserCircuitContext { IsConnected = true, IsFocused = true };
+
+            var service = CreateChatNotificationService(
+                mockPresenter.Object,
+                new NotificationRecipientFilter(_readStates, _messages),
+                new NotificationContentDecryptor(_keystoreMock.Object, _cryptoMock.Object),
+                mockSound.Object,
+                circuitContext: circuitContext,
+                inAppDispatcher: inAppDispatcher);
+
+            await service.InitializeAsync("user1", ["ch1"]);
+
+            var notification = new InAppNotification
+            {
+                RecipientUserId = "user1",
+                SenderName = "Bob",
+                Title = "Bob reacted 👍 to:",
+                Content = "\"Hello\"",
+                Initials = "BA",
+                ChannelId = "ch1",
+                ChannelName = "General",
+                IsReaction = true
+            };
+
+            // Act
+            inAppDispatcher.Dispatch(notification);
+
+            // Assert
+            mockPresenter.Verify(p => p.ShowChatNotification(It.IsAny<InAppNotification>()), Times.Never);
+            mockSound.Verify(s => s.PlayNotificationSoundAsync(It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<bool>()), Times.Never);
+        }
+
+        [Fact]
+        public async Task HandleInAppNotification_WhenOnDifferentPage_ShowsSnackbarAndPlaysSound()
+        {
+            // Arrange
+            var mockPresenter = new Mock<IUiNotificationPresenter>();
+            mockPresenter.Setup(p => p.IsOnChatChannel("ch1")).Returns(false);
+
+            var mockSound = new Mock<ISoundService>();
+            var inAppDispatcher = new InAppNotificationDispatcher();
+
+            var service = CreateChatNotificationService(
+                mockPresenter.Object,
+                new NotificationRecipientFilter(_readStates, _messages),
+                new NotificationContentDecryptor(_keystoreMock.Object, _cryptoMock.Object),
+                mockSound.Object,
+                inAppDispatcher: inAppDispatcher);
+
+            await service.InitializeAsync("user1", ["ch1"]);
+
+            var notification = new InAppNotification
+            {
+                RecipientUserId = "user1",
+                SenderName = "Bob",
+                Title = "Bob reacted 👍 to:",
+                Content = "\"Hello world\"",
+                Initials = "BA",
+                ChannelId = "ch1",
+                ChannelName = "General",
+                SenderAvatarUrl = "/avatars/bob.png",
+                IsReaction = true,
+                IsGroupChat = true,
+                ServerName = "HQ",
+                Category = NotificationCategories.Chat
+            };
+
+            // Act
+            inAppDispatcher.Dispatch(notification);
+
+            // Assert
+            mockPresenter.Verify(p => p.ShowChatNotification(It.Is<InAppNotification>(n =>
+                n.RecipientUserId == "user1" &&
+                n.Title == "Bob reacted 👍 to:" &&
+                n.Content == "\"Hello world\"" &&
+                n.SenderAvatarUrl == "/avatars/bob.png" &&
+                n.ServerName == "HQ" &&
+                n.IsReaction &&
+                n.IsGroupChat)), Times.Once);
+            mockSound.Verify(s => s.PlayNotificationSoundAsync(NotificationCategories.Chat, null, false), Times.Once);
+        }
+
+        [Fact]
+        public async Task HandleInAppNotification_WhenSilent_DoesNotPlaySound()
+        {
+            // Arrange
+            var mockPresenter = new Mock<IUiNotificationPresenter>();
+            mockPresenter.Setup(p => p.IsOnChatChannel("ch1")).Returns(false);
+
+            var mockSound = new Mock<ISoundService>();
+            var inAppDispatcher = new InAppNotificationDispatcher();
+
+            var service = CreateChatNotificationService(
+                mockPresenter.Object,
+                new NotificationRecipientFilter(_readStates, _messages),
+                new NotificationContentDecryptor(_keystoreMock.Object, _cryptoMock.Object),
+                mockSound.Object,
+                inAppDispatcher: inAppDispatcher);
+
+            await service.InitializeAsync("user1", ["ch1"]);
+
+            var notification = new InAppNotification
+            {
+                RecipientUserId = "user1",
+                SenderName = "Bob",
+                Title = "Bob reacted 👍 to:",
+                Content = "\"Hello\"",
+                Initials = "BA",
+                ChannelId = "ch1",
+                ChannelName = "General",
+                IsSilent = true,
+                Category = NotificationCategories.Chat
+            };
+
+            // Act
+            inAppDispatcher.Dispatch(notification);
+
+            // Assert
+            mockPresenter.Verify(p => p.ShowChatNotification(It.Is<InAppNotification>(n =>
+                n.RecipientUserId == "user1" &&
+                n.Title == "Bob reacted 👍 to:" &&
+                n.IsSilent)), Times.Once);
+            mockSound.Verify(s => s.PlayNotificationSoundAsync(It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<bool>()), Times.Never);
+        }
+
+        [Fact]
+        public async Task DisposeAsync_UnsubscribesFromInAppNotificationDispatcher()
+        {
+            // Arrange
+            var mockPresenter = new Mock<IUiNotificationPresenter>();
+            var mockSound = new Mock<ISoundService>();
+            var inAppDispatcher = new InAppNotificationDispatcher();
+
+            var service = CreateChatNotificationService(
+                mockPresenter.Object,
+                new NotificationRecipientFilter(_readStates, _messages),
+                new NotificationContentDecryptor(_keystoreMock.Object, _cryptoMock.Object),
+                mockSound.Object,
+                inAppDispatcher: inAppDispatcher);
+
+            await service.InitializeAsync("user1", ["ch1"]);
+
+            // Act - Dispose
+            await service.DisposeAsync();
+
+            var notification = new InAppNotification
+            {
+                RecipientUserId = "user1",
+                SenderName = "Bob",
+                Title = "Bob reacted 👍 to:",
+                Content = "\"Hello\"",
+                Initials = "BA",
+                ChannelId = "ch1",
+                ChannelName = "General"
+            };
+
+            inAppDispatcher.Dispatch(notification);
+
+            // Assert - nothing received after dispose
+            mockPresenter.Verify(p => p.ShowChatNotification(It.IsAny<InAppNotification>()), Times.Never);
+        }
+
+        [Fact]
+        public async Task HandleInAppNotification_WhenMessageIsEncryptedAndKeystoreIsLocked_DisplaysMaskedContent()
+        {
+            // Arrange
+            var mockPresenter = new Mock<IUiNotificationPresenter>();
+            mockPresenter.Setup(p => p.IsOnChatChannel("ch1")).Returns(false);
+
+            var mockSound = new Mock<ISoundService>();
+            var inAppDispatcher = new InAppNotificationDispatcher();
+            var scopedKeystore = new ScopedKeystoreService(new EphemeralDataProtectionProvider());
+            Assert.False(scopedKeystore.IsUnlocked); // Locked by default
+
+            var service = CreateChatNotificationService(
+                mockPresenter.Object,
+                new NotificationRecipientFilter(_readStates, _messages),
+                new NotificationContentDecryptor(_keystoreMock.Object, _cryptoMock.Object),
+                mockSound.Object,
+                inAppDispatcher: inAppDispatcher,
+                scopedKeystore: scopedKeystore);
+
+            await service.InitializeAsync("user1", ["ch1"]);
+
+            var notification = new InAppNotification
+            {
+                RecipientUserId = "user1",
+                SenderName = "Alice",
+                Title = "Alice",
+                Content = "Top Secret Plaintext",
+                Initials = "AA",
+                ChannelId = "ch1",
+                ChannelName = "General",
+                IsEncrypted = true,
+                MaskedContent = "🔒 New Secure Message"
+            };
+
+            // Act
+            inAppDispatcher.Dispatch(notification);
+
+            // Assert: Must display MaskedContent instead of decrypted plaintext
+            mockPresenter.Verify(p => p.ShowChatNotification(It.Is<InAppNotification>(n =>
+                n.RecipientUserId == "user1" &&
+                n.Content == "🔒 New Secure Message")), Times.Once);
+        }
+
+        [Fact]
+        public async Task HandleInAppNotification_WhenMessageIsEncryptedAndKeystoreIsUnlocked_DisplaysDecryptedContent()
+        {
+            // Arrange
+            var mockPresenter = new Mock<IUiNotificationPresenter>();
+            mockPresenter.Setup(p => p.IsOnChatChannel("ch1")).Returns(false);
+
+            var mockSound = new Mock<ISoundService>();
+            var inAppDispatcher = new InAppNotificationDispatcher();
+            var scopedKeystore = new ScopedKeystoreService(new EphemeralDataProtectionProvider());
+            scopedKeystore.Unlock("<RSAKeyValue>fake</RSAKeyValue>");
+            Assert.True(scopedKeystore.IsUnlocked);
+
+            var service = CreateChatNotificationService(
+                mockPresenter.Object,
+                new NotificationRecipientFilter(_readStates, _messages),
+                new NotificationContentDecryptor(_keystoreMock.Object, _cryptoMock.Object),
+                mockSound.Object,
+                inAppDispatcher: inAppDispatcher,
+                scopedKeystore: scopedKeystore);
+
+            await service.InitializeAsync("user1", ["ch1"]);
+
+            var notification = new InAppNotification
+            {
+                RecipientUserId = "user1",
+                SenderName = "Alice",
+                Title = "Alice",
+                Content = "Top Secret Plaintext",
+                Initials = "AA",
+                ChannelId = "ch1",
+                ChannelName = "General",
+                IsEncrypted = true,
+                MaskedContent = "🔒 New Secure Message"
+            };
+
+            // Act
+            inAppDispatcher.Dispatch(notification);
+
+            // Assert: Must display decrypted content when keystore is unlocked
+            mockPresenter.Verify(p => p.ShowChatNotification(It.Is<InAppNotification>(n =>
+                n.RecipientUserId == "user1" &&
+                n.Content == "Top Secret Plaintext")), Times.Once);
+        }
+
+        [Fact]
+        public async Task HandleInAppNotification_WhenMessageIsNotEncrypted_DisplaysOriginalContentEvenIfKeystoreLocked()
+        {
+            // Arrange
+            var mockPresenter = new Mock<IUiNotificationPresenter>();
+            mockPresenter.Setup(p => p.IsOnChatChannel("ch1")).Returns(false);
+
+            var mockSound = new Mock<ISoundService>();
+            var inAppDispatcher = new InAppNotificationDispatcher();
+            var scopedKeystore = new ScopedKeystoreService(new EphemeralDataProtectionProvider());
+            Assert.False(scopedKeystore.IsUnlocked);
+
+            var service = CreateChatNotificationService(
+                mockPresenter.Object,
+                new NotificationRecipientFilter(_readStates, _messages),
+                new NotificationContentDecryptor(_keystoreMock.Object, _cryptoMock.Object),
+                mockSound.Object,
+                inAppDispatcher: inAppDispatcher,
+                scopedKeystore: scopedKeystore);
+
+            await service.InitializeAsync("user1", ["ch1"]);
+
+            var notification = new InAppNotification
+            {
+                RecipientUserId = "user1",
+                SenderName = "Alice",
+                Title = "Alice",
+                Content = "Regular unencrypted message",
+                Initials = "AA",
+                ChannelId = "ch1",
+                ChannelName = "General",
+                IsEncrypted = false
+            };
+
+            // Act
+            inAppDispatcher.Dispatch(notification);
+
+            // Assert: Must display original content
+            mockPresenter.Verify(p => p.ShowChatNotification(It.Is<InAppNotification>(n =>
+                n.RecipientUserId == "user1" &&
+                n.Content == "Regular unencrypted message")), Times.Once);
+        }
     }
+
+

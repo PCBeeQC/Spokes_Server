@@ -1,52 +1,12 @@
-using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.Logging;
-using Moq;
-using Spokes_Server.Core.Data;
 using Spokes_Server.Core.Data.Repositories.Projects;
 using Spokes_Server.Core.Models.Projects;
+using Spokes_Server.Tests.Helpers;
 using Xunit;
 
 namespace Spokes_Server.Tests.Core.Data.Repositories.Projects;
 
-public class BoardRepositoryTests : IDisposable
+public class BoardRepositoryTests : RepositoryTestFixture<BoardRepository>
 {
-    private readonly string _testDataDir;
-    private readonly DiskPersistenceService _writer;
-    private readonly BoardRepository _repo;
-
-    public BoardRepositoryTests()
-    {
-        _testDataDir = Path.Combine(Path.GetTempPath(), $"Spokes_Test_Boards_{Guid.NewGuid()}");
-
-        var mockConfig = new Mock<IConfiguration>();
-        mockConfig.Setup(c => c["DataPath"]).Returns(_testDataDir);
-
-        var mockPersistenceLogger = new Mock<ILogger<DiskPersistenceService>>();
-        _writer = new DiskPersistenceService(mockPersistenceLogger.Object);
-
-        _repo = new BoardRepository(_writer, mockConfig.Object);
-    }
-
-    public void Dispose()
-    {
-        if (Directory.Exists(_testDataDir))
-        {
-            try { Directory.Delete(_testDataDir, true); } catch (Exception ex) { Console.WriteLine($"Cleanup failed: {ex.Message}"); }
-        }
-        _writer.Dispose();
-    }
-
-    [Fact]
-    public void Constructor_WithNullDataPath_UsesDefaultPath()
-    {
-        var mockConfig = new Mock<IConfiguration>();
-        mockConfig.Setup(c => c["DataPath"]).Returns((string?)null);
-
-        var repo = new BoardRepository(_writer, mockConfig.Object);
-
-        Assert.NotNull(repo);
-    }
-
     [Fact]
     public void Save_And_GetById_ReturnsBoard()
     {
@@ -118,10 +78,7 @@ public class BoardRepositoryTests : IDisposable
         var board = new Board { Id = "board-disk", Title = "Disk Board" };
         File.WriteAllText(Path.Combine(targetDir, "board-disk.json"), System.Text.Json.JsonSerializer.Serialize(board));
 
-        var mockConfig = new Mock<IConfiguration>();
-        mockConfig.Setup(c => c["DataPath"]).Returns(_testDataDir);
-
-        var newRepo = new BoardRepository(_writer, mockConfig.Object);
+        var newRepo = new BoardRepository(_writer, Config);
         newRepo.LoadFromDisk();
 
         var loaded = newRepo.GetById("board-disk");

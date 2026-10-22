@@ -1,43 +1,18 @@
 using System.Text.Json;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Moq;
-using Spokes_Server.Core.Data;
 using Spokes_Server.Core.Data.Repositories.Communication;
 using Spokes_Server.Core.Models.Communication;
+using Spokes_Server.Tests.Helpers;
 using Xunit;
 
 namespace Spokes_Server.Tests.Core.Data.Repositories.Communication;
 
-public class PrivateContactRepositoryTests : IDisposable
+public class PrivateContactRepositoryTests : RepositoryTestFixture<PrivateContactRepository>
 {
-    private readonly string _testDataDir;
-    private readonly DiskPersistenceService _writer;
-    private readonly PrivateContactRepository _repo;
-    private readonly Mock<ILogger<PrivateContactRepository>> _loggerMock;
-
     public PrivateContactRepositoryTests()
+        : base((writer, config) => new PrivateContactRepository(writer, config, Mock.Of<ILogger<PrivateContactRepository>>()), "PrivateContacts")
     {
-        _testDataDir = Path.Combine(Path.GetTempPath(), $"Spokes_Test_PrivateContacts_{Guid.NewGuid()}");
-
-        var mockConfig = new Mock<IConfiguration>();
-        mockConfig.Setup(c => c["DataPath"]).Returns(_testDataDir);
-
-        var mockPersistenceLogger = new Mock<ILogger<DiskPersistenceService>>();
-        _writer = new DiskPersistenceService(mockPersistenceLogger.Object);
-
-        _loggerMock = new Mock<ILogger<PrivateContactRepository>>();
-
-        _repo = new PrivateContactRepository(_writer, mockConfig.Object, _loggerMock.Object);
-    }
-
-    public void Dispose()
-    {
-        if (Directory.Exists(_testDataDir))
-        {
-            try { Directory.Delete(_testDataDir, true); } catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"Cleanup error: {ex.Message}"); }
-        }
-        _writer.Dispose();
     }
 
     [Fact]
@@ -106,17 +81,6 @@ public class PrivateContactRepositoryTests : IDisposable
     }
 
     [Fact]
-    public void Constructor_WithNullDataPath_UsesDefaultPath()
-    {
-        var mockConfig = new Mock<IConfiguration>();
-        mockConfig.Setup(c => c["DataPath"]).Returns((string?)null);
-
-        var repo = new PrivateContactRepository(_writer, mockConfig.Object, _loggerMock.Object);
-
-        Assert.NotNull(repo);
-    }
-
-    [Fact]
     public void Save_WritesToDiskInEmployeeContactsDirectory()
     {
         var contact = new ContactPerson { Id = "c-disk", Name = "Disk Contact" };
@@ -154,7 +118,3 @@ public class PrivateContactRepositoryTests : IDisposable
         Assert.Null(_repo.GetById("emp-partial", "non-existent-contact"));
     }
 }
-
-
-
-

@@ -1,0 +1,152 @@
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Constants
+@using Spokes_Server.Components.Dialogs.HR
+@using Spokes_Server.Core.Services
+@using Spokes_Server.Core.Services.Communication.Chat
+@inject IDialogService DialogService
+@inject ChatService ChatService
+@inject NavigationManager Nav
+@inject ISnackbar Snackbar
+@inject PresenceStateService PresenceState
+
+<MudCard Elevation="0" Outlined="true" Class="h-100 d-flex flex-column directory-card" Style="@($"border-radius: 16px; {(!Employee.IsActive ? "opacity: 0.75;" : "")}")">
+    <MudCardContent Class="pa-4 flex-grow-1 cursor-pointer" @onclick="OpenProfileDialog">
+        <div class="d-flex gap-4">
+            <MudAvatar Size="Size.Large" Style="@($"width: 56px; height: 56px; font-size: 1.5rem; background-color: {(Employee.ProfileColor ?? Colors.DeepPurple.Default)}; color: {Colors.Shades.White}; flex-shrink: 0;")">
+                @if (Employee.HasCustomAvatar)
+                {
+                    <MudImage Src="@($"/spokesapi/Media/Avatar/{Employee.Id}?v={Employee.AvatarVersion}")" ObjectFit="ObjectFit.Cover" />
+                }
+                else
+                {
+                    @Employee.Initials
+                }
+            </MudAvatar>
+            <div class="d-flex flex-column justify-center" style="min-width: 0; flex: 1;">
+                <div class="d-flex align-center gap-1" style="width: 100%;">
+                    <MudText Typo="Typo.subtitle1" Style="font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block;" Class="flex-grow-1">@Employee.FullName</MudText>
+                    @if (Employee.IsAdmin)
+                    {
+                        <MudIcon Icon="@Icons.Material.Filled.VerifiedUser" Color="Color.Info" Size="Size.Small" Style="font-size: 14px; flex-shrink: 0;" Title="@Loc["Admin"]" />
+                    }
+                    @if (!Employee.IsActive)
+                    {
+                        <MudChip T="string" Color="Color.Default" Variant="Variant.Outlined" Size="Size.Small" Class="ma-0 py-0" Style="font-size: 11px; height: 20px;">@Loc["Inactive"]</MudChip>
+                    }
+                </div>
+                <MudText Typo="Typo.body2" Color="Color.Secondary" Style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block; width: 100%;">
+                    @(!string.IsNullOrEmpty(Employee.DisplaySubtitle) ? Employee.DisplaySubtitle : Employee.Email)
+                </MudText>
+                
+                @if (ShowPresence)
+                {
+                    <div class="d-flex align-center mt-2">
+                        @{
+                            var hasConnection = PresenceState.HasActiveConnection(Employee.Id);
+                            var isAway = PresenceState.IsGloballyAway(Employee.Id);
+                            var hasDesktopActive = PresenceState.HasActiveDesktopConnection(Employee.Id) && !PresenceState.IsUserAwayFromDesktop(Employee.Id);
+                            var hasCapacitorMobile = PresenceState.IsOnlineOnCapacitorMobile(Employee.Id);
+                            var isMobileOnlineOnly = Employee.IsActive && !hasDesktopActive && hasCapacitorMobile;
+                            var lastSeen = PresenceState.GetLastSeen(Employee.Id);
+                            
+                            string lastSeenText = Loc["Offline"].Value;
+                            string dotColor = "var(--mud-palette-action-disabled)";
+
+                            if (!Employee.IsActive)
+                            {
+                                lastSeenText = Loc["Inactive"].Value;
+                                dotColor = "var(--mud-palette-action-disabled)";
+                            }
+                            else if (isMobileOnlineOnly)
+                            {
+                                lastSeenText = Loc["Online on Mobile"].Value;
+                                dotColor = "var(--mud-palette-success)";
+                            }
+                            else if (hasConnection && !isAway)
+                            {
+                                lastSeenText = Loc["Online"].Value;
+                                dotColor = "var(--mud-palette-success)";
+                            }
+                            else if (isAway)
+                            {
+                                lastSeenText = Loc["Away"].Value;
+                                dotColor = "var(--mud-palette-warning)";
+                            }
+                            else
+                            {
+                                lastSeenText = PresenceStateService.FormatLastSeen(lastSeen);
+                            }
+                        }
+                        @if (isMobileOnlineOnly)
+                        {
+                            <MudIcon Icon="@Icons.Material.Filled.Smartphone" Color="Color.Success" Size="Size.Small" Style="font-size: 14px; margin-right: 4px;" />
+                        }
+                        else
+                        {
+                            <div style="width: 8px; height: 8px; border-radius: 50%; background-color: @dotColor; margin-right: 6px;"></div>
+                        }
+                        <MudText Typo="Typo.caption" Color="Color.Secondary" Style="font-weight: 500;">@lastSeenText</MudText>
+                    </div>
+                }
+            </div>
+            
+            @if (ShowManageMenu || OnRemoveContact.HasDelegate)
+            {
+                <div class="d-flex flex-column justify-start align-end ml-n2">
+                    <MudMenu Icon="@Icons.Material.Filled.MoreVert" Size="Size.Small" AnchorOrigin="Origin.BottomRight" TransformOrigin="Origin.TopRight" Dense="true" @onclick:stopPropagation="true">
+                        @if (ShowManageMenu)
+                        {
+                            <MudMenuItem Icon="@Icons.Material.Filled.Edit" OnClick="@(() => OnEdit.InvokeAsync(Employee))">@Loc["Edit"]</MudMenuItem>
+                            @if (!Employee.IsAdmin)
+                            {
+                                <MudMenuItem Icon="@Icons.Material.Filled.Delete" IconColor="Color.Error" OnClick="@(() => OnDelete.InvokeAsync(Employee))">@Loc["Delete"]</MudMenuItem>
+                            }
+                        }
+                        @if (OnRemoveContact.HasDelegate)
+                        {
+                            <MudMenuItem Icon="@Icons.Material.Filled.PersonRemove" IconColor="Color.Error" OnClick="@(() => OnRemoveContact.InvokeAsync(Employee))">@Loc["Remove Contact"]</MudMenuItem>
+                        }
+                    </MudMenu>
+                </div>
+            }
+        </div>
+    </MudCardContent>
+    <MudCardActions Class="px-4 pb-4 pt-0 d-flex justify-space-between align-center">
+        <MudButton Variant="Variant.Text" Color="Color.Primary" Size="Size.Small" OnClick="OpenProfileDialog">@Loc["View Profile"]</MudButton>
+        @if (CurrentUser?.Id != Employee.Id)
+        {
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small" Class="rounded-pill px-4" Style="text-transform: none; font-weight: 600;" DropShadow="false" OnClick="InitiateDirectMessage" Disabled="@(!Employee.IsActive || CurrentUser?.IsSuspended == true)">@Loc["Message"]</MudButton>
+        }
+    </MudCardActions>
+</MudCard>
+
+@code {
+    [Parameter, EditorRequired] public Employee Employee { get; set; } = default!;
+    [Parameter] public Employee? CurrentUser { get; set; }
+    [Parameter] public bool ShowPresence { get; set; } = true;
+    [Parameter] public bool ShowManageMenu { get; set; }
+    [Parameter] public EventCallback<Employee> OnEdit { get; set; }
+    [Parameter] public EventCallback<Employee> OnDelete { get; set; }
+    [Parameter] public EventCallback<Employee> OnRemoveContact { get; set; }
+
+    private async Task OpenProfileDialog()
+    {
+        var parameters = new DialogParameters { ["Employee"] = Employee };
+        var options = new DialogOptions { CloseButton = true, MaxWidth = MaxWidth.Small, FullWidth = true, CloseOnEscapeKey = true };
+        await DialogService.ShowAsync<MemberProfileDialog>(null, parameters, options);
+    }
+
+    private void InitiateDirectMessage()
+    {
+        if (CurrentUser == null) return;
+        try
+        {
+            var channel = ChatService.CreateDirectMessageChannel(CurrentUser.Id, Employee.Id);
+            Nav.NavigateTo($"/chat/{channel.Id}");
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add(string.Format(Loc["Failed to open chat: {0}"].Value, ex.Message), Severity.Error);
+        }
+    }
+}

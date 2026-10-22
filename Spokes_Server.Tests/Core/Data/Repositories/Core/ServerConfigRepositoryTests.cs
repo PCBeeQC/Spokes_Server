@@ -1,74 +1,31 @@
-using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.Logging;
-using Moq;
 using Spokes_Server.Core.Data;
 using Spokes_Server.Core.Data.Repositories.Core;
 using Spokes_Server.Core.Models.Core;
-using Spokes_Server.Core.Services.Core;
+using Spokes_Server.Core.Services.Licensing;
+using Spokes_Server.Tests.Helpers;
 using Xunit;
 
 namespace Spokes_Server.Tests.Core.Data.Repositories.Core;
 
-public class ServerConfigRepositoryTests : IDisposable
+public class ServerConfigRepositoryTests : RepositoryTestFixture<ServerConfigRepository>
 {
-    private readonly string _testDataDir;
-    private readonly DiskPersistenceService _writer;
-    private readonly EncryptionService _encryptionService;
-    private readonly IConfiguration _config;
-    private readonly ServerConfigRepository _repo;
-
     public ServerConfigRepositoryTests()
+        : base((writer, config) => new ServerConfigRepository(writer, config), "ServerConfig")
     {
-        _testDataDir = Path.Combine(Path.GetTempPath(), $"Spokes_Test_ServerConfig_{Guid.NewGuid()}");
-        Directory.CreateDirectory(_testDataDir);
-
-        var inMemorySettings = new Dictionary<string, string?>
-        {
-            { "DataPath", _testDataDir }
-        };
-        _config = new ConfigurationBuilder().AddInMemoryCollection(inMemorySettings).Build();
-
-        var mockPersistenceLogger = new Mock<ILogger<DiskPersistenceService>>();
-        _writer = new DiskPersistenceService(mockPersistenceLogger.Object);
-
-        _encryptionService = new EncryptionService(_config);
-        _repo = new ServerConfigRepository(_writer, _config, _encryptionService);
-    }
-
-    public void Dispose()
-    {
-        if (Directory.Exists(_testDataDir))
-        {
-            try { Directory.Delete(_testDataDir, true); } catch (Exception ex) { Console.WriteLine($"Cleanup failed: {ex.Message}"); }
-        }
-        _writer.Dispose();
     }
 
     [Fact]
-    public void Constructor_WithNullDataPath_UsesDefaultPath()
-    {
-        var mockConfig = new Mock<IConfiguration>();
-        mockConfig.Setup(c => c["DataPath"]).Returns((string?)null);
-
-        var repo = new ServerConfigRepository(_writer, mockConfig.Object, _encryptionService);
-
-        Assert.NotNull(repo);
-    }
-
-    [Fact]
-    public void GetOrCreateGlobalConfig_CreatesAndSignsNewConfigWhenMissing()
+    public void GetOrCreateGlobalConfig_CreatesNewConfigWhenMissing()
     {
         var config = _repo.GetOrCreateGlobalConfig();
 
         Assert.NotNull(config);
         Assert.Equal("Global", config.Id);
-        Assert.False(string.IsNullOrEmpty(config.DatabaseCreationVersion));
-        Assert.False(string.IsNullOrEmpty(config.DatabaseCreationSignature));
-        Assert.False(string.IsNullOrEmpty(config.DatabaseCreationId));
-        Assert.False(string.IsNullOrEmpty(config.DatabaseCreationIdSignature));
+        Assert.False(string.IsNullOrWhiteSpace(config.DatabaseCreationId));
 
         var inCache = _repo.GetById("Global");
         Assert.NotNull(inCache);
+        Assert.Equal("Global", inCache.Id);
         Assert.Equal(config.DatabaseCreationId, inCache.DatabaseCreationId);
     }
 
@@ -79,18 +36,17 @@ public class ServerConfigRepositoryTests : IDisposable
         {
             Id = "Global",
             DatabaseCreationVersion = "1.0.0",
-            DatabaseCreationSignature = "sig-ver",
             DatabaseCreationId = "db-custom-id",
-            DatabaseCreationIdSignature = "sig-id"
+            RelayTrialTicket = new RelayTrialTicket { Fingerprint = "fp", IssuedAt = "2026-10-01T00:00:00Z", ExpiresAt = "2026-12-01T00:00:00Z", Signature = "sig" }
         };
         _repo.Save(existing);
 
         var retrieved = _repo.GetOrCreateGlobalConfig();
 
         Assert.Equal("1.0.0", retrieved.DatabaseCreationVersion);
-        Assert.Equal("sig-ver", retrieved.DatabaseCreationSignature);
         Assert.Equal("db-custom-id", retrieved.DatabaseCreationId);
-        Assert.Equal("sig-id", retrieved.DatabaseCreationIdSignature);
+        Assert.NotNull(retrieved.RelayTrialTicket);
+        Assert.Equal("2026-12-01T00:00:00Z", retrieved.RelayTrialTicket!.ExpiresAt);
     }
 
     [Fact]

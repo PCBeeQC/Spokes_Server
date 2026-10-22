@@ -1,6 +1,3 @@
-global using Spokes_Server.Core.Services.Communication.Chat;
-global using Spokes_Server.Core.Services.Communication.Email;
-global using Spokes_Server.Core.Services.Communication.Voice;
-global using Spokes_Server.Core.Services.Communication.Presence;
-global using Spokes_Server.Core.Services.Communication.Notifications;
-global using Spokes_Server.Core.Services.Security;
+global using Spokes_Server.Core.Configuration;
+global using Spokes_Server.Core.Models.Documents;
+global using Spokes_Server.Core.Models.Communication;

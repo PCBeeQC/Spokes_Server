@@ -63,39 +63,47 @@
                     <MudTh>Actions</MudTh>
                 </HeaderContent>
                 <RowTemplate>
-                    <MudTd DataLabel="Business Name">@context.Info.BusinessName</MudTd>
+                    <MudTd DataLabel="Business Name">@context.ContactInfo.BusinessName</MudTd>
                     <MudTd DataLabel="Primary Contact">
-                        @if (context.Contacts.Any(c => c.IsPrimary))
+                        @{
+                            var primary = context.Contacts.FirstOrDefault(c => c.IsPrimary) ?? context.Contacts.FirstOrDefault();
+                        }
+                        @if (primary != null)
                         {
-                            var p = context.Contacts.First(c => c.IsPrimary);
-                            @($"{p.Prefix} {p.Name}")
+                            @($"{primary.Prefix} {primary.Name}".Trim())
                         }
                         else
                         {
-                            @context.Info.ContactPersonName
+                            @context.ContactInfo.ContactPersonName
                         }
                     </MudTd>
                     <MudTd DataLabel="Email">
-                        @if (context.Contacts.Any(c => c.IsPrimary))
+                        @{
+                            var primaryEmail = (context.Contacts.FirstOrDefault(c => c.IsPrimary) ?? context.Contacts.FirstOrDefault())?.Email;
+                        }
+                        @if (!string.IsNullOrEmpty(primaryEmail))
                         {
-                            @context.Contacts.First(c => c.IsPrimary).Email
+                            @primaryEmail
                         }
                         else
                         {
-                            @context.Info.ContactPersonEmail
+                            @context.ContactInfo.ContactPersonEmail
                         }
                     </MudTd>
                     <MudTd DataLabel="Phone">
-                        @if (context.Contacts.Any(c => c.IsPrimary))
+                        @{
+                            var primaryPhone = (context.Contacts.FirstOrDefault(c => c.IsPrimary) ?? context.Contacts.FirstOrDefault())?.Phone;
+                        }
+                        @if (!string.IsNullOrEmpty(primaryPhone))
                         {
-                            @context.Contacts.First(c => c.IsPrimary).Phone
+                            @primaryPhone
                         }
                         else
                         {
-                            @context.Info.ContactPersonPhone
+                            @context.ContactInfo.ContactPersonPhone
                         }
                     </MudTd>
-                    <MudTd DataLabel="City">@context.Info.BusinessAdressCity</MudTd>
+                    <MudTd DataLabel="City">@context.ContactInfo.BusinessAddressCity</MudTd>
                     <MudTd DataLabel="Actions">
                         @if (CanManage)
                         {
@@ -171,7 +179,7 @@
 
     private void RefreshLists()
     {
-        Suppliers = Db.Suppliers.GetAll().OrderBy(s => s.Info.BusinessName).ToList();
+        Suppliers = Db.Suppliers.GetAll().OrderBy(s => s.ContactInfo.BusinessName).ToList();
         PublicContacts = Db.PublicContacts.GetAll().OrderBy(c => c.Name).ToList();
     }
 
@@ -179,9 +187,11 @@
     {
         if (string.IsNullOrWhiteSpace(searchString)) return true;
 
-        if (element.Info.BusinessName.Contains(searchString, StringComparison.OrdinalIgnoreCase)) return true;
-        if (element.Info.ContactPersonName.Contains(searchString, StringComparison.OrdinalIgnoreCase)) return true;
-        if (element.Contacts.Any(c => c.Name.Contains(searchString, StringComparison.OrdinalIgnoreCase))) return true;
+        if (element.ContactInfo.BusinessName.Contains(searchString, StringComparison.OrdinalIgnoreCase)) return true;
+        if (element.Contacts.Any(c => c.Name.Contains(searchString, StringComparison.OrdinalIgnoreCase) ||
+                                      c.Email.Contains(searchString, StringComparison.OrdinalIgnoreCase) ||
+                                      c.Phone.Contains(searchString, StringComparison.OrdinalIgnoreCase))) return true;
+        if (element.ContactInfo.ContactPersonName.Contains(searchString, StringComparison.OrdinalIgnoreCase)) return true;
 
         return false;
     }
@@ -205,9 +215,8 @@
             }, options);
         var result = await dialog.Result;
 
-        if (!result.Canceled)
+        if (result is { Canceled: false, Data: Supplier created })
         {
-            var created = (Supplier)result.Data;
             Db.Suppliers.Save(created);
             RefreshLists();
             Snackbar.Add("Company created", Severity.Success);
@@ -223,9 +232,8 @@
             }, options);
         var result = await dialog.Result;
 
-        if (!result.Canceled)
+        if (result is { Canceled: false, Data: Supplier updated })
         {
-            var updated = (Supplier)result.Data;
             Db.Suppliers.Save(updated);
             RefreshLists();
             Snackbar.Add("Company updated", Severity.Success);
@@ -236,7 +244,7 @@
     {
         bool? result = await DialogService.ShowMessageBoxAsync(
         "Warning",
-        $"Deleting a company cannot be undone. Are you sure you want to delete '{supplier.Info.BusinessName}'?",
+        $"Deleting a company cannot be undone. Are you sure you want to delete '{supplier.ContactInfo.BusinessName}'?",
         yesText: "Delete!", cancelText: "Cancel");
 
         if (result == true)
@@ -260,9 +268,8 @@
         }, options);
         var result = await dialog.Result;
 
-        if (!result.Canceled)
+        if (result is { Canceled: false, Data: ContactPerson created })
         {
-            var created = (ContactPerson)result.Data;
             Db.PublicContacts.Save(created);
             RefreshLists();
             Snackbar.Add("Public contact created", Severity.Success);
@@ -278,9 +285,8 @@
         }, options);
         var result = await dialog.Result;
 
-        if (!result.Canceled)
+        if (result is { Canceled: false, Data: ContactPerson updated })
         {
-            var updated = (ContactPerson)result.Data;
             Db.PublicContacts.Save(updated);
             RefreshLists();
             Snackbar.Add("Public contact updated", Severity.Success);

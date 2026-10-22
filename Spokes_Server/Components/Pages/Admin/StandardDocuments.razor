@@ -1,10 +1,10 @@
 @page "/admin/standard-documents"
+@attribute [Authorize(Policy = AppPermissions.Admin.ManageSettings)]
 @using Spokes_Server.Core.Constants
-@inject Database Db
-@inject UserService UserService
+@using Spokes_Server.Core.Data.Repositories.Documents
+@inject StandardDocumentRepository StandardDocumentRepo
 @inject IDialogService DialogService
 @inject ISnackbar Snackbar
-@inject NavigationManager Nav
 
 <PageTitle>Standard Documents</PageTitle>
 
@@ -59,24 +59,15 @@
     private List<StandardDocument> _documents = [];
     private bool _loading = true;
 
-    protected override async Task OnInitializedAsync()
+    protected override void OnInitialized()
     {
-        var emp = await UserService.GetEmployeeAsync();
-        var hasAccess = emp != null && (emp.IsAdmin || emp.HasPermission(AppPermissions.Admin.ManageSettings));
-
-        if (!hasAccess)
-        {
-            Nav.NavigateTo("/", true);
-            return;
-        }
-
         Reload();
     }
 
     private void Reload()
     {
         _loading = true;
-        _documents = Db.StandardDocuments.GetAll().OrderBy(d => d.Name).ToList();
+        _documents = StandardDocumentRepo.GetAll().OrderBy(d => d.Name).ToList();
         _loading = false;
     }
 
@@ -87,7 +78,7 @@
         var dialog = await DialogService.ShowAsync<StandardDocumentDialog>("Create Document", parameters, options);
         var result = await dialog.Result;
 
-        if (!result.Canceled)
+        if (result is { Canceled: false })
         {
             Reload();
         }
@@ -118,7 +109,7 @@
         var dialog = await DialogService.ShowAsync<StandardDocumentDialog>("Edit Document", parameters, options);
         var result = await dialog.Result;
 
-        if (!result.Canceled)
+        if (result is { Canceled: false })
         {
             Reload();
         }
@@ -134,7 +125,7 @@
         {
             try
             {
-                Db.StandardDocuments.Delete(doc.Id);
+                StandardDocumentRepo.Delete(doc.Id);
                 Snackbar.Add("Standard document deleted", Severity.Info);
                 Reload();
             }

@@ -126,7 +126,7 @@
         UnbilledLabor = laborTotal;
 
         // Calculate unbilled expenses (POs + Expense Reports)
-        var allPos = Db.Purchases.GetAll();
+        var allPos = Db.PurchaseOrders.GetAll();
         var allReports = Db.ExpenseReports.GetAll();
 
         decimal markupRate = 0.15m; // Default markup
@@ -135,7 +135,7 @@
         // PO Items
         foreach (var po in allPos)
         {
-            var unbilledItems = po.Items
+            var unbilledItems = po.LineItems
                 .Where(i => projectIds.Contains(i.ProjectId) && !billedPoItemIds.Contains(i.Id));
             expenseTotal += unbilledItems.Sum(i => i.Total);
         }
@@ -143,7 +143,7 @@
         // Expense items
         foreach (var report in allReports.Where(r => r.DateSubmitted.HasValue))
         {
-            var unbilledItems = report.Items
+            var unbilledItems = report.LineItems
                 .Where(i => projectIds.Contains(i.ProjectId) && !billedExpenseItemIds.Contains(i.Id));
             expenseTotal += unbilledItems.Sum(i => i.Total);
         }
@@ -164,8 +164,9 @@
             ProjectId = Group.ProjectIds.FirstOrDefault() ?? "", // Use first project as reference
             InvoiceNumber = Db.Invoices.GenerateInvoiceNumber(profile.InvoicePrefix),
             Date = DateTime.Today,
-            Status = "Draft",
-            TaxRate = template?.TaxRate ?? 0.14975m
+            Status = InvoiceStatus.Draft,
+            TaxRate = template?.TaxRate ?? 0.14975m,
+            PaymentTerms = template?.DefaultPaymentTerms ?? string.Empty
         };
 
         var parameters = new DialogParameters { ["Invoice"] = invoice };
@@ -174,7 +175,7 @@
         var dialog = await DialogService.ShowAsync<InvoiceMasterDialog>("Create Group Invoice", parameters, options);
         var result = await dialog.Result;
 
-        if (!result.Canceled)
+        if (result is { Canceled: false })
         {
             Refresh();
             Snackbar.Add("Invoice Created", Severity.Success);

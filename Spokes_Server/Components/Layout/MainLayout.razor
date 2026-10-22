@@ -13,7 +13,7 @@
 @inject NavigationManager Nav
 @inject IDialogService DialogService
 @inject IJSRuntime JS
-@inject TimerService TimerService
+@inject TimesheetTimerService TimerService
 @inject ISnackbar Snackbar
 @inject PresenceStateService PresenceState
 @inject UserCircuitContext CircuitContext
@@ -22,6 +22,7 @@
 @inject LicenseValidationService LicenseValidationService
 @inject IFileService FileService
 @inject ChatNotificationService ChatNotifications
+@inject Spokes_Server.Core.Services.HR.Calendar.CalendarNotificationService CalendarNotifications
 @inject ShareTargetStateService ShareTargetStateService
 @inject ServerUpdateService ServerUpdateService
 @inject ScopedKeystoreService ScopedKeystore
@@ -31,7 +32,9 @@
 @inject IHttpContextAccessor HttpContextAccessor
 @inject StartupTimingService StartupTimings
 @inject UserClientStateService UserClientStateService
-@inject Spokes_Server.Core.Services.Core.IStorageHealthService StorageHealth
+@inject SessionService SessionService
+@inject IStorageHealthService StorageHealth
+@inject ILogger<MainLayout> Logger
 @implements IAsyncDisposable
 @implements IBrowserViewportObserver
 
@@ -41,17 +44,20 @@
 <MudSnackbarProvider />
 
 <MudLayout>
+    @{
+        StartupTimings.AddChatTransition($"Server: RenderTree MainLayout[{_diagTag}] #{++_diagRenderCount} (_isChatChannelOpen={_isChatChannelOpen})"); // DIAG-TEMP
+    }
     <MudAppBar Class="@($"py-n2{(_isChatChannelOpen ? " hide-appbar-mobile" : "")}")" Elevation="1" Dense="true">
         <MudIconButton Icon="@Icons.Material.Filled.Menu" Color="Color.Inherit" Edge="Edge.Start"
             OnClick="@((e) => DrawerToggle())" />
         <div class="d-flex align-center ml-1">
-            @if (Profile?.HasCustomIcon == true)
-            {
-                <MudImage Src="@($"/spokesapi/Media/Icon?v={Profile.IconVersion}")" Height="32" Class="mr-2" />
-            }
-            else if (Profile?.HasCustomLogo == true)
+            @if (Profile?.HasCustomLogo == true)
             {
                 <MudImage Src="@($"/spokesapi/Media/Logo?v={Profile.LogoVersion}")" Height="32" Class="mr-2" />
+            }
+            else if (Profile?.HasCustomIcon == true)
+            {
+                <MudImage Src="@($"/spokesapi/Media/Icon?v={Profile.IconVersion}")" Height="32" Class="mr-2" />
             }
 
             @if(!IsFriendEdition)
@@ -71,52 +77,52 @@
 
         @* Desktop Toolbar *@
         <MudHidden Breakpoint="Breakpoint.SmAndDown">
-            @if (!IsFriendEdition)
-            {
-                <MudMenu Icon="@Icons.Material.Filled.Add" Color="Color.Inherit" Edge="Edge.Start" Class="ml-4">
-                    <MudMenuItem OnClick="@(() => Nav.NavigateTo("/projects/new"))">New Project</MudMenuItem>
-                    <MudMenuItem OnClick="@(() => Nav.NavigateTo("/my-timesheet"))">Log Time</MudMenuItem>
-                    <MudMenuItem OnClick="@(() => Nav.NavigateTo("/me/expenses"))">New Expense</MudMenuItem>
-                </MudMenu>
+                @if (!IsFriendEdition)
+                {
+                    <MudMenu Icon="@Icons.Material.Filled.Add" Color="Color.Inherit" Class="ml-4">
+                        <MudMenuItem OnClick="@(() => Nav.NavigateTo("/projects/new"))">@BizLoc["New Project"]</MudMenuItem>
+                        <MudMenuItem OnClick="@(() => Nav.NavigateTo("/my-timesheet"))">@BizLoc["Log Time"]</MudMenuItem>
+                        <MudMenuItem OnClick="@(() => Nav.NavigateTo("/me/expenses"))">@BizLoc["New Expense"]</MudMenuItem>
+                    </MudMenu>
 
-                <Spokes_Server.Components.Shared.TimerButton />
-            }
-            
-            <MudSpacer />
-			@if (!IsFriendEdition)
-            {
-                <Spokes_Server.Components.Shared.GlobalSearchBar @ref="_searchBar" />
-            }
-            
+                    <Spokes_Server.Components.Shared.TimerButton />
+                }
+                
+                <MudSpacer />
+                @if (!IsFriendEdition)
+                {
+                    <Spokes_Server.Components.Shared.GlobalSearchBar @ref="_searchBar" />
+                }
+                
 
-            <MudSpacer />
+                <MudSpacer />
 
-            <MudIconButton Icon="@Icons.Material.Filled.Settings" Color="Color.Inherit"
-                OnClick="OpenUserSettingsDialog" />
-            <MudIconButton Icon="@DarkLightModeButtonIcon" Color="Color.Inherit" OnClick="@DarkModeToggle"
-                Class="mr-4" />
+                <MudIconButton Icon="@Icons.Material.Filled.Settings" Color="Color.Inherit"
+                    OnClick="OpenUserSettingsDialog" />
+                <MudIconButton Icon="@DarkLightModeButtonIcon" Color="Color.Inherit" OnClick="@DarkModeToggle"
+                    Class="mr-4" />
 
-            <AuthorizeView>
-                <Authorized Context="auth">
-                    <div class="d-flex align-center cursor-pointer mr-4" @onclick="OpenProfileDialog">
-                        <EmployeeAvatar Employee="@_currentUser" Size="Size.Small" Class="mr-2" />
-                        <MudText>
-                            @(_currentUser?.FullName
-                                ?? _currentUser?.Email
-                                ?? auth.User.FindFirst("email")?.Value
-                                ?? auth.User.FindFirst(System.Security.Claims.ClaimTypes.Email)?.Value
-                                ?? auth.User.Identity?.Name)
-                        </MudText>
-                    </div>
+                <AuthorizeView>
+                    <Authorized Context="auth">
+                        <div class="d-flex align-center cursor-pointer mr-4" @onclick="OpenProfileDialog">
+                            <EmployeeAvatar Employee="@_currentUser" Size="Size.Small" Class="mr-2" />
+                            <MudText>
+                                @(_currentUser?.FullName
+                                    ?? _currentUser?.Email
+                                    ?? auth.User.FindFirst("email")?.Value
+                                    ?? auth.User.FindFirst(System.Security.Claims.ClaimTypes.Email)?.Value
+                                    ?? auth.User.Identity?.Name)
+                            </MudText>
+                        </div>
 
-                    <form action="logout" method="post" data-enhance="false">
-                        <MudButton ButtonType="ButtonType.Submit" Variant="Variant.Filled" Color="Color.Error">Logout
-                        </MudButton>
-                        <AntiforgeryToken />
-                    </form>
-                </Authorized>
-            </AuthorizeView>
-        </MudHidden>
+                        <form action="logout" method="post" data-enhance="false">
+                            <MudButton ButtonType="ButtonType.Submit" Variant="Variant.Filled" Color="Color.Error">@Loc["Logout"]
+                            </MudButton>
+                            <AntiforgeryToken />
+                        </form>
+                    </Authorized>
+                </AuthorizeView>
+            </MudHidden>
 
         @* Mobile Toolbar *@
         <MudHidden Breakpoint="Breakpoint.MdAndUp">
@@ -149,21 +155,21 @@
                 {
                     @* New Project *@
                     <MudMenuItem Icon="@Icons.Material.Filled.Add" OnClick="@(() => Nav.NavigateTo("/projects/new"))">
-                        New Project
+                        @BizLoc["New Project"]
                     </MudMenuItem>
 
                     @* Start/Stop Timer *@
                     @if (_timerState.IsRunning)
                     {
                         <MudMenuItem Icon="@Icons.Material.Filled.Stop" IconColor="Color.Error" OnClick="StopTimerFromMenu">
-                            Stop Timer
+                            @BizLoc["Stop Timer"]
                         </MudMenuItem>
                     }
                     else
                     {
                         <MudMenuItem Icon="@Icons.Material.Filled.PlayArrow" IconColor="Color.Success"
                                      OnClick="StartTimerFromMenu">
-                            Start Timer
+                            @BizLoc["Start Timer"]
                         </MudMenuItem>
                     }
                 }
@@ -172,7 +178,7 @@
                 {
                     @* Search *@
                     <MudMenuItem Icon="@Icons.Material.Filled.Search" OnClick="FocusMobileSearch">
-                        Search
+                        @Loc["Search"]
                     </MudMenuItem>
 				}
 				
@@ -180,12 +186,12 @@
                 @* Settings *@
                 <MudMenuItem Icon="@Icons.Material.Filled.Settings"
                     OnClick="OpenUserSettingsDialog">
-                    Settings
+                    @Loc["Settings"]
                 </MudMenuItem>
 
                 @* Theme *@
                 <MudMenuItem Icon="@DarkLightModeButtonIcon" OnClick="DarkModeToggle">
-                    Switch Theme
+                    @Loc["SwitchTheme"]
                 </MudMenuItem>
 
                 <MudDivider />
@@ -197,7 +203,7 @@
                             <span style="position: absolute; left: 12px; top: 50%; transform: translateY(-50%); z-index: 10; pointer-events: none;">
                                 <EmployeeAvatar Employee="@_currentUser" Size="Size.Small" />
                             </span>
-                            @(_currentUser?.FirstName ?? "Profile")
+                            @(_currentUser?.FirstName ?? Loc["Profile"].Value)
                         </MudMenuItem>
 
                         @* Logout *@
@@ -205,7 +211,7 @@
                             <form action="logout" method="post" data-enhance="false" id="logout-form-mobile" style="width: 100%; display: flex; flex-grow: 1;">
                                 <button type="submit"
                                     style="background: none; border: none; padding: 0; margin: 0; color: inherit; width: 100%; text-align: left; cursor: pointer; display: flex; align-items: center; justify-content: flex-start;">
-                                    Logout
+                                    @Loc["Logout"]
                                 </button>
                                 <AntiforgeryToken />
                             </form>
@@ -234,7 +240,7 @@
                 {
                     <MudPaper Class="d-flex flex-row" Elevation="0" Style="background-color: transparent;">
                         <MudSpacer></MudSpacer>
-                        <MudSwitch @bind-Value="_isEditingFavorites" Size="Size.Small" ThumbIcon="@(_isEditingFavorites == true ? Icons.Material.Filled.Edit : Icons.Material.Filled.EditOff)" ThumbIconColor="@(_isEditingFavorites == true ? Color.Success : Color.Default)">Edit @AppLabels.Favorites</MudSwitch>
+                        <MudSwitch @bind-Value="_isEditingFavorites" Size="Size.Small" ThumbIcon="@(_isEditingFavorites == true ? Icons.Material.Filled.Edit : Icons.Material.Filled.EditOff)" ThumbIconColor="@(_isEditingFavorites == true ? Color.Success : Color.Default)">@Loc["Edit"] @AppLabels.Favorites</MudSwitch>
                         <MudSpacer></MudSpacer>
                     </MudPaper>
                 }
@@ -251,7 +257,7 @@
         @if (_currentUser != null && (_currentUser.IsAdmin || _currentUser.HasPermission(AppPermissions.Admin.ManageSettings)))
         {
             var storageStatus = StorageHealth.Status;
-            if (storageStatus == Spokes_Server.Core.Services.Core.StorageStatus.CriticalReadOnly)
+            if (storageStatus == StorageStatus.CriticalReadOnly)
             {
                 <MudAlert Severity="Severity.Error" 
                           Dense="true" 
@@ -261,12 +267,12 @@
                     <div class="d-flex align-center flex-wrap flex-grow-1">
                         <MudIcon Icon="@Icons.Material.Filled.Error" Color="Color.Inherit" Size="Size.Small" Class="mr-2" />
                         <MudText Typo="Typo.body2">
-                            <b>CRITICAL: Storage Full (@(StorageHealth.AvailableFreeMegabytes) MB free):</b> Uploads are temporarily paused to protect database integrity. Please free up disk space on the server.
+                            <b>@Loc["CriticalStorageFull"] (@(StorageHealth.AvailableFreeMegabytes) MB free):</b> @Loc["StorageFullDescription"]
                         </MudText>
                     </div>
                 </MudAlert>
             }
-            else if (storageStatus == Spokes_Server.Core.Services.Core.StorageStatus.Warning)
+            else if (storageStatus == StorageStatus.Warning)
             {
                 <MudAlert Severity="Severity.Warning" 
                           Dense="true" 
@@ -276,7 +282,7 @@
                     <div class="d-flex align-center flex-wrap flex-grow-1">
                         <MudIcon Icon="@Icons.Material.Filled.Warning" Color="Color.Inherit" Size="Size.Small" Class="mr-2" />
                         <MudText Typo="Typo.body2">
-                            <b>Storage Warning:</b> Server disk space is running low (@(StorageHealth.AvailableFreeMegabytes) MB remaining). Please free up disk space soon.
+                            <b>@Loc["StorageWarning"]:</b> @string.Format(Loc["StorageWarningDescription"].Value, StorageHealth.AvailableFreeMegabytes)
                         </MudText>
                     </div>
                 </MudAlert>
@@ -299,12 +305,13 @@
                              Size="Size.Small" 
                              Class="mr-2" />
                     <MudText Typo="Typo.body2" Class="mr-2">
-                        <b>@(_licenseStatus == Spokes_Server.Core.Services.Licensing.LicenseStatus.HardLock ? "Spokes Pass Invalid:" : _licenseStatus == Spokes_Server.Core.Services.Licensing.LicenseStatus.Expired ? "Spokes Pass Expired:" : "Spokes Pass Outdated:")</b> @(_licenseStatus == Spokes_Server.Core.Services.Licensing.LicenseStatus.HardLock || _licenseStatus == Spokes_Server.Core.Services.Licensing.LicenseStatus.Expired ? "Mobile push notifications are currently disabled." : _licenseError)
+                        <b>@(_licenseStatus == Spokes_Server.Core.Services.Licensing.LicenseStatus.HardLock ? Loc["Spokes Pass Invalid"] : _licenseStatus == Spokes_Server.Core.Services.Licensing.LicenseStatus.Expired ? Loc["Spokes Pass Expired"] : Loc["Spokes Pass Update Required"])</b>
+                        <span> - @(_licenseStatus == Spokes_Server.Core.Services.Licensing.LicenseStatus.HardLock || _licenseStatus == Spokes_Server.Core.Services.Licensing.LicenseStatus.Expired ? Loc["Native push notifications (desktop & mobile) are currently disabled."] : _licenseError)</span>
                     </MudText>
-                    <MudButton Variant="Variant.Text" Color="Color.Inherit" Size="Size.Small" OnClick="@(() => Nav.NavigateTo("/admin/settings?tab=setup"))">Resolve</MudButton>
+                    <MudButton Variant="Variant.Text" Color="Color.Inherit" Size="Size.Small" OnClick="@(() => Nav.NavigateTo("/admin/settings?tab=setup"))">@Loc["Resolve"]</MudButton>
                     <MudSpacer />
-                    <MudButton Variant="Variant.Text" Color="Color.Inherit" Size="Size.Small" OnClick="DismissLicenseBanner">Remind me later</MudButton>
-                    <MudButton Variant="Variant.Text" Color="Color.Inherit" Size="Size.Small" OnClick="NeverShowLicenseBanner">Never show again</MudButton>
+                    <MudButton Variant="Variant.Text" Color="Color.Inherit" Size="Size.Small" OnClick="DismissLicenseBanner">@Loc["Remind Me Later"]</MudButton>
+                    <MudButton Variant="Variant.Text" Color="Color.Inherit" Size="Size.Small" OnClick="NeverShowLicenseBanner">@Loc["Never Show Again"]</MudButton>
                 </div>
             </MudAlert>
         }
@@ -316,8 +323,8 @@
 </MudLayout>
 
 <div id="blazor-error-ui" data-nosnippet>
-    An unhandled error has occurred.
-    <a href="." class="reload">Reload</a>
+    @Loc["UnhandledErrorOccurred"]
+    <a href="." class="reload">@Loc["Reload"]</a>
     <span class="dismiss">🗙</span>
 </div>
 
@@ -429,6 +436,7 @@
 @code {
     private bool _isLoaded = false;
     private bool _isCapacitorApp = false;
+    private bool _isDesktopSession = false;
     private bool _isEditingFavorites = false;
     private bool _drawerOpen = true;
     private DrawerVariant _drawerVariant = DrawerVariant.Responsive;
@@ -449,6 +457,7 @@
     private string? _currentSubscriptionEndpoint;
     private string? _currentSubscriptionId;
     private string? _currentSessionId;
+    private bool _pushPromptEvaluated = false;
     private bool _isChatPage;
     private bool _isChatChannelOpen;
     private bool _hideLicenseBanner = false;
@@ -569,18 +578,39 @@
         }
     }
 
+    // DIAG-TEMP: chat transition diagnostics
+    private readonly string _diagTag = Guid.NewGuid().ToString("N")[..4];
+    private int _diagRenderCount;
+    private int _diagAfterRenderCount;
+
+    [JSInvokable] public double DiagPing() => StartupTimingService.NowMs();
+    [JSInvokable] public int DiagBeginTransition(string name) => StartupTimings.BeginTransition(name, isNamed: false);
+    [JSInvokable] public ChatTransitionDrainResult DiagDrain(int transitionId, int cursor) => StartupTimings.Drain(transitionId, cursor);
+
     protected override void OnInitialized()
     {
         StartupTimings.Add("Server: Layout OnInitialized");
-        _isChatPage = Nav.Uri.Contains("/chat", StringComparison.OrdinalIgnoreCase);
+        StartupTimings.AddChatTransition($"Server: MainLayout[{_diagTag}] OnInitialized"); // DIAG-TEMP
+        _isChatPage = IsChatPageUrl(Nav.Uri);
         _isChatChannelOpen = IsChatChannelUrl(Nav.Uri);
         Nav.LocationChanged += HandleLocationChanged;
+        CircuitContext.OnChatChannelOpenChanged += HandleChatChannelOpenChanged;
         
-        PresenceState.OnSessionRevoked += HandleSessionRevoked;
+        SessionService.OnSessionRevoked += HandleSessionRevoked;
 
         if (Db.CompanyProfile.Get()?.Edition == "Family")
         {
             _drawerOpen = false;
+        }
+    }
+
+    private void HandleChatChannelOpenChanged(bool isOpen)
+    {
+        if (_isChatChannelOpen != isOpen || !_isChatPage)
+        {
+            _isChatPage = true;
+            _isChatChannelOpen = isOpen;
+            _ = InvokeAsync(StateHasChanged);
         }
     }
 
@@ -597,15 +627,26 @@
 
     private void HandleLocationChanged(object? sender, LocationChangedEventArgs e)
     {
-        _isChatPage = e.Location.Contains("/chat", StringComparison.OrdinalIgnoreCase);
-        _isChatChannelOpen = IsChatChannelUrl(e.Location);
+        var newIsChatPage = IsChatPageUrl(e.Location);
+        var newIsChatChannelOpen = IsChatChannelUrl(e.Location);
+        bool layoutStateChanged = _isChatPage != newIsChatPage || _isChatChannelOpen != newIsChatChannelOpen;
+        _isChatPage = newIsChatPage;
+        _isChatChannelOpen = newIsChatChannelOpen;
+        StartupTimings.AddChatTransition($"Server: MainLayout[{_diagTag}].HandleLocationChanged (_isChatChannelOpen={_isChatChannelOpen}, changed={layoutStateChanged}, intercepted={e.IsNavigationIntercepted}, location={new Uri(e.Location).PathAndQuery})"); // DIAG-TEMP
         
         if (_currentUser != null)
         {
-            PresenceState.PingUserActive(_currentUser.Id);
+            using (StartupTimings.Span("Server: MainLayout PresenceState.PingUserActive")) // DIAG-TEMP
+            {
+                PresenceState.PingUserActive(_currentUser.Id);
+            }
         }
         
-        StateHasChanged();
+        if (!newIsChatPage || layoutStateChanged)
+        {
+            StateHasChanged();
+            StartupTimings.AddChatTransition($"Server: MainLayout[{_diagTag}].HandleLocationChanged StateHasChanged returned"); // DIAG-TEMP
+        }
     }
 
     protected override async Task OnInitializedAsync()
@@ -614,16 +655,35 @@
         Profile = Db.CompanyProfile.Get();
 
         // 1. Setup Theme
-        _theme = new()
-            {
-                PaletteLight = _lightPalette,
-                PaletteDark = _darkPalette,
-                LayoutProperties = new LayoutProperties()
-            };
+        _theme = SpokesTheme.CreateTheme();
 
-        // 2. Load User Preference
+        // 2. Load User Preference & Session Platform Context
         var authState = await AuthStateProvider.GetAuthenticationStateAsync();
         var user = authState.User;
+        _currentSessionId = user.FindFirst("SessionId")?.Value;
+
+        var initialSession = !string.IsNullOrEmpty(_currentSessionId) ? Db.DeviceSessions.GetById(_currentSessionId) : null;
+        var ua = HttpContextAccessor.HttpContext?.Request.Headers.UserAgent.ToString() ?? string.Empty;
+        bool isDesktopUa = Spokes_Server.Core.Helpers.DeviceDetectionHelper.IsDesktopClient(ua);
+        bool isMobileQuery = string.Equals(HttpContextAccessor.HttpContext?.Request.Query["client"].ToString(), "mobile", StringComparison.OrdinalIgnoreCase);
+        bool isCapacitorFromUa = ua.Contains("Capacitor", StringComparison.OrdinalIgnoreCase);
+        bool isMobileUa = !isDesktopUa && (isCapacitorFromUa
+            || ua.Contains("Mobile", StringComparison.OrdinalIgnoreCase)
+            || ua.Contains("Android", StringComparison.OrdinalIgnoreCase)
+            || ua.Contains("iPhone", StringComparison.OrdinalIgnoreCase)
+            || ua.Contains("iPod", StringComparison.OrdinalIgnoreCase));
+        _isDesktopSession = isDesktopUa
+            || (initialSession?.DeviceInfo?.Contains("Desktop App", StringComparison.OrdinalIgnoreCase) ?? false);
+        _isCapacitorApp = !_isDesktopSession && ((initialSession?.IsCapacitorApp ?? false) || isCapacitorFromUa || isMobileQuery);
+        bool isInitialMobile = !_isDesktopSession && (isMobileUa || isMobileQuery || string.Equals(initialSession?.DeviceType, DeviceType.Mobile, StringComparison.OrdinalIgnoreCase));
+
+        if (isInitialMobile)
+        {
+            _drawerOpen = false;
+            _drawerVariant = DrawerVariant.Responsive;
+            Snackbar.Configuration.PositionClass = Defaults.Classes.Position.TopCenter;
+            _isLoaded = true;
+        }
 
         // Use UserService to get the employee
         _currentUser = await UserService.GetEmployeeAsync();
@@ -642,6 +702,17 @@
 
         if (_currentUser != null)
         {
+            // Pre-populate CircuitContext before first render so child components have accurate platform state
+            CircuitContext.UserId = _currentUser.Id;
+            CircuitContext.SessionId = _currentSessionId;
+            CircuitContext.IsCapacitorApp = _isCapacitorApp;
+            CircuitContext.DeviceType = _isDesktopSession ? DeviceType.Desktop : (isInitialMobile ? DeviceType.Mobile : (initialSession?.DeviceType ?? DeviceType.Desktop));
+            CircuitContext.IsMobileViewport = isInitialMobile;
+            CircuitContext.HasPushEnabled = initialSession?.PushEnabled ?? false;
+            CircuitContext.IsFocused = _isThisTabFocused;
+
+            await CalendarNotifications.InitializeAsync(_currentUser.Id);
+
             if (_currentUser.IsBanned)
             {
                 var currentUri = Nav.Uri;
@@ -703,7 +774,7 @@
             if (_currentUser != null && !string.IsNullOrEmpty(_currentUser.EncryptedPrivateKey) && !ScopedKeystore.IsUnlocked)
             {
                 ScopedKeystore.TryInitializeFromVaultCookie(
-                    HttpContextAccessor.HttpContext, _currentUser.Id, _currentUser.EncryptedPrivateKey, Crypto, GlobalKeystore);
+                    HttpContextAccessor.HttpContext, _currentUser.Id, _currentUser.EncryptedPrivateKey);
             }
         }
         StartupTimings.Add("Server: Layout OnInitializedAsync Done");
@@ -733,90 +804,132 @@
         if (firstRender)
         {
             StartupTimings.Add("Server: Layout OnAfterRenderAsync Start");
+            _dotNetRef = DotNetObjectReference.Create(this);
+            _currentSubscriptionId = Guid.NewGuid().ToString();
+
+            if (string.IsNullOrEmpty(_currentSessionId))
+            {
+                try
+                {
+                    var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+                    _currentSessionId = authState.User.FindFirst("SessionId")?.Value;
+                }
+                catch { }
+            }
+
+            if (_currentUser != null)
+            {
+                CircuitContext.SubscriptionId = _currentSubscriptionId;
+                CircuitContext.SessionId = _currentSessionId;
+                PresenceState.RegisterConnection(new ConnectionRegistrationOptions
+                {
+                    UserId = _currentUser.Id,
+                    SubscriptionId = _currentSubscriptionId,
+                    DeviceType = CircuitContext.DeviceType,
+                    HasPushEnabled = CircuitContext.HasPushEnabled,
+                    IsCapacitorApp = CircuitContext.IsCapacitorApp,
+                    SessionId = _currentSessionId,
+                    IsFocused = _isThisTabFocused
+                });
+            }
+
+            var vapidPublicKey = (Profile ?? Db.CompanyProfile.Get())?.VapidPublicKey ?? string.Empty;
+            LayoutClientInitResult? clientInit = null;
             try
             {
-                await JS.InvokeVoidAsync("startupDiagnostics.reportInteractive", _currentUser?.Id, _currentUser?.AvatarBase64?.Length ?? 0, StartupTimings.GetTimings());
+                clientInit = await JS.InvokeAsync<LayoutClientInitResult>("SpokesBridge.initLayout", _dotNetRef, new
+                {
+                    userId = _currentUser?.Id,
+                    avatarLength = _currentUser?.AvatarBase64?.Length ?? 0,
+                    serverTimings = StartupTimings.GetTimings(),
+                    subscriptionId = _currentSubscriptionId,
+                    isDarkMode = _isDarkMode,
+                    vapidPublicKey = vapidPublicKey,
+                    chatDiagnostics = ChatDiagnostics.Enabled // DIAG-TEMP
+                });
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[Startup] Failed to report interactive in JS: {ex.Message}");
+                Logger.LogWarning(ex, "[MainLayout] SpokesBridge.initLayout failed");
             }
 
-            _dotNetRef = DotNetObjectReference.Create(this);
-            await JS.InvokeVoidAsync("registerCtrlK", _dotNetRef);
-            await JS.InvokeVoidAsync("registerWindowFocus", _dotNetRef);
-            await JS.InvokeVoidAsync("registerActivityTracker", _dotNetRef);
-            await JS.InvokeVoidAsync("registerShareTarget", _dotNetRef);
-            await JS.InvokeVoidAsync("registerImageRecoveryCoordinator", _dotNetRef);
-            await JS.InvokeVoidAsync("pushNotifications.registerPresenceLayout", _dotNetRef);
-
-            try
+            if (!string.IsNullOrEmpty(clientInit?.TimeZone))
             {
-                var authState = await AuthStateProvider.GetAuthenticationStateAsync();
-                _currentSessionId = authState.User.FindFirst("SessionId")?.Value;
+                var companyProfile = Db.CompanyProfile.Get();
+                if (string.IsNullOrEmpty(companyProfile.TimeZoneId))
+                {
+                    try
+                    {
+                        _ = TimeZoneInfo.FindSystemTimeZoneById(clientInit.TimeZone);
+                        companyProfile.TimeZoneId = clientInit.TimeZone;
+                        Db.CompanyProfile.Save(companyProfile);
+                        Profile = companyProfile;
+                        Logger.LogInformation("[MainLayout] Auto-detected server timezone as {TimeZone}", clientInit.TimeZone);
+                    }
+                    catch (Exception tzEx)
+                    {
+                        Logger.LogDebug("[MainLayout] Client timezone {TimeZone} not recognized by host: {Message}", clientInit.TimeZone, tzEx.Message);
+                    }
+                }
             }
-            catch { }
 
-            // Register this connection for presence tracking
-            await RegisterPresenceConnection();
-            if (_currentUser != null)
-            {
-                PresenceState.SetConnectionFocus(_currentUser.Id, _currentSubscriptionId, _isThisTabFocused);
-            }
+            var prevIsCapacitor = _isCapacitorApp;
+
+            // Register this connection for presence tracking using the batched client state
+            await RegisterPresenceConnection(clientInit);
 
             // Auto-unlock vault on Native Mobile (since cookies aren't passed reliably in HTTP initial request)
-            if (_currentUser != null && _currentUser.HasChatPassword && !string.IsNullOrEmpty(_currentUser.EncryptedPrivateKey) && !ScopedKeystore.IsUnlocked)
+            if (_currentUser != null && _currentUser.HasVaultPassword && !string.IsNullOrEmpty(_currentUser.EncryptedPrivateKey) && !ScopedKeystore.IsUnlocked)
             {
                 try
                 {
-                    await ScopedKeystore.InitializeFromDeviceCookieAsync(JS, _currentUser.Id, _currentUser.EncryptedPrivateKey, Crypto, GlobalKeystore);
+                    await ScopedKeystore.InitializeFromDeviceCookieAsync(JS, _currentUser.Id, _currentUser.EncryptedPrivateKey);
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine($"[MainLayout] Failed to initialize Keystore from device: {ex.Message}");
+                    Logger.LogWarning(ex, "[MainLayout] Failed to initialize Keystore from device");
                 }
             }
 
-            // Auto-prompt for push notifications on new devices
-            if (_currentUser != null && string.IsNullOrEmpty(_currentSubscriptionEndpoint) && !Config.GetValue<bool>("Spokes_DemoMode"))
+            // Auto-prompt or auto-register push notifications on new devices that don't have an active endpoint yet
+            if (!_pushPromptEvaluated && _currentUser != null && string.IsNullOrEmpty(_currentSubscriptionEndpoint) && !Config.GetValue<bool>("Spokes_DemoMode"))
             {
+                _pushPromptEvaluated = true;
                 try
                 {
-                    var profile = Db.CompanyProfile.Get();
-                    if (!string.IsNullOrEmpty(profile?.VapidPublicKey))
+                    if (!string.IsNullOrEmpty(vapidPublicKey))
                     {
-                        var hasPrompted = await JS.InvokeAsync<bool>("pushNotifications.hasBeenPromptedForPush", profile.VapidPublicKey);
-                        if (!hasPrompted)
+                        var permStatus = clientInit?.PermissionStatus ?? "default";
+                        if (permStatus == "granted")
                         {
-                            var isSupported = await JS.InvokeAsync<bool>("pushNotifications.isSupported");
-                            if (isSupported)
-                            {
-                                var isNativeMobile = await JS.InvokeAsync<bool>("pushNotifications.isNativePlatform");
-                                bool isNativePushBlocked = _licenseStatus == Spokes_Server.Core.Services.Licensing.LicenseStatus.HardLock || 
-                                                           _licenseStatus == Spokes_Server.Core.Services.Licensing.LicenseStatus.Expired;
+                            _ = TriggerAutoPushRegistration(vapidPublicKey, isSilent: true, clientInit);
+                        }
+                        else if (permStatus == "default" && clientInit is { HasBeenPromptedForPush: false, IsPushSupported: true })
+                        {
+                            bool isNativePushBlocked = _licenseStatus == Spokes_Server.Core.Services.Licensing.LicenseStatus.HardLock || 
+                                                       _licenseStatus == Spokes_Server.Core.Services.Licensing.LicenseStatus.Expired;
 
-                                if (isNativeMobile && isNativePushBlocked)
+                            if (clientInit.RequiresPushRelay && isNativePushBlocked)
+                            {
+                                // Suppress auto-prompt for mobile and desktop app users when server lacks a Spokes Pass.
+                                await JS.InvokeVoidAsync("pushNotifications.setPushPrompted", vapidPublicKey);
+                            }
+                            else
+                            {
+                                await JS.InvokeVoidAsync("pushNotifications.setPushPrompted", vapidPublicKey);
+                                
+                                Snackbar.Add("Would you like to enable push notifications for this server?", Severity.Info, config =>
                                 {
-                                    // Suppress auto-prompt for mobile app users when server lacks a Spokes Pass.
-                                    await JS.InvokeVoidAsync("pushNotifications.setPushPrompted", profile.VapidPublicKey);
-                                }
-                                else
-                                {
-                                    await JS.InvokeVoidAsync("pushNotifications.setPushPrompted", profile.VapidPublicKey);
-                                    
-                                    Snackbar.Add("Would you like to enable push notifications for this server?", Severity.Info, config =>
+                                    config.Action = "Enable";
+                                    config.ActionColor = Color.Success;
+                                    config.OnClick = snackbar =>
                                     {
-                                        config.Action = "Enable";
-                                        config.ActionColor = Color.Success;
-                                        config.OnClick = snackbar =>
-                                        {
-                                            _ = TriggerAutoPushRegistration(profile.VapidPublicKey);
-                                            return Task.CompletedTask;
-                                        };
-                                        config.ShowCloseIcon = true;
-                                        config.RequireInteraction = true;
-                                    });
-                                }
+                                        _ = TriggerAutoPushRegistration(vapidPublicKey, isSilent: false, clientInit);
+                                        return Task.CompletedTask;
+                                    };
+                                    config.ShowCloseIcon = true;
+                                    config.RequireInteraction = true;
+                                });
                             }
                         }
                     }
@@ -850,13 +963,13 @@
                 }
             }
 
-            if (_currentUser != null && !_currentUser.HasChatPassword && !_currentUser.DismissedChatWizardPermanently)
+            if (_currentUser != null && !_currentUser.HasVaultPassword && !_currentUser.DismissedChatWizardPermanently)
             {
                 if ((_currentUser.ChatWizardRemindLaterDate == null || DateTimeOffset.UtcNow > _currentUser.ChatWizardRemindLaterDate) && !Config.GetValue<bool>("Spokes_DemoMode"))
                 {
                     var options = new DialogOptions { CloseOnEscapeKey = false, BackdropClick = false, MaxWidth = MaxWidth.Small, FullWidth = true };
                     var parameters = new DialogParameters { { "Employee", _currentUser } };
-                    var dialog = await DialogService.ShowAsync<Spokes_Server.Components.Dialogs.SecureChatSetupWizardDialog>("Secure Chat Setup", parameters, options);
+                    var dialog = await DialogService.ShowAsync<SecureChatSetupWizardDialog>("Secure Chat Setup", parameters, options);
                     var result = await dialog.Result;
                 }
             }
@@ -864,25 +977,34 @@
             await ViewportService.SubscribeAsync(this);
             var bp = await ViewportService.GetCurrentBreakpointAsync();
             var isMobile = bp <= Breakpoint.Sm;
-            
-            Snackbar.Configuration.PositionClass = isMobile ? Defaults.Classes.Position.TopCenter : Defaults.Classes.Position.BottomRight;
-            
-            if (!isMobile)
+            CircuitContext.IsMobileViewport = isMobile;
+
+            var targetPosition = isMobile ? Defaults.Classes.Position.TopCenter : Defaults.Classes.Position.BottomLeft;
+            var targetVariant = isMobile ? DrawerVariant.Responsive : DrawerVariant.Mini;
+            var targetDrawerOpen = isMobile ? false : _drawerOpen;
+
+            bool needsRender = !_isLoaded
+                || Snackbar.Configuration.PositionClass != targetPosition
+                || _drawerVariant != targetVariant
+                || (isMobile && _drawerOpen != targetDrawerOpen)
+                || prevIsCapacitor != _isCapacitorApp;
+
+            Snackbar.Configuration.PositionClass = targetPosition;
+            _drawerVariant = targetVariant;
+            if (isMobile)
             {
-                _drawerVariant = DrawerVariant.Mini;
-            }
-            else
-            {
-                _drawerVariant = DrawerVariant.Responsive;
                 _drawerOpen = false;
             }
-            
-            try { await JS.InvokeVoidAsync("setCapacitorStatusBarStyle", _isDarkMode); } catch { }
-            try { _isCapacitorApp = await JS.InvokeAsync<bool>("eval", "!!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform())"); } catch { }
-            try { await JS.InvokeVoidAsync("pushNotifications.initializeNativePushListeners", _dotNetRef); } catch { }
-            
             _isLoaded = true;
-            StateHasChanged();
+
+            if (needsRender)
+            {
+                StateHasChanged();
+            }
+        }
+        else
+        {
+            StartupTimings.AddChatTransition($"Server: MainLayout[{_diagTag}] OnAfterRender #{++_diagAfterRenderCount} (_isChatChannelOpen={_isChatChannelOpen})"); // DIAG-TEMP
         }
     }
 
@@ -892,9 +1014,11 @@
     public async Task NotifyBrowserViewportChangeAsync(BrowserViewportEventArgs args)
     {
         var isMobile = args.Breakpoint <= Breakpoint.Sm;
+        CircuitContext.IsMobileViewport = isMobile;
+
         var newVariant = isMobile ? DrawerVariant.Responsive : DrawerVariant.Mini;
         
-        var newPosition = isMobile ? Defaults.Classes.Position.TopCenter : Defaults.Classes.Position.BottomRight;
+        var newPosition = isMobile ? Defaults.Classes.Position.TopCenter : Defaults.Classes.Position.BottomLeft;
         if (Snackbar.Configuration.PositionClass != newPosition)
         {
             Snackbar.Configuration.PositionClass = newPosition;
@@ -913,11 +1037,7 @@
         {
             if (_dotNetRef != null)
             {
-                await JS.InvokeVoidAsync("unregisterCtrlK");
-                await JS.InvokeVoidAsync("unregisterWindowFocus");
-                await JS.InvokeVoidAsync("unregisterActivityTracker");
-                await JS.InvokeVoidAsync("unregisterShareTarget");
-                await JS.InvokeVoidAsync("pushNotifications.stopIdleDetector");
+                await JS.InvokeVoidAsync("SpokesBridge.disposeLayout");
             }
 
             // Remove this connection from presence tracking
@@ -937,7 +1057,8 @@
         TimerService.OnTimerChanged -= OnTimerChanged;
         StopUiTimer();
         Nav.LocationChanged -= HandleLocationChanged;
-        PresenceState.OnSessionRevoked -= HandleSessionRevoked;
+        CircuitContext.OnChatChannelOpenChanged -= HandleChatChannelOpenChanged;
+        SessionService.OnSessionRevoked -= HandleSessionRevoked;
         _dotNetRef?.Dispose();
     }
 
@@ -967,9 +1088,17 @@
     [JSInvokable]
     public void OnWindowFocusChanged(bool isFocused)
     {
-        if (_isThisTabFocused == isFocused) return; // Prevent spurious updates
+        bool serverMatches = CircuitContext.IsFocused == isFocused &&
+                             !CircuitContext.IsIdle &&
+                             (string.IsNullOrEmpty(_currentSubscriptionId) || PresenceState.IsConnectionActivelyViewed(_currentSubscriptionId) == isFocused);
+        if (_isThisTabFocused == isFocused && serverMatches) return; // Prevent spurious updates
+
         _isThisTabFocused = isFocused;
         CircuitContext.IsFocused = isFocused;
+        if (isFocused)
+        {
+            CircuitContext.IsIdle = false;
+        }
         CircuitContext.NotifyFocusChanged();
 
         if (_currentUser != null)
@@ -995,29 +1124,6 @@
             
             InvokeAsync(StateHasChanged);
         }
-    }
-
-    public class SharePayload
-    {
-        public string? Title { get; set; }
-        public string? Text { get; set; }
-        public string? Url { get; set; }
-        public List<SharedFile>? Files { get; set; }
-        public string? TargetChannelId { get; set; }
-        public string? TargetServerUrl { get; set; }
-
-        /// <summary>
-        /// Compat: @capgo/capacitor-share-target sends "texts" (plural array).
-        /// Merged into Text/Url by OnShareReceived if present.
-        /// </summary>
-        public List<string>? Texts { get; set; }
-    }
-
-    public class SharedFile
-    {
-        public string? Name { get; set; }
-        public string? MimeType { get; set; }
-        public string? Uri { get; set; }
     }
 
     [JSInvokable]
@@ -1060,14 +1166,14 @@
             { "SharedTitle", payload.Title },
             { "SharedText", payload.Text },
             { "SharedUrl", payload.Url },
-            { "SharedFiles", payload.Files ?? new List<SharedFile>() }
+            { "SharedFiles", payload.Files ?? [] }
         };
 
         var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Large, FullWidth = true };
-        var dialog = await DialogService.ShowAsync<Spokes_Server.Components.Dialogs.ShareModal>("Share to Spokes", parameters,options);
+        var dialog = await DialogService.ShowAsync<ShareModal>("Share to Spokes", parameters,options);
         var result = await dialog.Result;
 
-        if (result != null && !result.Canceled && result.Data is Spokes_Server.Components.Dialogs.ShareModal.ShareResult shareResult)
+        if (result != null && !result.Canceled && result.Data is ShareModal.ShareResult shareResult)
         {
             if (!string.IsNullOrEmpty(shareResult.ChannelId))
             {
@@ -1087,7 +1193,7 @@
                 NoHeader = true,
                 CloseOnEscapeKey = true
             };
-        await DialogService.ShowAsync<Spokes_Server.Components.Dialogs.GlobalSearchDialog>("", options);
+        await DialogService.ShowAsync<GlobalSearchDialog>("", options);
     }
 
     // --- Drawer & Theme ---
@@ -1122,15 +1228,15 @@
     {
         if (_currentUser == null) return;
 
-        var parameters = new DialogParameters<Spokes_Server.Components.Dialogs.EditProfileDialog>
+        var parameters = new DialogParameters<EditProfileDialog>
 {
 { x => x.Employee, _currentUser }
 };
         var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Small, FullWidth = true };
-        var dialog = await DialogService.ShowAsync<Spokes_Server.Components.Dialogs.EditProfileDialog>("Edit Profile", parameters);
+        var dialog = await DialogService.ShowAsync<EditProfileDialog>("Edit Profile", parameters);
         var result = await dialog.Result;
 
-        if (!result.Canceled && result.Data is Employee updatedEmployee)
+        if (result is { Canceled: false, Data: Employee updatedEmployee })
         {
             StateHasChanged();
         }
@@ -1140,21 +1246,29 @@
     private async Task StartTimerFromMenu()
     {
         var options = new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true, CloseButton = true };
-        var dialog = await DialogService.ShowAsync<Spokes_Server.Components.Dialogs.StartTimerDialog>("Start Timer", options);
+        var dialog = await DialogService.ShowAsync<StartTimerDialog>("Start Timer", options);
         // The dialog handles the actual starting through TimerService
     }
 
     private void StopTimerFromMenu()
     {
         if (_currentUser == null) return;
-        var elapsed = TimerService.Stop(_currentUser.Id);
-        if (elapsed.TotalMinutes >= 1)
+        var result = TimerService.Stop(_currentUser.Id);
+        if (result.IsSuccess)
         {
-            Snackbar.Add($"Logged {elapsed.Hours}h {elapsed.Minutes}m", Severity.Success);
+            var elapsed = result.Value;
+            if (elapsed.TotalMinutes >= 1)
+            {
+                Snackbar.Add($"Logged {elapsed.Hours}h {elapsed.Minutes}m", Severity.Success);
+            }
+            else
+            {
+                Snackbar.Add("Timer < 1 min - discarded", Severity.Warning);
+            }
         }
         else
         {
-            Snackbar.Add("Timer < 1 min - discarded", Severity.Warning);
+            Snackbar.Add(result.ErrorMessage ?? "Cannot stop timer.", Severity.Error);
         }
     }
 
@@ -1195,76 +1309,116 @@
     // --- User Settings Dialog ---
     private async Task OpenUserSettingsDialog()
     {
+        var parameters = new DialogParameters<UserSettingsDialog>
+        {
+            { x => x.Employee, _currentUser }
+        };
         var options = new DialogOptions
         {
             CloseOnEscapeKey = true,
             MaxWidth = MaxWidth.Small,
             FullWidth = true
         };
-        await DialogService.ShowAsync<Spokes_Server.Components.Dialogs.UserSettingsDialog>("", options);
+        await DialogService.ShowAsync<UserSettingsDialog>("", parameters, options);
     }
 
     // --- Presence Connection Registration ---
-    private async Task RegisterPresenceConnection()
+    private static string? ExtractDictString(Dictionary<string, object>? dict, string key)
+    {
+        if (dict == null || !dict.TryGetValue(key, out var val) || val == null) return null;
+        if (val is System.Text.Json.JsonElement je)
+        {
+            return je.ValueKind == System.Text.Json.JsonValueKind.String ? je.GetString() : je.ToString();
+        }
+        return val.ToString();
+    }
+
+    private async Task RegisterPresenceConnection(LayoutClientInitResult? clientInit)
     {
         if (_currentUser == null) return;
 
-        // Give this browser tab a robust unique ID so presence works even without push notifications.
-        _currentSubscriptionId = Guid.NewGuid().ToString();
-        var deviceType = "Desktop"; // Default
-        bool isNativeApp = false;
-        try
+        if (string.IsNullOrEmpty(_currentSubscriptionId))
         {
-            deviceType = await JS.InvokeAsync<string>("pushNotifications.detectDeviceType");
-            isNativeApp = deviceType == "Mobile";
+            _currentSubscriptionId = Guid.NewGuid().ToString();
         }
-        catch
+
+        var currentSession = !string.IsNullOrEmpty(_currentSessionId) ? Db.DeviceSessions.GetById(_currentSessionId) : null;
+        bool isDesktopClient = (clientInit?.IsDesktopApp == true) || _isDesktopSession;
+        bool isNativeApp = !isDesktopClient && (clientInit?.IsCapacitorApp ?? _isCapacitorApp);
+        bool isCapacitorApp = !isDesktopClient && (isNativeApp || (currentSession?.IsCapacitorApp ?? false));
+        var deviceType = isDesktopClient
+            ? DeviceType.Desktop
+            : (isCapacitorApp
+                ? DeviceType.Mobile
+                : (!string.IsNullOrEmpty(clientInit?.DeviceType) ? clientInit.DeviceType : (currentSession?.DeviceType ?? DeviceType.Desktop)));
+
+        // Self-heal previously poisoned sessions or persist Capacitor identity on mobile sessions
+        if (isDesktopClient && currentSession != null && (currentSession.IsCapacitor || currentSession.DeviceType != DeviceType.Desktop))
         {
-            try
-            {
-                isNativeApp = await JS.InvokeAsync<bool>("eval", "typeof window.isCapacitorNative === 'function' ? window.isCapacitorNative() : !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform())");
-                if (isNativeApp)
-                {
-                    deviceType = "Mobile";
-                }
-            }
-            catch { }
+            currentSession.IsCapacitor = false;
+            currentSession.DeviceType = DeviceType.Desktop;
+            Db.DeviceSessions.Save(currentSession);
+        }
+        else if (isCapacitorApp && currentSession != null && (!currentSession.IsCapacitor || currentSession.DeviceType != DeviceType.Mobile))
+        {
+            currentSession.IsCapacitor = true;
+            currentSession.DeviceType = DeviceType.Mobile;
+            Db.DeviceSessions.Save(currentSession);
         }
 
         bool hasPushEnabled = false;
-
-        try
+        bool shouldSyncPushSubscription = false;
+        var existingSub = clientInit?.ExistingSubscription;
+        var endpoint = ExtractDictString(existingSub, "endpoint");
+        if (existingSub != null && !string.IsNullOrEmpty(endpoint))
         {
-            var existingSub = await JS.InvokeAsync<Dictionary<string, object>?>("pushNotifications.getExistingSubscription");
-            if (existingSub != null && existingSub.TryGetValue("endpoint", out var epObj))
+            _currentSubscriptionEndpoint = endpoint;
+            var sub = Db.DeviceSessions.GetByPushEndpoint(_currentSubscriptionEndpoint);
+            var incomingPubKey = ExtractDictString(existingSub, "publicKey");
+            bool pubKeyMatches = string.IsNullOrEmpty(incomingPubKey) || currentSession?.PushPublicKey == incomingPubKey;
+
+            if (sub != null && sub.Id == currentSession?.Id && currentSession.HasPush && pubKeyMatches)
             {
-                _currentSubscriptionEndpoint = epObj?.ToString();
-
-                // Look up the subscription ID from the endpoint
-                if (!string.IsNullOrEmpty(_currentSubscriptionEndpoint))
+                hasPushEnabled = currentSession.PushEnabled;
+                if (!isDesktopClient)
                 {
-                    var currentSession = !string.IsNullOrEmpty(_currentSessionId) ? Db.DeviceSessions.GetById(_currentSessionId) : null;
-                    var sub = Db.DeviceSessions.GetByPushEndpoint(_currentSubscriptionEndpoint);
+                    isCapacitorApp = isCapacitorApp || sub.IsCapacitorApp;
+                    deviceType = (isCapacitorApp || deviceType == DeviceType.Mobile) ? DeviceType.Mobile : sub.DeviceType;
+                }
+            }
+            else
+            {
+                // Active push subscription exists on client; sync or register to current session
+                var subType = ExtractDictString(existingSub, "subscriptionType");
+                bool isExistingRelay = subType == "NativeRelay" || isNativeApp || (clientInit?.RequiresPushRelay ?? false);
+                bool isNativePushBlocked = _licenseStatus == Spokes_Server.Core.Services.Licensing.LicenseStatus.HardLock || 
+                                           _licenseStatus == Spokes_Server.Core.Services.Licensing.LicenseStatus.Expired;
 
-                    if (sub != null && sub.Id == currentSession?.Id && currentSession.HasPush)
-                    {
-                        hasPushEnabled = true;
-                        deviceType = (isNativeApp || sub.IsCapacitorApp || deviceType == "Mobile") ? "Mobile" : sub.DeviceType;
-                    }
-                    else
-                    {
-                        // Active push subscription exists in browser; re-sync or register to current session
-                        hasPushEnabled = true;
-                        try
-                        {
-                            await JS.InvokeAsync<bool>("pushNotifications.sendSubscriptionToServer", existingSub, deviceType, "", false);
-                        }
-                        catch { /* Ignore */ }
-                    }
+                if (!isExistingRelay || !isNativePushBlocked)
+                {
+                    hasPushEnabled = true;
+                    shouldSyncPushSubscription = true;
                 }
             }
         }
-        catch { /* Push not available — will track presence using the anonymous ID */ }
+
+        if (clientInit?.IosSoundDisabled == true && hasPushEnabled)
+        {
+            Snackbar.Add("Notification sounds are disabled for Spokes in your iPhone Settings.", Severity.Warning, config =>
+            {
+                config.Action = "Open Settings";
+                config.ActionColor = Color.Warning;
+                config.OnClick = _ => JS.InvokeVoidAsync("pushNotifications.openAppSettings").AsTask();
+                config.RequireInteraction = true;
+            });
+        }
+
+        _isCapacitorApp = isCapacitorApp;
+
+        if (clientInit?.IsFocused == false || !PresenceState.IsConnectionActivelyViewed(_currentSubscriptionId))
+        {
+            _isThisTabFocused = false;
+        }
 
         // Populate scoped circuit context for PresenceCircuitHandler
         CircuitContext.UserId = _currentUser.Id;
@@ -1272,56 +1426,71 @@
         CircuitContext.SessionId = _currentSessionId;
         CircuitContext.DeviceType = deviceType;
         CircuitContext.HasPushEnabled = hasPushEnabled;
+        CircuitContext.IsCapacitorApp = isCapacitorApp;
         CircuitContext.IsFocused = _isThisTabFocused;
+        CircuitContext.IsIdle = false;
 
-        // Register the connection in the PresenceState service
-        PresenceState.RegisterConnection(_currentUser.Id, _currentSubscriptionId, deviceType, hasPushEnabled, _currentSessionId, _isThisTabFocused);
-        
-        try
+        // Register the connection in the PresenceState service before awaiting any slow push sync JS roundtrip
+        PresenceState.RegisterConnection(new ConnectionRegistrationOptions
         {
-            await JS.InvokeVoidAsync("eval", $"window._currentSubscriptionId = '{_currentSubscriptionId}';");
-        }
-        catch { /* Ignore errors if circuit is disconnecting */ }
+            UserId = _currentUser.Id,
+            SubscriptionId = _currentSubscriptionId,
+            DeviceType = deviceType,
+            HasPushEnabled = hasPushEnabled,
+            IsCapacitorApp = isCapacitorApp,
+            SessionId = _currentSessionId,
+            IsFocused = _isThisTabFocused
+        });
 
-        // If this device has Idle Detection enabled, try to start it
-        if (_currentSubscriptionEndpoint != null && !isNativeApp)
-        {
-            var sub = Db.DeviceSessions.GetByPushEndpoint(_currentSubscriptionEndpoint);
-            if (sub != null && sub.IsIdleDetectionEnabled && sub.DeviceType == "Desktop" && !sub.IsCapacitorApp)
-            {
-                try
-                {
-                    await JS.InvokeAsync<bool>("pushNotifications.startIdleDetector", _dotNetRef);
-                }
-                catch { /* Ignore errors if browser doesn't support it */ }
-            }
-            else
-            {
-                try
-                {
-                    await JS.InvokeVoidAsync("pushNotifications.stopIdleDetector");
-                }
-                catch { }
-            }
-        }
-        else if (isNativeApp)
+        if (shouldSyncPushSubscription && existingSub != null)
         {
             try
             {
-                await JS.InvokeVoidAsync("pushNotifications.stopIdleDetector");
+                await JS.InvokeAsync<bool>("pushNotifications.sendSubscriptionToServer", existingSub, deviceType, "", true);
             }
-            catch { }
+            catch { /* Ignore */ }
         }
-
-        // Note: Legacy "session consolidation" block removed.
-        // Device ID mismatch is now handled at SSO login time (Program.cs /sso/login/auto)
-        // and at layout load time (OnAfterRenderAsync deviceId validation above).
     }
 
     [JSInvokable]
     public void OnDeviceActivePing()
     {
+        bool wasIdle = CircuitContext.IsIdle;
+        CircuitContext.IsIdle = false;
         PresenceState.PingDeviceActive(_currentSubscriptionId);
+        if (wasIdle && _isThisTabFocused)
+        {
+            CircuitContext.NotifyFocusChanged();
+        }
+    }
+
+    [JSInvokable]
+    public void OnClientPresenceStateChanged(string state)
+    {
+        if (string.IsNullOrEmpty(state)) return;
+
+        var normalized = state.Trim().ToLowerInvariant();
+        var parsedState = normalized switch
+        {
+            "away" or "idle" => ConnectionPresenceState.Idle,
+            "dnd" => ConnectionPresenceState.DoNotDisturb,
+            "offline" or "invisible" => ConnectionPresenceState.Offline,
+            _ => ConnectionPresenceState.Active
+        };
+
+        bool wasIdle = CircuitContext.IsIdle;
+        CircuitContext.IsIdle = parsedState is ConnectionPresenceState.Idle or ConnectionPresenceState.Offline;
+
+        PresenceState.SetConnectionPresenceState(_currentSubscriptionId, parsedState);
+
+        if (CircuitContext.IsIdle && _currentUser != null)
+        {
+            UserClientStateService.FlushToDiskIfUnsent(_currentUser.Id);
+        }
+        else if (wasIdle && !CircuitContext.IsIdle && _isThisTabFocused)
+        {
+            CircuitContext.NotifyFocusChanged();
+        }
     }
 
     public string DarkLightModeButtonIcon => _isDarkMode switch
@@ -1331,10 +1500,53 @@
     };
 
     /// <summary>
+    /// Checks if the URL represents a chat page layout.
+    /// In Friend/Family Edition, the root route ("/") also renders the Chat component.
+    /// </summary>
+    internal bool IsChatPageUrl(string? url) => IsChatPageUrl(url, IsFriendEdition);
+
+    internal static bool IsChatPageUrl(string? url, bool isFriendEdition)
+    {
+        if (string.IsNullOrEmpty(url)) return false;
+
+        if (Uri.TryCreate(url, UriKind.Absolute, out var uri))
+        {
+            var path = uri.AbsolutePath.TrimEnd('/');
+            var segments = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
+
+            if (segments.Length >= 1 && segments[0].Equals("chat", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            if (segments.Length == 0 && isFriendEdition)
+            {
+                return true;
+            }
+        }
+        else
+        {
+            var clean = url.Split('?')[0].TrimEnd('/');
+            if (clean.Equals("/chat", StringComparison.OrdinalIgnoreCase) ||
+                clean.StartsWith("/chat/", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            if ((clean == "/" || string.IsNullOrEmpty(clean)) && isFriendEdition)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
     /// Checks if the URL is a chat channel URL (i.e. /chat/{channelId}).
     /// This is used to hide the app bar on mobile to maximize chat space.
     /// </summary>
-    private static bool IsChatChannelUrl(string url)
+    internal static bool IsChatChannelUrl(string url)
     {
         // Extract the path from the full URL
         if (Uri.TryCreate(url, UriKind.Absolute, out var uri))
@@ -1348,74 +1560,50 @@
         return false;
     }
 
-    private readonly PaletteLight _lightPalette = new()
-        {
-            Black = "#110e2d",
-            AppbarText = "#424242",
-            AppbarBackground = "rgba(255,255,255,0.8)",
-            DrawerBackground = "#ffffff",
-            GrayLight = "#e8e8e8",
-            GrayLighter = "#f9f9f9",
-        };
 
-    private readonly PaletteDark _darkPalette = new()
-        {
-            Primary = "#7e6fff",
-            Surface = "#1e1e2d",
-            Background = "#1a1a27",
-            BackgroundGray = "#151521",
-            AppbarText = "#92929f",
-            AppbarBackground = "rgba(26,26,39,0.8)",
-            DrawerBackground = "#1a1a27",
-            ActionDefault = "#74718e",
-            ActionDisabled = "#9999994d",
-            ActionDisabledBackground = "#605f6d4d",
-            TextPrimary = "#b2b0bf",
-            TextSecondary = "#92929f",
-            TextDisabled = "#ffffff33",
-            DrawerIcon = "#92929f",
-            DrawerText = "#92929f",
-            GrayLight = "#2a2833",
-            GrayLighter = "#1e1e2d",
-            Info = "#4a86ff",
-            Success = "#3dcb6c",
-            Warning = "#ffb545",
-            Error = "#ff3f5f",
-            LinesDefault = "#33323e",
-            TableLines = "#33323e",
-            Divider = "#292838",
-            OverlayLight = "#1e1e2d80",
-        };
-
-    private async Task TriggerAutoPushRegistration(string vapidPublicKey)
+    private async Task TriggerAutoPushRegistration(string vapidPublicKey, bool isSilent = false, LayoutClientInitResult? clientInit = null)
     {
         try
         {
+            var requiresRelay = clientInit?.RequiresPushRelay ?? await JS.InvokeAsync<bool>("pushNotifications.requiresPushRelay");
+            bool isNativePushBlocked = _licenseStatus == Spokes_Server.Core.Services.Licensing.LicenseStatus.HardLock || 
+                                       _licenseStatus == Spokes_Server.Core.Services.Licensing.LicenseStatus.Expired;
+            if (requiresRelay && isNativePushBlocked)
+            {
+                return;
+            }
+
             // 1. Request permission
             var permResult = await JS.InvokeAsync<Dictionary<string, object>>("pushNotifications.requestPermission", _dotNetRef);
-            var permission = permResult?.GetValueOrDefault("permission")?.ToString();
+            var permission = ExtractDictString(permResult, "permission");
             
             if (permission == "granted")
             {
                 // 2. Register service worker
                 var swResult = await JS.InvokeAsync<Dictionary<string, object>>("pushNotifications.registerServiceWorker");
-                var swSuccess = swResult?.GetValueOrDefault("success")?.ToString() == "True";
+                var swSuccess = string.Equals(ExtractDictString(swResult, "success"), "True", StringComparison.OrdinalIgnoreCase);
                 
                 if (swSuccess)
                 {
                     // 3. Subscribe to push
                     var subscription = await JS.InvokeAsync<Dictionary<string, object>>("pushNotifications.subscribe", vapidPublicKey, _dotNetRef);
+                    var subEndpoint = ExtractDictString(subscription, "endpoint");
                     
-                    if (subscription != null && subscription.ContainsKey("endpoint"))
+                    if (subscription != null && !string.IsNullOrEmpty(subEndpoint))
                     {
                         // 4. Save to server
-                        var deviceType = await JS.InvokeAsync<string>("pushNotifications.detectDeviceType");
-                        var success = await JS.InvokeAsync<bool>("pushNotifications.sendSubscriptionToServer", subscription, deviceType, "", false);
+                        var deviceType = !string.IsNullOrEmpty(clientInit?.DeviceType)
+                            ? clientInit.DeviceType
+                            : await JS.InvokeAsync<string>("pushNotifications.detectDeviceType");
+                        var success = await JS.InvokeAsync<bool>("pushNotifications.sendSubscriptionToServer", subscription, deviceType, "", true);
                         
                         if (success)
                         {
-                            Snackbar.Add("Push notifications enabled!", Severity.Success);
-                            if (permResult != null && permResult.TryGetValue("soundDisabled", out var sd) && sd?.ToString()?.Equals("True", StringComparison.OrdinalIgnoreCase) == true)
+                            if (!isSilent)
+                            {
+                                Snackbar.Add("Push notifications enabled!", Severity.Success);
+                            }
+                            if (string.Equals(ExtractDictString(permResult, "soundDisabled"), "True", StringComparison.OrdinalIgnoreCase))
                             {
                                 Snackbar.Add("Notification sounds are disabled for Spokes in your iPhone Settings.", Severity.Warning, config =>
                                 {
@@ -1426,9 +1614,22 @@
                                 });
                             }
                             // Refresh endpoint and presence so other tabs see it
-                            _currentSubscriptionEndpoint = subscription.GetValueOrDefault("endpoint")?.ToString();
+                            _currentSubscriptionEndpoint = subEndpoint;
                             CircuitContext.HasPushEnabled = true;
                             PresenceState.UpdatePushEnabledState(_currentSubscriptionId, true);
+                        }
+                        else
+                        {
+                            try
+                            {
+                                var lastErr = await JS.InvokeAsync<Dictionary<string, object>?>("pushNotifications.getLastSubscriptionError");
+                                var errCode = ExtractDictString(lastErr, "code");
+                                if (errCode == "PASS_EXPIRED")
+                                {
+                                    Snackbar.Add(Loc["Native push notifications require an active Spokes Pass."].Value, Severity.Warning);
+                                }
+                            }
+                            catch { }
                         }
                     }
                 }
@@ -1436,7 +1637,7 @@
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Error auto-registering push notifications: {ex.Message}");
+            Logger.LogWarning(ex, "Error auto-registering push notifications");
         }
     }
 
@@ -1453,5 +1654,21 @@
     public void TriggerTokenRecovery()
     {
         ImageRecovery.NotifyTokensWiped();
+    }
+
+    private sealed class LayoutClientInitResult
+    {
+        public string Platform { get; set; } = "web";
+        public bool IsCapacitorApp { get; set; }
+        public bool IsDesktopApp { get; set; }
+        public string DeviceType { get; set; } = global::Spokes_Server.Core.Models.Core.DeviceType.Desktop;
+        public bool? IsFocused { get; set; }
+        public Dictionary<string, object>? ExistingSubscription { get; set; }
+        public string PermissionStatus { get; set; } = "default";
+        public bool HasBeenPromptedForPush { get; set; }
+        public bool IsPushSupported { get; set; }
+        public bool RequiresPushRelay { get; set; }
+        public bool IosSoundDisabled { get; set; }
+        public string? TimeZone { get; set; }
     }
 }

@@ -1,4 +1,6 @@
 @page "/projects/{ProjectId}/quotes/{QuoteId}"
+@attribute [Authorize(Policy = AppPermissions.Projects.View)]
+@using Spokes_Server.Core.Constants
 @using Spokes_Server.Core.Models.Core
 @using Spokes_Server.Core.Models.Projects
 @using Spokes_Server.Core.Models.Accounting
@@ -8,6 +10,7 @@
 @using Spokes_Server.Components.Pages.Email
 @using Spokes_Server.Core.Services.Documents
 @using Spokes_Server.Core.Services.Projects
+@using Spokes_Server.Components.Shared
 @inject Database Db
 @inject ISnackbar Snackbar
 @inject IDialogService DialogService
@@ -17,6 +20,7 @@
 @inject UserService UserService
 @inject DocumentPdfService PdfService
 @inject MarkdownSanitizerService MarkdownSanitizer
+@inject ITimelineEventService TimelineEventService
 @implements IAsyncDisposable
 
 @if (Quote == null || Template == null || Profile == null)
@@ -26,9 +30,9 @@
 }
 else
 {
-    @if (Quote != null && Project != null)
+    @if (Quote != null)
     {
-        <PageTitle>@($"{Template?.Label_Quote ?? "Quote"} {Quote.QuoteNumber} - {Project.Client.BusinessName}")</PageTitle>
+        <PageTitle>@(Project?.Client?.BusinessName is { Length: > 0 } clientName ? $"{Template?.Label_Quote ?? "Quote"} {Quote.QuoteNumber} - {clientName}" : $"{Template?.Label_Quote ?? "Quote"} {Quote.QuoteNumber}")</PageTitle>
     }
     <style>
         .markdown-content h1,
@@ -71,26 +75,31 @@ else
         }
     </style>
 
-    <MudGrid Spacing="0" Class="py-2 d-print-none align-center" Style="position: sticky; top: 0; z-index: 99; background-color: var(--mud-palette-background);">
-        <MudItem xs="3">
+    <div class="d-print-none mb-1">
+        <SpokesBreadcrumbs Items="@(new (string, string?)[] { ("Projects", "projects"), (Project?.DisplayName ?? "Project", $"projects/{ProjectId}"), ("Quotes", $"projects/{ProjectId}?tab=quotes"), (Quote!.QuoteNumber, null) })" />
+    </div>
+
+    <div class="d-flex justify-space-between align-center flex-wrap gap-2 py-2 d-print-none" Style="position: sticky; top: 0; z-index: 99; background-color: var(--mud-palette-background);">
+        <div>
             <MudButton StartIcon="@Icons.Material.Filled.ArrowBack" OnClick="GoBack">Back to Project</MudButton>
-        </MudItem>
-        <MudItem xs="9" Class="d-flex justify-end align-center gap-2">
-            <MudSelect T="string" Value="@Quote.Status" ValueChanged="UpdateStatus" Dense="true" Margin="Margin.Dense"
-                Variant="Variant.Outlined" Style="width: 150px;">
-                <MudSelectItem Value="@("Draft")">Draft</MudSelectItem>
-                <MudSelectItem Value="@("Final")">Final</MudSelectItem>
-                <MudSelectItem Value="@("Accepted")">Accepted</MudSelectItem>
-                <MudSelectItem Value="@("Rejected")">Rejected</MudSelectItem>
+        </div>
+        <div class="d-flex align-center gap-2 flex-wrap">
+            <MudSelect T="string" Value="@Quote.Status" ValueChanged="UpdateStatusAsync" Dense="true" Margin="Margin.Dense"
+                Variant="Variant.Outlined" Style="width: 180px; min-width: 180px; flex-shrink: 0;">
+                <MudSelectItem Value="@(QuoteStatus.Draft)">Draft</MudSelectItem>
+                <MudSelectItem Value="@(QuoteStatus.Final)">Final</MudSelectItem>
+                <MudSelectItem Value="@(QuoteStatus.Accepted)">Accepted</MudSelectItem>
+                <MudSelectItem Value="@(QuoteStatus.Rejected)">Rejected</MudSelectItem>
             </MudSelect>
-            @if (Quote.Status == "Draft")
+            <MudDivider Vertical="true" FlexItem="true" Class="mx-1" />
+            @if (Quote.Status == QuoteStatus.Draft)
             {
                 <MudButton Variant="Variant.Outlined" Color="Color.Error" StartIcon="@Icons.Material.Filled.Delete"
                     OnClick="DeleteQuote">Delete</MudButton>
             }
             <MudButton Variant="Variant.Outlined" Color="Color.Success" StartIcon="@Icons.Material.Filled.PictureAsPdf"
                 OnClick="PrintPdf">Print / PDF</MudButton>
-            @if (Quote.Status != "Draft" && !string.IsNullOrEmpty(Quote.PdfPath))
+            @if (Quote.Status != QuoteStatus.Draft)
             {
                 <MudButton Variant="Variant.Outlined" Color="Color.Info" StartIcon="@Icons.Material.Filled.OpenInNew"
                     OnClick="OpenPdf">Open PDF</MudButton>
@@ -99,13 +108,13 @@ else
             }
             <MudButton Variant="Variant.Outlined" Color="Color.Secondary" StartIcon="@Icons.Material.Filled.ContentCopy"
                 OnClick="DuplicateQuote">Duplicate</MudButton>
-            @if (Quote.Status == "Draft")
+            @if (Quote.Status == QuoteStatus.Draft)
             {
                 <MudButton Variant="Variant.Outlined" Color="Color.Warning" StartIcon="@Icons.Material.Filled.Edit"
                     OnClick="EditQuote">Edit</MudButton>
             }
-        </MudItem>
-    </MudGrid>
+        </div>
+    </div>
 
     <MudPaper Class="mx-auto overflow-hidden" Style="max-width: 8.5in; width: 100%; min-height: 11in;" Elevation="3" id="printable-area">
 
@@ -150,10 +159,10 @@ else
                     <MudText Typo="Typo.h3" Style="@($"color: {Profile.PrimaryColor}; margin-bottom: 0.25rem;")">
                         @Template.Label_Quote</MudText>
                     <MudText Typo="Typo.h6" Style="@($"color: {Profile.SecondaryColor};")">#@Quote.QuoteNumber</MudText>
-                    <MudText Class="mb-1">@Template.Label_Date: @Quote.Date.ToString(!string.IsNullOrEmpty(Template?.DateFormat) ? Template.DateFormat : "MM/dd/yyyy")</MudText>
-                    @if (!string.IsNullOrEmpty(Project.ProjectNumber))
+                    <MudText Class="mb-1">@Template.Label_Date: @Quote.Date.ToString(!string.IsNullOrEmpty(Template?.DateFormat) ? Template.DateFormat : "yyyy-MM-dd")</MudText>
+                    @if (!string.IsNullOrEmpty(Project?.ProjectNumber))
                     {
-                        <MudText Class="mb-1">@Template.Label_ProjectNumber @Project.ProjectNumber</MudText>
+                        <MudText Class="mb-1">@Template.Label_ProjectNumber @Project?.ProjectNumber</MudText>
                     }
 
                     @if (!string.IsNullOrEmpty(Quote.Title))
@@ -175,10 +184,10 @@ else
                     <div class="mt-2">
                         <MudText Typo="Typo.body1" Style="font-weight: 600;">@Project?.Client.ContactPersonPrefix
                             @Project?.Client.ContactPersonName</MudText>
-                        <MudText Typo="Typo.body2">@Project?.Client.BusinessAdressNumber
-                            @Project?.Client.BusinessAdressStreet</MudText>
-                        <MudText Typo="Typo.body2">@Project?.Client.BusinessAdressCity, @Project?.Client.BusinessAdressState
-                            @Project?.Client.BusinessAdressZip</MudText>
+                        <MudText Typo="Typo.body2">@Project?.Client.BusinessAddressNumber
+                            @Project?.Client.BusinessAddressStreet</MudText>
+                        <MudText Typo="Typo.body2">@Project?.Client.BusinessAddressCity, @Project?.Client.BusinessAddressState
+                            @Project?.Client.BusinessAddressZip</MudText>
                         @if (!string.IsNullOrEmpty(Project?.Client.ContactPersonEmail))
                         {
                             <MudText Typo="Typo.body2" Class="mt-1">@Project?.Client.ContactPersonEmail</MudText>
@@ -422,11 +431,10 @@ else
 
             @if (!string.IsNullOrEmpty(Quote.TermsAndConditions))
             {
-                <div class="mb-10 allow-break">
-                    <div class="keep-together keep-with-next">
-                        <MudText Typo="Typo.h6" Class="mb-2" Style="@($"color: {Profile.PrimaryColor}; font-weight: bold;")">
-                            @Template.Label_TermsAndConditions</MudText>
-                    </div>
+                var termsBreakClass = Template?.TermsStartOnNewPage == true ? "mb-10 force-break" : "mb-10 allow-break";
+                <div class="@termsBreakClass">
+                    <MudText Typo="Typo.h6" Class="mb-2 keep-together keep-with-next" Style="@($"color: {Profile.PrimaryColor}; font-weight: bold;")">
+                        @Template.Label_TermsAndConditions</MudText>
                     <div class="markdown-content allow-break" style="font-size: 0.85rem; color: #444;">
                         @RenderMarkdown(Quote.TermsAndConditions)
                     </div>
@@ -464,8 +472,8 @@ else
 }
 
 @code {
-    [Parameter] public string ProjectId { get; set; }
-    [Parameter] public string QuoteId { get; set; }
+    [Parameter] public string ProjectId { get; set; } = "";
+    [Parameter] public string QuoteId { get; set; } = "";
 
     private Project? Project;
     private Quote? Quote;
@@ -507,13 +515,14 @@ else
         catch { /* component already disposed or JS unavailable */ }
     }
 
-    private IEnumerable<object> CombinedItems => Quote?.LaborItems.Cast<object>().Concat(Quote.ItemRows) ?? [];
+    private IEnumerable<object> CombinedItems => Quote != null ? Quote.LaborItems.Cast<object>().Concat(Quote.MaterialLineItems) : Enumerable.Empty<object>();
 
     private MarkupString RenderMarkdown(string text)
     {
-        if (string.IsNullOrEmpty(text)) return default;
+        if (string.IsNullOrWhiteSpace(text)) return default;
         try
         {
+            text = text.Trim();
             // Preserve multiple blank lines
             text = text.Replace("\r\n", "\n").Replace("\r", "\n");
             text = System.Text.RegularExpressions.Regex.Replace(text, @"\n{3,}", match => 
@@ -552,7 +561,7 @@ else
             if (Quote == null) Logger.LogWarning("Quote not found: {QuoteId}", QuoteId);
 
             // 1. Check Quote Override
-            if (!string.IsNullOrEmpty(Quote.TemplateId))
+            if (Quote != null && !string.IsNullOrEmpty(Quote.TemplateId))
             {
                 Template = Db.DocumentTemplates.GetById(Quote.TemplateId);
             }
@@ -597,44 +606,26 @@ else
 
     private void GoBack() => Nav.NavigateTo($"/projects/{ProjectId}?tab=quote");
 
-    private void UpdateStatus(string newStatus) => _ = UpdateStatusAsync(newStatus);
-
     private string GetTranslatedTaskName(QuoteLaborItem labor)
     {
-        var taskName = labor.WorkTypeName;
-        var subTaskName = labor.SubTaskName;
-
-        if (Template != null && !string.IsNullOrEmpty(Template.TaskTranslationLanguage))
-        {
-            var lang = Template.TaskTranslationLanguage;
-            var workType = Db.WorkTypes.GetById(labor.WorkTypeId);
-            if (workType != null)
-            {
-                if (workType.NameTranslations != null && workType.NameTranslations.TryGetValue(lang, out var taskTrans) && !string.IsNullOrWhiteSpace(taskTrans))
-                {
-                    taskName = taskTrans;
-                }
-                
-                if (!string.IsNullOrEmpty(labor.SubTaskId))
-                {
-                    var subTask = workType.SubTasks.FirstOrDefault(s => s.Id == labor.SubTaskId);
-                    if (subTask != null && subTask.NameTranslations != null && subTask.NameTranslations.TryGetValue(lang, out var subTaskTrans) && !string.IsNullOrWhiteSpace(subTaskTrans))
-                    {
-                        subTaskName = subTaskTrans;
-                    }
-                }
-            }
-        }
-
-        return string.IsNullOrEmpty(subTaskName) || subTaskName == "General" ? taskName : $"{taskName} : {subTaskName}";
+        var workType = !string.IsNullOrEmpty(labor.WorkTypeId) ? Db.WorkTypes.GetById(labor.WorkTypeId) : null;
+        return TimesheetSearchHelper.FormatTranslatedTaskAndSubTask(
+            labor.WorkTypeName,
+            labor.SubTaskName,
+            labor.SubTaskId,
+            workType,
+            Template?.TaskTranslationLanguage,
+            separator: " : ");
     }
 
     private async Task UpdateStatusAsync(string newStatus)
     {
         try
         {
+            if (Quote == null) return;
+
             // Admin-only revert from Final to Draft
-            if (Quote.Status == "Final" && newStatus == "Draft" && !_isAdmin)
+            if (Quote.Status == QuoteStatus.Final && newStatus == QuoteStatus.Draft && !_isAdmin)
             {
                 Snackbar.Add("Only administrators can revert a finalized document to draft.", Severity.Warning);
                 return;
@@ -643,7 +634,7 @@ else
             var oldStatus = Quote.Status;
             Quote.Status = newStatus;
 
-            if (oldStatus == "Final" && newStatus == "Draft")
+            if (oldStatus != QuoteStatus.Draft && newStatus == QuoteStatus.Draft)
             {
                 if (!string.IsNullOrEmpty(Quote.PdfPath) && System.IO.File.Exists(Quote.PdfPath))
                 {
@@ -657,15 +648,18 @@ else
                     }
                 }
                 Quote.PdfPath = string.Empty;
+                Db.Quotes.Save(Quote);
             }
-            else if (oldStatus != "Final" && newStatus == "Final")
+            else if (oldStatus == QuoteStatus.Draft && (newStatus == QuoteStatus.Final || newStatus == QuoteStatus.Accepted))
             {
-                Snackbar.Add("Generating PDF document...", Severity.Info);
-                Quote.PdfPath = await PdfService.GenerateQuotePdfAsync(Quote, ProjectId, Nav.BaseUri);
+                Db.Quotes.Save(Quote);
+                await EnsurePdfExistsAsync();
             }
-
-            Db.Quotes.Save(Quote);
-            TimelineEventHelper.ProcessQuoteStatusChange(Db, Quote, oldStatus, newStatus, null);
+            else
+            {
+                Db.Quotes.Save(Quote);
+            }
+            TimelineEventService.SyncQuoteStatusTimelineEvent(Quote, oldStatus, newStatus, null);
             Logger.LogInformation("Updated Quote Status to {Status}", newStatus);
             Snackbar.Add($"Status updated to {newStatus}", Severity.Success);
             
@@ -680,6 +674,7 @@ else
 
     private async Task EditQuote()
     {
+        if (Quote == null) return;
         try
         {
             var parameters = new DialogParameters { ["Quote"] = Quote, ["ProjectId"] = ProjectId };
@@ -687,9 +682,9 @@ else
 
             var dialog = await DialogService.ShowAsync<QuoteEditorDialog>("Edit Quote", parameters, options);
             var result = await dialog.Result;
-            if (!result.Canceled)
+            if (result is { Canceled: false, Data: Quote editedQuote })
             {
-                Db.Quotes.Save((Quote)result.Data);
+                Db.Quotes.Save(editedQuote);
                 // Refresh local state
                 Quote = Db.Quotes.GetByProject(ProjectId).FirstOrDefault(q => q.Id == QuoteId);
                 
@@ -737,6 +732,7 @@ else
 
     private async Task DuplicateQuote()
     {
+        if (Quote == null) return;
         var result = await DialogService.ShowMessageBoxAsync("Duplicate Quote", "Are you sure you want to create a copy of this quote?", yesText: "Duplicate", cancelText: "Cancel");
         if (result != true) return;
 
@@ -745,12 +741,13 @@ else
             // 1. Clone via serialization to ensure deep copy
             var json = System.Text.Json.JsonSerializer.Serialize(Quote);
             var newQuote = System.Text.Json.JsonSerializer.Deserialize<Quote>(json);
+            if (newQuote == null) return;
             
             // 2. Update Metadata
             newQuote.Id = Guid.NewGuid().ToString();
             newQuote.QuoteNumber = Db.Quotes.GenerateQuoteNumber(Profile?.QuotePrefix ?? "EST-");
             newQuote.Date = DateTime.Today;
-            newQuote.Status = "Draft";
+            newQuote.Status = QuoteStatus.Draft;
             newQuote.Title = $"{Quote.Title} (Copy)";
             
             // 3. Save
@@ -785,11 +782,35 @@ else
         }
     }
 
+    private async Task<bool> EnsurePdfExistsAsync()
+    {
+        if (Quote == null) return false;
+        if (PdfService.IsValidCachedPdf(Quote.PdfPath))
+        {
+            return true;
+        }
+
+        try
+        {
+            Snackbar.Add("Generating PDF document...", Severity.Info);
+            Quote.PdfPath = await PdfService.GenerateQuotePdfAsync(Quote, ProjectId, Nav.BaseUri);
+            Db.Quotes.Save(Quote);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to generate quote PDF on demand");
+            Snackbar.Add("Failed to generate PDF document", Severity.Error);
+            return false;
+        }
+    }
+
     private async Task SendByEmail()
     {
-        if (string.IsNullOrEmpty(Quote?.PdfPath) || !System.IO.File.Exists(Quote.PdfPath))
+        if (Quote == null) return;
+
+        if (!await EnsurePdfExistsAsync())
         {
-            Snackbar.Add("PDF file not found. Please try generating it again by setting status to Draft then Final.", Severity.Warning);
             return;
         }
 
@@ -811,9 +832,10 @@ else
 
     private async Task OpenPdf()
     {
-        if (string.IsNullOrEmpty(Quote?.PdfPath) || !System.IO.File.Exists(Quote.PdfPath))
+        if (Quote == null) return;
+
+        if (!await EnsurePdfExistsAsync())
         {
-            Snackbar.Add("PDF file not found.", Severity.Warning);
             return;
         }
 

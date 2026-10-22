@@ -1,17 +1,19 @@
-using Microsoft.AspNetCore.Components;
-using MudBlazor;
-using Spokes_Server.Components.Shared;
+using Spokes_Server.Aggregate.Contexts;
 using Spokes_Server.Core.Data.Repositories.Communication;
 using Spokes_Server.Core.Data.Repositories.HR;
 using Spokes_Server.Core.Data.Repositories.Projects;
 using Spokes_Server.Core.Models.Communication;
 using Spokes_Server.Core.Services.Communication;
-using Spokes_Server.Core.Services.Core;
 using Spokes_Server.Core.Services.Security;
 
 using Spokes_Server.Core.Models.Communication.Notifications;
-using Spokes_Server.Core.Services.Communication.Presence;
+using Spokes_Server.Core.Services.Communication.Notifications;
+using Spokes_Server.Core.Services.Communication.Notifications.InApp;
+using Spokes_Server.Core.Services.Communication.Notifications.Presentation;
 using Spokes_Server.Core.Services.UI;
+using Spokes_Server.Core.Services.Communication.Notifications.Routing;
+using Spokes_Server.Core.Services.Communication.Notifications.WebPush;
+using Spokes_Server.Core.Services.Communication.Presence;
 
 namespace Spokes_Server.Core.Services.Communication.Chat;
 
@@ -20,24 +22,23 @@ namespace Spokes_Server.Core.Services.Communication.Chat;
 /// Shows snackbar notifications for new messages when user is not on the chat page.
 /// Tracks unread message counts per channel using persistent read state timestamps.
 /// </summary>
-public class ChatNotificationService : IUserNotificationService, IAsyncDisposable
+public class ChatNotificationService : IAsyncDisposable
 {
-    private readonly ISnackbar _snackbar;
-    private readonly NavigationManager _nav;
+    private readonly IUiNotificationPresenter _presenter;
     private readonly ChatStateService _chatState;
     private readonly ChatReadStateRepository _readStates;
     private readonly ChatMessageRepository _messages;
     private readonly ChatChannelRepository _channels;
     private readonly EmployeeRepository _employees;
-    private readonly TeamRepository _teams;
-    private readonly ProjectRepository _projects;
-    private readonly GlobalKeystoreService _keystore;
-    private readonly ICryptoService _crypto;
+    private readonly NotificationRecipientFilter _recipientFilter;
     private readonly IWebPushService _webPush;
-    private readonly ChatService _chatService;
+    private readonly IChatChannelAccessService _chatAccess;
     private readonly ISoundService _soundService;
     private readonly UserCircuitContext? _circuitContext;
     private readonly PresenceStateService? _presenceState;
+    private readonly IInAppNotificationDispatcher? _inAppDispatcher;
+    private readonly ScopedKeystoreService? _scopedKeystore;
+    private readonly ILogger<ChatNotificationService>? _logger;
     private string? _currentUserId;
     private HashSet<string> _subscribedChannels = new();
 
@@ -46,6 +47,8 @@ public class ChatNotificationService : IUserNotificationService, IAsyncDisposabl
     private Dictionary<string, int> _unreadByChannel = new();
     // _notifiedByChannel: only messages that should trigger a notification (nav menu badge)
     private Dictionary<string, int> _notifiedByChannel = new();
+    // Tracks channels whose current read state has already been persisted and push-cleared
+    private readonly HashSet<string> _clearedPushChannels = new();
 
     /// <summary>
     /// Total notified-only unread count for the nav menu badge.
@@ -54,40 +57,164 @@ public class ChatNotificationService : IUserNotificationService, IAsyncDisposabl
     public int TotalUnreadCount => _notifiedByChannel.Values.Sum();
     public event Action? OnUnreadCountChanged;
 
+    /// <summary>
+    /// Runner for background tasks like silent push notifications. Defaults to Task.Run, but can be overridden for synchronous or deterministic execution.
+    /// </summary>
+    public Func<Func<Task>, Task> BackgroundTaskRunner { get; set; } = work => Task.Run(work);
+
+    /// <summary>
+    /// Tracks the most recent background task dispatched by this service (e.g. silent push notifications).
+    /// Enables deterministic awaiting in test suites and synchronization seams.
+    /// </summary>
+    public Task? LastBackgroundTask { get; private set; }
+
+    [Microsoft.Extensions.DependencyInjection.ActivatorUtilitiesConstructor]
     public ChatNotificationService(
-        ISnackbar snackbar,
-        NavigationManager nav,
+        CommunicationContext communicationContext,
+        HrContext hrContext,
+        IUiNotificationPresenter presenter,
+        ChatStateService chatState,
+        NotificationRecipientFilter recipientFilter,
+        IWebPushService webPush,
+        IChatChannelAccessService chatAccess,
+        ISoundService soundService,
+        UserCircuitContext? circuitContext = null,
+        PresenceStateService? presenceState = null,
+        IInAppNotificationDispatcher? inAppDispatcher = null,
+        ScopedKeystoreService? scopedKeystore = null,
+        ILogger<ChatNotificationService>? logger = null,
+        Func<Func<Task>, Task>? backgroundTaskRunner = null)
+        : this(
+            presenter,
+            chatState,
+            communicationContext.ChatReadStates,
+            communicationContext.ChatMessages,
+            communicationContext.ChatChannels,
+            hrContext.Employees,
+            recipientFilter,
+            webPush,
+            chatAccess,
+            soundService,
+            circuitContext,
+            presenceState,
+            inAppDispatcher,
+            scopedKeystore,
+            logger,
+            backgroundTaskRunner)
+    {
+    }
+
+    [Obsolete("NotificationContentDecryptor is no longer needed; notifications are routed through NotificationRoutingService.")]
+    public ChatNotificationService(
+        CommunicationContext communicationContext,
+        HrContext hrContext,
+        IUiNotificationPresenter presenter,
+        ChatStateService chatState,
+        NotificationRecipientFilter recipientFilter,
+        NotificationContentDecryptor contentDecryptor,
+        IWebPushService webPush,
+        IChatChannelAccessService chatAccess,
+        ISoundService soundService,
+        UserCircuitContext? circuitContext = null,
+        PresenceStateService? presenceState = null,
+        IInAppNotificationDispatcher? inAppDispatcher = null,
+        ScopedKeystoreService? scopedKeystore = null,
+        ILogger<ChatNotificationService>? logger = null,
+        Func<Func<Task>, Task>? backgroundTaskRunner = null)
+        : this(
+            communicationContext,
+            hrContext,
+            presenter,
+            chatState,
+            recipientFilter,
+            webPush,
+            chatAccess,
+            soundService,
+            circuitContext,
+            presenceState,
+            inAppDispatcher,
+            scopedKeystore,
+            logger,
+            backgroundTaskRunner)
+    {
+    }
+
+    internal ChatNotificationService(
+        IUiNotificationPresenter presenter,
         ChatStateService chatState,
         ChatReadStateRepository readStates,
         ChatMessageRepository messages,
         ChatChannelRepository channels,
         EmployeeRepository employees,
-        TeamRepository teams,
-        ProjectRepository projects,
-        GlobalKeystoreService keystore,
-        ICryptoService crypto,
+        NotificationRecipientFilter recipientFilter,
         IWebPushService webPush,
-        ChatService chatService,
+        IChatChannelAccessService chatAccess,
         ISoundService soundService,
         UserCircuitContext? circuitContext = null,
-        PresenceStateService? presenceState = null)
+        PresenceStateService? presenceState = null,
+        IInAppNotificationDispatcher? inAppDispatcher = null,
+        ScopedKeystoreService? scopedKeystore = null,
+        ILogger<ChatNotificationService>? logger = null,
+        Func<Func<Task>, Task>? backgroundTaskRunner = null)
     {
-        _snackbar = snackbar;
-        _nav = nav;
+        ArgumentNullException.ThrowIfNull(webPush);
+        _presenter = presenter ?? NullUiNotificationPresenter.Instance;
         _chatState = chatState;
         _readStates = readStates;
         _messages = messages;
         _channels = channels;
         _employees = employees;
-        _teams = teams;
-        _projects = projects;
-        _keystore = keystore;
-        _crypto = crypto;
+        _recipientFilter = recipientFilter;
         _webPush = webPush;
-        _chatService = chatService;
+        _chatAccess = chatAccess;
         _soundService = soundService;
         _circuitContext = circuitContext;
         _presenceState = presenceState;
+        _inAppDispatcher = inAppDispatcher;
+        _scopedKeystore = scopedKeystore;
+        _logger = logger;
+        if (backgroundTaskRunner != null)
+        {
+            BackgroundTaskRunner = backgroundTaskRunner;
+        }
+    }
+
+    [Obsolete("NotificationContentDecryptor is no longer needed.")]
+    internal ChatNotificationService(
+        IUiNotificationPresenter presenter,
+        ChatStateService chatState,
+        ChatReadStateRepository readStates,
+        ChatMessageRepository messages,
+        ChatChannelRepository channels,
+        EmployeeRepository employees,
+        NotificationRecipientFilter recipientFilter,
+        NotificationContentDecryptor contentDecryptor,
+        IWebPushService webPush,
+        IChatChannelAccessService chatAccess,
+        ISoundService soundService,
+        UserCircuitContext? circuitContext = null,
+        PresenceStateService? presenceState = null,
+        IInAppNotificationDispatcher? inAppDispatcher = null,
+        ILogger<ChatNotificationService>? logger = null,
+        Func<Func<Task>, Task>? backgroundTaskRunner = null)
+        : this(
+            presenter,
+            chatState,
+            readStates,
+            messages,
+            channels,
+            employees,
+            recipientFilter,
+            webPush,
+            chatAccess,
+            soundService,
+            circuitContext,
+            presenceState,
+            inAppDispatcher,
+            null,
+            logger,
+            backgroundTaskRunner)
+    {
     }
 
     /// <summary>
@@ -114,9 +241,9 @@ public class ChatNotificationService : IUserNotificationService, IAsyncDisposabl
 
     public Task InitializeAsync(string userId) => InitializeAsync(userId, null);
 
-    public async Task InitializeAsync(string userId, IEnumerable<string>? channelIds)
+    public Task InitializeAsync(string userId, IEnumerable<string>? channelIds)
     {
-        if (_currentUserId != null) return; // Already initialized
+        if (_currentUserId != null) return Task.CompletedTask; // Already initialized
 
         _currentUserId = userId;
 
@@ -129,7 +256,7 @@ public class ChatNotificationService : IUserNotificationService, IAsyncDisposabl
             var employee = _employees.GetById(userId);
             if (employee != null)
             {
-                var channels = _chatService.GetChannelsForUser(userId);
+                var channels = _chatAccess.GetChannelsForUser(userId);
                 
                 if (!employee.HasPermission(Spokes_Server.Core.Constants.AppPermissions.Chat.ViewArchive))
                 {
@@ -151,8 +278,12 @@ public class ChatNotificationService : IUserNotificationService, IAsyncDisposabl
         _chatState.MessageReceived += OnMessageReceived;
         _chatState.MessageEdited += OnMessageEdited;
         _chatState.ModerationAlertReceived += OnModerationAlertReceived;
+        if (_inAppDispatcher != null)
+        {
+            _inAppDispatcher.OnNotificationDispatched += HandleInAppNotification;
+        }
 
-        await Task.CompletedTask;
+        return Task.CompletedTask;
     }
 
     /// <summary>
@@ -174,6 +305,8 @@ public class ChatNotificationService : IUserNotificationService, IAsyncDisposabl
 
             if (unreadCount > 0)
             {
+                _clearedPushChannels.Remove(channelId);
+
                 // Always increment sidebar unread count (even muted channels)
                 _unreadByChannel[channelId] = unreadCount;
 
@@ -182,11 +315,11 @@ public class ChatNotificationService : IUserNotificationService, IAsyncDisposabl
                 var notifLevel = _readStates.GetNotificationLevel(
                     _currentUserId, channelId, channel?.ChannelType.ToString(), channel?.IsVoiceChannel ?? false);
 
-                if (notifLevel == "None")
+                if (notifLevel == ChatNotificationLevel.None)
                 {
                     // Muted: 0 notified
                 }
-                else if (notifLevel != "Mentions")
+                else if (notifLevel != ChatNotificationLevel.Mentions)
                 {
                     // "All": all unread messages trigger notification without loading bodies
                     _notifiedByChannel[channelId] = unreadCount;
@@ -217,13 +350,15 @@ public class ChatNotificationService : IUserNotificationService, IAsyncDisposabl
 
     private void OnMessageReceived(ChatMessage msg)
     {
+        if (string.IsNullOrEmpty(_currentUserId)) return;
+
         // Don't notify for own messages
         if (msg.SenderId == _currentUserId) return;
 
         // Auto-subscribe to channels we now have access to (e.g. newly created group chats)
         if (!_subscribedChannels.Contains(msg.ChannelId))
         {
-            var myChannels = _chatService.GetChannelsForUser(_currentUserId);
+            var myChannels = _chatAccess.GetChannelsForUser(_currentUserId);
             if (myChannels.Any(c => c.Id == msg.ChannelId))
             {
                 _subscribedChannels.Add(msg.ChannelId);
@@ -234,9 +369,11 @@ public class ChatNotificationService : IUserNotificationService, IAsyncDisposabl
             }
         }
 
+        // A new message arrived in this channel, so its read/push-cleared state is no longer current
+        _clearedPushChannels.Remove(msg.ChannelId);
+
         // Don't count if user is on the chat page for this channel AND actively viewing
-        var currentUri = _nav.Uri;
-        var isOnThisChannel = currentUri.Contains($"/chat/{msg.ChannelId}");
+        var isOnThisChannel = _presenter.IsOnChatChannel(msg.ChannelId);
         bool isActivelyViewing = _circuitContext?.IsActivelyViewed == true;
         if (isOnThisChannel && isActivelyViewing) return;
 
@@ -245,43 +382,12 @@ public class ChatNotificationService : IUserNotificationService, IAsyncDisposabl
             _unreadByChannel[msg.ChannelId] = 0;
         _unreadByChannel[msg.ChannelId]++;
 
-        // Determine whether this message should trigger a notification
-        var shouldNotify = ShouldNotifyForMessage(msg);
-
-        if (shouldNotify)
+        // Increment the nav-menu notified count
+        if (ShouldNotifyForMessage(msg))
         {
-            // Increment the nav-menu notified count
             if (!_notifiedByChannel.ContainsKey(msg.ChannelId))
                 _notifiedByChannel[msg.ChannelId] = 0;
             _notifiedByChannel[msg.ChannelId]++;
-
-            // Determine if notification sound is suppressed by consecutive sound limit
-            var employee = _currentUserId != null ? _employees.GetById(_currentUserId) : null;
-            bool isSoundSilent = false;
-            if (employee != null && employee.LimitConsecutiveNotificationSounds)
-            {
-                var streakCount = _notifiedByChannel[msg.ChannelId];
-                isSoundSilent = streakCount > employee.ConsecutiveNotificationSoundLimit;
-            }
-
-            // Only play in-app sound and display in-app snackbar if the user is actively viewing the app
-            if (ShouldDisplayInAppNotification())
-            {
-                if (!isSoundSilent)
-                {
-                    if (msg.MessageType == "CallInvite")
-                    {
-                        _ = _soundService.PlayNotificationSoundAsync(NotificationCategories.Call);
-                    }
-                    else
-                    {
-                        _ = _soundService.PlayNotificationSoundAsync(NotificationCategories.Chat);
-                    }
-                }
-
-                // Show snackbar notification
-                ShowSnackbarNotification(msg);
-            }
         }
 
         OnUnreadCountChanged?.Invoke();
@@ -298,93 +404,16 @@ public class ChatNotificationService : IUserNotificationService, IAsyncDisposabl
         var notifLevel = _readStates.GetNotificationLevel(
             _currentUserId, msg.ChannelId, channel?.ChannelType.ToString(), channel?.IsVoiceChannel ?? false);
 
-        if (notifLevel == "None")
+        if (notifLevel == ChatNotificationLevel.None)
             return false;
 
-        if (notifLevel == "Mentions")
+        if (notifLevel == ChatNotificationLevel.Mentions)
         {
-            var isMentioned = msg.MentionedUserIds.Contains(_currentUserId) || msg.MentionsEveryone;
-
-            if (!isMentioned && msg.MentionsTeam)
-            {
-                var user = _employees.GetById(_currentUserId);
-                // Check if user is a team member OR a team leader
-                var isOnTeam = !string.IsNullOrEmpty(user?.TeamId)
-                    || _teams.GetAll().Any(t => t.LeaderId == _currentUserId);
-                if (isOnTeam)
-                    isMentioned = true;
-            }
-
-            return isMentioned;
+            var user = _employees.GetById(_currentUserId);
+            return _recipientFilter.IsUserMentioned(_currentUserId, user, msg);
         }
 
         return true; // "All"
-    }
-
-    private void ShowSnackbarNotification(ChatMessage msg)
-    {
-        var sender = _employees.GetById(msg.SenderId);
-        var senderName = sender?.FullName ?? "Unknown";
-
-        var channel = _channels.GetById(msg.ChannelId);
-        var channelName = channel?.Name ?? "Unknown Channel";
-
-        if (channel?.ChannelType == ChatChannelType.Direct && channel.ParticipantIds.Count == 2)
-            channelName = $"DM with {senderName}";
-
-        var initials = GetInitials(senderName);
-
-        var messageContent = msg.Content;
-        if (msg.IsEncrypted)
-        {
-            messageContent = "🔒 New Secure Message";
-            if (_currentUserId != null && _keystore.IsUserUnlocked(_currentUserId))
-            {
-                var privateKey = _keystore.GetPrivateKey(_currentUserId);
-                if (privateKey != null && channel != null && channel.EncryptedChannelKeys.TryGetValue(_currentUserId, out var cipherKey))
-                {
-                    try
-                    {
-                        var channelKey = _crypto.DecryptRsa(cipherKey, privateKey);
-                        messageContent = _crypto.DecryptAes(msg.Content, channelKey);
-                    }
-                    catch (Exception ex)
-                    {
-                        Console.WriteLine($"[ChatNotificationService] Decryption failed: {ex.Message}");
-                    }
-                }
-            }
-        }
-
-        var truncatedContent = string.IsNullOrEmpty(messageContent)
-            ? "[Attachment]"
-            : messageContent;
-        truncatedContent = System.Text.RegularExpressions.Regex.Replace(truncatedContent, @"!\[gif\]\([^)]+\)|\[gif\]", "Sent a GIF", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-        truncatedContent = truncatedContent.Length > 40 ? truncatedContent[..37] + "..." : truncatedContent;
-
-        _snackbar.Add<ChatNotificationContent>(
-            new Dictionary<string, object>
-            {
-                { "SenderName", senderName },
-                { "Content", truncatedContent },
-                { "Initials", initials },
-                { "ChannelId", msg.ChannelId },
-                { "ChannelName", channelName }
-            },
-            Severity.Normal,
-            config =>
-            {
-                config.VisibleStateDuration = 5000;
-                config.ShowCloseIcon = true;
-                config.SnackbarVariant = Variant.Filled;
-                config.HideIcon = true;
-                config.OnClick = snackbar =>
-                {
-                    _soundService.StopCallRingtoneAsync();
-                    _nav.NavigateTo($"/chat/{msg.ChannelId}");
-                    return Task.CompletedTask;
-                };
-            });
     }
 
     private void OnModerationAlertReceived(ReportedMessage report)
@@ -401,39 +430,13 @@ public class ChatNotificationService : IUserNotificationService, IAsyncDisposabl
             var reporter = _employees.GetById(report.ReporterId);
             var reporterName = reporter?.FullName ?? "Someone";
 
-            _snackbar.Add(
-                $"{reporterName} reported a message for: {report.Reason}",
-                Severity.Warning,
-                config =>
-                {
-                    config.VisibleStateDuration = 10000;
-                    config.ShowCloseIcon = true;
-                    config.Action = "Review";
-                    config.ActionColor = Color.Warning;
-                    config.OnClick = _ =>
-                    {
-                        _nav.NavigateTo("/admin/moderation");
-                        return Task.CompletedTask;
-                    };
-                }
-            );
+            _presenter.ShowModerationAlert(reporterName, report.Reason);
         }
     }
 
-    private string GetInitials(string name)
+    public Task SubscribeToChannelAsync(string channelId)
     {
-        if (string.IsNullOrEmpty(name)) return "?";
-        var parts = name.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        if (parts.Length >= 2)
-        {
-            return $"{parts[0][0]}{parts[1][0]}".ToUpper();
-        }
-        return name.Length >= 2 ? name[..2].ToUpper() : name.ToUpper();
-    }
-
-    public async Task SubscribeToChannel(string channelId)
-    {
-        if (_subscribedChannels.Contains(channelId)) return;
+        if (_subscribedChannels.Contains(channelId)) return Task.CompletedTask;
         _subscribedChannels.Add(channelId);
 
         // Calculate unread count for newly subscribed channel
@@ -449,32 +452,41 @@ public class ChatNotificationService : IUserNotificationService, IAsyncDisposabl
             }
         }
 
-        await Task.CompletedTask;
+        return Task.CompletedTask;
     }
 
-    public async Task MarkChannelAsReadAsync(string channelId)
+    public Task MarkChannelAsReadAsync(string channelId)
     {
-        if (_currentUserId == null) return;
+        if (_currentUserId == null) return Task.CompletedTask;
+
+        var hasCachedUnread = (_unreadByChannel.TryGetValue(channelId, out var u) && u > 0) ||
+                              (_notifiedByChannel.TryGetValue(channelId, out var n) && n > 0);
+        var lastReadAt = _readStates.GetLastReadAt(_currentUserId, channelId);
+        var hasPersistedUnread = lastReadAt == DateTime.MinValue ||
+                                 _messages.GetUnreadCountSince(channelId, lastReadAt, _currentUserId) > 0;
+        var isFirstClearForState = _clearedPushChannels.Add(channelId);
+
+        if (!hasCachedUnread && !hasPersistedUnread && !isFirstClearForState)
+        {
+            return Task.CompletedTask;
+        }
 
         // Persist the read state
         var channel = _channels.GetById(channelId);
         _readStates.MarkAsRead(_currentUserId, channelId, channel?.ChannelType.ToString(), channel?.IsVoiceChannel ?? false);
 
         // Broadcast silent push to clear notifications on other devices in background
-        if (_webPush != null)
+        LastBackgroundTask = BackgroundTaskRunner(async () =>
         {
-            _ = Task.Run(async () =>
+            try
             {
-                try
-                {
-                    await _webPush.SendClearNotificationAsync(_currentUserId, channelId);
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"[ChatNotificationService] Silent push clear error: {ex.Message}");
-                }
-            });
-        }
+                await _webPush.SendClearNotificationAsync(_currentUserId, channelId);
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogWarning(ex, "[ChatNotificationService] Silent push clear error: {Message}", ex.Message);
+            }
+        });
 
         // Update both in-memory caches
         var changed = false;
@@ -489,59 +501,107 @@ public class ChatNotificationService : IUserNotificationService, IAsyncDisposabl
             changed = true;
         }
         if (changed) OnUnreadCountChanged?.Invoke();
+        return Task.CompletedTask;
     }
 
-    public async Task MarkAsReadAsync()
+    public Task MarkAsReadAsync()
     {
-        if (_currentUserId == null) return;
+        if (_currentUserId == null) return Task.CompletedTask;
 
         // Persist read state for all channels
         foreach (var channelId in _subscribedChannels)
         {
+            _clearedPushChannels.Add(channelId);
             var channel = _channels.GetById(channelId);
             _readStates.MarkAsRead(_currentUserId, channelId, channel?.ChannelType.ToString(), channel?.IsVoiceChannel ?? false);
         }
 
-        if (_webPush != null)
+        var channelsToClear = _subscribedChannels.ToList();
+        var userId = _currentUserId;
+        LastBackgroundTask = BackgroundTaskRunner(async () =>
         {
-            var channelsToClear = _subscribedChannels.ToList();
-            var userId = _currentUserId;
-            _ = Task.Run(async () =>
+            foreach (var channelId in channelsToClear)
             {
-                foreach (var channelId in channelsToClear)
+                try
                 {
-                    try
-                    {
-                        await _webPush.SendClearNotificationAsync(userId, channelId);
-                    }
-                    catch (Exception ex)
-                    {
-                        Console.WriteLine($"[ChatNotificationService] Silent push clear error: {ex.Message}");
-                    }
+                    await _webPush.SendClearNotificationAsync(userId, channelId);
                 }
-            });
-        }
+                catch (Exception ex)
+                {
+                    _logger?.LogWarning(ex, "[ChatNotificationService] Silent push clear error: {Message}", ex.Message);
+                }
+            }
+        });
 
         // Clear both in-memory caches
         var hadUnread = _unreadByChannel.Any(x => x.Value > 0) || _notifiedByChannel.Any(x => x.Value > 0);
         _unreadByChannel.Clear();
         _notifiedByChannel.Clear();
         if (hadUnread) OnUnreadCountChanged?.Invoke();
+        return Task.CompletedTask;
     }
 
     private void OnMessageEdited(ChatMessage msg)
     {
-        if (msg.MessageType == "CallInvite" && msg.CallStatus != "Active")
+        if (msg.MessageType == ChatMessageType.CallInvite && msg.CallStatus != CallStatus.Active)
         {
             _ = _soundService.StopCallRingtoneAsync();
         }
     }
 
-    public async ValueTask DisposeAsync()
+    private void HandleInAppNotification(InAppNotification notif)
+    {
+        if (string.IsNullOrEmpty(_currentUserId) || notif.RecipientUserId != _currentUserId) return;
+
+        // Don't show snackbar if user is on the chat page for this channel AND actively viewing
+        var isOnThisChannel = _presenter.IsOnChatChannel(notif.ChannelId);
+        bool isActivelyViewing = _circuitContext?.IsActivelyViewed == true;
+        if (isOnThisChannel && isActivelyViewing) return;
+
+        // Only play in-app sound and display in-app snackbar if the user is actively viewing the app / circuit context permits
+        if (ShouldDisplayInAppNotification())
+        {
+            if (!notif.IsSilent)
+            {
+                _ = _soundService.PlayNotificationSoundAsync(notif.Category);
+            }
+
+            var displayNotif = notif;
+            if (notif.IsEncrypted && _scopedKeystore?.IsUnlocked != true)
+            {
+                displayNotif = new InAppNotification
+                {
+                    RecipientUserId = notif.RecipientUserId,
+                    Title = notif.Title,
+                    Content = notif.MaskedContent ?? "🔒 New Secure Message",
+                    SenderName = notif.SenderName,
+                    SenderAvatarUrl = notif.SenderAvatarUrl,
+                    Initials = notif.Initials,
+                    ChannelId = notif.ChannelId,
+                    ChannelName = notif.ChannelName,
+                    ServerName = notif.ServerName,
+                    IsReaction = notif.IsReaction,
+                    IsGroupChat = notif.IsGroupChat,
+                    Category = notif.Category,
+                    IsSilent = notif.IsSilent,
+                    IsEncrypted = true,
+                    MaskedContent = notif.MaskedContent
+                };
+            }
+
+            _presenter.ShowChatNotification(displayNotif);
+        }
+    }
+
+    public ValueTask DisposeAsync()
     {
         _chatState.MessageReceived -= OnMessageReceived;
         _chatState.MessageEdited -= OnMessageEdited;
         _chatState.ModerationAlertReceived -= OnModerationAlertReceived;
-        await Task.CompletedTask;
+        if (_inAppDispatcher != null)
+        {
+            _inAppDispatcher.OnNotificationDispatched -= HandleInAppNotification;
+        }
+        return ValueTask.CompletedTask;
     }
 }

@@ -1,0 +1,84 @@
+@page "/access-pending"
+@layout LoginLayout
+@using Spokes_Server.Components.Layout
+@using System.Security.Claims
+@using Microsoft.Extensions.Localization
+@using Spokes_Server.Resources
+@inject AuthenticationStateProvider AuthStateProvider
+@inject NavigationManager Nav
+@inject IStringLocalizer<AppResources> Loc
+@inject AppLabelService AppLabels
+
+<PageTitle>@Loc["Access Pending"] - Spokes</PageTitle>
+
+<MudContainer MaxWidth="MaxWidth.Small" Class="mt-16">
+    <MudPaper Class="pa-8 text-center" Elevation="3">
+        <MudIcon Icon="@Icons.Material.Filled.HourglassEmpty" Size="Size.Large" Color="Color.Warning" Class="mb-4" />
+
+        <MudText Typo="Typo.h4" Class="mb-2">@Loc["Access Pending"]</MudText>
+
+        <MudText Typo="Typo.body1" Color="Color.Tertiary" Class="mb-6">
+            @string.Format(Loc["Your account has been authenticated but is not yet linked to a {0} profile. Please contact your administrator to complete your account setup."].Value, AppLabels.Employee.ToLower())
+        </MudText>
+
+        <MudDivider Class="my-4" />
+
+        <MudText Typo="Typo.subtitle2" Class="mb-2">@Loc["Your Account Details"]</MudText>
+
+        <MudSimpleTable Dense="true" Class="mb-6">
+            <tbody>
+                <tr>
+                    <td><strong>@Loc["Name:"]</strong></td>
+                    <td>@userName</td>
+                </tr>
+                <tr>
+                    <td><strong>@Loc["Email:"]</strong></td>
+                    <td>@userEmail</td>
+                </tr>
+            </tbody>
+        </MudSimpleTable>
+
+        <MudText Typo="Typo.caption" Color="Color.Tertiary" Class="mb-4 d-block">
+            @string.Format(Loc["Once an administrator links your OpenID account to your {0} profile, you will have full access to Spokes."].Value, AppLabels.Employee.ToLower())
+        </MudText>
+
+        <form method="post" action="/logout">
+            <MudButton ButtonType="ButtonType.Submit" Variant="Variant.Filled" Color="Color.Primary"
+                StartIcon="@Icons.Material.Filled.Logout">
+                @Loc["Sign Out"]
+            </MudButton>
+        </form>
+    </MudPaper>
+</MudContainer>
+
+@code {
+    private string userName = "";
+    private string userEmail = "";
+
+    protected override async Task OnInitializedAsync()
+    {
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        var user = authState.User;
+
+        if (user.Identity?.IsAuthenticated == true)
+        {
+            userName = user.FindFirst("name")?.Value
+            ?? user.Identity.Name
+            ?? Loc["Unknown"].Value;
+            userEmail = user.FindFirst("email")?.Value
+            ?? user.FindFirst(ClaimTypes.Email)?.Value
+            ?? Loc["Not provided"].Value;
+
+            // If user has an EmployeeId claim, they shouldn't be here - redirect to home
+            if (user.HasClaim(c => c.Type == "EmployeeId"))
+            {
+                Nav.NavigateTo("/", replace: true);
+            }
+        }
+        else
+        {
+            // Not authenticated, redirect to login
+            Nav.NavigateTo("/sso/login", replace: true);
+        }
+    }
+}

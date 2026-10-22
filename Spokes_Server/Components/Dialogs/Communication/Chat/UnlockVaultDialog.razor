@@ -1,0 +1,86 @@
+@using Spokes_Server.Core.Services.Communication.Chat
+@inject ICryptoService Crypto
+@inject GlobalKeystoreService GlobalKeystore
+@inject ScopedKeystoreService ScopedKeystore
+@inject IJSRuntime JS
+@inject ISnackbar Snackbar
+
+<MudDialog>
+    <DialogContent>
+        @{
+            string vaultUsername = !string.IsNullOrWhiteSpace(Employee?.FullName) ? Employee.FullName : Employee?.Id ?? "";
+        }
+        <div class="d-flex flex-column gap-2">
+            <MudText Typo="Typo.body2">
+                @Loc["Enter your vault password to unlock your secure key and continue."]
+            </MudText>
+
+            <input type="text" autocomplete="username" value="@($"{vaultUsername} (Chat Vault)")" style="position: absolute; left: -9999px;" tabindex="-1" aria-hidden="true" />
+            <MudTextField @bind-Value="_vaultPassword" 
+                          Label="@Loc["Vault Password"]" 
+                          InputType="@(_showPassword ? InputType.Text : InputType.Password)" 
+                          Variant="Variant.Outlined" 
+                          Margin="Margin.Dense" 
+                          Class="mt-2" 
+                          Immediate="true"
+                          AutoFocus="true"
+                          Adornment="Adornment.End" 
+                          AdornmentIcon="@(_showPassword ? Icons.Material.Filled.Visibility : Icons.Material.Filled.VisibilityOff)" 
+                          OnAdornmentClick="@(() => _showPassword = !_showPassword)" 
+                          AdornmentAriaLabel="@Loc["Show/hide password"]" 
+                          OnKeyDown="@(async (e) => { if (e.Key == "Enter" || e.Key == "NumpadEnter") await UnlockAsync(); })" 
+                          UserAttributes="@(new Dictionary<string,object>{{ "autocomplete", "current-password" }})" />
+
+            @if (_hasError)
+            {
+                <MudText Typo="Typo.caption" Color="Color.Error">@Loc["Incorrect vault password."]</MudText>
+            }
+        </div>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">@Loc["Cancel"]</MudButton>
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="UnlockAsync" Disabled="_isUnlocking">
+            @Loc["Unlock"]
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
+    [Parameter] public Employee Employee { get; set; } = default!;
+
+    private string _vaultPassword = "";
+    private bool _showPassword = false;
+    private bool _hasError = false;
+    private bool _isUnlocking = false;
+
+    private async Task UnlockAsync()
+    {
+        if (Employee == null || string.IsNullOrWhiteSpace(_vaultPassword) || string.IsNullOrEmpty(Employee.EncryptedPrivateKey))
+        {
+            _hasError = true;
+            return;
+        }
+
+        _isUnlocking = true;
+        _hasError = false;
+        try
+        {
+            var unlocked = await ScopedKeystore.UnlockWithPasswordAsync(JS, Employee, _vaultPassword, rememberDevice: true);
+            if (unlocked)
+            {
+                MudDialog.Close(DialogResult.Ok(true));
+            }
+            else
+            {
+                _hasError = true;
+            }
+        }
+        finally
+        {
+            _isUnlocking = false;
+        }
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+}

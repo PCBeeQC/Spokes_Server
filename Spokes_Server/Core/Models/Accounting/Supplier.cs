@@ -1,6 +1,7 @@
 namespace Spokes_Server.Core.Models.Accounting;
 
-using Spokes_Server.Core.Models.Projects;
+using System.Text.Json.Serialization;
+using Spokes_Server.Core.Models.Core;
 using Spokes_Server.Core.Models.Communication;
 using Spokes_Server.Core.Data;
 
@@ -16,11 +17,28 @@ public class Supplier : IDataEntity
 
     public override int GetHashCode() => Id?.GetHashCode() ?? base.GetHashCode();
 
-    // We reuse your existing ClientInfo class to keep things compatible
-    public ClientInfo Info { get; set; } = new();
+    // Party contact details for the supplier
+    public PartyContactInfo ContactInfo { get; set; } = new();
+
+    // Backward compatibility for legacy JSON files and existing call sites
+    [JsonPropertyName("Info")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public PartyContactInfo? LegacyInfo
+    {
+        get => null;
+        set { if (value != null) ContactInfo = value; }
+    }
+
+    [Obsolete("Prefer ContactInfo for consistency across accounting models.")]
+    [JsonIgnore]
+    public PartyContactInfo Info
+    {
+        get => ContactInfo;
+        set => ContactInfo = value;
+    }
 
     // Helper for search
-    public string Name => Info.BusinessName;
+    public string Name => ContactInfo.BusinessName;
 
     public List<ContactPerson> Contacts { get; set; } = [];
 }

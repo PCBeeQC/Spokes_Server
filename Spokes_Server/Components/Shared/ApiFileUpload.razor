@@ -1,7 +1,11 @@
+@inject ISnackbar Snackbar
 @inject IJSRuntime JS
 @using Microsoft.Extensions.Configuration
 @inject IConfiguration Config
 @inject IDialogService DialogService
+@inject ILogger<ApiFileUpload> Logger
+@inject Spokes_Server.Core.Data.Repositories.Core.CompanyProfileRepository CompanyProfiles
+@inject StartupTimingService StartupTimings
 @implements IAsyncDisposable
 
 <div class="api-file-upload d-inline-block @Class" style="@Style">
@@ -11,21 +15,29 @@
            accept="@Accept"
            capture="@Capture"
            data-upload-url="@(string.IsNullOrEmpty(UploadUrl) ? $"/spokesapi/files/{Category}/{ContextId}" : UploadUrl)"
+           data-max-dimension="@EffectiveMobileMaxDim"
+           data-quality="@EffectiveMobileQuality"
+           data-video-max-dimension="@EffectiveMobileVideoMaxDim"
+           data-video-bitrate="@EffectiveMobileVideoBitrate"
            style="position: absolute; width: 0; height: 0; opacity: 0; overflow: hidden; z-index: -1;" />
            
     <!-- Native inline onclick is REQUIRED because async Blazor JSInterop loses the browser's trusted user-gesture token, which silently blocks input.click() -->
     @if (Config.GetValue<bool>("Spokes_DemoMode"))
     {
-        <div class="d-inline-block" style="position: relative; cursor: pointer; margin: 0;" @onclick="HandleDemoClick">
+        <div class="@(Class.Contains("w-100") ? "w-100" : "d-inline-block")" style="position: relative; cursor: pointer; margin: 0; @(Class.Contains("w-100") ? "width: 100%;" : "")" @onclick="HandleDemoClick">
             @CustomContent
             <div style="position: absolute; inset: 0; z-index: 10;"></div>
         </div>
     }
     else
     {
-        <div class="d-inline-block" style="position: relative; cursor: pointer; margin: 0;" onclick="spokesUpload.openFilePicker('@_inputId')">
+        <div class="@(Class.Contains("w-100") ? "w-100" : "d-inline-block")" 
+             style="position: relative; cursor: pointer; margin: 0; @(Class.Contains("w-100") ? "width: 100%;" : "")" 
+             onclick="if (window.spokesUpload) { spokesUpload.openFilePicker('@_inputId'); } else { document.getElementById('@_inputId')?.click(); }"
+             ondragover="event.preventDefault();"
+             ondrop="event.preventDefault(); if (window.spokesUpload) { spokesUpload.handleDrop(event, '@_inputId'); }">
             @CustomContent
-            <div style="position: absolute; inset: 0; z-index: 10;"></div>
+            <div style="position: absolute; inset: 0; z-index: 10;" ondragover="event.preventDefault();" ondrop="event.preventDefault(); if (window.spokesUpload) { spokesUpload.handleDrop(event, '@_inputId'); }"></div>
         </div>
     }
 
@@ -44,7 +56,7 @@
                         <text>Compressing @(Math.Round(_progress))%</text>
                     }
                 } else if (_isProcessing) {
-                    <text>Finishing up...</text>
+                    <text>@(_processingStatusText ?? "Finishing up...")</text>
                 } else {
                     <text>@(Math.Round(_progress))%</text>
                 }
@@ -64,6 +76,8 @@
     [Parameter] public string Style { get; set; } = "";
     [Parameter] public int? CompressionMaxDim { get; set; }
     [Parameter] public double? CompressionQuality { get; set; }
+    [Parameter] public int? VideoMaxDim { get; set; }
+    [Parameter] public int? VideoBitrate { get; set; }
     [Parameter] public RenderFragment? CustomContent { get; set; }
     [Parameter] public bool ShowProgress { get; set; } = false;
 
@@ -77,6 +91,94 @@
     [Parameter] public EventCallback<int> OnUploadStartedWithCount { get; set; }
 
     [Parameter] public string? Id { get; set; }
+    [Parameter] public long? MaxAllowedSize { get; set; }
+
+    private long EffectiveMaxAllowedSize => MaxAllowedSize ?? CompanyProfiles.Get()?.MaxFileUploadSizeBytes ?? WebUiExtensions.DefaultMaxFileUploadSizeBytes;
+
+    private int EffectiveMobileMaxDim
+    {
+        get
+        {
+            if (CompressionMaxDim.HasValue) return CompressionMaxDim.Value;
+            var profile = CompanyProfiles.Get();
+            if (string.Equals(Category, "albums", StringComparison.OrdinalIgnoreCase))
+                return profile?.Albums?.MobilePhotoMaxDimension ?? 3840;
+            if (string.Equals(Category, "chat", StringComparison.OrdinalIgnoreCase))
+                return profile?.Chat?.MobilePhotoMaxDimension ?? 1920;
+            return 3840;
+        }
+    }
+
+    private int EffectiveMobileQuality
+    {
+        get
+        {
+            if (CompressionQuality.HasValue) return (int)(CompressionQuality.Value <= 1.0 ? CompressionQuality.Value * 100 : CompressionQuality.Value);
+            var profile = CompanyProfiles.Get();
+            if (string.Equals(Category, "albums", StringComparison.OrdinalIgnoreCase))
+                return profile?.Albums?.MobilePhotoQuality ?? 90;
+            if (string.Equals(Category, "chat", StringComparison.OrdinalIgnoreCase))
+                return profile?.Chat?.MobilePhotoQuality ?? 80;
+            return 85;
+        }
+    }
+
+    private int EffectiveMobileVideoMaxDim
+    {
+        get
+        {
+            if (VideoMaxDim.HasValue) return VideoMaxDim.Value;
+            var profile = CompanyProfiles.Get();
+            if (string.Equals(Category, "albums", StringComparison.OrdinalIgnoreCase))
+                return profile?.Albums?.MobileVideoMaxDimension ?? 0;
+            if (string.Equals(Category, "chat", StringComparison.OrdinalIgnoreCase))
+                return profile?.Chat?.MobileVideoMaxDimension ?? 1080;
+            return 1080;
+        }
+    }
+
+    private int EffectiveMobileVideoBitrate
+    {
+        get
+        {
+            if (VideoBitrate.HasValue) return VideoBitrate.Value;
+            var profile = CompanyProfiles.Get();
+            if (string.Equals(Category, "albums", StringComparison.OrdinalIgnoreCase))
+                return profile?.Albums?.MobileVideoBitrate ?? 0;
+            if (string.Equals(Category, "chat", StringComparison.OrdinalIgnoreCase))
+                return profile?.Chat?.MobileVideoBitrate ?? 5_000_000;
+            return 5_000_000;
+        }
+    }
+
+    private int EffectiveDesktopMaxDim
+    {
+        get
+        {
+            if (CompressionMaxDim.HasValue) return CompressionMaxDim.Value;
+            var profile = CompanyProfiles.Get();
+            if (string.Equals(Category, "albums", StringComparison.OrdinalIgnoreCase))
+                return profile?.Albums?.DesktopPhotoMaxDimension ?? 3840;
+            if (string.Equals(Category, "chat", StringComparison.OrdinalIgnoreCase))
+                return profile?.Chat?.DesktopPhotoMaxDimension ?? 3840;
+            return 3840;
+        }
+    }
+
+    private double EffectiveDesktopQuality
+    {
+        get
+        {
+            if (CompressionQuality.HasValue) return CompressionQuality.Value <= 1.0 ? CompressionQuality.Value : CompressionQuality.Value / 100.0;
+            var profile = CompanyProfiles.Get();
+            int q = 90;
+            if (string.Equals(Category, "albums", StringComparison.OrdinalIgnoreCase))
+                q = profile?.Albums?.DesktopPhotoQuality ?? 90;
+            else if (string.Equals(Category, "chat", StringComparison.OrdinalIgnoreCase))
+                q = profile?.Chat?.DesktopPhotoQuality ?? 85;
+            return q / 100.0;
+        }
+    }
 
     private string _inputId = "";
     private DotNetObjectReference<ApiFileUpload>? _objRef;
@@ -85,6 +187,7 @@
     private bool _isDownloadingFromICloud = false;
     private bool _isCompressing = false;
     private bool _isProcessing = false;
+    private string? _processingStatusText;
     private double _progress = 0;
 
     protected override void OnInitialized()
@@ -93,15 +196,36 @@
         _objRef = DotNetObjectReference.Create(this);
     }
 
+    private long _lastMaxAllowedSize = -1;
+    private int _lastMaxDim = -1;
+    private double _lastQuality = -1;
+
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (firstRender)
+        try
+        {
+            var maxAllowed = EffectiveMaxAllowedSize;
+            var maxDim = EffectiveDesktopMaxDim;
+            var quality = EffectiveDesktopQuality;
+
+            if (firstRender || _lastMaxAllowedSize != maxAllowed || _lastMaxDim != maxDim || _lastQuality != quality)
+            {
+                _lastMaxAllowedSize = maxAllowed;
+                _lastMaxDim = maxDim;
+                _lastQuality = quality;
+                StartupTimings.AddChatTransition($"Server: ApiFileUpload.OnAfterRenderAsync ({_inputId}, firstRender={firstRender})");
+                // Initialize or re-synchronize dynamic limits with the native JS file input handler
+                await JS.InvokeVoidAsync("spokesUpload.initializeInput", _inputId, _objRef, maxAllowed, maxDim, quality);
+            }
+        }
+        catch
         {
             try
             {
-                // Initialize the native JS file input handler to bypass SignalR instability 
-                // when returning from heavyweight mobile tasks (like camera apps)
-                await JS.InvokeVoidAsync("spokesUpload.initializeInput", _inputId, _objRef, 268435456, CompressionMaxDim ?? 3840, CompressionQuality ?? 0.9);
+                // If spokesUpload is not yet defined, trigger deferred script loading and retry initialization
+                await JS.InvokeVoidAsync("eval", "if (window.loadDeferredScripts) window.loadDeferredScripts();");
+                await Task.Delay(100);
+                await JS.InvokeVoidAsync("spokesUpload.initializeInput", _inputId, _objRef, EffectiveMaxAllowedSize, EffectiveDesktopMaxDim, EffectiveDesktopQuality);
             }
             catch { /* Ignore prerendering errors */ }
         }
@@ -110,10 +234,10 @@
     private async Task HandleDemoClick()
     {
         var options = new MudBlazor.DialogOptions { CloseOnEscapeKey = true, MaxWidth = MudBlazor.MaxWidth.Medium, FullWidth = true };
-        var dialog = await DialogService.ShowAsync<Spokes_Server.Components.Dialogs.DemoMediaPicker>("Select Sample Media", options);
+        var dialog = await DialogService.ShowAsync<DemoMediaPicker>("Select Sample Media", options);
         var result = await dialog.Result;
         
-        if (!result.Canceled && result.Data is string filename)
+        if (result is { Canceled: false, Data: string filename })
         {
             var mockResult = new UploadResult
             {
@@ -136,8 +260,12 @@
     [JSInvokable]
     public async Task OnUploadStartedCallback(int fileCount = 0)
     {
-        Console.WriteLine($"[ApiFileUpload] Upload started via JS for {_inputId} with {fileCount} files");
+        Logger.LogDebug("Upload started via JS for {InputId} with {FileCount} files.", _inputId, fileCount);
         _isUploading = true;
+        _isDownloadingFromICloud = false;
+        _isCompressing = false;
+        _isProcessing = false;
+        _processingStatusText = null;
         await OnUploadStarted.InvokeAsync();
         await OnUploadStartedWithCount.InvokeAsync(fileCount);
         StateHasChanged();
@@ -146,11 +274,12 @@
     [JSInvokable]
     public async Task OnUploadCompletedCallback(string resultJson)
     {
-        Console.WriteLine($"[ApiFileUpload] Upload completed via JS for {_inputId}.");
+        Logger.LogDebug("Upload completed via JS for {InputId}.", _inputId);
         _isUploading = false;
         _isDownloadingFromICloud = false;
         _isCompressing = false;
         _isProcessing = false;
+        _processingStatusText = null;
 
         try
         {
@@ -166,19 +295,22 @@
                     r.Category = this.Category;
                     r.ContextId = this.ContextId;
                 }
-                Console.WriteLine($"[ApiFileUpload] Upload complete. Processed {results.Count} result(s).");
+                Logger.LogDebug("Upload complete. Processed {Count} result(s).", results.Count);
                 await OnUploadCompleted.InvokeAsync(results);
             }
             else 
             {
-                Console.WriteLine("[ApiFileUpload] Warning: Upload finished but results were empty.");
+                Logger.LogWarning("Upload finished for {InputId} but results were empty.", _inputId);
                 await OnUploadError.InvokeAsync("Upload completed but server returned no file data.");
             }
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[ApiFileUpload] Error parsing results: {ex}");
-            await OnUploadError.InvokeAsync("Failed to process upload results.");
+            Logger.LogError(ex, "Error parsing upload results for {InputId}.", _inputId);
+            if (OnUploadError.HasDelegate)
+                await OnUploadError.InvokeAsync("Failed to process upload results.");
+            else
+                Snackbar.Add("Failed to process upload results.", Severity.Error);
         }
         
         StateHasChanged();
@@ -187,12 +319,16 @@
     [JSInvokable]
     public async Task OnUploadErrorCallback(string errorMessage)
     {
-        Console.WriteLine($"[ApiFileUpload] Upload error via JS for {_inputId}: {errorMessage}");
+        Logger.LogWarning("Upload error via JS for {InputId}: {ErrorMessage}", _inputId, errorMessage);
         _isUploading = false;
         _isDownloadingFromICloud = false;
         _isCompressing = false;
         _isProcessing = false;
-        await OnUploadError.InvokeAsync(errorMessage);
+        _processingStatusText = null;
+        if (OnUploadError.HasDelegate)
+            await OnUploadError.InvokeAsync(errorMessage);
+        else
+            Snackbar.Add(errorMessage, Severity.Error);
         StateHasChanged();
     }
 
@@ -254,9 +390,26 @@
         }
 
         if (OnDetailedProgressUpdate.HasDelegate)
-            await OnDetailedProgressUpdate.InvokeAsync((_isProcessing ? "Finishing up..." : "Uploading...", percentComplete));
+            await OnDetailedProgressUpdate.InvokeAsync((_isProcessing ? (_processingStatusText ?? "Finishing up...") : "Uploading...", percentComplete));
         else
             await OnProgressUpdate.InvokeAsync(percentComplete);
+
+        await InvokeAsync(StateHasChanged);
+    }
+
+    [JSInvokable]
+    public async Task OnProcessingCallback(string statusText)
+    {
+        _isDownloadingFromICloud = false;
+        _isCompressing = false;
+        _isProcessing = true;
+        _progress = 100;
+        _processingStatusText = string.IsNullOrWhiteSpace(statusText) ? "Finishing up..." : statusText;
+
+        if (OnDetailedProgressUpdate.HasDelegate)
+            await OnDetailedProgressUpdate.InvokeAsync((_processingStatusText, 100));
+        else
+            await OnProgressUpdate.InvokeAsync(100);
 
         await InvokeAsync(StateHasChanged);
     }
@@ -285,6 +438,7 @@
         public bool HasThumbnail { get; set; } = false;
         public int? ImageWidth { get; set; }
         public int? ImageHeight { get; set; }
+        public double? DurationSeconds { get; set; }
         public string Category { get; set; } = "";
         public string ContextId { get; set; } = "";
     }

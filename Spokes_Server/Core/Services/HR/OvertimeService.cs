@@ -37,7 +37,7 @@ public class OvertimeService
         var employee = _employees.GetById(employeeId);
         if (employee == null) return new HourBankResult();
 
-        var hrConfig = _companyProfiles.Get()?.HRConfig ?? new Spokes_Server.Core.Models.Core.HRSettings();
+        var hrConfig = _companyProfiles.GetHRSettings();
 
         if (!hrConfig.EnableHourBank)
         {
@@ -62,7 +62,6 @@ public class OvertimeService
             endDate = today;
         }
 
-        // Get all timesheets for this employee
         var allTimesheets = _timesheets.GetAll()
             .Where(t => t.EmployeeId == employeeId)
             .ToList();
@@ -72,7 +71,6 @@ public class OvertimeService
         decimal calculatedBank = 0;
         int weekCount = 0;
 
-        // Start from the Monday of the start week
         var current = GetMondayOfWeek(startDate);
         var endMonday = GetMondayOfWeek(endDate);
 
@@ -81,7 +79,7 @@ public class OvertimeService
 
         while (current <= endMonday && current < currentWeekMonday)
         {
-            var year = current.Year;
+            var year = ISOWeek.GetYear(current.ToDateTime(TimeOnly.MinValue));
             var week = ISOWeek.GetWeekOfYear(current.ToDateTime(TimeOnly.MinValue));
 
             var timesheet = allTimesheets.FirstOrDefault(t => t.Year == year && t.WeekNumber == week);
@@ -194,7 +192,7 @@ public class OvertimeService
         var employee = _employees.GetById(employeeId);
         if (employee == null) return audit;
 
-        var hrConfig = _companyProfiles.Get()?.HRConfig ?? new Spokes_Server.Core.Models.Core.HRSettings();
+        var hrConfig = _companyProfiles.GetHRSettings();
         if (!hrConfig.EnableHourBank) return audit;
 
         var startDate = employee.DateOfJoining;
@@ -210,7 +208,7 @@ public class OvertimeService
 
         while (current <= endMonday && current < currentWeekMonday)
         {
-            var year = current.Year;
+            var year = ISOWeek.GetYear(current.ToDateTime(TimeOnly.MinValue));
             var week = ISOWeek.GetWeekOfYear(current.ToDateTime(TimeOnly.MinValue));
 
             var timesheet = allTimesheets.FirstOrDefault(t => t.Year == year && t.WeekNumber == week);

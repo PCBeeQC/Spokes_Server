@@ -1,4 +1,6 @@
 using System.Text.Json;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Spokes_Server.Core.Models.Communication;
 
 namespace Spokes_Server.Core.Data.Repositories.Communication;
@@ -6,7 +8,13 @@ namespace Spokes_Server.Core.Data.Repositories.Communication;
 public class EmailFolderRepository : JsonRepository<EmailFolder>
 {
     public EmailFolderRepository(DiskPersistenceService writer, IConfiguration config)
-        : base(writer, Path.Combine(config["DataPath"] ?? "Data", "Employees"), "EmailFolders.json") // Search pattern irrelevant for custom load
+        : this(writer, config, null)
+    {
+    }
+
+    [ActivatorUtilitiesConstructor]
+    public EmailFolderRepository(DiskPersistenceService writer, IConfiguration config, ILogger<EmailFolderRepository>? logger)
+        : base(writer, Path.Combine(config["DataPath"] ?? "Data", "Employees"), "EmailFolders.json", logger) // Search pattern irrelevant for custom load
     {
     }
 
@@ -15,29 +23,44 @@ public class EmailFolderRepository : JsonRepository<EmailFolder>
 
     public override void LoadFromDisk()
     {
-        if (!Directory.Exists(_basePath)) return;
-
-        // Strategy: Iterate all Employee directories, look for Email/Folders
-        var employeeDirs = Directory.GetDirectories(_basePath);
-        foreach (var employeeDir in employeeDirs)
+        lock (_loadLock)
         {
-            var folderPath = Path.Combine(employeeDir, "Email", "Folders");
-            if (!Directory.Exists(folderPath)) continue;
-
-            var files = Directory.GetFiles(folderPath, "*.json");
-            foreach (var file in files)
+            if (!Directory.Exists(_basePath))
             {
-                try
+                _isLoaded = true;
+                return;
+            }
+
+            var tempFolders = new List<EmailFolder>();
+            // Strategy: Iterate all Employee directories, look for Email/Folders
+            var employeeDirs = Directory.GetDirectories(_basePath);
+            foreach (var employeeDir in employeeDirs)
+            {
+                var folderPath = Path.Combine(employeeDir, "Email", "Folders");
+                if (!Directory.Exists(folderPath)) continue;
+
+                var files = Directory.GetFiles(folderPath, "*.json");
+                foreach (var file in files)
                 {
-                    var json = File.ReadAllText(file);
-                    var item = JsonSerializer.Deserialize<EmailFolder>(json);
-                    if (item != null) _cache[item.Id] = item;
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"[EmailFolderRepo] Error loading folder file {file}: {ex.Message}");
+                    try
+                    {
+                        var json = File.ReadAllText(file);
+                        var item = JsonSerializer.Deserialize<EmailFolder>(json);
+                        if (item != null) tempFolders.Add(item);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger?.LogWarning(ex, "[EmailFolderRepo] Error loading folder file {File}", file);
+                    }
                 }
             }
+
+            RawCache.Clear();
+            foreach (var folder in tempFolders)
+            {
+                RawCache[folder.Id] = folder;
+            }
+            _isLoaded = true;
         }
     }
 

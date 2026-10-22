@@ -12,6 +12,9 @@ public class BoardCardRepository : JsonRepository<BoardCard>
     protected override string GetFilePath(BoardCard item) =>
         Path.Combine(_basePath, $"{item.Id}.json");
 
-    public List<BoardCard> GetByBoardId(string boardId) =>
-        _cache.Values.Where(c => c.BoardId == boardId).ToList();
+    public List<BoardCard> GetByBoardId(string boardId)
+    {
+        EnsureLoaded();
+        return _cache.Values.Where(c => c.BoardId == boardId).ToList();
+    }
 }

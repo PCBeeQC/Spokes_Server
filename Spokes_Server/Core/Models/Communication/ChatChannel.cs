@@ -76,6 +76,14 @@ public class ChatChannel : IDataEntity
     public bool SupportsAnnouncements => ChannelType != ChatChannelType.Direct;
 
     /// <summary>
+    /// A channel is public when it is a General channel with no team or participant restrictions.
+    /// </summary>
+    [JsonIgnore]
+    public bool IsPublicChannel => ChannelType == ChatChannelType.General &&
+                                   (AllowedTeamIds == null || AllowedTeamIds.Count == 0) &&
+                                   (ParticipantIds == null || ParticipantIds.Count == 0);
+
+    /// <summary>
     /// Normalizes channel state to maintain domain invariants.
     /// If the channel does not support announcements, announcement flags and access lists are reset.
     /// </summary>

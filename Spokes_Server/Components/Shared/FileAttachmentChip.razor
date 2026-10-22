@@ -1,0 +1,156 @@
+@using Spokes_Server.Core.Helpers
+@using Spokes_Server.Core.Models.Common
+@inject IJSRuntime JS
+
+@if (IsUploading)
+{
+    <MudChip T="string"
+             Size="@Size"
+             Variant="@Variant"
+             Color="Color.Default"
+             Class="@($"file-attachment-chip uploading {Class}".Trim())"
+             Style="@Style"
+             OnClose="@HandleCancel"
+             CloseIcon="@Icons.Material.Filled.Close">
+        <MudProgressCircular Size="Size.Small"
+                             Indeterminate="@(UploadProgress < 0)"
+                             Value="@(UploadProgress < 0 ? 0 : UploadProgress)"
+                             Max="100"
+                             Color="Color.Primary"
+                             Class="mr-1" />
+        <span class="text-truncate" style="max-width: @MaxWidthPx;">
+            @DisplayUploadingText
+            @if (!string.IsNullOrWhiteSpace(DisplayProgressText))
+            {
+                <span class="mud-text-secondary ml-1" style="font-size: 0.8em;">(@DisplayProgressText)</span>
+            }
+        </span>
+    </MudChip>
+}
+else
+{
+    <MudTooltip Text="@TooltipText">
+        <MudChip T="string"
+                 Size="@Size"
+                 Variant="@Variant"
+                 Color="@ChipColor"
+                 Class="@($"file-attachment-chip {Class}".Trim())"
+                 Style="@Style"
+                 OnClick="@HandleClick"
+                 OnClose="@CloseCallback"
+                 CloseIcon="@(CanRemove ? Icons.Material.Filled.Close : null)">
+            <MudIcon Icon="@FileIcon" Size="Size.Small" Class="mr-1" />
+            <span class="text-truncate" style="max-width: @MaxWidthPx;">
+                @DisplayFileName
+                @if (ShowSize && EffectiveFileSizeBytes > 0)
+                {
+                    <span class="mud-text-secondary ml-1" style="font-size: 0.8em;">(@FileHelper.FormatBytes(EffectiveFileSizeBytes))</span>
+                }
+            </span>
+        </MudChip>
+    </MudTooltip>
+}
+
+@code {
+    [Parameter] public IFileAttachment? Attachment { get; set; }
+    [Parameter] public string? FileName { get; set; }
+    [Parameter] public string? FilePath { get; set; }
+    [Parameter] public string? ContentType { get; set; }
+    [Parameter] public long? FileSizeBytes { get; set; }
+
+    [Parameter] public bool IsUploading { get; set; }
+    [Parameter] public double UploadProgress { get; set; }
+    [Parameter] public string? StageText { get; set; }
+
+    [Parameter] public bool ReadOnly { get; set; } = false;
+    [Parameter] public bool ShowSize { get; set; } = true;
+    [Parameter] public bool AllowDownload { get; set; } = true;
+    [Parameter] public Size Size { get; set; } = Size.Small;
+    [Parameter] public Variant Variant { get; set; } = Variant.Filled;
+    [Parameter] public string MaxWidthPx { get; set; } = "220px";
+    [Parameter] public string Class { get; set; } = "";
+    [Parameter] public string Style { get; set; } = "";
+
+    [Parameter] public EventCallback<IFileAttachment?> OnClick { get; set; }
+    [Parameter] public EventCallback<IFileAttachment?> OnRemove { get; set; }
+    [Parameter] public EventCallback OnCancel { get; set; }
+
+    private string DisplayFileName => !string.IsNullOrWhiteSpace(FileName)
+        ? FileName
+        : Attachment?.FileName ?? "File";
+
+    private string DisplayUploadingText =>
+        !string.IsNullOrWhiteSpace(StageText)
+            ? StageText
+            : (!string.IsNullOrWhiteSpace(FileName)
+                ? FileName
+                : Attachment?.FileName ?? "Uploading...");
+
+    private string EffectiveFilePath => !string.IsNullOrWhiteSpace(FilePath)
+        ? FilePath
+        : Attachment?.FilePath ?? "";
+
+    private string EffectiveContentType => !string.IsNullOrWhiteSpace(ContentType)
+        ? ContentType
+        : Attachment?.ContentType ?? "";
+
+    private long EffectiveFileSizeBytes => FileSizeBytes ?? Attachment?.FileSizeBytes ?? 0;
+
+    private bool IsImage => FileHelper.IsImageFile(DisplayFileName) ||
+                           EffectiveContentType.StartsWith("image/", StringComparison.OrdinalIgnoreCase);
+
+    private Color ChipColor => IsImage ? Color.Info : Color.Default;
+
+    private string FileIcon => FileHelper.GetFileIcon(DisplayFileName, EffectiveContentType);
+
+    private string? DisplayProgressText =>
+        UploadProgress >= 0 ? $"{Math.Round(UploadProgress)}%" : null;
+
+    private string TooltipText
+    {
+        get
+        {
+            var text = DisplayFileName;
+            if (EffectiveFileSizeBytes > 0)
+            {
+                text += $" ({FileHelper.FormatBytes(EffectiveFileSizeBytes)})";
+            }
+            return text;
+        }
+    }
+
+    private async Task HandleClick()
+    {
+        if (OnClick.HasDelegate)
+        {
+            await OnClick.InvokeAsync(Attachment);
+            return;
+        }
+
+        if (AllowDownload && !string.IsNullOrWhiteSpace(EffectiveFilePath))
+        {
+            await JS.InvokeVoidAsync("open", EffectiveFilePath, "_blank");
+        }
+    }
+
+    private bool CanRemove => !ReadOnly && OnRemove.HasDelegate;
+
+    private EventCallback<MudChip<string>> CloseCallback =>
+        CanRemove ? EventCallback.Factory.Create<MudChip<string>>(this, (Func<MudChip<string>, Task>)HandleRemove) : default;
+
+    private async Task HandleRemove(MudChip<string>? chip = null)
+    {
+        if (OnRemove.HasDelegate)
+        {
+            await OnRemove.InvokeAsync(Attachment);
+        }
+    }
+
+    private async Task HandleCancel()
+    {
+        if (OnCancel.HasDelegate)
+        {
+            await OnCancel.InvokeAsync();
+        }
+    }
+}

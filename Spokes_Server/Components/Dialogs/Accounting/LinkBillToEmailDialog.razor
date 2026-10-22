@@ -1,0 +1,305 @@
+@using Spokes_Server.Aggregate
+@using Spokes_Server.Core.Constants
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.Communication
+@inject Database Db
+@inject IStringLocalizer<BusinessResources> BizLoc
+@inject IStringLocalizer<AppResources> Loc
+
+<MudDialog>
+    <DialogContent>
+        <MudText Typo="Typo.body2" Class="mb-3 text-muted">
+            @BizLoc["Select an existing bill in Spokes to link with this incoming email. The invoice attachment will be attached to the bill and the email will be marked as dealt with."]
+        </MudText>
+
+        @if (Email != null)
+        {
+            <MudPaper Elevation="0" Outlined="true" Class="pa-3 mb-3" Style="background-color: var(--mud-palette-background-grey);">
+                <MudText Typo="Typo.caption" Color="Color.Secondary" Style="font-weight: 700; text-transform: uppercase;">
+                    @BizLoc["Incoming Email"]
+                </MudText>
+                <div class="d-flex align-center justify-space-between flex-wrap gap-2 mt-1">
+                    <div>
+                        <MudText Typo="Typo.body2"><b>@(!string.IsNullOrWhiteSpace(Email.FromName) ? Email.FromName : Email.FromAddress)</b></MudText>
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">@Email.Subject</MudText>
+                    </div>
+                    <div class="text-right">
+                        @if (Email.DetectedAmount.HasValue)
+                        {
+                            <MudChip T="string" Color="Color.Primary" Size="Size.Small" Variant="Variant.Outlined">
+                                @Email.DetectedAmount.Value.ToString("C2") @(!string.IsNullOrEmpty(Email.DetectedCurrency) ? Email.DetectedCurrency : "CAD")
+                            </MudChip>
+                        }
+                        <MudText Typo="Typo.caption" Color="Color.Secondary" Class="d-block">@Email.Date.LocalDateTime.ToShortDateString()</MudText>
+                    </div>
+                </div>
+            </MudPaper>
+        }
+
+        <!-- Status Filter Chips and Suggested Filter -->
+        <div class="d-flex align-center justify-space-between flex-wrap gap-2 mb-2">
+            <div class="d-flex align-center gap-1">
+                <MudChip T="string" Size="Size.Small"
+                         Color="@(_statusFilter == "all" ? Color.Primary : Color.Default)"
+                         Variant="@(_statusFilter == "all" ? Variant.Filled : Variant.Outlined)"
+                         OnClick='() => _statusFilter = "all"'>
+                    @BizLoc["All Bills"] (@_allItems.Count)
+                </MudChip>
+                <MudChip T="string" Size="Size.Small"
+                         Color="@(_statusFilter == "unpaid" ? Color.Warning : Color.Default)"
+                         Variant="@(_statusFilter == "unpaid" ? Variant.Filled : Variant.Outlined)"
+                         OnClick='() => _statusFilter = "unpaid"'>
+                    @BizLoc["Unpaid / Open"] (@_allItems.Count(b => b.Status != BillStatus.Paid && b.BalanceDue > 0))
+                </MudChip>
+                <MudChip T="string" Size="Size.Small"
+                         Color="@(_statusFilter == "paid" ? Color.Success : Color.Default)"
+                         Variant="@(_statusFilter == "paid" ? Variant.Filled : Variant.Outlined)"
+                         OnClick='() => _statusFilter = "paid"'>
+                    @BizLoc["Paid"] (@_allItems.Count(b => b.Status == BillStatus.Paid || b.BalanceDue <= 0))
+                </MudChip>
+            </div>
+            @if (Email != null && !string.IsNullOrWhiteSpace(Email.FromName) && _searchQuery != Email.FromName.Trim())
+            {
+                <MudButton Variant="Variant.Text" Size="Size.Small" Color="Color.Secondary"
+                           StartIcon="@Icons.Material.Filled.FilterList"
+                           OnClick="ApplySuggestedSupplierSearch">
+                    @string.Format(BizLoc["Filter by '{0}'"].Value, Email.FromName.Trim())
+                </MudButton>
+            }
+        </div>
+
+        <div class="mb-3">
+            <MudTextField @bind-Value="_searchQuery" Placeholder="@BizLoc["Search supplier, invoice #, description, amount..."]" Immediate="true"
+                          Variant="Variant.Outlined" Margin="Margin.Dense" Adornment="Adornment.Start"
+                          AdornmentIcon="@Icons.Material.Filled.Search" Clearable="true" />
+        </div>
+
+        <MudTable T="ExistingBillItem" Items="FilteredBills" Dense="true" Hover="true" FixedHeader="true" Height="340px"
+                  SelectedItem="_selectedItem" SelectedItemChanged="@((ExistingBillItem? b) => OnBillSelected(b))"
+                  RowClassFunc="@((b, i) => _selectedItem?.Id == b?.Id ? "mud-selected-item" : "")">
+            <HeaderContent>
+                <MudTh>@BizLoc["Type"]</MudTh>
+                <MudTh>@BizLoc["Supplier"]</MudTh>
+                <MudTh>@BizLoc["Invoice # / Ref"]</MudTh>
+                <MudTh>@BizLoc["Date"]</MudTh>
+                <MudTh>@BizLoc["Amount"]</MudTh>
+                <MudTh>@BizLoc["Status"]</MudTh>
+                <MudTh>@BizLoc["Attachment"]</MudTh>
+            </HeaderContent>
+            <RowTemplate>
+                <MudTd DataLabel="Type">
+                    @if (context.IsRecurring)
+                    {
+                        <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Info" Style="height: 20px; font-size: 0.65rem;">
+                            @BizLoc["Recurring"]
+                        </MudChip>
+                    }
+                    else
+                    {
+                        <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Default" Style="height: 20px; font-size: 0.65rem;">
+                            @BizLoc["Standard"]
+                        </MudChip>
+                    }
+                </MudTd>
+                <MudTd DataLabel="Supplier">
+                    <MudText Typo="Typo.body2" Style="font-weight: 600;">@context.SupplierName</MudText>
+                </MudTd>
+                <MudTd DataLabel="Invoice # / Ref">
+                    <MudText Typo="Typo.body2">
+                        @(!string.IsNullOrEmpty(context.InvoiceNumber) ? context.InvoiceNumber : (!string.IsNullOrEmpty(context.Description) ? context.Description : "—"))
+                    </MudText>
+                </MudTd>
+                <MudTd DataLabel="Date">
+                    <MudText Typo="Typo.caption">@context.Date.ToShortDateString()</MudText>
+                </MudTd>
+                <MudTd DataLabel="Amount">
+                    <MudText Typo="Typo.body2">@context.Amount.ToString("C2")</MudText>
+                    @if (context.AmountPaid > 0 && context.BalanceDue > 0)
+                    {
+                        <MudText Typo="Typo.caption" Color="Color.Warning" Class="d-block">
+                            @string.Format(BizLoc["Due: {0}"].Value, context.BalanceDue.ToString("C2"))
+                        </MudText>
+                    }
+                </MudTd>
+                <MudTd DataLabel="Status">
+                    <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined"
+                             Color="@(context.Status == BillStatus.Paid ? Color.Success : (context.AmountPaid > 0 ? Color.Warning : (context.Status == BillStatus.AwaitingApproval ? Color.Warning : Color.Default)))"
+                             Style="height: 20px; font-size: 0.7rem;">
+                        @context.Status
+                    </MudChip>
+                </MudTd>
+                <MudTd DataLabel="Attachment">
+                    @if (!string.IsNullOrEmpty(context.AttachmentPath))
+                    {
+                        <MudIcon Icon="@Icons.Material.Filled.AttachFile" Size="Size.Small" Color="Color.Success" Title="@context.AttachmentName" />
+                    }
+                    else
+                    {
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">—</MudText>
+                    }
+                </MudTd>
+            </RowTemplate>
+            <NoRecordsContent>
+                <div class="pa-4 text-center text-muted">
+                    <MudText Typo="Typo.body2">@BizLoc["No matching bills found."]</MudText>
+                </div>
+            </NoRecordsContent>
+        </MudTable>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">@Loc["Cancel"]</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled"
+                   StartIcon="@Icons.Material.Filled.Link"
+                   OnClick="Submit" Disabled="@(_selectedItem == null)">
+            @BizLoc["Link to Selected Bill"]
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
+
+    [Parameter] public EmailMessage? Email { get; set; }
+
+    public class ExistingBillItem
+    {
+        public string Id { get; set; } = "";
+        public string SupplierName { get; set; } = "";
+        public string? InvoiceNumber { get; set; }
+        public string Description { get; set; } = "";
+        public DateTime Date { get; set; }
+        public DateTime? DueDate { get; set; }
+        public decimal Amount { get; set; }
+        public decimal AmountPaid { get; set; }
+        public decimal BalanceDue => Amount - AmountPaid;
+        public string Status { get; set; } = "";
+        public string? AttachmentPath { get; set; }
+        public string? AttachmentName { get; set; }
+        public bool IsRecurring { get; set; }
+        public Bill? Bill { get; set; }
+        public RecurringExpense? RecurringExpense { get; set; }
+        public RecurringBillRecord? RecurringRecord { get; set; }
+    }
+
+    private List<ExistingBillItem> _allItems = [];
+    private ExistingBillItem? _selectedItem;
+    private string _searchQuery = "";
+    private string _statusFilter = "all"; // "all", "unpaid", "paid"
+
+    protected override void OnInitialized()
+    {
+        _allItems.Clear();
+
+        // 1. Standard Bills (All non-void bills: Paid, Unpaid, Approved, AwaitingApproval)
+        var bills = Db.Bills.GetAll().Where(b => b.Status != BillStatus.Void);
+        foreach (var b in bills)
+        {
+            var isPaid = b.BalanceDue <= 0 || b.Status == BillStatus.Paid;
+            _allItems.Add(new ExistingBillItem
+            {
+                Id = b.Id,
+                SupplierName = !string.IsNullOrWhiteSpace(b.SupplierName) ? b.SupplierName : BizLoc["Unknown Supplier"].Value,
+                InvoiceNumber = b.InvoiceNumber,
+                Description = b.Description,
+                Date = b.Date,
+                DueDate = b.DueDate,
+                Amount = b.Amount,
+                AmountPaid = b.AmountPaid,
+                Status = isPaid ? BillStatus.Paid : (b.AmountPaid > 0 ? "Partially Paid" : b.Status),
+                AttachmentPath = b.AttachmentPath,
+                AttachmentName = b.AttachmentName,
+                IsRecurring = false,
+                Bill = b
+            });
+        }
+
+        // 2. Recurring Bills from actual recurring expenses
+        var recurringExpenses = Db.RecurringExpenses.GetAll().Where(e => !e.IsEstimate);
+        foreach (var re in recurringExpenses)
+        {
+            foreach (var rec in re.History)
+            {
+                var isPaid = rec.IsPaid || rec.BalanceDue <= 0;
+                var supplier = !string.IsNullOrWhiteSpace(re.Supplier) ? re.Supplier : re.Name;
+                _allItems.Add(new ExistingBillItem
+                {
+                    Id = rec.Id,
+                    SupplierName = supplier,
+                    InvoiceNumber = null,
+                    Description = re.Name,
+                    Date = rec.Date,
+                    DueDate = rec.DueDate,
+                    Amount = rec.Amount,
+                    AmountPaid = rec.AmountPaid,
+                    Status = isPaid ? BillStatus.Paid : (rec.AmountPaid > 0 ? "Partially Paid" : BillStatus.Unpaid),
+                    AttachmentPath = rec.AttachmentPath,
+                    AttachmentName = rec.AttachmentName,
+                    IsRecurring = true,
+                    RecurringExpense = re,
+                    RecurringRecord = rec
+                });
+            }
+        }
+
+        // Strictly order from most recent to oldest
+        _allItems = _allItems.OrderByDescending(b => b.Date).ThenByDescending(b => b.DueDate ?? b.Date).ToList();
+
+        // Note: _searchQuery starts empty so that all bills from most recent to oldest are displayed immediately.
+    }
+
+    private void ApplySuggestedSupplierSearch()
+    {
+        if (Email != null && !string.IsNullOrWhiteSpace(Email.FromName))
+        {
+            _searchQuery = Email.FromName.Trim();
+        }
+    }
+
+    private IEnumerable<ExistingBillItem> FilteredBills
+    {
+        get
+        {
+            var items = _allItems.AsEnumerable();
+
+            // Status filter
+            if (_statusFilter == "unpaid")
+            {
+                items = items.Where(b => b.Status != BillStatus.Paid && b.BalanceDue > 0);
+            }
+            else if (_statusFilter == "paid")
+            {
+                items = items.Where(b => b.Status == BillStatus.Paid || b.BalanceDue <= 0);
+            }
+
+            // Search query with multi-term search
+            if (!string.IsNullOrWhiteSpace(_searchQuery))
+            {
+                var terms = _searchQuery.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                items = items.Where(b =>
+                    terms.All(term =>
+                        (!string.IsNullOrEmpty(b.SupplierName) && b.SupplierName.Contains(term, StringComparison.OrdinalIgnoreCase)) ||
+                        (!string.IsNullOrEmpty(b.InvoiceNumber) && b.InvoiceNumber.Contains(term, StringComparison.OrdinalIgnoreCase)) ||
+                        (!string.IsNullOrEmpty(b.Description) && b.Description.Contains(term, StringComparison.OrdinalIgnoreCase)) ||
+                        b.Amount.ToString("F2").Contains(term, StringComparison.OrdinalIgnoreCase) ||
+                        (!string.IsNullOrEmpty(b.Status) && b.Status.Contains(term, StringComparison.OrdinalIgnoreCase))));
+            }
+
+            return items;
+        }
+    }
+
+    private void OnBillSelected(ExistingBillItem? item)
+    {
+        _selectedItem = item;
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+
+    private void Submit()
+    {
+        if (_selectedItem != null)
+        {
+            MudDialog.Close(DialogResult.Ok(_selectedItem));
+        }
+    }
+}

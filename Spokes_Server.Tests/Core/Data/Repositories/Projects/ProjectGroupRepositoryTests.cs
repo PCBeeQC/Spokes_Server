@@ -1,40 +1,13 @@
-using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.Logging;
-using Moq;
-using Spokes_Server.Core.Data;
 using Spokes_Server.Core.Data.Repositories.Projects;
+using Spokes_Server.Core.Models.Core;
 using Spokes_Server.Core.Models.Projects;
+using Spokes_Server.Tests.Helpers;
+using Xunit;
 
 namespace Spokes_Server.Tests.Core.Data.Repositories.Projects;
 
-public class ProjectGroupRepositoryTests : IDisposable
+public class ProjectGroupRepositoryTests : RepositoryTestFixture<ProjectGroupRepository>
 {
-    private readonly string _testDataDir;
-    private readonly DiskPersistenceService _writer;
-    private readonly ProjectGroupRepository _repo;
-
-    public ProjectGroupRepositoryTests()
-    {
-        _testDataDir = Path.Combine(Path.GetTempPath(), $"Spokes_Test_ProjectGroups_{Guid.NewGuid()}");
-
-        var mockConfig = new Mock<IConfiguration>();
-        mockConfig.Setup(c => c["DataPath"]).Returns(_testDataDir);
-
-        var mockLogger = new Mock<ILogger<DiskPersistenceService>>();
-        _writer = new DiskPersistenceService(mockLogger.Object);
-
-        _repo = new ProjectGroupRepository(_writer, mockConfig.Object);
-    }
-
-    public void Dispose()
-    {
-        if (Directory.Exists(_testDataDir))
-        {
-            try { Directory.Delete(_testDataDir, true); } catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"Cleanup error: {ex.Message}"); }
-        }
-        _writer.Dispose();
-    }
-
     [Fact]
     public void GetByClient_ReturnsGroupsForClientCaseInsensitive()
     {
@@ -128,7 +101,3 @@ public class ProjectGroupRepositoryTests : IDisposable
         Assert.Null(resultEmpty);
     }
 }
-
-
-
-

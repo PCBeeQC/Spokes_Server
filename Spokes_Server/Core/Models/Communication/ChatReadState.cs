@@ -34,14 +34,22 @@ public class ChatReadState : IDataEntity
     /// Returns the default notification level for a given channel type.
     /// DMs default to "All"; everything else defaults to "All".
     /// </summary>
-    public static string DefaultNotificationLevel(string? channelType, bool isVoiceChannel, string defaultPublicSub = "Mentions")
+    public static string DefaultNotificationLevel(string? channelType, bool isVoiceChannel, string defaultPublicSub = ChatNotificationLevel.Mentions)
     {
         if (isVoiceChannel)
-            return "Mentions";
+            return ChatNotificationLevel.Mentions;
 
         // Public/General channels default to the configured value; everything else defaults to All
-        if (channelType == nameof(ChatChannelType.General))
+        if (channelType == ChatChannelType.General)
             return defaultPublicSub;
-        return "All";
+        return ChatNotificationLevel.All;
     }
+}
+
+public static class ChatNotificationLevel
+{
+    public const string All = "All";
+    public const string Mentions = "Mentions";
+    public const string None = "None";
+    public static readonly string[] AllLevels = [All, Mentions, None];
 }

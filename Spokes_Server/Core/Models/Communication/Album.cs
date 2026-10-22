@@ -3,7 +3,10 @@ namespace Spokes_Server.Core.Models.Communication;
 using System.Text.Json.Serialization;
 using Spokes_Server.Core.Data;
 
-public class Album : IDataEntity
+using System.Collections.Generic;
+using System.Linq;
+
+public class Album : IDataEntity, IHasAssociatedFiles
 {
     public string Id { get; set; } = Guid.NewGuid().ToString();
 
@@ -23,9 +26,14 @@ public class Album : IDataEntity
     public bool IsEncrypted { get; set; } = true;
     public Dictionary<string, string> EncryptedAlbumKeys { get; set; } = [];
     public List<AlbumMedia> Media { get; set; } = [];
+
+    public IEnumerable<string> GetAssociatedFilePaths()
+    {
+        return Media?.Select(m => m.FilePath).Where(p => !string.IsNullOrWhiteSpace(p)) ?? Enumerable.Empty<string>();
+    }
 }
 
-public class AlbumMedia
+public class AlbumMedia : IHasAssociatedFiles
 {
     public string Id { get; set; } = Guid.NewGuid().ToString();
     public string FileName { get; set; } = string.Empty;
@@ -37,6 +45,7 @@ public class AlbumMedia
     public bool HasServerThumbnail { get; set; }
     public int? ImageWidth { get; set; }
     public int? ImageHeight { get; set; }
+    public double? DurationSeconds { get; set; }
 
     [JsonIgnore]
     public string ThumbnailUrl
@@ -53,5 +62,10 @@ public class AlbumMedia
             
             return FilePath;
         }
+    }
+
+    public IEnumerable<string> GetAssociatedFilePaths()
+    {
+        if (!string.IsNullOrWhiteSpace(FilePath)) yield return FilePath;
     }
 }

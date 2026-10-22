@@ -1,0 +1,62 @@
+@using Spokes_Server.Core.Services.Communication.Voice
+@inject GlobalVoiceService VoiceService
+@inject IVoiceDeviceService VoiceDeviceService
+@inject IJSRuntime JS
+
+<MudDialog>
+    <TitleContent>
+        <div class="d-flex align-center gap-2">
+            <MudIcon Icon="@Icons.Material.Filled.GraphicEq" Color="Color.Primary" />
+            <MudText Typo="Typo.h6">@Loc["Apple Voice Isolation"]</MudText>
+        </div>
+    </TitleContent>
+    <DialogContent>
+        <div class="d-flex flex-column gap-3 py-1">
+            <MudText Typo="Typo.body2">
+                @Loc["Spokes supports Apple Voice Isolation to filter out background noise, machinery, and room echoes on your microphone using the on-device Neural Engine."]
+            </MudText>
+
+            <MudPaper Class="pa-3 rounded-lg" Elevation="0" Style="background-color: var(--mud-palette-background-grey); border: 1px solid var(--mud-palette-divider);">
+                <div class="d-flex align-center gap-2">
+                    <MudIcon Icon="@Icons.Material.Filled.Info" Color="Color.Info" Size="Size.Small" />
+                    <MudText Typo="Typo.caption" Color="Color.Secondary">
+                        @((MarkupString)Loc["Tap <b>Turn On</b>, then select <b>Voice Isolation</b> in the iOS menu that appears. iOS will remember this choice for future calls."].Value)
+                    </MudText>
+                </div>
+            </MudPaper>
+        </div>
+    </DialogContent>
+    <DialogActions>
+        <MudButton Variant="Variant.Text" Color="Color.Secondary" OnClick="Dismiss">@Loc["Not Now"]</MudButton>
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="TurnOn">@Loc["Turn On"]</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
+
+    private async Task TurnOn()
+    {
+        try
+        {
+            await JS.InvokeVoidAsync("localStorage.setItem", "spokes_ios_vi_prompted", "true");
+        }
+        catch { }
+
+        MudDialog.Close(DialogResult.Ok(true));
+
+        // Trigger the native iOS menu directly upon user consent
+        await VoiceDeviceService.PromptIosVoiceIsolationAsync(VoiceService.IsIOS);
+    }
+
+    private async Task Dismiss()
+    {
+        try
+        {
+            await JS.InvokeVoidAsync("localStorage.setItem", "spokes_ios_vi_prompted", "true");
+        }
+        catch { }
+
+        MudDialog.Cancel();
+    }
+}

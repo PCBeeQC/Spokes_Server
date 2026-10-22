@@ -1,0 +1,136 @@
+@using Spokes_Server.Core.Services.Communication.Chat
+@inject Database Db
+@inject ISnackbar Snackbar
+@inject ICryptoService Crypto
+@inject GlobalKeystoreService Keystore
+@inject ScopedKeystoreService ScopedKeystore
+@inject ChatSecurityService ChatSecurityService
+@inject IJSRuntime JS
+
+<MudDialog>
+    <DialogContent>
+        @{
+            string vaultUsername = !string.IsNullOrWhiteSpace(Employee?.FullName) ? Employee.FullName : Employee?.Id ?? "";
+        }
+        <MudCarousel Class="mud-width-full" Style="height:350px;" ShowArrows="false" ShowBullets="true" EnableSwipeGesture="false" AutoCycle="false" TData="object" @ref="_carousel">
+            <MudCarouselItem>
+                <div class="d-flex flex-column align-center justify-center h-100 pa-4 text-center">
+                    <MudIcon Icon="@Icons.Material.Filled.EnhancedEncryption" Color="Color.Primary" Style="font-size: 4rem;" Class="mb-4" />
+                    <MudText Typo="Typo.h5" GutterBottom="true">@Loc["Secure Chat"]</MudText>
+                    <MudText Typo="Typo.body1" Class="mb-4">
+                        @Loc["Spokes encrypts your messages inside the database. This keeps them safe even if the server's backups ever leak."]
+                    </MudText>
+                    <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="NextStep">@Loc["Continue"]</MudButton>
+                </div>
+            </MudCarouselItem>
+            
+            <MudCarouselItem>
+                <div class="d-flex flex-column h-100 pa-4 justify-center">
+                    <MudAlert Severity="Severity.Error" Class="mb-4">
+                        <b>@Loc["Critical Warning"]</b><br />
+                        @Loc["If you forget your password, all your encrypted conversations and photo albums are permanently lost. There is NO password recovery."]
+                    </MudAlert>
+                    <MudCheckBox @bind-Value="_understoodWarning" Color="Color.Error" Label="@Loc["Duly noted."]" Class="mb-4" />
+                    <div class="d-flex justify-space-between mt-auto">
+                        <MudButton Variant="Variant.Text" OnClick="PreviousStep">@Loc["Back"]</MudButton>
+                        <MudButton Variant="Variant.Filled" Color="Color.Primary" Disabled="!_understoodWarning" OnClick="NextStep">@Loc["I Understand"]</MudButton>
+                    </div>
+                </div>
+            </MudCarouselItem>
+            
+            <MudCarouselItem>
+                <div class="d-flex flex-column h-100 pa-4">
+                    <MudText Typo="Typo.h6" GutterBottom="true">@Loc["Set Your Password"]</MudText>
+                    <MudText Typo="Typo.body2" Class="mb-4">@Loc["Choose a strong password that you won't forget."]</MudText>
+                    
+                    <input type="text" autocomplete="username" value="@($"{vaultUsername} (Chat Vault)")" style="position: absolute; left: -9999px;" tabindex="-1" aria-hidden="true" />
+                    <MudTextField @bind-Value="_newPassword" Label="@Loc["New Password"]" InputType="@(_showNewPassword ? InputType.Text : InputType.Password)" Variant="Variant.Outlined" Margin="Margin.Dense" Class="mb-2" Adornment="Adornment.End" AdornmentIcon="@(_showNewPassword ? Icons.Material.Filled.Visibility : Icons.Material.Filled.VisibilityOff)" OnAdornmentClick="@(() => _showNewPassword = !_showNewPassword)" AdornmentAriaLabel="@Loc["Show/hide password"]" UserAttributes="@(new Dictionary<string,object>{{ "autocomplete", "new-password" }})" />
+                    <MudTextField @bind-Value="_confirmPassword" Label="@Loc["Confirm Password"]" InputType="@(_showConfirmPassword ? InputType.Text : InputType.Password)" Variant="Variant.Outlined" Margin="Margin.Dense" Class="mb-4" Adornment="Adornment.End" AdornmentIcon="@(_showConfirmPassword ? Icons.Material.Filled.Visibility : Icons.Material.Filled.VisibilityOff)" OnAdornmentClick="@(() => _showConfirmPassword = !_showConfirmPassword)" AdornmentAriaLabel="@Loc["Show/hide password"]" UserAttributes="@(new Dictionary<string,object>{{ "autocomplete", "new-password" }})" />
+                    
+                    <div class="d-flex justify-space-between mt-auto">
+                        <MudButton Variant="Variant.Text" OnClick="PreviousStep">@Loc["Back"]</MudButton>
+                        <MudButton Variant="Variant.Filled" Color="Color.Success" OnClick="SetupInitialPassword" Disabled="_isSettingUp">@Loc["Enable Secure Chat"]</MudButton>
+                    </div>
+                </div>
+            </MudCarouselItem>
+        </MudCarousel>
+    </DialogContent>
+    <DialogActions>
+        <div class="d-flex w-100 justify-space-between px-2">
+            <MudButton Variant="Variant.Text" Color="Color.Default" OnClick="NeverShowAgain">@Loc["Never show again"]</MudButton>
+            <MudButton Variant="Variant.Text" Color="Color.Default" OnClick="RemindMeLater">@Loc["Remind me later"]</MudButton>
+        </div>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
+    [Parameter] public Employee Employee { get; set; } = default!;
+
+    private MudCarousel<object> _carousel = default!;
+    private bool _understoodWarning = false;
+    private string _newPassword = "";
+    private string _confirmPassword = "";
+    private bool _showNewPassword = false;
+    private bool _showConfirmPassword = false;
+    private bool _isSettingUp = false;
+
+    private void NextStep() => _carousel.Next();
+    private void PreviousStep() => _carousel.Previous();
+
+    private async Task SetupInitialPassword()
+    {
+        if (string.IsNullOrEmpty(_newPassword)) { Snackbar.Add(Loc["Password required"].Value, Severity.Error); return; }
+        if (_newPassword != _confirmPassword) { Snackbar.Add(Loc["Passwords do not match"].Value, Severity.Error); return; }
+
+        _isSettingUp = true;
+        try
+        {
+            var keys = Crypto.GenerateRsaKeyPair();
+            var kek = Crypto.DeriveKeyFromPassword(_newPassword, Employee.Id);
+            var encryptedPrivate = Crypto.EncryptAes(keys.PrivateKey, kek);
+
+            Employee.PublicKey = keys.PublicKey;
+            Employee.EncryptedPrivateKey = encryptedPrivate;
+            Db.Employees.Save(Employee);
+
+            // Auto-unlock the vault and drop the cookie
+            ScopedKeystore.Unlock(keys.PrivateKey, Employee.Id);
+            Keystore.UnlockVault(Employee.Id, Employee.EncryptedPrivateKey, _newPassword, Crypto);
+            await SetVaultCookie(_newPassword);
+
+            // Claim any escrowed public/team channel keys and albums specifically for this user
+            await ChatSecurityService.ClaimEscrowedKeysAsync(Employee.Id);
+
+            Snackbar.Add(Loc["Secure chat enabled successfully!"].Value, Severity.Success);
+            MudDialog.Close(DialogResult.Ok(true));
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add(string.Format(Loc["Error setting up secure chat: {0}"].Value, ex.Message), Severity.Error);
+        }
+        finally
+        {
+            _isSettingUp = false;
+        }
+    }
+
+    private async Task SetVaultCookie(string password)
+    {
+        await ScopedKeystore.SaveDeviceCookieAsync(JS, password);
+    }
+
+    private void RemindMeLater()
+    {
+        Employee.ChatWizardRemindLaterDate = DateTimeOffset.UtcNow.AddDays(3);
+        Db.Employees.Save(Employee);
+        MudDialog.Cancel();
+    }
+
+    private void NeverShowAgain()
+    {
+        Employee.DismissedChatWizardPermanently = true;
+        Db.Employees.Save(Employee);
+        MudDialog.Cancel();
+    }
+}

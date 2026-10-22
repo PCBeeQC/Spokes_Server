@@ -52,7 +52,7 @@ public class CalendarEvent : IDataEntity
     /// If the user muted the event, returns empty.
     /// Deduplicates reminders with identical trigger offsets.
     /// </summary>
-    public List<CalendarReminder> GetEffectiveRemindersForUser(string userId)
+    public List<CalendarReminder> GetEffectiveRemindersForUser(string userId, bool defaultMuteSharedAlerts = false)
     {
         if (string.IsNullOrEmpty(userId)) return Reminders ?? [];
 
@@ -82,6 +82,11 @@ public class CalendarEvent : IDataEntity
                 }
             }
             return deduplicated;
+        }
+
+        if (defaultMuteSharedAlerts && !string.Equals(userId, EmployeeId, StringComparison.OrdinalIgnoreCase))
+        {
+            return [];
         }
 
         return Reminders ?? [];

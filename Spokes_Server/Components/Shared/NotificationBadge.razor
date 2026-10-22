@@ -5,33 +5,7 @@
     </span>
 }
 
-<style>
-    .notification-badge {
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        border-radius: 9999px; /* Ensures a perfect pill/circle shape */
-        color: white;
-        font-weight: 700;
-        flex-shrink: 0;
-        box-sizing: border-box;
-        line-height: normal; /* Better vertical centering than fixed line-height: 1 */
-    }
-
-    .notification-badge-medium {
-        min-width: 21px;
-        height: 21px;
-        padding: 0 7px;
-        font-size: 11px;
-    }
-
-    .notification-badge-small {
-        min-width: 18px;
-        height: 18px;
-        padding: 0 6px;
-        font-size: 9px;
-    }
-</style>
+@* Styles live in wwwroot/css/app.css: this component renders once per badge, so inline style blocks would be re-sent and re-inserted per instance (AGENTS.md §3). *@
 
 @code {
     [Parameter] public int Count { get; set; } = 0;

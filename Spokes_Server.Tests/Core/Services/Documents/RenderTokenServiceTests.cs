@@ -1,28 +1,17 @@
-using System.Collections;
-using System.Reflection;
+using System;
+using System.Collections.Generic;
 using Spokes_Server.Core.Services.Documents;
+using Xunit;
 
 namespace Spokes_Server.Tests.Core.Services.Documents;
 
 public class RenderTokenServiceTests
 {
-    private static IDictionary GetTokensDictionary(RenderTokenService service)
+    private class TestTimeProvider : TimeProvider
     {
-        var field = typeof(RenderTokenService).GetField("_tokens", BindingFlags.NonPublic | BindingFlags.Instance);
-        Assert.NotNull(field);
-        return (IDictionary)field.GetValue(service)!;
-    }
-
-    private static void InjectToken(RenderTokenService service, string token, DateTime expiresAt)
-    {
-        var tokens = GetTokensDictionary(service);
-        var tokenDataType = typeof(RenderTokenService).GetNestedType("TokenData", BindingFlags.NonPublic);
-        Assert.NotNull(tokenDataType);
-        var tokenData = Activator.CreateInstance(tokenDataType)!;
-        var expiresAtProp = tokenDataType.GetProperty("ExpiresAt");
-        Assert.NotNull(expiresAtProp);
-        expiresAtProp.SetValue(tokenData, expiresAt);
-        tokens[token] = tokenData;
+        private DateTimeOffset _utcNow = new DateTimeOffset(2025, 1, 1, 12, 0, 0, TimeSpan.Zero);
+        public override DateTimeOffset GetUtcNow() => _utcNow;
+        public void Advance(TimeSpan delta) => _utcNow = _utcNow.Add(delta);
     }
 
     [Fact]
@@ -60,6 +49,44 @@ public class RenderTokenServiceTests
     }
 
     [Fact]
+    public void ValidateToken_ValidToken_AllowsMultipleRequestsInSameScope_AndReturnsSameSessionId()
+    {
+        // Arrange
+        var service = new RenderTokenService();
+        var token = service.CreateToken();
+
+        // Act
+        var firstResult = service.ValidateToken(token, out var sessionId1);
+        var secondResult = service.ValidateToken(token, out var sessionId2);
+
+        // Assert
+        Assert.True(firstResult);
+        Assert.True(secondResult);
+        Assert.False(string.IsNullOrWhiteSpace(sessionId1));
+        Assert.Equal(sessionId1, sessionId2);
+    }
+
+    [Fact]
+    public void RevokeToken_RemovesToken_AndSubsequentValidationReturnsFalse()
+    {
+        // Arrange
+        var service = new RenderTokenService();
+        var token = service.CreateToken();
+        Assert.True(service.ValidateToken(token, out var expectedSessionId));
+
+        // Act
+        var revoked = service.RevokeToken(token, out var revokedSessionId);
+        var validAfterRevoke = service.ValidateToken(token, out _);
+        var secondRevoke = service.RevokeToken(token);
+
+        // Assert
+        Assert.True(revoked);
+        Assert.Equal(expectedSessionId, revokedSessionId);
+        Assert.False(validAfterRevoke);
+        Assert.False(secondRevoke);
+    }
+
+    [Fact]
     public void ValidateAndConsume_ValidToken_ReturnsTrueFirstTime_AndFalseSecondTime()
     {
         // Arrange
@@ -79,33 +106,30 @@ public class RenderTokenServiceTests
     [InlineData(null)]
     [InlineData("")]
     [InlineData("   ")]
-    public void ValidateAndConsume_NullOrWhitespaceToken_ReturnsFalse(string? token)
+    public void ValidateToken_And_ValidateAndConsume_NullOrWhitespaceToken_ReturnsFalse(string? token)
     {
         // Arrange
         var service = new RenderTokenService();
 
-        // Act
-        var result = service.ValidateAndConsume(token!);
-
-        // Assert
-        Assert.False(result);
+        // Act & Assert
+        Assert.False(service.ValidateToken(token!, out _));
+        Assert.False(service.RevokeToken(token!, out _));
+        Assert.False(service.ValidateAndConsume(token!));
     }
 
     [Fact]
-    public void ValidateAndConsume_NonExistentToken_ReturnsFalse()
+    public void ValidateToken_NonExistentToken_ReturnsFalse()
     {
         // Arrange
         var service = new RenderTokenService();
 
-        // Act
-        var result = service.ValidateAndConsume("non-existent-token-12345");
-
-        // Assert
-        Assert.False(result);
+        // Act & Assert
+        Assert.False(service.ValidateToken("non-existent-token-12345", out _));
+        Assert.False(service.ValidateAndConsume("non-existent-token-12345"));
     }
 
     [Fact]
-    public void ValidateAndConsume_CaseInsensitiveMatching()
+    public void ValidateToken_CaseInsensitiveMatching()
     {
         // Arrange
         var service = new RenderTokenService();
@@ -113,47 +137,49 @@ public class RenderTokenServiceTests
         var upperToken = token.ToUpperInvariant();
 
         // Act
-        var result = service.ValidateAndConsume(upperToken);
+        var result = service.ValidateToken(upperToken, out var sessionId);
 
         // Assert
         Assert.True(result);
+        Assert.False(string.IsNullOrWhiteSpace(sessionId));
     }
 
     [Fact]
-    public void ValidateAndConsume_ExpiredToken_ReturnsFalse()
+    public void ValidateToken_ExpiredToken_ReturnsFalse()
     {
         // Arrange
-        var service = new RenderTokenService();
+        var timeProvider = new TestTimeProvider();
+        var service = new RenderTokenService(timeProvider);
         var token = service.CreateToken();
-        var tokens = GetTokensDictionary(service);
-        var tokenData = tokens[token]!;
-        var expiresAtProp = tokenData.GetType().GetProperty("ExpiresAt")!;
-        expiresAtProp.SetValue(tokenData, DateTime.UtcNow.AddMinutes(-5));
+
+        // Advance past 2-minute token lifetime
+        timeProvider.Advance(TimeSpan.FromMinutes(5));
 
         // Act
-        var result = service.ValidateAndConsume(token);
+        var result = service.ValidateToken(token, out _);
 
         // Assert
         Assert.False(result);
-        Assert.False(tokens.Contains(token));
+        Assert.False(service.ContainsToken(token));
     }
 
     [Fact]
     public void CleanupExpired_RemovesExpiredTokensDuringCreateToken()
     {
         // Arrange
-        var service = new RenderTokenService();
-        const string expiredToken = "expired-token-123";
-        InjectToken(service, expiredToken, DateTime.UtcNow.AddMinutes(-5));
+        var timeProvider = new TestTimeProvider();
+        var service = new RenderTokenService(timeProvider);
+        var expiredToken = service.CreateToken();
 
-        var tokens = GetTokensDictionary(service);
-        Assert.True(tokens.Contains(expiredToken));
+        // Advance past 2-minute token lifetime
+        timeProvider.Advance(TimeSpan.FromMinutes(5));
+        Assert.True(service.ContainsToken(expiredToken));
 
         // Act
         var newToken = service.CreateToken();
 
         // Assert
-        Assert.False(tokens.Contains(expiredToken));
-        Assert.True(tokens.Contains(newToken));
+        Assert.False(service.ContainsToken(expiredToken));
+        Assert.True(service.ContainsToken(newToken));
     }
 }

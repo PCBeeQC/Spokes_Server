@@ -50,7 +50,7 @@ public static class EmojiData
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Error loading emoji data: {ex.Message}");
+            Console.Error.WriteLine($"[EmojiData] Error loading emoji data: {ex}");
         }
     }
 

@@ -1,30 +1,27 @@
 using System.Collections.Concurrent;
 using System.Text.RegularExpressions;
-using Livekit.Server;
-using Microsoft.AspNetCore.SignalR;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Spokes_Server.Aggregate.Contexts;
 using Spokes_Server.Core.Data.Repositories.Communication;
-using Spokes_Server.Core.Data.Repositories.Core;
 using Spokes_Server.Core.Data.Repositories.HR;
 using Spokes_Server.Core.Data.Repositories.Projects;
 using Spokes_Server.Core.Helpers;
-using Spokes_Server.Core.Hubs;
+using Spokes_Server.Core.Services.Communication.Chat.Formatters;
 using Spokes_Server.Core.Models.Communication;
 using Spokes_Server.Core.Models.Core;
 using Spokes_Server.Core.Models.HR;
 using Spokes_Server.Core.Models.Projects;
 using Spokes_Server.Core.Services.Communication;
-using Spokes_Server.Core.Services.Core;
+using Spokes_Server.Core.Services.Communication.Notifications.Routing;
+using Spokes_Server.Core.Services.Communication.Presence;
+using Spokes_Server.Core.Services.Content;
+using Spokes_Server.Core.Services.Storage;
+using Spokes_Server.Core.Services.Security;
 
 namespace Spokes_Server.Core.Services.Communication.Chat;
 
-public interface IChatChannelAccessService
-{
-    List<ChatChannel> GetChannelsForUser(string userId);
-    List<string> GetUsersForChannel(string channelId);
-}
-
-public class ChatService : IChatChannelAccessService
+public class ChatService : IChatService
 {
     private readonly EmployeeRepository _employees;
     private readonly ChatChannelRepository _channels;
@@ -33,315 +30,82 @@ public class ChatService : IChatChannelAccessService
     private readonly ChatReadStateRepository _readStates;
     private readonly ProjectRepository _projects;
 
-    private readonly IHubContext<ChatHub> _hubContext;
+    private readonly IChatRealtimeGateway _realtimeGateway;
     private readonly ChatStateService _chatState;
-    private readonly NotificationRoutingService _notificationRouting;
+    private readonly INotificationRoutingService _notificationRouting;
     private readonly PresenceStateService _presenceState;
     private readonly ILogger<ChatService> _logger;
-    private readonly IConfiguration _configuration;
     private readonly IFileService _fileService;
     private readonly ICryptoService _crypto;
-    private readonly GlobalKeystoreService _keystore;
-    private readonly ServerEscrowService _escrowService;
     private readonly IContentModerationService _moderationService;
-    private readonly SystemConfigRepository _systemConfigs;
-    private readonly CompanyProfileRepository _companyProfiles;
     private readonly AlbumService _albumService;
     private readonly MarkdownSanitizerService _markdownSanitizer;
-    private readonly CalendarEventRepository? _calendarEvents;
     private readonly IChatAuthorizationService _chatAuth;
+    private readonly IUserPrivacyService? _privacyService;
 
+    [ActivatorUtilitiesConstructor]
     public ChatService(
-        EmployeeRepository employees,
-        ChatChannelRepository channels,
-        ChatMessageRepository messages,
-        TeamRepository teams,
-        ChatReadStateRepository readStates,
-        ProjectRepository projects,
-        IHubContext<ChatHub> hubContext,
+        CommunicationContext communicationContext,
+        HrContext hrContext,
+        ProjectsContext projectsContext,
+        IChatRealtimeGateway realtimeGateway,
         ChatStateService chatState,
-        NotificationRoutingService notificationRouting,
+        INotificationRoutingService notificationRouting,
         PresenceStateService presenceState,
-        ILogger<ChatService> logger,
-        IConfiguration configuration,
         IFileService fileService,
-        ICryptoService crypto,
-        GlobalKeystoreService keystore,
-        ServerEscrowService escrowService,
         IContentModerationService moderationService,
-        SystemConfigRepository systemConfigs,
-        CompanyProfileRepository companyProfiles,
         AlbumService albumService,
         MarkdownSanitizerService markdownSanitizer,
-        CalendarEventRepository? calendarEvents = null)
-        : this(
-            employees,
-            channels,
-            messages,
-            teams,
-            readStates,
-            projects,
-            hubContext,
-            chatState,
-            notificationRouting,
-            presenceState,
-            logger,
-            configuration,
-            fileService,
-            crypto,
-            keystore,
-            escrowService,
-            moderationService,
-            systemConfigs,
-            companyProfiles,
-            albumService,
-            markdownSanitizer,
-            calendarEvents,
-            new ChatAuthorizationService(channels, projects, teams, employees))
-    {
-    }
-
-    public ChatService(
-        EmployeeRepository employees,
-        ChatChannelRepository channels,
-        ChatMessageRepository messages,
-        TeamRepository teams,
-        ChatReadStateRepository readStates,
-        ProjectRepository projects,
-        IHubContext<ChatHub> hubContext,
-        ChatStateService chatState,
-        NotificationRoutingService notificationRouting,
-        PresenceStateService presenceState,
         ILogger<ChatService> logger,
-        IConfiguration configuration,
-        IFileService fileService,
-        ICryptoService crypto,
-        GlobalKeystoreService keystore,
-        ServerEscrowService escrowService,
-        IContentModerationService moderationService,
-        SystemConfigRepository systemConfigs,
-        CompanyProfileRepository companyProfiles,
-        AlbumService albumService,
-        MarkdownSanitizerService markdownSanitizer,
-        CalendarEventRepository? calendarEvents,
-        IChatAuthorizationService? chatAuth)
+        IChatAuthorizationService? chatAuth = null,
+        ICryptoService? crypto = null,
+        IUserPrivacyService? privacyService = null)
     {
-        _employees = employees;
-        _channels = channels;
-        _messages = messages;
-        _teams = teams;
-        _readStates = readStates;
-        _projects = projects;
-        _hubContext = hubContext;
+        ArgumentNullException.ThrowIfNull(communicationContext);
+        ArgumentNullException.ThrowIfNull(hrContext);
+        ArgumentNullException.ThrowIfNull(projectsContext);
+
+        _employees = hrContext.Employees;
+        _channels = communicationContext.ChatChannels;
+        _messages = communicationContext.ChatMessages;
+        _teams = hrContext.Teams;
+        _readStates = communicationContext.ChatReadStates;
+        _projects = projectsContext.Projects;
+
+        _realtimeGateway = realtimeGateway;
         _chatState = chatState;
         _notificationRouting = notificationRouting;
         _presenceState = presenceState;
-        _logger = logger;
-        _configuration = configuration;
         _fileService = fileService;
-        _crypto = crypto;
-        _keystore = keystore;
-        _escrowService = escrowService;
+        _crypto = crypto ?? new CryptoService();
         _moderationService = moderationService;
-        _systemConfigs = systemConfigs;
-        _companyProfiles = companyProfiles;
         _albumService = albumService;
         _markdownSanitizer = markdownSanitizer;
-        _calendarEvents = calendarEvents;
-        _chatAuth = chatAuth ?? new ChatAuthorizationService(channels, projects, teams, employees);
+        ArgumentNullException.ThrowIfNull(logger);
+        _logger = logger;
+        _privacyService = privacyService;
+        _chatAuth = chatAuth ?? new ChatAuthorizationService(_channels, _projects, _teams, _employees, privacyService);
     }
 
-    public async Task<bool> RsvpToEventAsync(string eventId, string userId)
+    public virtual Task<SpokesResult<ChatMessage>> SendMessageAsync(string senderId, string channelId, string content, string? replyToId = null) =>
+        SendMessageAsync(senderId, channelId, content, replyToId, CancellationToken.None);
+
+    public virtual Task<SpokesResult<ChatMessage>> SendMessageAsync(string senderId, string channelId, string content, string? replyToId, CancellationToken cancellationToken)
     {
-        if (_calendarEvents == null || string.IsNullOrWhiteSpace(eventId) || string.IsNullOrWhiteSpace(userId))
-            return false;
-
-        var evt = _calendarEvents.GetById(eventId);
-        if (evt == null)
-            return false;
-
-        evt.Attendees ??= new List<string>();
-        if (!evt.Attendees.Contains(userId))
-        {
-            evt.Attendees.Add(userId);
-            _calendarEvents.Save(evt);
-            _chatState.NotifyCalendarEventUpdated(evt);
-            return true;
-        }
-
-        return false;
-    }
-
-    public async Task<bool> CancelRsvpEventAsync(string eventId, string userId)
-    {
-        if (_calendarEvents == null || string.IsNullOrWhiteSpace(eventId) || string.IsNullOrWhiteSpace(userId))
-            return false;
-
-        var evt = _calendarEvents.GetById(eventId);
-        if (evt == null || evt.Attendees == null)
-            return false;
-
-        if (evt.Attendees.Contains(userId))
-        {
-            evt.Attendees.Remove(userId);
-            _calendarEvents.Save(evt);
-            _chatState.NotifyCalendarEventUpdated(evt);
-            return true;
-        }
-
-        return false;
-    }
-
-    public bool CanUserPostToChannel(ChatChannel channel, Employee employee)
-    {
-        return _chatAuth.CanUserPostToChannel(channel, employee);
-    }
-
-    public virtual List<ChatChannel> GetChannelsForUser(string userId)
-    {
-        var employee = _employees.GetById(userId);
-        if (employee == null) return new List<ChatChannel>();
-
-        var userProjectIds = _chatAuth.GetUserProjectIds(employee);
-        var userTeamIds = _chatAuth.GetUserTeamIds(employee);
-
-        var channels = _channels.GetChannelsForUser(userId, userProjectIds, userTeamIds, employee.IsAdmin);
-        
-        if (!employee.HasPermission(Spokes_Server.Core.Constants.AppPermissions.Chat.ViewArchive))
-        {
-            channels = channels.Where(c => !c.IsArchived).ToList();
-        }
-        
-        return channels;
-    }
-
-    public virtual List<string> GetUsersForChannel(string channelId)
-    {
-        var channel = _channels.GetById(channelId);
-        if (channel == null) return new List<string>();
-
-        var validUserIds = new List<string>();
-        var allActiveEmployees = _employees.GetAll().Where(e => e.IsActive).ToList();
-
-        foreach (var emp in allActiveEmployees)
-        {
-            if (_chatAuth.CanUserAccessChannel(channel, emp))
-            {
-                validUserIds.Add(emp.Id);
-            }
-        }
-
-        return validUserIds;
-    }
-
-    // ... (keep existing methods until UploadAttachmentAsync)
-
-    // UploadAttachmentAsync moved to bottom to use FileService
-
-
-    public async Task<ChatMessage?> SendMessageAsync(string senderId, string channelId, string content, string? replyToId = null)
-    {
-        return await SendMessageWithAttachmentsAsync(new SendMessageOptions
+        return SendMessageAsync(new SendMessageOptions
         {
             SenderId = senderId,
             ChannelId = channelId,
             Content = content,
             ReplyToId = replyToId
-        });
+        }, cancellationToken);
     }
 
-    public async Task<ChatMessage?> SendMessageAsync(SendMessageOptions options)
-    {
-        return await SendMessageWithAttachmentsAsync(options);
-    }
-
-    public async Task<ChatMessage?> SendCallInviteAsync(string senderId, string channelId)
-    {
-        var employee = _employees.GetById(senderId);
-        var channel = _channels.GetById(channelId);
-        if (employee == null || channel == null) return null;
-
-        if (!_chatAuth.CanUserAccessChannel(channel, employee) || !_chatAuth.CanUserPostToChannel(channel, employee))
-        {
-            _logger.LogWarning("SendCallInvite failed: User {UserId} denied access to Channel {ChannelId}", employee.Id, channelId);
-            return null;
-        }
-
-        var message = new ChatMessage
-        {
-            ChannelId = channelId,
-            ChannelType = channel.ChannelType,
-            SenderId = employee.Id,
-            Content = $"🎙️ {employee.FullName} started a voice call.",
-            MessageType = "CallInvite",
-            CallStatus = "Active",
-            SentAt = DateTime.UtcNow,
-            ReadBy = new List<string> { employee.Id }
-        };
-
-        _messages.Save(message);
-        _channels.UpdateLastActivity(channelId);
-        _readStates.MarkAsRead(employee.Id, channelId, channel.ChannelType.ToString(), channel.IsVoiceChannel);
-
-        _chatState.NotifyMessageReceived(message);
-
-        await _hubContext.Clients.Group($"channel_{channelId}").SendAsync("ReceiveMessage", new
-        {
-            message.Id,
-            message.ChannelId,
-            message.SenderId,
-            SenderName = employee.FullName,
-            message.Content,
-            message.SentAt,
-            message.ReplyToId,
-            Attachments = new List<object>()
-        });
-
-        _ = _notificationRouting.RouteChatNotificationAsync(message, channel, employee);
-
-        return message;
-    }
-
-    public async Task UpdateCallInviteStatusAsync(string messageId, string status)
-    {
-        var message = _messages.GetById(messageId);
-        if (message == null || message.MessageType != "CallInvite") return;
-
-        message.CallStatus = status;
-        _messages.Save(message);
-
-        _chatState.NotifyMessageEdited(message);
-
-        await _hubContext.Clients.Group($"channel_{message.ChannelId}").SendAsync("MessageEdited", new
-        {
-            message.Id,
-            message.ChannelId,
-            message.Content,
-            message.EditedAt,
-            message.CallStatus
-        });
-
-        if (status == "Ended" || status == "Declined")
-        {
-            _ = _notificationRouting.ClearChannelNotificationsAsync(message.ChannelId);
-        }
-    }
-
-    [Obsolete("Use SendMessageWithAttachmentsAsync(SendMessageOptions options) instead.")]
-    public async Task<ChatMessage?> SendMessageWithAttachmentsAsync(string senderId, string channelId, string content, List<ChatAttachment>? attachments = null, string? replyToId = null, string? privateKey = null)
-    {
-        return await SendMessageWithAttachmentsAsync(new SendMessageOptions
-        {
-            SenderId = senderId,
-            ChannelId = channelId,
-            Content = content,
-            Attachments = attachments,
-            ReplyToId = replyToId,
-            PrivateKey = privateKey
-        });
-    }
-
-    public async Task<ChatMessage?> SendMessageWithAttachmentsAsync(SendMessageOptions options)
+    /// <summary>
+    /// Sends a message and returns a <see cref="SpokesResult{ChatMessage}"/> containing the created message entity
+    /// or failure details preserving distinct error reasons and codes (e.g. NOT_FOUND, FORBIDDEN, MODERATION_BLOCKED, SAVE_FAILED).
+    /// </summary>
+    public virtual async Task<SpokesResult<ChatMessage>> SendMessageAsync(SendMessageOptions options, CancellationToken cancellationToken = default)
     {
         var senderId = options.SenderId;
         var channelId = options.ChannelId;
@@ -354,21 +118,47 @@ public class ChatService : IChatChannelAccessService
         if (employee == null)
         {
             _logger.LogWarning("SendMessage failed: Employee not found: {SenderId}", senderId);
-            return null;
+            return SpokesResult<ChatMessage>.Failure($"User '{senderId}' not found.", "NOT_FOUND");
         }
 
         var channel = _channels.GetById(channelId);
         if (channel == null)
         {
             _logger.LogWarning("SendMessage failed: Channel not found: {ChannelId}", channelId);
-            return null;
+            return SpokesResult<ChatMessage>.Failure($"Channel '{channelId}' not found.", "NOT_FOUND");
         }
 
         // Validate Channel Access and Post Access
         if (!_chatAuth.CanUserAccessChannel(channel, employee) || !_chatAuth.CanUserPostToChannel(channel, employee))
         {
             _logger.LogWarning("SendMessage failed: User {UserId} denied access to Channel {ChannelId}", employee.Id, channelId);
-            return null;
+            return SpokesResult<ChatMessage>.Failure("User is not authorized to access or post to this channel.", "FORBIDDEN");
+        }
+
+        string? plainChannelKey = null;
+        if (channel.IsEncrypted)
+        {
+            if (string.IsNullOrEmpty(privateKey))
+            {
+                _logger.LogWarning("SendMessage failed: Vault locked for User {UserId}", employee.Id);
+                return SpokesResult<ChatMessage>.Failure("Vault is locked. Cannot send encrypted message.", "VAULT_LOCKED");
+            }
+
+            if (!channel.EncryptedChannelKeys.TryGetValue(employee.Id, out var cipherChannelKey))
+            {
+                _logger.LogWarning("SendMessage failed: Channel key not found for User {UserId} in channel {ChannelId}", employee.Id, channelId);
+                return SpokesResult<ChatMessage>.Failure("Channel key not found for current user.", "KEY_NOT_FOUND");
+            }
+
+            try
+            {
+                plainChannelKey = _crypto.DecryptRsa(cipherChannelKey, privateKey);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "SendMessage failed: RSA Decryption of Channel Key failed for User {UserId}", employee.Id);
+                return SpokesResult<ChatMessage>.Failure($"Failed to decrypt channel key: {ex.Message}", "CRYPTO_FAILED");
+            }
         }
 
         // Process Attachments - Save to Disk
@@ -378,19 +168,15 @@ public class ChatService : IChatChannelAccessService
             foreach (var att in attachments)
             {
                 // Check if it's base64 (starts with "data:")
-                if (!string.IsNullOrEmpty(att.FilePath) && att.FilePath.StartsWith("data:"))
+                if (!string.IsNullOrEmpty(att.FilePath) && att.FilePath.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
                 {
                     try
                     {
-                        var commaIndex = att.FilePath.IndexOf(',');
-                        if (commaIndex >= 0)
+                        if (DataUriHelper.TryParse(att.FilePath, out var bytes, out _))
                         {
-                            var base64 = att.FilePath.Substring(commaIndex + 1);
-                            var bytes = Convert.FromBase64String(base64);
-
                             // Delegate to unified FileService pipeline for secure storage and valid routing
                             using var stream = new MemoryStream(bytes);
-                            var url = await _fileService.UploadStreamAsync("chat", channelId, stream, att.FileName);
+                            var url = await _fileService.UploadStreamAsync("chat", channelId, stream, att.FileName, plainChannelKey);
 
                             // Update attachment to point to valid API URL returned by FileService
                             att.FilePath = url;
@@ -406,18 +192,17 @@ public class ChatService : IChatChannelAccessService
             }
         }
 
-        var modResult = await _moderationService.EvaluateTextAsync(content ?? "");
+        var modResult = await _moderationService.EvaluateTextAsync(content ?? "", cancellationToken);
         if (modResult.HasViolation)
         {
             if (modResult.Action == TextModerationAction.Block)
             {
                 _logger.LogWarning("SendMessage blocked due to moderation policy for User {UserId}", employee.Id);
-                // Return null or maybe throw an exception if we want the client to know. For now returning null stops the send.
-                return null;
+                return SpokesResult<ChatMessage>.Failure("Message content violates moderation policy.", "MODERATION_BLOCKED");
             }
             else if (modResult.Action == TextModerationAction.Sanitize)
             {
-                content = modResult.SanitizedText;
+                content = modResult.SanitizedText ?? content ?? "";
             }
         }
 
@@ -433,35 +218,29 @@ public class ChatService : IChatChannelAccessService
             ReadBy = new List<string> { employee.Id }
         };
 
-        UpdateMessageMentionsAndTokens(message, channel, content, privateKey, isEdit: false);
+        var tokens = ExtractMessageTokens(content);
+        ApplyTokensAndResolveMentions(message, tokens);
+        SynchronizeMentionedAlbums(message, channel, previousAlbumIds: Array.Empty<string>(), privateKey);
 
         // --- ENCRYPTION (Data-at-Rest) ---
         if (channel.IsEncrypted)
         {
-            if (string.IsNullOrEmpty(privateKey))
-            {
-                _logger.LogWarning("SendMessage failed: Vault locked for User {UserId}", employee.Id);
-                return null; // Don't save if we can't encrypt!
-            }
-
-            if (channel.EncryptedChannelKeys.TryGetValue(employee.Id, out var cipherChannelKey))
+            if (plainChannelKey != null)
             {
                 try
                 {
-                    var plainChannelKey = _crypto.DecryptRsa(cipherChannelKey, privateKey);
                     message.Content = _crypto.EncryptAes(message.Content, plainChannelKey);
                     message.IsEncrypted = true;
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogError(ex, "SendMessage failed: RSA Decryption of Channel Key failed for User {UserId}", employee.Id);
-                    return null;
+                    _logger.LogError(ex, "Failed to encrypt message content for channel {ChannelId}", channelId);
+                    return SpokesResult<ChatMessage>.Failure($"Failed to encrypt message: {ex.Message}", "CRYPTO_FAILED");
                 }
             }
             else
             {
-                _logger.LogWarning("SendMessage failed: Channel Key not found for User {UserId}", employee.Id);
-                return null;
+                return SpokesResult<ChatMessage>.Failure("Cannot encrypt message: Channel key is unavailable.", "KEY_NOT_FOUND");
             }
         }
 
@@ -473,105 +252,149 @@ public class ChatService : IChatChannelAccessService
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to save message {MessageId}", message.Id);
-            return null;
+            return SpokesResult<ChatMessage>.Failure($"Failed to persist message to database: {ex.Message}", "SAVE_FAILED");
         }
 
         // Update channel last activity
         _channels.UpdateLastActivity(channelId);
         _readStates.MarkAsRead(employee.Id, channelId, channel.ChannelType.ToString(), channel.IsVoiceChannel);
 
-        // Auto-mark previous messages in this channel as read by the sender
+        // 1. Notify local subscribers (Server-side Blazor) immediately
+        _chatState.NotifyMessageReceived(message);
+
+        // 2. Broadcast to external clients via SignalR immediately
+        await _realtimeGateway.SendToChannelAsync(channelId, "ReceiveMessage", new
+        {
+            Id = message.Id,
+            MessageId = message.Id,
+            message.ChannelId,
+            message.SenderId,
+            UserId = message.SenderId,
+            SenderName = employee.FullName,
+            message.Content,
+            message.SentAt,
+            message.ReplyToId,
+            Attachments = message.Attachments.Select(a => new { a.Id, a.FileName, a.FilePath, a.ContentType, a.FileSizeBytes })
+        }, cancellationToken);
+
+        // 3. Delegate routing rules to the central notification routing service
+        _ = SafeDispatchNotificationAsync(() => _notificationRouting.RouteChatNotificationAsync(message, channel, employee), "chat message");
+
+        // 4. Synchronize sender previous read state (offloaded after real-time message delivery)
+        await SynchronizeSenderPreviousReadStateAsync(channelId, employee.Id, message.Id, cancellationToken);
+
+        return SpokesResult<ChatMessage>.Success(message);
+    }
+
+    private async Task SynchronizeSenderPreviousReadStateAsync(string channelId, string senderId, string currentMessageId, CancellationToken cancellationToken = default)
+    {
         try
         {
-            var recentMessages = _messages.GetByChannel(channelId, 50);
+            var recentMessages = await _messages.GetByChannelAsync(channelId, 50, cancellationToken);
+            var unreadPrevious = new List<ChatMessage>();
             foreach (var prevMsg in recentMessages)
             {
-                if (prevMsg.Id != message.Id && !prevMsg.ReadBy.Contains(employee.Id))
+                if (prevMsg.Id != currentMessageId && !prevMsg.ReadBy.Contains(senderId))
                 {
-                    prevMsg.ReadBy.Add(employee.Id);
-                    _messages.Save(prevMsg);
+                    prevMsg.ReadBy.Add(senderId);
+                    unreadPrevious.Add(prevMsg);
+                }
+            }
+
+            if (unreadPrevious.Count > 0)
+            {
+                _messages.SaveBatch(unreadPrevious);
+                foreach (var prevMsg in unreadPrevious)
+                {
                     _chatState.NotifyMessageRead(channelId, prevMsg.Id, prevMsg.ReadBy);
                 }
             }
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Failed to auto-mark previous messages as read for sender {SenderId} in channel {ChannelId}", employee.Id, channelId);
+            _logger.LogWarning(ex, "Failed to auto-mark previous messages as read for sender {SenderId} in channel {ChannelId}", senderId, channelId);
         }
-
-        // 1. Notify local subscribers (Server-side Blazor)
-        _chatState.NotifyMessageReceived(message);
-
-        // 2. Broadcast to external clients via SignalR
-        await _hubContext.Clients.Group($"channel_{channelId}").SendAsync("ReceiveMessage", new
-        {
-            message.Id,
-            message.ChannelId,
-            message.SenderId,
-            SenderName = employee.FullName,
-            message.Content,
-            message.SentAt,
-            message.ReplyToId,
-            Attachments = message.Attachments.Select(a => new { a.Id, a.FileName, a.FilePath, a.ContentType, a.FileSizeBytes })
-        });
-
-        // 3. Delegate routing rules to the central notification routing service
-        _ = _notificationRouting.RouteChatNotificationAsync(message, channel, employee);
-
-        return message;
     }
 
-    public async Task MarkMessageAsReadAsync(string channelId, string messageId, string userId)
+    public Task MarkMessageAsReadAsync(string userId, string channelId, string messageId, CancellationToken cancellationToken = default)
+        => MarkMessagesAsReadAsync(userId, channelId, [messageId], cancellationToken);
+
+    public async Task MarkMessagesAsReadAsync(string userId, string channelId, IReadOnlyCollection<string> messageIds, CancellationToken cancellationToken = default)
     {
-        var message = _messages.GetById(messageId);
-        if (message == null || message.ChannelId != channelId) return;
+        if (messageIds == null || messageIds.Count == 0) return;
 
-        if (!message.ReadBy.Contains(userId))
+        var updatedMessages = new List<ChatMessage>();
+        foreach (var messageId in messageIds.Distinct())
         {
-            message.ReadBy.Add(userId);
-            _messages.Save(message);
+            if (string.IsNullOrWhiteSpace(messageId)) continue;
+            var message = _messages.GetById(messageId);
+            if (message == null || message.ChannelId != channelId) continue;
 
+            if (!message.ReadBy.Contains(userId))
+            {
+                message.ReadBy.Add(userId);
+                updatedMessages.Add(message);
+            }
+        }
+
+        if (updatedMessages.Count == 0) return;
+
+        if (updatedMessages.Count == 1)
+        {
+            _messages.Save(updatedMessages[0]);
+        }
+        else
+        {
+            _messages.SaveBatch(updatedMessages);
+        }
+
+        foreach (var message in updatedMessages)
+        {
             // Notify local subscribers
-            _chatState.NotifyMessageRead(channelId, messageId, message.ReadBy);
+            _chatState.NotifyMessageRead(channelId, message.Id, message.ReadBy);
 
             // SignalR
-            await _hubContext.Clients.Group($"channel_{channelId}").SendAsync("MessageRead", new
+            await _realtimeGateway.SendToChannelAsync(channelId, "MessageRead", new
             {
                 ChannelId = channelId,
-                MessageId = messageId,
+                MessageId = message.Id,
                 ReadBy = message.ReadBy
-            });
+            }, cancellationToken);
         }
     }
 
-    public async Task MarkChannelMessagesAsReadAsync(string channelId, string userId, int count = 50)
+    public async Task MarkChannelMessagesAsReadAsync(string userId, string channelId, int count = 50, CancellationToken cancellationToken = default)
     {
-        var messages = _messages.GetByChannel(channelId, count);
-        var updated = false;
+        var messages = await _messages.GetByChannelAsync(channelId, count, cancellationToken);
+        var unreadMessages = new List<ChatMessage>();
 
         foreach (var msg in messages)
         {
             if (msg.SenderId != userId && !msg.ReadBy.Contains(userId))
             {
                 msg.ReadBy.Add(userId);
-                _messages.Save(msg);
-                _chatState.NotifyMessageRead(channelId, msg.Id, msg.ReadBy);
-                updated = true;
+                unreadMessages.Add(msg);
             }
         }
 
-        if (updated)
+        if (unreadMessages.Count > 0)
         {
-            await _hubContext.Clients.Group($"channel_{channelId}").SendAsync("ChannelMessagesRead", new
+            _messages.SaveBatch(unreadMessages);
+            foreach (var msg in unreadMessages)
+            {
+                _chatState.NotifyMessageRead(channelId, msg.Id, msg.ReadBy);
+            }
+
+            await _realtimeGateway.SendToChannelAsync(channelId, "ChannelMessagesRead", new
             {
                 ChannelId = channelId,
                 UserId = userId
-            });
+            }, cancellationToken);
         }
     }
 
 
-    public async Task StartTypingAsync(string userId, string channelId)
+    public async Task StartTypingAsync(string userId, string channelId, CancellationToken cancellationToken = default)
     {
         var employee = _employees.GetById(userId);
         if (employee == null) return;
@@ -581,48 +404,71 @@ public class ChatService : IChatChannelAccessService
         _presenceState.PingUserActive(employee.Id);
 
         // SignalR
-        await _hubContext.Clients.Group($"channel_{channelId}").SendAsync("UserTyping", new
+        await _realtimeGateway.SendToChannelAsync(channelId, "UserTyping", new
         {
             ChannelId = channelId,
             UserId = employee.Id,
+            SenderId = employee.Id,
             UserName = employee.FullName
-        });
+        }, cancellationToken);
     }
 
-    public async Task StopTypingAsync(string userId, string channelId)
+    public async Task StopTypingAsync(string userId, string channelId, CancellationToken cancellationToken = default)
     {
         // Local
         _chatState.NotifyUserStoppedTyping(channelId, userId);
 
         // SignalR
-        await _hubContext.Clients.Group($"channel_{channelId}").SendAsync("UserStoppedTyping", new
+        await _realtimeGateway.SendToChannelAsync(channelId, "UserStoppedTyping", new
         {
             ChannelId = channelId,
-            UserId = userId
-        });
+            UserId = userId,
+            SenderId = userId
+        }, cancellationToken);
     }
 
-    public async Task EditMessageAsync(string userId, string messageId, string newContent, string? requestingUserPrivateKey = null)
+    public virtual async Task<SpokesResult> EditMessageAsync(string userId, string messageId, string newContent, string? requestingUserPrivateKey = null, CancellationToken cancellationToken = default)
     {
+        if (string.IsNullOrWhiteSpace(newContent))
+        {
+            return SpokesResult.Failure("Message content cannot be empty.", "INVALID_CONTENT");
+        }
+
         var message = _messages.GetById(messageId);
-        if (message == null) return;
+        if (message == null) return SpokesResult.Failure($"Message '{messageId}' not found.", "NOT_FOUND");
 
         var channel = _channels.GetById(message.ChannelId);
+        if (channel == null)
+        {
+            return SpokesResult.Failure($"Channel '{message.ChannelId}' not found.", "NOT_FOUND");
+        }
+
         var employee = _employees.GetById(userId);
         if (!_chatAuth.CanUserModifyMessage(message, channel, employee))
         {
             _logger.LogWarning("EditMessage failed: User {UserId} denied edit access to Message {MessageId}", userId, messageId);
-            return;
+            return SpokesResult.Failure("User is not authorized to edit this message.", "FORBIDDEN");
         }
-        var modResult = await _moderationService.EvaluateTextAsync(newContent ?? "");
+
+        (bool HasViolation, string SanitizedText, TextModerationAction Action) modResult;
+        try
+        {
+            modResult = await _moderationService.EvaluateTextAsync(newContent ?? "", cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Moderation service evaluation failed for message {MessageId}", messageId);
+            return SpokesResult.Failure($"Message moderation evaluation failed: {ex.Message}", "MODERATION_ERROR");
+        }
+
         if (modResult.HasViolation)
         {
             if (modResult.Action == TextModerationAction.Block)
             {
                 _logger.LogWarning("EditMessage blocked due to moderation policy for User {UserId}", userId);
-                return;
+                return SpokesResult.Failure("Message content violates moderation policy.", "MODERATION_BLOCKED");
             }
-            else if (modResult.Action == TextModerationAction.Sanitize)
+            else if (modResult.Action == TextModerationAction.Sanitize && !string.IsNullOrEmpty(modResult.SanitizedText))
             {
                 newContent = modResult.SanitizedText;
             }
@@ -630,196 +476,306 @@ public class ChatService : IChatChannelAccessService
 
         message.EditedAt = DateTime.UtcNow;
 
-        if (channel != null)
+        // Pass the original plaintext 'newContent' to the parser, 
+        // since message.Content might be encrypted below
+        var plainContent = newContent;
+        
+        if (channel.IsEncrypted && message.IsEncrypted)
         {
-            // Pass the original plaintext 'newContent' to the parser, 
-            // since message.Content might be encrypted below
-            var plainContent = newContent;
-            
-            if (channel.IsEncrypted && message.IsEncrypted)
+            if (string.IsNullOrEmpty(requestingUserPrivateKey))
             {
-                if (string.IsNullOrEmpty(requestingUserPrivateKey))
+                return SpokesResult.Failure("Private key is required to edit an encrypted message.", "KEY_REQUIRED");
+            }
+            if (channel.EncryptedChannelKeys.TryGetValue(userId, out var cipherChannelKey))
+            {
+                try
                 {
-                    return;
+                    var plainChannelKey = _crypto.DecryptRsa(cipherChannelKey, requestingUserPrivateKey);
+                    newContent = _crypto.EncryptAes(newContent!, plainChannelKey);
+                    message.IsEncrypted = true;
                 }
-                if (channel.EncryptedChannelKeys.TryGetValue(userId, out var cipherChannelKey))
+                catch (Exception ex)
                 {
-                    try
-                    {
-                        var plainChannelKey = _crypto.DecryptRsa(cipherChannelKey, requestingUserPrivateKey);
-                        newContent = _crypto.EncryptAes(newContent, plainChannelKey);
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogError(ex, "Failed to re-encrypt message content during edit.");
-                        return;
-                    }
-                }
-                else
-                {
-                    return;
+                    _logger.LogError(ex, "Failed to re-encrypt message content during edit.");
+                    return SpokesResult.Failure($"Failed to re-encrypt message: {ex.Message}", "CRYPTO_FAILED");
                 }
             }
-
-            message.Content = newContent;
-            UpdateMessageMentionsAndTokens(message, channel, plainContent, requestingUserPrivateKey, isEdit: true);
+            else
+            {
+                _logger.LogWarning("EditMessage failed: Channel encryption key unavailable for user {UserId}", userId);
+                return SpokesResult.Failure("Channel encryption key unavailable for user.", "KEY_UNAVAILABLE");
+            }
         }
-        else
+
+        var previousUserIds = message.MentionedUserIds.ToList();
+        var previousAlbumIds = message.MentionedAlbumIds.ToList();
+        var previousMentionsTeam = message.MentionsTeam;
+        var previousMentionsEveryone = message.MentionsEveryone;
+
+        message.Content = newContent ?? "";
+
+        var tokens = ExtractMessageTokens(plainContent);
+        ApplyTokensAndResolveMentions(message, tokens);
+        var syncResult = SynchronizeMentionedAlbums(message, channel, previousAlbumIds, requestingUserPrivateKey);
+        if (!syncResult.IsSuccess)
         {
-            message.Content = newContent;
+            return syncResult;
         }
+        RouteEditMentionNotifications(message, channel, previousUserIds, previousMentionsTeam, previousMentionsEveryone);
 
-        _messages.Save(message);
+        try
+        {
+            _messages.Save(message);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to save message {MessageId} during edit", message.Id);
+            return SpokesResult.Failure("Failed to persist edited message.", "SAVE_FAILED");
+        }
 
         // Local
         _chatState.NotifyMessageEdited(message);
 
         // SignalR
-        await _hubContext.Clients.Group($"channel_{message.ChannelId}").SendAsync("MessageEdited", new
+        await _realtimeGateway.SendToChannelAsync(message.ChannelId, "MessageEdited", new
         {
-            message.Id,
+            Id = message.Id,
+            MessageId = message.Id,
             message.ChannelId,
             message.Content,
             message.EditedAt
-        });
+        }, cancellationToken);
+
+        return SpokesResult.Success();
     }
 
-    private void UpdateMessageMentionsAndTokens(ChatMessage message, ChatChannel channel, string plainContent, string? privateKey, bool isEdit)
+    internal sealed class ParsedMessageTokens
     {
-        var oldUserIds = message.MentionedUserIds.ToList();
-        var oldEventIds = message.MentionedEventIds.ToList();
-        var oldAlbumIds = message.MentionedAlbumIds.ToList();
-        var oldMentionsTeam = message.MentionsTeam;
-        var oldMentionsEveryone = message.MentionsEveryone;
+        public List<string> MentionedDisplayNames { get; set; } = [];
+        public bool MentionsEveryone { get; set; }
+        public List<string> MentionedEventIds { get; set; } = [];
+        public List<string> MentionedAlbumIds { get; set; } = [];
+    }
 
+    internal static ParsedMessageTokens ExtractMessageTokens(string? plainContent)
+    {
+        var tokens = new ParsedMessageTokens();
+        if (string.IsNullOrEmpty(plainContent))
+            return tokens;
+
+        var mentionMatches = System.Text.RegularExpressions.Regex.Matches(plainContent, @"@\[([^\]]+)\]");
+        foreach (System.Text.RegularExpressions.Match match in mentionMatches)
+        {
+            var displayName = match.Groups[1].Value;
+            if (!tokens.MentionedDisplayNames.Contains(displayName, StringComparer.OrdinalIgnoreCase))
+            {
+                tokens.MentionedDisplayNames.Add(displayName);
+            }
+        }
+
+        tokens.MentionsEveryone = System.Text.RegularExpressions.Regex.IsMatch(plainContent, @"@everyone\b");
+
+        var eventMatches = System.Text.RegularExpressions.Regex.Matches(plainContent, @"#\[([^\]]+)\]\(event:([^\)]+)\)");
+        foreach (System.Text.RegularExpressions.Match match in eventMatches)
+        {
+            var eventId = match.Groups[2].Value;
+            if (!tokens.MentionedEventIds.Contains(eventId))
+            {
+                tokens.MentionedEventIds.Add(eventId);
+            }
+        }
+
+        var albumMatches = System.Text.RegularExpressions.Regex.Matches(plainContent, @"#\[([^\]]+)\]\(album:([^\)]+)\)");
+        foreach (System.Text.RegularExpressions.Match match in albumMatches)
+        {
+            var albumId = match.Groups[2].Value;
+            if (!tokens.MentionedAlbumIds.Contains(albumId))
+            {
+                tokens.MentionedAlbumIds.Add(albumId);
+            }
+        }
+
+        return tokens;
+    }
+
+    private void ApplyTokensAndResolveMentions(ChatMessage message, ParsedMessageTokens tokens)
+    {
         message.MentionedUserIds.Clear();
         message.MentionedEventIds.Clear();
         message.MentionedAlbumIds.Clear();
         message.MentionsTeam = false;
-        message.MentionsEveryone = false;
+        message.MentionsEveryone = tokens.MentionsEveryone;
 
-        if (!string.IsNullOrEmpty(plainContent))
+        message.MentionedEventIds.AddRange(tokens.MentionedEventIds);
+        message.MentionedAlbumIds.AddRange(tokens.MentionedAlbumIds);
+
+        if (tokens.MentionedDisplayNames.Count == 0)
+            return;
+
+        var employees = _employees.GetAll().ToList();
+        var teams = _teams.GetAll().ToList();
+
+        var employeeLookup = employees
+            .GroupBy(e => e.FullName, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+
+        var teamLookup = teams
+            .GroupBy(t => t.Name, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+
+        var teamMembersLookup = employees
+            .Where(e => !string.IsNullOrEmpty(e.TeamId))
+            .GroupBy(e => e.TeamId!)
+            .ToDictionary(g => g.Key, g => g.ToList());
+
+        foreach (var displayName in tokens.MentionedDisplayNames)
         {
-            var mentionMatches = System.Text.RegularExpressions.Regex.Matches(plainContent, @"@\[([^\]]+)\]");
-            foreach (System.Text.RegularExpressions.Match match in mentionMatches)
+            if (employeeLookup.TryGetValue(displayName, out var mentionedEmployee))
             {
-                var displayName = match.Groups[1].Value;
+                if (!message.MentionedUserIds.Contains(mentionedEmployee.Id))
+                    message.MentionedUserIds.Add(mentionedEmployee.Id);
+                continue;
+            }
 
-                var mentionedEmployee = _employees.GetAll()
-                    .FirstOrDefault(e => e.FullName.Equals(displayName, StringComparison.OrdinalIgnoreCase));
-                if (mentionedEmployee != null)
+            if (teamLookup.TryGetValue(displayName, out var team))
+            {
+                message.MentionsTeam = true;
+                if (!string.IsNullOrEmpty(team.LeaderId) && !message.MentionedUserIds.Contains(team.LeaderId))
                 {
-                    if (!message.MentionedUserIds.Contains(mentionedEmployee.Id))
-                        message.MentionedUserIds.Add(mentionedEmployee.Id);
-                    continue;
+                    message.MentionedUserIds.Add(team.LeaderId);
                 }
-
-                var team = _teams.GetAll()
-                    .FirstOrDefault(t => t.Name.Equals(displayName, StringComparison.OrdinalIgnoreCase));
-                if (team != null)
+                if (teamMembersLookup.TryGetValue(team.Id, out var members))
                 {
-                    message.MentionsTeam = true;
-                    var teamMembers = _employees.GetAll().Where(e => e.TeamId == team.Id);
-                    foreach (var member in teamMembers)
+                    foreach (var member in members)
                     {
                         if (!message.MentionedUserIds.Contains(member.Id))
                             message.MentionedUserIds.Add(member.Id);
                     }
                 }
             }
-
-            message.MentionsEveryone = System.Text.RegularExpressions.Regex.IsMatch(plainContent, @"@everyone\b");
-
-            var eventMatches = System.Text.RegularExpressions.Regex.Matches(plainContent, @"#\[([^\]]+)\]\(event:([^\)]+)\)");
-            foreach (System.Text.RegularExpressions.Match match in eventMatches)
-            {
-                var eventId = match.Groups[2].Value;
-                if (!message.MentionedEventIds.Contains(eventId))
-                    message.MentionedEventIds.Add(eventId);
-            }
-
-            var albumMatches = System.Text.RegularExpressions.Regex.Matches(plainContent, @"#\[([^\]]+)\]\(album:([^\)]+)\)");
-            foreach (System.Text.RegularExpressions.Match match in albumMatches)
-            {
-                var albumId = match.Groups[2].Value;
-                if (!message.MentionedAlbumIds.Contains(albumId))
-                {
-                    message.MentionedAlbumIds.Add(albumId);
-                }
-            }
-        }
-
-        var newAlbumIds = message.MentionedAlbumIds.Except(oldAlbumIds).ToList();
-        foreach (var albumId in newAlbumIds)
-        {
-            _albumService.ShareAlbumWithChannel(albumId, message.SenderId, channel.Id, privateKey);
-        }
-
-        var removedAlbumIds = oldAlbumIds.Except(message.MentionedAlbumIds).ToList();
-        foreach (var albumId in removedAlbumIds)
-        {
-            var otherMentionsExist = false;
-            if (_messages is ChatMessageRepository chatRepo)
-            {
-                var index = chatRepo.GetIndexForChannel(channel.Id);
-                foreach (var entry in index)
-                {
-                    if (entry.Id != message.Id && !entry.IsDeleted)
-                    {
-                        var msg = chatRepo.GetMessageFromDisk(channel.Id, entry.Id);
-                        if (msg != null && msg.MentionedAlbumIds.Contains(albumId))
-                        {
-                            otherMentionsExist = true;
-                            break;
-                        }
-                    }
-                }
-            }
-            else
-            {
-                otherMentionsExist = _messages.GetAll()
-                    .Any(m => m.ChannelId == channel.Id && m.Id != message.Id && !m.IsDeleted && m.MentionedAlbumIds.Contains(albumId));
-            }
-
-            if (!otherMentionsExist)
-            {
-                _albumService.UnshareAlbumWithChannel(albumId, message.SenderId, channel.Id);
-            }
-        }
-
-        if (isEdit)
-        {
-            var newlyMentionedUserIds = message.MentionedUserIds.Except(oldUserIds).ToList();
-            var newlyMentionedTeam = !oldMentionsTeam && message.MentionsTeam;
-            var newlyMentionedEveryone = !oldMentionsEveryone && message.MentionsEveryone;
-
-            if (newlyMentionedUserIds.Any() || newlyMentionedTeam || newlyMentionedEveryone)
-            {
-                var sender = _employees.GetById(message.SenderId);
-                if (sender != null)
-                {
-                    var notificationMessage = new ChatMessage
-                    {
-                        Id = message.Id,
-                        ChannelId = message.ChannelId,
-                        SenderId = message.SenderId,
-                        Content = message.Content,
-                        IsEncrypted = message.IsEncrypted,
-                        MentionedUserIds = newlyMentionedUserIds,
-                        MentionsTeam = newlyMentionedTeam,
-                        MentionsEveryone = newlyMentionedEveryone
-                    };
-
-                    _ = _notificationRouting.RouteChatNotificationAsync(notificationMessage, channel, sender);
-                }
-            }
         }
     }
 
-    public async Task AdminDeleteMessageAsync(string messageId)
+    private SpokesResult SynchronizeMentionedAlbums(ChatMessage message, ChatChannel channel, IReadOnlyCollection<string> previousAlbumIds, string? privateKey)
+    {
+        var newAlbumIds = message.MentionedAlbumIds.Except(previousAlbumIds).ToList();
+        foreach (var albumId in newAlbumIds)
+        {
+            try
+            {
+                var shareResult = _albumService.ShareAlbumWithChannel(albumId, message.SenderId, channel.Id, privateKey);
+                if (!shareResult.IsSuccess && shareResult.Code != "NOT_FOUND" && shareResult.Code != "FORBIDDEN")
+                {
+                    _logger.LogWarning("Failed to share album {AlbumId} with channel {ChannelId}: {Error}", albumId, channel.Id, shareResult.ErrorMessage);
+                    return shareResult;
+                }
+            }
+            catch (InvalidOperationException ex)
+            {
+                _logger.LogError(ex, "Encryption error sharing album {AlbumId} with channel {ChannelId} in message {MessageId}", albumId, channel.Id, message.Id);
+                return SpokesResult.Failure($"Cannot share album '{albumId}': {ex.Message}", "ENCRYPTION_ERROR");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to share album {AlbumId} with channel {ChannelId} mentioned in message {MessageId}", albumId, channel.Id, message.Id);
+            }
+        }
+
+        var removedAlbumIds = previousAlbumIds.Except(message.MentionedAlbumIds).ToList();
+        foreach (var albumId in removedAlbumIds)
+        {
+            if (!HasOtherAlbumMentionsInChannel(channel.Id, message.Id, albumId))
+            {
+                try
+                {
+                    var unshareResult = _albumService.UnshareAlbumWithChannel(albumId, message.SenderId, channel.Id);
+                    if (!unshareResult.IsSuccess)
+                    {
+                        _logger.LogWarning("Failed to unshare album {AlbumId} with channel {ChannelId}: {Error}", albumId, channel.Id, unshareResult.ErrorMessage);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to unshare album {AlbumId} with channel {ChannelId}", albumId, channel.Id);
+                }
+            }
+        }
+
+        return SpokesResult.Success();
+    }
+
+    private bool HasOtherAlbumMentionsInChannel(string channelId, string excludeMessageId, string albumId)
+    {
+        var index = _messages.GetIndexForChannel(channelId);
+        foreach (var entry in index)
+        {
+            if (entry.Id == excludeMessageId || entry.IsDeleted)
+            {
+                continue;
+            }
+
+            // 1. Fast-path: Check indexed album metadata (in-memory, 0 disk I/O)
+            if (entry.MentionedAlbumIds != null && entry.MentionedAlbumIds.Contains(albumId))
+            {
+                return true;
+            }
+
+            // 2. Query in-memory message cache if available
+            var cached = _messages.GetCachedMessage(entry.Id);
+            if (cached != null)
+            {
+                if (cached.MentionedAlbumIds != null && cached.MentionedAlbumIds.Contains(albumId))
+                {
+                    return true;
+                }
+                continue;
+            }
+
+            // 3. Pre-filter by index metadata: only inspect disk if SearchText explicitly contains the album ID
+            if (entry.SearchText != null && entry.SearchText.Contains(albumId, StringComparison.OrdinalIgnoreCase))
+            {
+                var msg = _messages.GetByIdOrLoad(channelId, entry.Id);
+                if (msg != null && msg.MentionedAlbumIds != null && msg.MentionedAlbumIds.Contains(albumId))
+                {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private void RouteEditMentionNotifications(ChatMessage message, ChatChannel channel, IReadOnlyCollection<string> previousUserIds, bool wasTeamMentioned, bool wasEveryoneMentioned)
+    {
+        var newlyMentionedUserIds = message.MentionedUserIds.Except(previousUserIds).ToList();
+        var newlyMentionedTeam = !wasTeamMentioned && message.MentionsTeam;
+        var newlyMentionedEveryone = !wasEveryoneMentioned && message.MentionsEveryone;
+
+        if (!newlyMentionedUserIds.Any() && !newlyMentionedTeam && !newlyMentionedEveryone)
+            return;
+
+        var sender = _employees.GetById(message.SenderId);
+        if (sender == null)
+            return;
+
+        var notificationMessage = new ChatMessage
+        {
+            Id = message.Id,
+            ChannelId = message.ChannelId,
+            SenderId = message.SenderId,
+            Content = message.Content,
+            IsEncrypted = message.IsEncrypted,
+            MentionedUserIds = newlyMentionedUserIds,
+            MentionsTeam = newlyMentionedTeam,
+            MentionsEveryone = newlyMentionedEveryone
+        };
+
+        _ = SafeDispatchNotificationAsync(() => _notificationRouting.RouteChatNotificationAsync(notificationMessage, channel, sender), "chat message edit");
+    }
+
+    public async Task<SpokesResult> AdminDeleteMessageAsync(string messageId, CancellationToken cancellationToken = default)
     {
         var message = _messages.GetById(messageId);
-        if (message == null) return;
+        if (message == null) return SpokesResult.Failure($"Message '{messageId}' not found.", "NOT_FOUND");
 
         if (message.Attachments != null && message.Attachments.Any())
         {
@@ -848,17 +804,20 @@ public class ChatService : IChatChannelAccessService
         _chatState.NotifyMessageDeleted(message.ChannelId, messageId);
 
         // SignalR
-        await _hubContext.Clients.Group($"channel_{message.ChannelId}").SendAsync("MessageDeleted", new
+        await _realtimeGateway.SendToChannelAsync(message.ChannelId, "MessageDeleted", new
         {
-            message.Id,
+            Id = message.Id,
+            MessageId = message.Id,
             message.ChannelId
-        });
+        }, cancellationToken);
+
+        return SpokesResult.Success();
     }
 
-    public async Task DeleteMessageAsync(string userId, string messageId)
+    public virtual async Task<SpokesResult> DeleteMessageAsync(string userId, string messageId, CancellationToken cancellationToken = default)
     {
         var message = _messages.GetById(messageId);
-        if (message == null) return;
+        if (message == null) return SpokesResult.Failure($"Message '{messageId}' not found.", "NOT_FOUND");
 
         var channel = _channels.GetById(message.ChannelId);
         var employee = _employees.GetById(userId);
@@ -866,7 +825,7 @@ public class ChatService : IChatChannelAccessService
         if (!_chatAuth.CanUserDeleteMessage(message, channel, employee))
         {
             _logger.LogWarning("DeleteMessage failed: User {UserId} denied delete access to Message {MessageId}", userId, messageId);
-            return;
+            return SpokesResult.Failure("User is not authorized to delete this message.", "FORBIDDEN");
         }
 
         message.IsDeleted = true;
@@ -876,26 +835,39 @@ public class ChatService : IChatChannelAccessService
         _chatState.NotifyMessageDeleted(message.ChannelId, messageId);
 
         // SignalR
-        await _hubContext.Clients.Group($"channel_{message.ChannelId}").SendAsync("MessageDeleted", new
+        await _realtimeGateway.SendToChannelAsync(message.ChannelId, "MessageDeleted", new
         {
-            message.Id,
+            Id = message.Id,
+            MessageId = message.Id,
             message.ChannelId
-        });
+        }, cancellationToken);
+
+        return SpokesResult.Success();
     }
 
-    public async Task ToggleReactionAsync(string userId, string messageId, string emoji)
+    public virtual async Task<SpokesResult> ToggleReactionAsync(string userId, string messageId, string emoji, CancellationToken cancellationToken = default)
     {
         var employee = _employees.GetById(userId);
-        if (employee == null) return;
+        if (employee == null) return SpokesResult.Failure($"User '{userId}' not found.", "NOT_FOUND");
 
         var message = _messages.GetById(messageId);
-        if (message == null) return;
+        if (message == null) return SpokesResult.Failure($"Message '{messageId}' not found.", "NOT_FOUND");
 
         var channel = _channels.GetById(message.ChannelId);
-        if (channel == null || !_chatAuth.CanUserAccessChannel(channel, employee) || !_chatAuth.CanUserPostToChannel(channel, employee))
+        if (channel == null || !_chatAuth.CanUserAccessChannel(channel, employee))
         {
             _logger.LogWarning("ToggleReaction failed: User {UserId} denied access to Channel {ChannelId}", employee.Id, message.ChannelId);
-            return;
+            return SpokesResult.Failure("User is not authorized to react in this channel.", "FORBIDDEN");
+        }
+
+        if (_privacyService != null && !_privacyService.CanReactInChannel(channel, employee))
+        {
+            return SpokesResult.Failure("Reactions are disabled in this channel.", "FORBIDDEN");
+        }
+        else if (_privacyService == null && !_chatAuth.CanUserPostToChannel(channel, employee))
+        {
+            _logger.LogWarning("ToggleReaction failed: User {UserId} denied post access to Channel {ChannelId}", employee.Id, message.ChannelId);
+            return SpokesResult.Failure("User is not authorized to react in this channel.", "FORBIDDEN");
         }
 
         var reactionKey = $"{emoji}:{userId}";
@@ -910,13 +882,15 @@ public class ChatService : IChatChannelAccessService
             _chatState.NotifyReactionRemoved(message.ChannelId, message.Id, emoji, employee.Id);
 
             // SignalR
-            await _hubContext.Clients.Group($"channel_{message.ChannelId}").SendAsync("ReactionRemoved", new
+            await _realtimeGateway.SendToChannelAsync(message.ChannelId, "ReactionRemoved", new
             {
+                Id = message.Id,
                 MessageId = message.Id,
                 message.ChannelId,
                 Emoji = emoji,
-                UserId = employee.Id
-            });
+                UserId = employee.Id,
+                SenderId = employee.Id
+            }, cancellationToken);
         }
         else
         {
@@ -928,55 +902,52 @@ public class ChatService : IChatChannelAccessService
             _chatState.NotifyReactionAdded(message.ChannelId, message.Id, emoji, employee.Id, employee.FullName);
 
             // SignalR
-            await _hubContext.Clients.Group($"channel_{message.ChannelId}").SendAsync("ReactionAdded", new
+            await _realtimeGateway.SendToChannelAsync(message.ChannelId, "ReactionAdded", new
             {
+                Id = message.Id,
                 MessageId = message.Id,
                 message.ChannelId,
                 Emoji = emoji,
                 UserId = employee.Id,
+                SenderId = employee.Id,
                 UserName = employee.FullName
-            });
+            }, cancellationToken);
 
             // Push Notifications
             if (channel != null)
             {
-                _ = _notificationRouting.RouteReactionNotificationAsync(message, channel, emoji, employee);
+                _ = SafeDispatchNotificationAsync(() => _notificationRouting.RouteReactionNotificationAsync(message, channel, emoji, employee), "chat reaction");
             }
         }
+
+        return SpokesResult.Success();
+    }
+
+    public virtual Task<SpokesResult> AddReactionAsync(string userId, string messageId, string emoji, CancellationToken cancellationToken = default)
+    {
+        var message = _messages.GetById(messageId);
+        if (message != null && message.Reactions.Contains($"{emoji}:{userId}"))
+        {
+            return Task.FromResult(SpokesResult.Success());
+        }
+        return ToggleReactionAsync(userId, messageId, emoji, cancellationToken);
+    }
+
+    public virtual Task<SpokesResult> RemoveReactionAsync(string userId, string messageId, string emoji, CancellationToken cancellationToken = default)
+    {
+        var message = _messages.GetById(messageId);
+        if (message != null && !message.Reactions.Contains($"{emoji}:{userId}"))
+        {
+            return Task.FromResult(SpokesResult.Success());
+        }
+        return ToggleReactionAsync(userId, messageId, emoji, cancellationToken);
     }
 
 
-    public async Task<ChatChannel> CreateDirectMessageChannelAsync(string initiatorUserId, string targetUserId, bool isEncrypted = false)
+    public ChatChannel CreateDirectMessageChannel(string initiatorUserId, string targetUserId)
     {
-        if (isEncrypted)
-        {
-            var p1 = _employees.GetById(initiatorUserId);
-            var p2 = _employees.GetById(targetUserId);
-
-            if (p1 == null || !p1.HasChatPassword)
-                throw new InvalidOperationException($"Cannot encrypt chat: User '{p1?.FullName ?? "Unknown"}' has not set up their Vault Password yet.");
-
-            if (p2 == null || !p2.HasChatPassword)
-                throw new InvalidOperationException($"Cannot encrypt chat: User '{p2?.FullName ?? "Unknown"}' has not set up their Vault Password yet.");
-        }
-
-        // 1. Create locally (DB) always unencrypted first to ensure base channel exists cleanly
         var channel = _channels.GetOrCreateDirectChannel(initiatorUserId, targetUserId, false, createdById: initiatorUserId);
-
-        if (isEncrypted && !channel.IsEncrypted)
-        {
-            // This will generate the keys and save the channel state correctly
-            await ToggleChannelEncryptionAsync(channel.Id, true, initiatorUserId);
-            // Re-fetch modifying the local ref
-            channel = _channels.GetById(channel.Id)!;
-        }
-
-        // 2. Notify local subscribers
         _chatState.NotifyChannelCreated(channel);
-
-        // 3. Optional: Broadcast to SignalR if we want external clients (e.g. mobile app) to see it instantly too
-        // For now, focusing on Server-side Blazor connectivity via ChatStateService.
-
         return channel;
     }
 
@@ -985,45 +956,19 @@ public class ChatService : IChatChannelAccessService
         return ChatChannelFormatter.GetDisplayName(channel, currentUserId, id => _employees.GetById(id), youSuffix);
     }
 
-    public bool IsSelfDirectMessage(ChatChannel? channel, string? currentUserId)
-    {
-        return ChatChannelFormatter.IsSelfDirectMessage(channel, currentUserId);
-    }
-
-    public async Task<ChatChannel> CreateGroupDirectMessageChannelAsync(string initiatorUserId, List<string> targetUserIds, bool isEncrypted = false)
+    public ChatChannel CreateGroupDirectMessageChannel(string initiatorUserId, List<string> targetUserIds)
     {
         var allParticipantIds = new List<string> { initiatorUserId };
         allParticipantIds.AddRange(targetUserIds);
         allParticipantIds = allParticipantIds.Distinct().ToList();
 
-        if (isEncrypted)
-        {
-            foreach (var uid in allParticipantIds)
-            {
-                var p = _employees.GetById(uid);
-                if (p == null || !p.HasChatPassword)
-                    throw new InvalidOperationException($"Cannot encrypt chat: User '{p?.FullName ?? "Unknown"}' has not set up their Vault Password yet.");
-            }
-        }
-
-        // 1. Create locally (DB) always unencrypted first
         var channel = _channels.CreateGroupChannel(allParticipantIds, "", false, createdById: initiatorUserId);
-
-        if (isEncrypted && !channel.IsEncrypted)
-        {
-            await ToggleChannelEncryptionAsync(channel.Id, true, initiatorUserId);
-            channel = _channels.GetById(channel.Id)!;
-        }
-
-        // 2. Notify local subscribers
         _chatState.NotifyChannelCreated(channel);
-
         return channel;
     }
 
-    public async Task<ChatChannel> CreateTeamChannelAsync(string initiatorUserId, List<string> teamIds, bool isEncrypted = false)
+    public ChatChannel CreateTeamChannel(string initiatorUserId, List<string> teamIds)
     {
-        // Build default name from team names
         var teamNames = teamIds
             .Select(id => _teams.GetById(id))
             .Where(t => t != null)
@@ -1044,630 +989,170 @@ public class ChatService : IChatChannelAccessService
         };
 
         _channels.Save(channel);
-
-        if (isEncrypted)
-        {
-            await ToggleChannelEncryptionAsync(channel.Id, true, initiatorUserId);
-            channel = _channels.GetById(channel.Id)!;
-        }
-
         _chatState.NotifyChannelCreated(channel);
         return channel;
     }
 
-    public async Task<ChatChannel> CreateChannelAsync(ChatChannel channel)
+    public ChatChannel CreateChannel(ChatChannel channel)
     {
         channel.Normalize();
-        var wasEncrypted = channel.IsEncrypted;
-        channel.IsEncrypted = false; // Always save unencrypted first to ensure base channel exists cleanly
-
-        // 1. Save to DB
+        channel.IsEncrypted = false;
         _channels.Save(channel);
-
-        if (wasEncrypted)
-        {
-            // Toggle encryption after creation to generate keys correctly
-            await ToggleChannelEncryptionAsync(channel.Id, true, channel.CreatedById);
-            channel = _channels.GetById(channel.Id)!;
-        }
-
-        // 2. Notify local subscribers
         _chatState.NotifyChannelCreated(channel);
-
-        // 3. Broadcast to relevant users via SignalR if needed
-        // For now, we rely on ChatStateService for server-side blazor updates.
-
         return channel;
     }
 
-    public async Task UpdateChannelAsync(ChatChannel channel)
+    public SpokesResult UpdateChannel(ChatChannel channel, string? requestingUserId = null, bool isSessionUnlocked = true)
     {
+        ArgumentNullException.ThrowIfNull(channel);
+
+        if (channel.IsEncrypted && !isSessionUnlocked)
+        {
+            _logger.LogWarning("UpdateChannel rejected: session vault is locked for encrypted channel {ChannelId}", channel.Id);
+            return SpokesResult.Failure("Session must have secure chat unlocked to modify an encrypted channel.", "VAULT_LOCKED");
+        }
+
+        if (!string.IsNullOrEmpty(requestingUserId))
+        {
+            var employee = _employees.GetById(requestingUserId);
+            if (employee == null || !_chatAuth.CanUserManageChannel(channel, employee, isSessionUnlocked))
+            {
+                _logger.LogWarning("UpdateChannel rejected: user {UserId} not authorized to manage channel {ChannelId}", requestingUserId, channel.Id);
+                return SpokesResult.Failure("User is not authorized to modify this channel.", "ACCESS_DENIED");
+            }
+        }
+
         channel.Normalize();
 
         // 1. Save to DB
         _channels.Save(channel);
 
         // 2. Notify local subscribers - Reusing ChannelCreated for now as it forces reload in UI
-        // Or we could add a specific ChannelUpdated event
         _chatState.NotifyChannelCreated(channel);
 
-        await Task.CompletedTask;
+        return SpokesResult.Success();
     }
 
-    public async Task JoinVoiceAsync(string userId, string channelId)
+    public void UpdateChannel(ChatChannel channel)
     {
-        _chatState.NotifyVoiceMemberJoined(channelId, userId);
-        await _hubContext.Clients.Group($"channel_{channelId}").SendAsync("VoiceMemberJoined", channelId, userId);
+        UpdateChannel(channel, null, true);
     }
 
-    public async Task LeaveVoiceAsync(string userId, string channelId)
+    public SpokesResult DeleteChannel(string channelId, string? requestingUserId = null, bool isSessionUnlocked = true)
     {
-        _chatState.NotifyVoiceMemberLeft(channelId, userId);
-
-        var participants = _chatState.GetVoiceParticipants(channelId);
-        if (participants.Count == 0)
+        if (string.IsNullOrEmpty(channelId))
         {
-            var activeInvite = _messages.GetByChannel(channelId, 50)
-                .FirstOrDefault(m => m.MessageType == "CallInvite" && (m.CallStatus == "Active" || m.CallStatus == "Joined"));
-            if (activeInvite != null)
+            return SpokesResult.Failure("Channel ID is required.", "INVALID_INPUT");
+        }
+
+        var channel = _channels.GetById(channelId);
+        if (channel == null)
+        {
+            return SpokesResult.Failure($"Channel '{channelId}' not found.", "NOT_FOUND");
+        }
+
+        if (channel.IsEncrypted && !isSessionUnlocked)
+        {
+            _logger.LogWarning("DeleteChannel rejected: session vault is locked for encrypted channel {ChannelId}", channelId);
+            return SpokesResult.Failure("Session must have secure chat unlocked to delete an encrypted channel.", "VAULT_LOCKED");
+        }
+
+        if (!string.IsNullOrEmpty(requestingUserId))
+        {
+            var employee = _employees.GetById(requestingUserId);
+            if (employee == null || !_chatAuth.CanUserDeleteChannel(channel, employee, isSessionUnlocked))
             {
-                await UpdateCallInviteStatusAsync(activeInvite.Id, "Ended");
+                _logger.LogWarning("DeleteChannel rejected: user {UserId} not authorized to delete channel {ChannelId}", requestingUserId, channelId);
+                return SpokesResult.Failure("User is not authorized to delete this channel.", "ACCESS_DENIED");
             }
         }
 
-        // --- Explicitly evict the user from the LiveKit room to prevent malicious WebRTC persistence ---
-        try
+        // Delete channel
+        _channels.Delete(channelId);
+
+        // Delete associated messages
+        var msgs = _messages.GetAll().Where(m => m.ChannelId == channelId).ToList();
+        foreach (var m in msgs)
         {
-            var config = _systemConfigs?.Get();
-            if (config != null && !string.IsNullOrEmpty(config.LiveKitApiKey) && !string.IsNullOrEmpty(config.LiveKitApiSecret))
+            _messages.Delete(m.Id);
+        }
+
+        // Delete associated read states
+        var readStates = _readStates.GetAll().Where(rs => rs.ChannelId == channelId).ToList();
+        foreach (var rs in readStates)
+        {
+            _readStates.Delete(rs.Id);
+        }
+
+        _chatState.NotifyChannelCreated(channel);
+
+        return SpokesResult.Success();
+    }
+
+    public SpokesResult ArchiveChannel(string channelId, bool archive, string? requestingUserId = null, bool isSessionUnlocked = true)
+    {
+        if (string.IsNullOrEmpty(channelId))
+        {
+            return SpokesResult.Failure("Channel ID is required.", "INVALID_INPUT");
+        }
+
+        var channel = _channels.GetById(channelId);
+        if (channel == null)
+        {
+            return SpokesResult.Failure($"Channel '{channelId}' not found.", "NOT_FOUND");
+        }
+
+        if (channel.IsEncrypted && !isSessionUnlocked)
+        {
+            _logger.LogWarning("ArchiveChannel rejected: session vault is locked for encrypted channel {ChannelId}", channelId);
+            return SpokesResult.Failure("Session must have secure chat unlocked to archive an encrypted channel.", "VAULT_LOCKED");
+        }
+
+        if (!string.IsNullOrEmpty(requestingUserId))
+        {
+            var employee = _employees.GetById(requestingUserId);
+            if (employee == null || !_chatAuth.CanUserManageChannel(channel, employee, isSessionUnlocked))
             {
-                var voicePort = Environment.GetEnvironmentVariable("Spokes_Voice_Port") ?? "7880";
-                var liveKitUrl = $"http://127.0.0.1:{voicePort}";
-                var roomServiceClient = new Livekit.Server.Sdk.Dotnet.RoomServiceClient(liveKitUrl, config.LiveKitApiKey, config.LiveKitApiSecret);
-                
-                var roomName = $"channel-{channelId}";
-                await roomServiceClient.RemoveParticipant(new Livekit.Server.Sdk.Dotnet.RoomParticipantIdentity {
-                    Room = roomName,
-                    Identity = userId
-                });
+                _logger.LogWarning("ArchiveChannel rejected: user {UserId} not authorized to archive channel {ChannelId}", requestingUserId, channelId);
+                return SpokesResult.Failure("User is not authorized to archive this channel.", "ACCESS_DENIED");
             }
         }
-        catch (Exception ex)
-        {
-            _logger.LogWarning($"[ChatService] Failed to evict user {userId} from LiveKit room channel-{channelId}: {ex.Message}");
-        }
-        // ------------------------------------------------------------------------------------------------
 
-        await _hubContext.Clients.Group($"channel_{channelId}").SendAsync("VoiceMemberLeft", channelId, userId);
+        channel.IsArchived = archive;
+        channel.Normalize();
+        _channels.Save(channel);
+        _chatState.NotifyChannelCreated(channel);
+
+        return SpokesResult.Success();
     }
 
-    public async Task UpdateActiveSpeakersAsync(string channelId, string[] speakerIds)
-    {
-        _chatState.NotifyVoiceActiveSpeakersChanged(channelId, speakerIds);
-        await _hubContext.Clients.Group($"channel_{channelId}").SendAsync("VoiceActiveSpeakersChanged", channelId, speakerIds);
-    }
-
-    public async Task SetUserSpeakingAsync(string channelId, string userId, bool isSpeaking)
-    {
-        _chatState.SetUserSpeaking(channelId, userId, isSpeaking);
-        var currentSpeakers = _chatState.GetActiveSpeakers(channelId);
-        await _hubContext.Clients.Group($"channel_{channelId}").SendAsync("VoiceActiveSpeakersChanged", channelId, currentSpeakers);
-    }
-
-    public async Task SetUserMutedAsync(string channelId, string userId, bool isMuted)
-    {
-        _chatState.SetUserMuted(channelId, userId, isMuted);
-        await _hubContext.Clients.Group($"channel_{channelId}").SendAsync("VoiceUserMutedChanged", channelId, userId, isMuted);
-    }
-
-    public async Task UpdateChannelOrdersAsync(Dictionary<string, int> channelOrders)
+    public void UpdateChannelOrders(Dictionary<string, int> channelOrders)
     {
         foreach (var kvp in channelOrders)
         {
-            var channel = await _channels.GetByIdAsync(kvp.Key);
+            var channel = _channels.GetById(kvp.Key);
             if (channel != null)
             {
                 channel.DisplayOrder = kvp.Value;
-                await _channels.SaveAsync(channel);
+                _channels.Save(channel);
                 _chatState.NotifyChannelCreated(channel);
             }
         }
     }
-    public async Task ToggleChannelEncryptionAsync(string channelId, bool enableEncryption, string requestingUserId, string? privateKeyContext = null)
+
+    internal Task SafeDispatchNotificationAsync(Func<Task> routeAction, string operation)
     {
-        var channel = _channels.GetById(channelId);
-        if (channel == null || channel.IsEncrypted == enableEncryption) return;
-
-        var isDMRestricted = channel.ChannelType == ChatChannelType.Direct || channel.ChannelType == ChatChannelType.Group || channel.ParticipantIds.Any();
-
-        string? existingCipherKeyForDisable = null;
-
-        if (enableEncryption)
-        {
-            if (isDMRestricted)
-            {
-                foreach (var uid in channel.ParticipantIds)
-                {
-                    var u = _employees.GetById(uid);
-                    if (u == null || !u.HasChatPassword)
-                    {
-                        var name = u?.FullName ?? "Unknown User";
-                        throw new InvalidOperationException($"Cannot encrypt chat: User '{name}' has not set up their Vault Password yet.");
-                    }
-                }
-            }
-        }
-        else
-        {
-            if (string.IsNullOrEmpty(privateKeyContext))
-            {
-                throw new InvalidOperationException("Private Key is required to disable encryption.");
-            }
-            if (!channel.EncryptedChannelKeys.TryGetValue(requestingUserId, out existingCipherKeyForDisable))
-            {
-                throw new InvalidOperationException("Could not find your decryption key to disable encryption. Your session may be out of date.");
-            }
-        }
-
-        // Ensure we save the channel's intent right away so UI knows
-        channel.IsEncrypted = enableEncryption;
-        if (!enableEncryption) channel.EncryptedChannelKeys.Clear();
-        _channels.Save(channel);
-
-        await Task.Run(async () =>
+        return Task.Run(async () =>
         {
             try
             {
-                List<ChatMessage> allMessages = new List<ChatMessage>();
-                if (_messages is Spokes_Server.Core.Data.Repositories.Communication.ChatMessageRepository chatRepo)
-                {
-                    var index = chatRepo.GetIndexForChannel(channelId);
-                    foreach (var entry in index)
-                    {
-                        var msg = chatRepo.GetMessageFromDisk(channelId, entry.Id);
-                        if (msg != null) allMessages.Add(msg);
-                    }
-                }
-                else
-                {
-                    allMessages = _messages.GetAll().Where(m => m.ChannelId == channelId).ToList();
-                }
-
-                if (enableEncryption)
-                {
-                    var newChannelKey = _crypto.GenerateAesKeyBase64();
-                    var allowedUserIds = new HashSet<string>();
-
-                    if (channel.ParticipantIds.Any())
-                    {
-                        foreach (var p in channel.ParticipantIds) allowedUserIds.Add(p);
-                    }
-                    else
-                    {
-                        var members = _employees.GetAll().Where(e => e.IsActive && e.HasChatPassword);
-
-                        if (channel.ChannelType == ChatChannelType.Team)
-                        {
-                            var team = _teams.GetById(channel.LinkedEntityId ?? "");
-                            if (team != null)
-                            {
-                                members = members.Where(e => e.TeamId == team.Id || team.LeaderId == e.Id);
-                            }
-                        }
-                        else if (channel.ChannelType == ChatChannelType.Project)
-                        {
-                            var proj = _projects.GetById(channel.LinkedEntityId ?? "");
-                            if (proj != null && proj.AccessPolicy != "Public")
-                            {
-                                members = members.Where(e => e.IsAdmin || proj.AllowedUserIds.Contains(e.Id) || (e.TeamId != null && proj.AllowedTeamIds.Contains(e.TeamId)));
-                            }
-                        }
-                        else if (channel.AllowedTeamIds.Any())
-                        {
-                            members = members.Where(e => channel.AllowedTeamIds.Contains(e.TeamId));
-                        }
-
-                        foreach (var m in members) allowedUserIds.Add(m.Id);
-                    }
-
-                    channel.EncryptedChannelKeys.Clear();
-                    foreach (var uid in allowedUserIds)
-                    {
-                        var user = _employees.GetById(uid);
-                        if (user != null && !string.IsNullOrEmpty(user.PublicKey))
-                        {
-                            channel.EncryptedChannelKeys[uid] = _crypto.EncryptRsa(newChannelKey, user.PublicKey);
-                        }
-                    }
-
-                    // Escrow for subsequent unauthenticated users if public/team
-                    if (!isDMRestricted && _escrowService.IsEscrowAvailable)
-                    {
-                        channel.EncryptedChannelKeys["ServerMaster"] = _crypto.EncryptRsa(newChannelKey, _escrowService.EscrowPublicKey!);
-                    }
-
-                    foreach (var m in allMessages)
-                    {
-                        if (!m.IsEncrypted && !string.IsNullOrEmpty(m.Content))
-                        {
-                            m.Content = _crypto.EncryptAes(m.Content, newChannelKey);
-                            m.IsEncrypted = true;
-                            _messages.Save(m);
-                        }
-                    }
-
-                    _albumService.ReEvaluateAlbumEncryptionForChannel(channelId, newChannelKey);
-                }
-                else
-                {
-                    if (string.IsNullOrEmpty(existingCipherKeyForDisable)) return;
-
-                    try
-                    {
-                        var plainChannelKey = _crypto.DecryptRsa(existingCipherKeyForDisable, privateKeyContext!);
-
-                        foreach (var m in allMessages)
-                        {
-                            if (m.IsEncrypted && !string.IsNullOrEmpty(m.Content))
-                            {
-                                try
-                                {
-                                    m.Content = _crypto.DecryptAes(m.Content, plainChannelKey);
-                                    m.IsEncrypted = false;
-                                    _messages.Save(m);
-                                }
-                                catch (Exception ex)
-                                {
-                                    // Ignore AES error for a specific message, but do NOT flip IsEncrypted = false!
-                                    // Otherwise it gets permanently corrupted in the UI.
-                                    _logger.LogWarning(ex, "Failed to decrypt message {MessageId} during encryption toggle.", m.Id);
-                                }
-                            }
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogError(ex, "Decryption error converting channel {ChannelId} back to plaintext.", channelId);
-                    }
-                }
-
-                _channels.Save(channel);
-                await _hubContext.Clients.Group($"channel_{channelId}").SendAsync("ChannelUpdated", channel);
+                await routeAction();
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error toggling channel encryption for {ChannelId}", channelId);
+                _logger.LogError(ex, "Failed to dispatch {Operation} notification in background", operation);
             }
         });
-    }
-
-    /// <summary>
-    /// Called when a user sets up their Chat Password for the first time.
-    /// Uses the Server Escrow key to decrypt AES channel keys from Public/Team channels
-    /// and re-encrypts them with the user's new Public Key.
-    /// </summary>
-    public async Task ClaimEscrowedKeysAsync(string userId)
-    {
-        if (!_escrowService.IsEscrowAvailable) return;
-
-        var user = await _employees.GetByIdAsync(userId);
-        if (user == null || string.IsNullOrEmpty(user.PublicKey)) return;
-
-        var allChannels = (await _channels.GetAllAsync()).Where(c => c.IsEncrypted).ToList();
-
-        foreach (var channel in allChannels)
-        {
-            // Skip if user already has a key for this channel
-            if (channel.EncryptedChannelKeys.ContainsKey(userId)) continue;
-
-            // Only claim from ServerMaster escrow (public/team channels)
-            if (!channel.EncryptedChannelKeys.TryGetValue("ServerMaster", out var encryptedEscrowKey)) continue;
-
-            // Check if user should have access to this channel
-            bool hasAccess = false;
-            if (channel.ChannelType == ChatChannelType.General)
-            {
-                if (channel.IsDefaultGeneral) hasAccess = true;
-                else if (!channel.ParticipantIds.Any() && !channel.AllowedTeamIds.Any()) hasAccess = true;
-                else if (channel.ParticipantIds.Contains(userId) || (user.TeamId != null && channel.AllowedTeamIds.Contains(user.TeamId))) hasAccess = true;
-            }
-            else if (channel.ChannelType == ChatChannelType.Team)
-            {
-                if (channel.ParticipantIds.Contains(userId))
-                {
-                    hasAccess = true;
-                }
-                else if (user.TeamId != null && channel.AllowedTeamIds.Contains(user.TeamId))
-                {
-                    hasAccess = true;
-                }
-                else
-                {
-                    var teams = (await _teams.GetAllAsync()).Where(t => channel.AllowedTeamIds.Contains(t.Id)).ToList();
-                    if (teams.Any(t => t.LeaderId == userId))
-                        hasAccess = true;
-                }
-            }
-            else if (channel.ChannelType == ChatChannelType.Project)
-            {
-                var proj = (await _projects.GetAllAsync()).FirstOrDefault(p => p.Id == channel.LinkedEntityId);
-                if (proj != null)
-                {
-                    if (proj.AccessPolicy == "Public") hasAccess = true;
-                    else if (user.IsAdmin || proj.AllowedUserIds.Contains(userId) || (user.TeamId != null && proj.AllowedTeamIds.Contains(user.TeamId))) hasAccess = true;
-                }
-            }
-
-            if (!hasAccess) continue;
-
-            try
-            {
-                var plainChannelKey = _crypto.DecryptRsa(encryptedEscrowKey, _escrowService.DecryptedEscrowPrivateKey!);
-                channel.EncryptedChannelKeys[userId] = _crypto.EncryptRsa(plainChannelKey, user.PublicKey);
-                await _channels.SaveAsync(channel);
-                
-                await _hubContext.Clients.Group($"channel_{channel.Id}").SendAsync("ChannelUpdated", channel);
-                
-                _logger.LogInformation("Claimed escrow key for user {UserId} in channel {ChannelId}", userId, channel.Id);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Failed to claim escrow for user {UserId} in channel {ChannelId}", userId, channel.Id);
-            }
-        }
-    }
-
-    /// <summary>
-    /// Implicitly shares the decrypted channel AES key with any newly-keyed participants
-    /// whenever an authorized current participant reads or writes to the encrypted channel.
-    /// Acts as a decentralized alternative when Server Escrow is disabled.
-    /// </summary>
-    public Task ShareKeyOpportunisticallyAsync(string channelId, string plainChannelKey)
-    {
-        _ = Task.Run(() =>
-        {
-            try
-            {
-                var channel = _channels.GetById(channelId);
-                if (channel == null || !channel.IsEncrypted) return;
-
-                bool modified = false;
-
-                // Heal ServerMaster if Escrow is now available but was missing when encrypted
-                if (_escrowService.IsEscrowAvailable && !channel.EncryptedChannelKeys.ContainsKey("ServerMaster"))
-                {
-                    bool isDMRestricted = channel.ChannelType == ChatChannelType.Direct || channel.ChannelType == ChatChannelType.Group;
-                    if (!isDMRestricted && !string.IsNullOrEmpty(_escrowService.EscrowPublicKey))
-                    {
-                        channel.EncryptedChannelKeys["ServerMaster"] = _crypto.EncryptRsa(plainChannelKey, _escrowService.EscrowPublicKey);
-                        modified = true;
-                        _logger.LogInformation("Opportunistically healed ServerMaster escrow key for channel {ChannelId}", channelId);
-                    }
-                }
-
-                var allActiveKeyedUsers = _employees.GetAll()
-                    .Where(e => e.IsActive && e.HasChatPassword && !string.IsNullOrEmpty(e.PublicKey))
-                    .ToList();
-
-                foreach (var u in allActiveKeyedUsers)
-                {
-                    // Skip if user already has a key for this channel
-                    if (channel.EncryptedChannelKeys.ContainsKey(u.Id)) continue;
-
-                    bool hasAccess = false;
-
-                    if (channel.ChannelType == ChatChannelType.General)
-                    {
-                        if (channel.IsDefaultGeneral) hasAccess = true;
-                        else if (!channel.ParticipantIds.Any() && !channel.AllowedTeamIds.Any()) hasAccess = true;
-                        else if (channel.ParticipantIds.Contains(u.Id) || (u.TeamId != null && channel.AllowedTeamIds.Contains(u.TeamId))) hasAccess = true;
-                    }
-                    else if (channel.ChannelType == ChatChannelType.Project)
-                    {
-                        var pId = channel.LinkedEntityId;
-                        if (!string.IsNullOrEmpty(pId))
-                        {
-                            var proj = _projects.GetById(pId);
-                            if (proj != null)
-                            {
-                                if (u.IsAdmin || proj.AccessPolicy == "Public")
-                                {
-                                    hasAccess = true;
-                                }
-                                else if (proj.AllowedUserIds.Contains(u.Id) || (u.TeamId != null && proj.AllowedTeamIds.Contains(u.TeamId)))
-                                {
-                                    hasAccess = true;
-                                }
-                            }
-                        }
-                    }
-                    else if (channel.ChannelType == ChatChannelType.Team)
-                    {
-                        if (channel.ParticipantIds.Contains(u.Id))
-                        {
-                            hasAccess = true;
-                        }
-                        else if (u.TeamId != null && channel.AllowedTeamIds.Contains(u.TeamId))
-                        {
-                            hasAccess = true;
-                        }
-                        else
-                        {
-                            var teams = _teams.GetAll().Where(t => channel.AllowedTeamIds.Contains(t.Id)).ToList();
-                            if (teams.Any(t => t.LeaderId == u.Id))
-                                hasAccess = true;
-                        }
-                    }
-                    else if (channel.ChannelType == ChatChannelType.Direct || channel.ChannelType == ChatChannelType.Group)
-                    {
-                        if (channel.ParticipantIds.Contains(u.Id)) hasAccess = true;
-                    }
-
-                    if (hasAccess)
-                    {
-                        channel.EncryptedChannelKeys[u.Id] = _crypto.EncryptRsa(plainChannelKey, u.PublicKey!);
-                        modified = true;
-                        _logger.LogInformation("Opportunistically shared channel {Channel} key with user {User}", channelId, u.Id);
-                    }
-                }
-
-                if (modified)
-                {
-                    _channels.Save(channel);
-                    _hubContext.Clients.Group($"channel_{channelId}").SendAsync("ChannelUpdated", channel);
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Failed to opportunistically share key for channel {ChannelId}", channelId);
-            }
-        });
-
-        return Task.CompletedTask;
-    }
-
-    public async Task<List<ChatMessage>> SecureSearchMessagesAsync(string channelId, string query, string requestingUserId, string? requestingUserPrivateKey = null)
-    {
-        var channel = _channels.GetById(channelId);
-        if (channel == null) return new List<ChatMessage>();
-
-        // 1. Verify access (basic scope test)
-        if (channel.ChannelType == ChatChannelType.Direct || channel.ChannelType == ChatChannelType.Group)
-        {
-            if (!channel.ParticipantIds.Contains(requestingUserId))
-                return new List<ChatMessage>();
-        }
-
-        var results = new List<ChatMessage>();
-        var lowerQuery = query.ToLowerInvariant();
-        string? plainChannelKey = null;
-
-        if (channel.IsEncrypted)
-        {
-            bool keyFound = false;
-
-            // 1. Try to use user's own private key if provided (required for DMs)
-            if (!string.IsNullOrEmpty(requestingUserPrivateKey) &&
-                channel.EncryptedChannelKeys.TryGetValue(requestingUserId, out var userCipherKey))
-            {
-                try
-                {
-                    plainChannelKey = _crypto.DecryptRsa(userCipherKey, requestingUserPrivateKey);
-                    keyFound = true;
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogDebug(ex, "Failed to decrypt channel key with user private key. Falling back to escrow.");
-                }
-            }
-
-            // 2. Fallback to Escrow if available (for Public/Team channels where user might not have their own key set up yet)
-            if (!keyFound && _escrowService.IsEscrowAvailable &&
-                channel.EncryptedChannelKeys.TryGetValue("ServerMaster", out var escrowCipherKey))
-            {
-                try
-                {
-                    plainChannelKey = _crypto.DecryptRsa(escrowCipherKey, _escrowService.DecryptedEscrowPrivateKey!);
-                    keyFound = true;
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogWarning(ex, "Failed to decrypt channel key using escrow key.");
-                }
-            }
-
-            if (!keyFound) return new List<ChatMessage>();
-        }
-
-        if (_messages is Spokes_Server.Core.Data.Repositories.Communication.ChatMessageRepository chatRepo)
-        {
-            var index = chatRepo.GetIndexForChannel(channelId);
-            // Sort index by SentAt desc to search newest first
-            foreach (var entry in index.OrderByDescending(e => e.SentAt))
-            {
-                if (entry.IsDeleted) continue;
-
-                // Fast path for unencrypted messages via index
-                if (!entry.IsEncrypted && !channel.IsEncrypted && entry.SearchText != null)
-                {
-                    if (entry.SearchText.Contains(lowerQuery))
-                    {
-                        var msg = await chatRepo.GetMessageFromDiskAsync(channelId, entry.Id);
-                        if (msg != null) results.Add(msg);
-                    }
-                }
-                else if (channel.IsEncrypted && entry.IsEncrypted && plainChannelKey != null)
-                {
-                    // Streaming decryption search
-                    var msg = await chatRepo.GetMessageFromDiskAsync(channelId, entry.Id);
-                    if (msg != null && !string.IsNullOrEmpty(msg.Content))
-                    {
-                        try
-                        {
-                            var plainContent = _crypto.DecryptAes(msg.Content, plainChannelKey);
-                            if (plainContent.ToLowerInvariant().Contains(lowerQuery))
-                            {
-                                results.Add(new ChatMessage
-                                {
-                                    Id = msg.Id,
-                                    ChannelId = msg.ChannelId,
-                                    SenderId = msg.SenderId,
-                                    SentAt = msg.SentAt,
-                                    Content = plainContent,
-                                    IsEncrypted = false // For UI highlighting
-                                });
-                            }
-                        }
-                        catch (Exception ex)
-                        {
-                            _logger.LogWarning(ex, "Failed to decrypt message {MessageId} during search", msg.Id);
-                        }
-                    }
-                }
-
-                if (results.Count >= 100) break;
-            }
-        }
-        else
-        {
-            // Fallback for non-JsonRepository (tests etc)
-            var allMessages = _messages.GetAll()
-                .Where(m => m.ChannelId == channelId && !m.IsDeleted)
-                .OrderByDescending(m => m.SentAt);
-
-            foreach (var m in allMessages)
-            {
-                var contentToSearch = m.Content ?? "";
-                if (channel.IsEncrypted && m.IsEncrypted && !string.IsNullOrEmpty(contentToSearch))
-                {
-                    if (plainChannelKey != null)
-                    {
-                        try { contentToSearch = _crypto.DecryptAes(contentToSearch, plainChannelKey); }
-                        catch (Exception ex)
-                        {
-                            _logger.LogWarning(ex, "Failed to decrypt legacy message {MessageId} during search.", m.Id);
-                            continue;
-                        }
-                    }
-                }
-
-                if (contentToSearch.ToLowerInvariant().Contains(lowerQuery))
-                {
-                    results.Add(new ChatMessage
-                    {
-                        Id = m.Id,
-                        ChannelId = m.ChannelId,
-                        SenderId = m.SenderId,
-                        SentAt = m.SentAt,
-                        Content = contentToSearch,
-                        IsEncrypted = false
-                    });
-                    if (results.Count >= 100) break;
-                }
-            }
-        }
-
-        return results;
     }
 }
 

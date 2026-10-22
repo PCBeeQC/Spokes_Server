@@ -1,62 +1,33 @@
-using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.Logging;
-using Moq;
-using Spokes_Server.Core.Data;
 using Spokes_Server.Core.Data.Repositories.Core;
 using Spokes_Server.Core.Models.Core;
+using Spokes_Server.Tests.Helpers;
 using Xunit;
 
 namespace Spokes_Server.Tests.Core.Data.Repositories.Core;
 
-public class DemoConfigRepositoryTests : IDisposable
+public class DemoConfigRepositoryTests : RepositoryTestFixture<DemoConfigRepository>
 {
-    private readonly string _testDataDir;
-    private readonly DiskPersistenceService _writer;
-    private readonly DemoConfigRepository _repo;
-
-    public DemoConfigRepositoryTests()
-    {
-        _testDataDir = Path.Combine(Path.GetTempPath(), $"Spokes_Test_DemoConfig_{Guid.NewGuid()}");
-
-        var mockConfig = new Mock<IConfiguration>();
-        mockConfig.Setup(c => c["DataPath"]).Returns(_testDataDir);
-
-        var mockPersistenceLogger = new Mock<ILogger<DiskPersistenceService>>();
-        _writer = new DiskPersistenceService(mockPersistenceLogger.Object);
-
-        _repo = new DemoConfigRepository(_writer, mockConfig.Object);
-    }
-
-    public void Dispose()
-    {
-        if (Directory.Exists(_testDataDir))
-        {
-            try { Directory.Delete(_testDataDir, true); } catch (Exception ex) { Console.WriteLine($"Cleanup failed: {ex.Message}"); }
-        }
-        _writer.Dispose();
-    }
-
     [Fact]
-    public void Constructor_WithNullDataPath_UsesDefaultPath()
+    public void GetOrCreate_CreatesDefaultConfig_WhenMissing()
     {
-        var mockConfig = new Mock<IConfiguration>();
-        mockConfig.Setup(c => c["DataPath"]).Returns((string?)null);
-
-        var repo = new DemoConfigRepository(_writer, mockConfig.Object);
-
-        Assert.NotNull(repo);
-    }
-
-    [Fact]
-    public void Get_CreatesDefaultConfig_WhenMissing()
-    {
-        var config = _repo.Get();
+        var config = _repo.GetOrCreate();
 
         Assert.NotNull(config);
         Assert.Equal("demo-config", config.Id);
 
         var inCache = _repo.GetById("demo-config");
         Assert.NotNull(inCache);
+    }
+
+    [Fact]
+    public void Get_WhenMissing_ReturnsDefaultInstanceWithoutSaving()
+    {
+        var config = _repo.Get();
+
+        Assert.NotNull(config);
+        Assert.Equal("demo-config", config.Id);
+        Assert.Null(_repo.GetById("demo-config"));
+        Assert.Empty(_repo.GetAll());
     }
 
     [Fact]

@@ -1,0 +1,337 @@
+@using Microsoft.AspNetCore.SignalR
+@using Spokes_Server.Core.Data
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Services.Communication.Chat
+@using Spokes_Server.Core.Services.Identity
+@using Spokes_Server.Core.Services.Licensing
+@using Spokes_Server.Core.Services.Security
+@using Spokes_Server.Hubs
+@implements IAsyncDisposable
+@inject ISlideshowSessionService SessionService
+@inject ISlideshowCastService CastService
+@inject LicenseValidationService LicenseValidation
+@inject IHubContext<SlideshowHub> HubContext
+@inject Database Db
+@inject AlbumService AlbumService
+@inject FileTokenService FileTokenService
+@inject ScopedKeystoreService KeystoreService
+@inject UserService UserService
+@inject NavigationManager Nav
+@inject IJSRuntime JS
+@inject IServiceProvider ServiceProvider
+@inject ISnackbar Snackbar
+@inject ILogger<SlideshowPairDialog> Logger
+
+<MudDialog>
+    <TitleContent>
+        <div class="d-flex align-center gap-2">
+            <MudIcon Icon="@Icons.Material.Filled.Tv" Color="Color.Primary" />
+            <MudText Typo="Typo.h6" Style="font-weight: 700;">@Loc["Present to TV"]</MudText>
+        </div>
+    </TitleContent>
+    <DialogContent>
+        <div class="d-flex flex-column gap-3 py-2">
+            @* --- SMART TV BROWSER PAIRING SECTION --- *@
+            <MudText Typo="Typo.body2" Color="Color.Secondary">
+                @Loc["Open the following URL on your Smart TV, laptop, or projector browser:"]
+            </MudText>
+
+            <MudPaper Class="pa-2 px-3 d-flex align-center justify-space-between rounded-lg gap-2" Elevation="0" Outlined="true" Style="background: rgba(255,255,255,0.03); overflow: hidden; box-sizing: border-box; width: 100%;">
+                <MudText Typo="Typo.body2" Style="font-family: monospace; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1 1 auto; min-width: 0;">
+                    @GetTvPairUrl()
+                </MudText>
+                <MudTooltip Text="@Loc["Copy"]">
+                    <MudIconButton Icon="@Icons.Material.Filled.ContentCopy" Size="Size.Small" OnClick="CopyPairUrl" Style="flex-shrink: 0;" />
+                </MudTooltip>
+            </MudPaper>
+
+            <MudText Typo="Typo.body2" Class="mt-1" Color="Color.Secondary">
+                @Loc["Enter the 6-digit PIN displayed on the TV screen:"]
+            </MudText>
+
+            <MudTextField @bind-Value="_enteredPin"
+                          Placeholder="e.g. 967054"
+                          Variant="Variant.Outlined"
+                          Margin="Margin.Dense"
+                          MaxLength="16"
+                          Adornment="Adornment.Start"
+                          AdornmentIcon="@Icons.Material.Filled.Pin"
+                          Class="rounded-lg"
+                          Style="font-size: 1.3rem; letter-spacing: 0.1em; font-family: monospace; text-align: center;"
+                          Immediate="true"
+                          OnKeyDown="HandleKeyDown" />
+
+            @* --- GOOGLE CAST SECTION --- *@
+            <MudPaper Class="pa-3 rounded-lg d-flex flex-column gap-2 mt-2" Elevation="0" Outlined="true" Style="background: rgba(var(--mud-palette-primary-rgb), 0.05); border-color: rgba(var(--mud-palette-primary-rgb), 0.25);">
+                <div class="d-flex align-center gap-2">
+                    <MudIcon Icon="@Icons.Material.Filled.Cast" Color="Color.Primary" Size="Size.Medium" />
+                    <div>
+                        <MudText Typo="Typo.subtitle2" Style="font-weight: 700;">@Loc["Cast to TV (Chromecast / Google TV)"]</MudText>
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">
+                            @Loc["Cast instantly to any Chromecast, Google TV, or Android TV on your Wi-Fi."]
+                        </MudText>
+                    </div>
+                </div>
+
+                @if (!_isPassActive)
+                {
+                    <MudAlert Severity="Severity.Warning" Dense="true" Class="rounded-lg mt-1">
+                        @Loc["A valid Spokes Pass is required to cast photo albums to TV."]
+                    </MudAlert>
+                }
+
+                <MudButton Variant="Variant.Filled"
+                           Color="Color.Primary"
+                           StartIcon="@Icons.Material.Filled.Cast"
+                           OnClick="StartGoogleCast"
+                           Disabled="@(_isConnecting || _isCastConnecting || !_isPassActive)"
+                           Class="rounded-lg mt-1 py-2"
+                           FullWidth="true">
+                    @if (_isCastConnecting)
+                    {
+                        <MudProgressCircular Indeterminate="true" Size="Size.Small" Class="mr-2" />
+                        <span>@Loc["Connecting to Google Cast..."]</span>
+                    }
+                    else
+                    {
+                        <span>@Loc["Cast to TV"]</span>
+                    }
+                </MudButton>
+            </MudPaper>
+
+            @if (!string.IsNullOrEmpty(_errorMessage))
+            {
+                <MudAlert Severity="Severity.Error" Dense="true" Class="rounded-lg mt-1">@_errorMessage</MudAlert>
+            }
+        </div>
+    </DialogContent>
+    <DialogActions>
+        <MudButton Variant="Variant.Text" OnClick="Cancel">@Loc["Cancel"]</MudButton>
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="PairAndConnect" Disabled="@(_isConnecting || _isCastConnecting || string.IsNullOrWhiteSpace(_enteredPin))" Class="rounded-lg px-5">
+            @if (_isConnecting)
+            {
+                <MudProgressCircular Indeterminate="true" Size="Size.Small" Class="mr-2" />
+                <span>@Loc["Connecting..."]</span>
+            }
+            else
+            {
+                <span>@Loc["Connect"]</span>
+            }
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+    [Parameter] public Album? Album { get; set; }
+    [Parameter] public int InitialIndex { get; set; } = 0;
+
+    private string _enteredPin = string.Empty;
+    private string? _errorMessage;
+    private bool _isConnecting;
+    private bool _isCastConnecting;
+    private bool _hasPaired;
+    private bool _isDisposed;
+    private bool _isPassActive = true;
+    private DotNetObjectReference<SlideshowPairDialog>? _dotNetRef;
+
+    protected override void OnInitialized()
+    {
+        _dotNetRef = DotNetObjectReference.Create(this);
+        var profile = Db.CompanyProfile.Get();
+        var serverConfig = Db.ServerConfigs.GetOrCreateGlobalConfig();
+        var licenseResult = LicenseValidation.ValidateLicense(profile?.LicensePayload, serverConfig);
+        _isPassActive = LicenseValidationService.IsLicenseActive(licenseResult.Status);
+    }
+
+    private string GetTvPairUrl()
+    {
+        return $"{Nav.BaseUri.TrimEnd('/')}/slideshow/pair";
+    }
+
+    private async Task CopyPairUrl()
+    {
+        try
+        {
+            await JS.InvokeVoidAsync("navigator.clipboard.writeText", GetTvPairUrl());
+            Snackbar.Add(Loc["Pairing URL copied to clipboard."].Value, Severity.Info);
+        }
+        catch { }
+    }
+
+    private async Task HandleKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter" && !string.IsNullOrWhiteSpace(_enteredPin))
+        {
+            await PairAndConnect();
+        }
+    }
+
+    private async Task StartGoogleCast()
+    {
+        if (Album == null || Album.Media.Count == 0 || !_isPassActive) return;
+
+        _errorMessage = null;
+        _isCastConnecting = true;
+        StateHasChanged();
+
+        try
+        {
+            var initPayload = CastService.GetCastInitPayload(Nav.BaseUri);
+            bool launched = await JS.InvokeAsync<bool>("spokesCast.requestCastSession", initPayload, _dotNetRef);
+            if (!launched)
+            {
+                _isCastConnecting = false;
+                StateHasChanged();
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Failed to launch Google Cast session in SlideshowPairDialog");
+            _isCastConnecting = false;
+            _errorMessage = Loc["Failed to connect to Google Cast."].Value;
+            StateHasChanged();
+        }
+    }
+
+    [JSInvokable]
+    public async Task OnCastTvReady(string sessionId, string pairingPin)
+    {
+        if (_hasPaired || _isConnecting || _isDisposed || !_isPassActive)
+        {
+            Logger.LogInformation("Ignoring duplicate or unauthorized OnCastTvReady callback for session {SessionId}", sessionId);
+            return;
+        }
+
+        _isCastConnecting = false;
+        await InvokeAsync(async () =>
+        {
+            if (!_hasPaired && !_isConnecting && !_isDisposed)
+            {
+                await PairWithPin(pairingPin);
+            }
+        });
+    }
+
+    [JSInvokable]
+    public void OnCastAuthFailed(string error, string detail)
+    {
+        _isCastConnecting = false;
+        _errorMessage = !string.IsNullOrWhiteSpace(detail)
+            ? detail
+            : Loc["A valid Spokes Pass is required to cast photo albums to TV."].Value;
+        InvokeAsync(StateHasChanged);
+    }
+
+    private async Task PairAndConnect()
+    {
+        await PairWithPin(_enteredPin);
+    }
+
+    private async Task PairWithPin(string pin)
+    {
+        if (Album == null || _hasPaired || _isDisposed) return;
+        _errorMessage = null;
+        _isConnecting = true;
+        StateHasChanged();
+
+        try
+        {
+            var currentUser = await UserService.GetEmployeeAsync();
+            if (currentUser == null)
+            {
+                _errorMessage = Loc["Authentication required."].Value;
+                return;
+            }
+
+            // Derive plain album key if encrypted
+            string? plainAlbumKey = null;
+            if (Album.IsEncrypted)
+            {
+                string? privateKey = KeystoreService.IsUnlocked ? KeystoreService.GetPrivateKey() : null;
+                plainAlbumKey = AlbumService.GetPlainAlbumKey(Album, currentUser.Id, privateKey);
+            }
+
+            string hostConnectionId = $"blazor_host_{currentUser.Id}_{Guid.NewGuid():N}";
+
+            var allowedMedia = Album.Media.ToDictionary(m => m.Id, m => System.IO.Path.GetFileName(m.FilePath));
+            var bridge = new UserScopedSlideshowBridge(ServiceProvider, currentUser, Album.Id, plainAlbumKey, allowedMedia);
+
+            if (!SessionService.TryPair(pin, currentUser.Id, hostConnectionId, Album.Id, out var session, out var error, bridge))
+            {
+                _errorMessage = error ?? Loc["Invalid or expired PIN."].Value;
+                return;
+            }
+
+            // Prepare slideshow media items routed to dedicated SlideshowMediaController
+            var items = new List<SlideshowMediaItem>();
+            var allEmployees = Db.Employees.GetAll();
+
+            foreach (var media in Album.Media)
+            {
+                string url = $"/spokesapi/slideshow/{session!.SessionId}/media/{media.Id}";
+
+                var uploader = allEmployees.FirstOrDefault(e => e.Id == media.AddedByUserId);
+                string uploaderName = uploader != null ? $"{uploader.FirstName} {uploader.LastName}".Trim() : string.Empty;
+
+                items.Add(new SlideshowMediaItem
+                {
+                    Id = media.Id,
+                    FileName = media.FileName,
+                    Url = url,
+                    ThumbnailUrl = $"{url}/thumb",
+                    ContentType = media.ContentType,
+                    ImageWidth = media.ImageWidth,
+                    ImageHeight = media.ImageHeight,
+                    DurationSeconds = media.DurationSeconds,
+                    AddedAt = media.AddedAt,
+                    AddedByUserName = uploaderName,
+                    FileSizeBytes = media.FileSizeBytes
+                });
+            }
+
+            var stagePayload = new SlideshowStagePayload
+            {
+                SessionId = session!.SessionId,
+                AlbumId = Album.Id,
+                AlbumTitle = Album.Title,
+                InitialIndex = Math.Clamp(InitialIndex, 0, Math.Max(0, items.Count - 1)),
+                Items = items
+            };
+
+            // Notify in-memory TV Stage (Blazor Server) AND SignalR clients
+            SessionService.NotifySessionStarted(session.SessionId, stagePayload);
+            if (!string.IsNullOrEmpty(session.TvConnectionId))
+            {
+                await HubContext.Clients.Client(session.TvConnectionId).SendAsync("SessionStarted", stagePayload);
+            }
+
+            _hasPaired = true;
+            MudDialog.Close(DialogResult.Ok(session.SessionId));
+            Nav.NavigateTo($"/albums/{Album.Id}/remote/{session.SessionId}");
+        }
+        catch (Exception ex)
+        {
+            _hasPaired = false;
+            Logger.LogError(ex, "Failed to connect to TV in SlideshowPairDialog");
+            _errorMessage = Loc["Failed to connect to TV."].Value;
+        }
+        finally
+        {
+            _isConnecting = false;
+            if (!_isDisposed && !_hasPaired)
+            {
+                StateHasChanged();
+            }
+        }
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+
+    public ValueTask DisposeAsync()
+    {
+        _isDisposed = true;
+        _dotNetRef?.Dispose();
+        return ValueTask.CompletedTask;
+    }
+}

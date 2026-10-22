@@ -10,8 +10,9 @@
 @inject ISnackbar Snackbar
 @inject IJSRuntime JS
 @inject AuthenticationStateProvider AuthStateProvider
-@inject Spokes_Server.Core.Services.Core.IFileService FileService
-@inject Spokes_Server.Core.Services.Core.MarkdownSanitizerService MarkdownSanitizer
+@inject IFileService FileService
+@inject MarkdownSanitizerService MarkdownSanitizer
+@inject ILogger<ProjectTimeline> Logger
 
 <div class="d-flex flex-column gap-4 mb-4">
     <div class="d-flex justify-space-between align-center">
@@ -115,9 +116,9 @@ else
                                     <div class="d-flex flex-wrap gap-2">
                                         @foreach(var att in note.Attachments)
                                         {
-                                            <MudChip T="string" Icon="@Icons.Material.Filled.AttachFile" Size="Size.Small" OnClick="@(() => OpenAttachment(att))">
-                                                @att.FileName
-                                            </MudChip>
+                                            <FileAttachmentChip Attachment="@att"
+                                                                ReadOnly="true"
+                                                                OnClick="@(() => OpenAttachment(note, att))" />
                                         }
                                     </div>
                                 }
@@ -305,7 +306,7 @@ else
             var html = MarkdownSanitizer.RenderSanitizedHtml(text);
             return new MarkupString(html);
         }
-        catch (Exception ex)
+        catch (Exception)
         {
             return new MarkupString(System.Net.WebUtility.HtmlEncode(text));
         }
@@ -343,6 +344,11 @@ else
 
         if (result != null && !result.Canceled && result.Data is ProjectNote savedNote)
         {
+            var originalNote = Db.ProjectNotes.GetById(savedNote.Id);
+            if (originalNote != null)
+            {
+                await FileService.DeleteDeltaFilesAsync(originalNote, savedNote);
+            }
             Db.ProjectNotes.Save(savedNote);
             Refresh();
             Snackbar.Add("Note Saved", Severity.Success);
@@ -363,9 +369,43 @@ else
         }
     }
 
-    private async Task OpenAttachment(NoteAttachment att)
+    private async Task OpenAttachment(ProjectNote note, NoteAttachment att)
     {
-        if (!string.IsNullOrEmpty(att.FilePath))
+        if (FileHelper.IsMediaFile(att.FileName, att.ContentType))
+        {
+            var mediaAttachments = note.Attachments
+                .Where(a => FileHelper.IsMediaFile(a.FileName, a.ContentType))
+                .ToList();
+
+            var initialIndex = mediaAttachments.IndexOf(att);
+            if (initialIndex < 0) initialIndex = 0;
+
+            var lightboxItems = mediaAttachments.Select(a => new LightboxMediaItem
+            {
+                Id = a.Id,
+                FileName = a.FileName,
+                FilePath = a.FilePath,
+                ContentType = FileHelper.GetContentType(a.FileName, a.ContentType),
+                AddedAt = note.Date,
+                FileSizeBytes = a.FileSizeBytes,
+                HasServerThumbnail = a.HasServerThumbnail
+            }).ToList();
+
+            var parameters = new DialogParameters
+            {
+                { "MediaList", lightboxItems },
+                { "InitialIndex", initialIndex }
+            };
+            var options = new DialogOptions
+            {
+                MaxWidth = MaxWidth.False,
+                FullWidth = true,
+                NoHeader = true,
+                CloseButton = false
+            };
+            await DialogService.ShowAsync<MediaViewerDialog>(Loc["Media Lightbox"].Value, parameters, options);
+        }
+        else if (!string.IsNullOrEmpty(att.FilePath))
         {
             await JS.InvokeVoidAsync("window.open", att.FilePath, "_blank");
         }
@@ -402,7 +442,7 @@ else
 
                 if (System.IO.File.Exists(physicalPath))
                 {
-                    var body = await EmailService.ExtractBodyFromMimeAsync(physicalPath);
+                    var body = await EmailCacheMaintenanceService.ExtractBodyFromMimeAsync(physicalPath);
                     _emailBodyCache[note.Id] = body;
                     return;
                 }
@@ -410,7 +450,7 @@ else
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[ProjectTimeline] Failed to extract email body for note {note.Id}: {ex.Message}");
+            Logger.LogWarning(ex, "Failed to extract email body for note {NoteId}.", note.Id);
         }
 
         _emailBodyCache[note.Id] = "";

@@ -1,0 +1,707 @@
+@using Spokes_Server.Components.Dialogs
+@using Spokes_Server.Core.Configuration
+@using Spokes_Server.Core.Services.Security
+@using System.Security.Claims
+@inject Database Db
+@inject IDialogService DialogService
+@inject AppLabelService AppLabels
+@inject IUserPrivacyService PrivacyService
+@inject AuthenticationStateProvider AuthStateProvider
+@inject ScopedKeystoreService ScopedKeystore
+@implements IDisposable
+
+<MudDialog>
+    <DialogContent>
+        <div class="d-flex flex-column gap-4 pb-2" style="max-height: 70vh; overflow-y: auto;">
+            @if (IsChannelLocked)
+            {
+                <MudAlert Severity="Severity.Warning" Dense="true" Class="rounded-lg">
+                    @Loc["Unlock secure chat to modify this channel."]
+                </MudAlert>
+            }
+            @* --- General Info Card --- *@
+            <MudPaper Elevation="0" Outlined="true" Class="rounded-lg overflow-hidden flex-shrink-0">
+                <div class="d-flex align-center px-4 py-3">
+                    <MudIcon Icon="@Icons.Material.Filled.Info" Size="Size.Small" Class="mr-2 flex-shrink-0" />
+                    <MudText Typo="Typo.subtitle2">@Loc["General Info"]</MudText>
+                </div>
+                <MudDivider />
+                <div class="px-4 py-4 d-flex flex-column gap-3">
+                    <div class="d-flex gap-3 align-center">
+                        <MudTooltip Text="@(IsChannelLocked ? Loc["Unlock secure chat to modify this channel."].Value : Loc["Select Icon"].Value)">
+                            <MudAvatar Style="@($"height: 56px; width: 56px; {(IsChannelLocked ? "opacity: 0.6;" : "cursor: pointer;")} flex-shrink: 0;")" Color="Color.Primary" @onclick="PickIcon">
+                                @if (!string.IsNullOrEmpty(Icon))
+                                {
+                                    <MudIcon Icon="@Icon" Size="Size.Large" />
+                                }
+                                else
+                                {
+                                    <MudIcon Icon="@Icons.Material.Filled.InsertEmoticon" Size="Size.Medium" />
+                                }
+                            </MudAvatar>
+                        </MudTooltip>
+                        <MudTextField T="string" Margin="Margin.Dense" Label="@Loc["Channel Name"]" @bind-Value="ChannelName" Required="true" Variant="Variant.Outlined" Class="flex-grow-1 ma-0" Disabled="IsChannelLocked" />
+                    </div>
+                    
+                    <MudTextField T="string" Margin="Margin.Dense" Label="@Loc["Description"]" @bind-Value="Description" Lines="2" Variant="Variant.Outlined" Class="ma-0" Disabled="IsChannelLocked" />
+                    
+                    @if (SelectedAccessType == "Public")
+                    {
+                        <div class="d-flex align-end gap-2 mt-1">
+                            <MudSelect Margin="Margin.Dense" T="string" Label="@Loc["Category (Optional)"]" @bind-Value="CategoryId"
+                                AnchorOrigin="Origin.BottomLeft" Variant="Variant.Outlined" Class="flex-grow-1 ma-0" Clearable="true" Disabled="IsChannelLocked"
+                                ToStringFunc="@(id => string.IsNullOrEmpty(id) ? Loc["None (Public)"].Value : AllCategories.FirstOrDefault(c => c.Id == id)?.Name ?? Loc["Unknown"].Value)">
+                                <MudSelectItem T="string" Value="@(null)">@Loc["None (Public)"]</MudSelectItem>
+                                @foreach (var cat in AllCategories)
+                                {
+                                    <MudSelectItem T="string" Value="@cat.Id">@cat.Name</MudSelectItem>
+                                }
+                            </MudSelect>
+                            @if (CanManageCategories)
+                            {
+                                <MudTooltip Text="@Loc["Manage Categories"]">
+                                    <MudIconButton Icon="@Icons.Material.Filled.Settings" OnClick="OpenManageCategories" Class="mb-n1" Disabled="IsChannelLocked" />
+                                </MudTooltip>
+                            }
+                        </div>
+                    }
+                </div>
+            </MudPaper>
+
+            @* --- Access Control Card --- *@
+            <MudPaper Elevation="0" Outlined="true" Class="rounded-lg overflow-hidden flex-shrink-0">
+                <div class="d-flex align-center px-4 py-3">
+                    <MudIcon Icon="@Icons.Material.Filled.Security" Size="Size.Small" Class="mr-2 flex-shrink-0" />
+                    <MudText Typo="Typo.subtitle2">@Loc["Access Control"]</MudText>
+                </div>
+                <MudDivider />
+                <div class="px-4 py-4 d-flex flex-column gap-3">
+                    <MudSelect Margin="Margin.Dense" T="string" Label="@Loc["Access Type"]" @bind-Value="SelectedAccessType"
+                        AnchorOrigin="Origin.BottomLeft" Variant="Variant.Outlined" Class="ma-0" Disabled="IsChannelLocked">
+                        @if (PrivacyService.CanCreatePublicChannels(_effectiveUser))
+                        {
+                            <MudSelectItem Value="@("Public")">@Loc["Public (Everyone)"]</MudSelectItem>
+                        }
+                        <MudSelectItem Value="@("Restricted")">@string.Format(Loc["Restricted (Specific {0}/People)"].Value, AppLabels.Teams)</MudSelectItem>
+                        @if (!IsFriendEdition)
+                        {
+                            <MudSelectItem Value="@("Project")">@BizLoc["Linked to Project"]</MudSelectItem>                        
+                        }
+                    </MudSelect>
+
+                    @if (SelectedAccessType == "Public" && PrivacyService.GetPrivacyConfig().PublicChannels == PublicChannelPolicy.AnnouncementOnly)
+                    {
+                        <MudAlert Severity="Severity.Info" Dense="true" Class="mt-1">
+                            @Loc["Public channels on this server are restricted to announcements only. Only authorized users or teams can post."]
+                        </MudAlert>
+                    }
+
+                    @if (SelectedAccessType == "Restricted")
+                    {
+                        <div class="mt-2">
+                            <MudText Typo="Typo.subtitle2" Class="mb-1">@Loc["Allowed"] @(AppLabels.Teams)</MudText>
+                            <TeamAutocomplete Label="@(string.Format(Loc["Add {0}"].Value, AppLabels.Team))" Margin="Margin.Dense" Teams="@AllTeams" ExcludedIds="@SelectedTeamIds" ValueChanged="AddTeamAsync" ResetOnSelect="true" Class="ma-0" Disabled="IsChannelLocked" />
+
+                            <div class="d-flex flex-wrap gap-1 mt-2">
+                                @foreach(var teamId in SelectedTeamIds)
+                                {
+                                    var team = AllTeams.FirstOrDefault(t => t.Id == teamId);
+                                    if (team != null)
+                                    {
+                                        <TeamChip Team="@team" OnClose="@(() => RemoveTeam(teamId))" Disabled="IsChannelLocked" Size="Size.Small" />
+                                    }
+                                }
+                            </div>
+                        </div>
+
+                        <div class="mt-2">
+                            <MudText Typo="Typo.subtitle2" Class="mb-1">@Loc["Allowed Users"]</MudText>
+                            <EmployeeAutocomplete Label="@Loc["Add User"]" Margin="Margin.Dense" Employees="@AllEmployees" ExcludedIds="@SelectedUserIds" ValueChanged="AddUserAsync" ResetOnSelect="true" Class="ma-0" Disabled="IsChannelLocked" />
+
+                            <div class="d-flex flex-wrap gap-1 mt-2">
+                                @foreach(var userId in SelectedUserIds)
+                                {
+                                    var user = AllEmployees.FirstOrDefault(u => u.Id == userId);
+                                    if (user != null)
+                                    {
+                                        <EmployeeChip Employee="@user" OnClose="@(() => RemoveUser(userId))" Disabled="IsChannelLocked" Size="Size.Small" />
+                                    }
+                                }
+                            </div>
+                        </div>
+                    }
+                    else if (SelectedAccessType == "Project")
+                    {
+                        <div class="mt-2">
+                            <MudAutocomplete Margin="Margin.Dense" T="Project" Label="@BizLoc["Select Project"]" Value="@_selectedProject" ValueChanged="OnProjectSelected"
+                                             SearchFunc="SearchProjects" ToStringFunc="@(p => p?.DisplayName ?? "")" 
+                                             Clearable="true" Variant="Variant.Outlined" Class="ma-0" Disabled="IsChannelLocked">
+                                <ItemTemplate Context="proj">
+                                    <MudText Typo="Typo.body2">@proj.DisplayName</MudText>
+                                </ItemTemplate>
+                            </MudAutocomplete>
+                            <MudText Typo="Typo.caption" Class="ml-1 mt-1 d-block">@BizLoc["Access will be determined by the Project's settings."]</MudText>
+                        </div>
+                    }
+                </div>
+            </MudPaper>
+
+            @* --- Announcement Channel Card --- *@
+            @if (ExistingChannel == null || ExistingChannel.SupportsAnnouncements)
+            {
+                <MudPaper Elevation="0" Outlined="true" Class="rounded-lg overflow-hidden flex-shrink-0">
+                    <div class="d-flex align-center justify-space-between ps-4 pe-2 py-1">
+                        <div class="d-flex align-center min-w-0 mr-2">
+                            <MudIcon Icon="@Icons.Material.Filled.Campaign" Size="Size.Small" Class="mr-2 flex-shrink-0" />
+                            <MudText Typo="Typo.subtitle2">@Loc["Announcement Channel"]</MudText>
+                        </div>
+                        @if (SelectedAccessType == "Public" && PrivacyService.GetPrivacyConfig().PublicChannels == PublicChannelPolicy.AnnouncementOnly)
+                        {
+                            <MudSwitch Value="@true" Disabled="true" Color="Color.Primary" Class="ma-0 flex-shrink-0" />
+                        }
+                        else
+                        {
+                            <MudSwitch @bind-Value="IsAnnouncementOnly" Color="Color.Primary" Class="ma-0 flex-shrink-0" Disabled="IsChannelLocked" />
+                        }
+                    </div>
+                    <MudDivider />
+                    @if (IsAnnouncementOnly)
+                    {
+                        <div class="px-4 py-4 d-flex flex-column gap-3">
+                            <MudText Color="Color.Info" Typo="Typo.caption" Class="mb-1">@string.Format(Loc["Only specific users or {0} will be allowed to post messages in this channel."].Value, AppLabels.Teams.ToLower())</MudText>
+                            
+                            <div>
+                                <MudText Typo="Typo.subtitle2" Class="mb-1">@Loc["Allowed"] @(AppLabels.Teams)</MudText>
+                                <TeamAutocomplete Label="@(string.Format(Loc["Add {0} to Post"].Value, AppLabels.Team))" Margin="Margin.Dense" Teams="@AllTeams" ExcludedIds="@AllowedPostTeamIds" ValueChanged="AddPostTeamAsync" ResetOnSelect="true" Class="ma-0" Disabled="IsChannelLocked" />
+                                <div class="d-flex flex-wrap gap-1 mt-2">
+                                    @foreach(var teamId in AllowedPostTeamIds)
+                                    {
+                                        var team = AllTeams.FirstOrDefault(t => t.Id == teamId);
+                                        if (team != null)
+                                        {
+                                            <TeamChip Team="@team" OnClose="@(() => RemovePostTeam(teamId))" Disabled="IsChannelLocked" Color="Color.Secondary" Size="Size.Small" />
+                                        }
+                                    }
+                                </div>
+                            </div>
+
+                            <div class="mt-2">
+                                <MudText Typo="Typo.subtitle2" Class="mb-1">@Loc["Allowed Users"]</MudText>
+                                <EmployeeAutocomplete Label="@Loc["Add User to Post"]" Margin="Margin.Dense" Employees="@AllEmployees" ExcludedIds="@AllowedPostUserIds" ValueChanged="AddPostUserAsync" ResetOnSelect="true" Class="ma-0" Disabled="IsChannelLocked" />
+                                <div class="d-flex flex-wrap gap-1 mt-2">
+                                    @foreach(var userId in AllowedPostUserIds)
+                                    {
+                                        var user = AllEmployees.FirstOrDefault(u => u.Id == userId);
+                                        if (user != null)
+                                        {
+                                            <EmployeeChip Employee="@user" OnClose="@(() => RemovePostUser(userId))" Disabled="IsChannelLocked" Size="Size.Small" />
+                                        }
+                                    }
+                                </div>
+                            </div>
+                        </div>
+                    }
+                </MudPaper>
+            }
+
+            @* --- Voice & Video Card --- *@
+            <MudPaper Elevation="0" Outlined="true" Class="rounded-lg overflow-hidden flex-shrink-0">
+                <div class="d-flex align-center justify-space-between ps-4 pe-2 py-1">
+                    <div class="d-flex align-center min-w-0 mr-2">
+                        <MudIcon Icon="@Icons.Material.Filled.VolumeUp" Size="Size.Small" Class="mr-2 flex-shrink-0" />
+                        <MudText Typo="Typo.subtitle2">@Loc["Voice Channel"]</MudText>
+                    </div>
+                    <MudSwitch @bind-Value="IsVoiceChannel" Color="Color.Primary" Class="ma-0 flex-shrink-0" Disabled="@(IsAnnouncementOnly || IsChannelLocked)" />
+                </div>
+                <MudDivider />
+                @if (IsVoiceChannel && !IsAnnouncementOnly)
+                {
+                    <div class="px-4 py-4 d-flex flex-column gap-3">
+                        <MudText Color="Color.Info" Typo="Typo.caption" Class="mb-1">@Loc["Makes this an auto-joining Voice and Video channel. Text chat acts as secondary."]</MudText>
+                        <MudSelect Margin="Margin.Dense" T="int" Label="@Loc["Audio Bitrate (Voice Call Quality)"]" @bind-Value="AudioBitrateKbps" Variant="Variant.Outlined" AnchorOrigin="Origin.BottomLeft" Class="ma-0" Disabled="IsChannelLocked">
+                            <MudSelectItem Value="64">@Loc["64 kbps (Low)"]</MudSelectItem>
+                            <MudSelectItem Value="96">@Loc["96 kbps (Standard)"]</MudSelectItem>
+                            <MudSelectItem Value="128">@Loc["128 kbps (High)"]</MudSelectItem>
+                            <MudSelectItem Value="256">@Loc["256 kbps (Very High)"]</MudSelectItem>
+                            <MudSelectItem Value="384">@Loc["384 kbps (Extreme)"]</MudSelectItem>
+                        </MudSelect>
+                    </div>
+                }
+            </MudPaper>
+
+            @* --- Encryption Card --- *@
+            <MudPaper Elevation="0" Outlined="true" Class="rounded-lg overflow-hidden flex-shrink-0">
+                <div class="d-flex align-center justify-space-between ps-4 pe-2 py-1">
+                    <div class="d-flex align-center min-w-0 mr-2">
+                        <MudIcon Icon="@Icons.Material.Filled.Lock" Size="Size.Small" Class="mr-2 flex-shrink-0" />
+                        <MudText Typo="Typo.subtitle2">@Loc["Channel Encryption"]</MudText>
+                    </div>
+                    <MudSwitch @bind-Value="IsEncrypted" Color="Color.Primary" Class="ma-0 flex-shrink-0" Disabled="IsChannelLocked" />
+                </div>
+                <MudDivider />
+                @if (IsEncrypted)
+                {
+                    <div class="px-4 py-4 d-flex flex-column gap-3">
+                        <MudText Color="Color.Error" Typo="Typo.caption">@Loc["This is not End-To-End encryption. When enabled, messages are encrypted before being saved to disk. However, a motivated malicious server owner could intercept data in the server's RAM. This encryption will protect chat data in case of database leak."]</MudText>
+                    </div>
+                }
+            </MudPaper>
+        </div>
+    </DialogContent>
+    <DialogActions>
+        @if (ExistingChannel != null)
+        {
+            @if (ExistingChannel.IsArchived)
+            {
+                <MudButton Color="Color.Warning" OnClick="UnarchiveChannel" StartIcon="@Icons.Material.Filled.Unarchive" Disabled="IsChannelLocked">
+                    @Loc["Unarchive"]
+                </MudButton>
+            }
+            else
+            {
+                <MudButton Color="Color.Warning" OnClick="ArchiveChannel" StartIcon="@Icons.Material.Filled.Archive" Disabled="IsChannelLocked">
+                    @Loc["Archive"]
+                </MudButton>
+            }
+        }
+        <MudSpacer />
+        <MudButton OnClick="Cancel">@Loc["Cancel"]</MudButton>
+        <MudButton Color="Color.Primary" OnClick="Submit" Variant="Variant.Filled" Disabled="IsChannelLocked">@(ExistingChannel != null ? Loc["Save Changes"].Value : Loc["Create Channel"].Value)</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    private Project? _selectedProject;
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
+
+    [Parameter] public List<Team> AllTeams { get; set; } = [];
+    [Parameter] public List<Employee> AllEmployees { get; set; } = [];
+    [Parameter] public List<Project> AllProjects { get; set; } = [];
+    [Parameter] public bool CanManageCategories { get; set; }
+
+    [Parameter] public ChatChannel? ExistingChannel { get; set; }
+    [Parameter] public string? InitialAccessType { get; set; }
+    [Parameter] public string? InitialCategoryId { get; set; }
+
+    private bool IsChannelLocked => ExistingChannel?.IsEncrypted == true && !ScopedKeystore.IsUnlocked;
+
+    private List<ChatCategory> AllCategories { get; set; } = [];
+
+    private string ChannelName { get; set; } = "";
+    private string Description { get; set; } = "";
+    private string Icon { get; set; } = "";
+    private string? CategoryId { get; set; }
+
+    private bool _isVoiceChannel;
+    private bool IsVoiceChannel
+    {
+        get => _isVoiceChannel;
+        set
+        {
+            _isVoiceChannel = value;
+            if (value && string.IsNullOrEmpty(Icon))
+            {
+                Icon = Icons.Material.Filled.VolumeUp;
+            }
+            else if (!value && Icon == Icons.Material.Filled.VolumeUp)
+            {
+                Icon = "";
+            }
+        }
+    }
+    
+    private bool IsEncrypted { get; set; }
+    private int AudioBitrateKbps { get; set; } = 96;
+
+    [Parameter] public Employee? CurrentUser { get; set; }
+    private Employee? _effectiveUser;
+
+    private string _selectedAccessType = "Public";
+    private string SelectedAccessType
+    {
+        get => _selectedAccessType;
+        set
+        {
+            _selectedAccessType = value;
+            if (value == "Public" && PrivacyService.GetPrivacyConfig().PublicChannels == PublicChannelPolicy.AnnouncementOnly)
+            {
+                IsAnnouncementOnly = true;
+            }
+        }
+    }
+
+    private IEnumerable<string> SelectedTeamIds { get; set; } = new HashSet<string>();
+    private IEnumerable<string> SelectedUserIds { get; set; } = new HashSet<string>();
+
+    private bool _isAnnouncementOnly;
+    private bool IsAnnouncementOnly 
+    { 
+        get => _isAnnouncementOnly; 
+        set
+        {
+            _isAnnouncementOnly = value;
+            if (value)
+            {
+                IsVoiceChannel = false;
+            }
+        }
+    }
+    private IEnumerable<string> AllowedPostTeamIds { get; set; } = new HashSet<string>();
+    private IEnumerable<string> AllowedPostUserIds { get; set; } = new HashSet<string>();
+
+    private string SelectedProjectId { get; set; } = "";
+    private bool IsFriendEdition => Db.CompanyProfile.Get()?.Edition == "Family";
+
+    protected override async Task OnInitializedAsync()
+    {
+        _effectiveUser = CurrentUser;
+        if (_effectiveUser == null)
+        {
+            var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+            var claimId = authState.User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+            var claimEmail = authState.User.Identity?.Name;
+            _effectiveUser = Db.Employees.GetAll().FirstOrDefault(e => e.Id == claimId || (claimEmail != null && e.Email == claimEmail));
+        }
+
+        LoadCategories();
+        ScopedKeystore.OnUnlocked += HandleKeystoreStateChanged;
+        ScopedKeystore.OnLocked += HandleKeystoreStateChanged;
+        if (ExistingChannel != null)
+        {
+            ChannelName = ExistingChannel.Name;
+            Description = ExistingChannel.Description;
+            Icon = ExistingChannel.Icon ?? "";
+            CategoryId = ExistingChannel.CategoryId;
+            _isVoiceChannel = ExistingChannel.IsVoiceChannel;
+            IsEncrypted = ExistingChannel.IsEncrypted;
+            AudioBitrateKbps = ExistingChannel.AudioBitrateKbps;
+            IsAnnouncementOnly = ExistingChannel.IsAnnouncementOnly;
+            AllowedPostTeamIds = new HashSet<string>(ExistingChannel.AllowedPostTeamIds ?? new List<string>());
+            AllowedPostUserIds = new HashSet<string>(ExistingChannel.AllowedPostUserIds ?? new List<string>());
+            
+            // Determine Access Type
+            if (ExistingChannel.ChannelType == ChatChannelType.Project)
+            {
+                SelectedAccessType = "Project";
+                SelectedProjectId = ExistingChannel.LinkedEntityId ?? string.Empty;
+                if (!string.IsNullOrEmpty(SelectedProjectId))
+                {
+                    _selectedProject = AllProjects.FirstOrDefault(p => p.Id == SelectedProjectId);
+                }
+            }
+            else
+            {
+                if (ExistingChannel.AllowedTeamIds.Any() || ExistingChannel.ParticipantIds.Any())
+                {
+                    SelectedAccessType = "Restricted";
+                    SelectedTeamIds = new HashSet<string>(ExistingChannel.AllowedTeamIds);
+                    SelectedUserIds = new HashSet<string>(ExistingChannel.ParticipantIds);
+                }
+                else
+                {
+                    SelectedAccessType = "Public";
+                }
+            }
+        }
+        else 
+        {
+            if (!string.IsNullOrEmpty(InitialAccessType))
+            {
+                SelectedAccessType = InitialAccessType;
+            }
+            if (!string.IsNullOrEmpty(InitialCategoryId))
+            {
+                CategoryId = InitialCategoryId;
+            }
+
+            if (!PrivacyService.CanCreatePublicChannels(_effectiveUser))
+            {
+                if (SelectedAccessType == "Public")
+                {
+                    SelectedAccessType = "Restricted";
+                }
+            }
+            else if (PrivacyService.GetPrivacyConfig().PublicChannels == PublicChannelPolicy.AnnouncementOnly && SelectedAccessType == "Public")
+            {
+                IsAnnouncementOnly = true;
+            }
+        }
+    }
+
+    private void HandleKeystoreStateChanged()
+    {
+        InvokeAsync(StateHasChanged);
+    }
+
+    public void Dispose()
+    {
+        ScopedKeystore.OnUnlocked -= HandleKeystoreStateChanged;
+        ScopedKeystore.OnLocked -= HandleKeystoreStateChanged;
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+
+    private void LoadCategories()
+    {
+        AllCategories = Db.ChatCategories.GetAll().Where(c => !c.IsSystem).OrderBy(c => c.DisplayOrder).ToList();
+    }
+
+    private async Task OpenManageCategories()
+    {
+        if (IsChannelLocked) return;
+        var dialog = await DialogService.ShowAsync<ManageCategoriesDialog>(Loc["Manage Categories"].Value);
+        await dialog.Result;
+        LoadCategories();
+    }
+
+    private async Task PickIcon()
+    {
+        if (IsChannelLocked) return;
+        var dialog = await DialogService.ShowAsync<IconPicker>(Loc["Select Icon"].Value);
+        var result = await dialog.Result;
+        if (result is { Canceled: false, Data: string icon })
+        {
+            Icon = icon;
+        }
+    }
+
+    private void AddTeamAsync(Team? team)
+    {
+        if (IsChannelLocked) return;
+        if (team != null)
+        {
+            var list = SelectedTeamIds.ToList();
+            if (!list.Contains(team.Id))
+            {
+                list.Add(team.Id);
+                SelectedTeamIds = list;
+            }
+        }
+        StateHasChanged();
+    }
+
+    private void AddUserAsync(Employee? user)
+    {
+        if (IsChannelLocked) return;
+        if (user != null)
+        {
+            var list = SelectedUserIds.ToList();
+            if (!list.Contains(user.Id))
+            {
+                 list.Add(user.Id);
+                 SelectedUserIds = list;
+            }
+        }
+        StateHasChanged();
+    }
+
+    private void OnProjectSelected(Project? project)
+    {
+        if (IsChannelLocked) return;
+        _selectedProject = project;
+        SelectedProjectId = project?.Id ?? string.Empty;
+    }
+
+    private Task<IEnumerable<Project>> SearchProjects(string value, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return Task.FromResult(AllProjects.AsEnumerable());
+
+        var results = AllProjects
+            .Where(p => (p.DisplayName != null && p.DisplayName.Contains(value, StringComparison.OrdinalIgnoreCase)) ||
+                        (p.Id != null && p.Id.Contains(value, StringComparison.OrdinalIgnoreCase)))
+            .Take(10);
+
+        return Task.FromResult(results);
+    }
+
+    private void RemoveTeam(string teamId)
+    {
+        if (IsChannelLocked) return;
+        var list = SelectedTeamIds.ToList();
+        list.Remove(teamId);
+        SelectedTeamIds = list;
+    }
+
+    private void RemoveUser(string userId)
+    {
+        if (IsChannelLocked) return;
+        var list = SelectedUserIds.ToList();
+        list.Remove(userId);
+        SelectedUserIds = list;
+    }
+
+    private void AddPostTeamAsync(Team? team)
+    {
+        if (IsChannelLocked) return;
+        if (team != null)
+        {
+            var list = AllowedPostTeamIds.ToList();
+            if (!list.Contains(team.Id))
+            {
+                list.Add(team.Id);
+                AllowedPostTeamIds = list;
+            }
+        }
+        StateHasChanged();
+    }
+
+    private void AddPostUserAsync(Employee? user)
+    {
+        if (IsChannelLocked) return;
+        if (user != null)
+        {
+            var list = AllowedPostUserIds.ToList();
+            if (!list.Contains(user.Id))
+            {
+                 list.Add(user.Id);
+                 AllowedPostUserIds = list;
+            }
+        }
+        StateHasChanged();
+    }
+
+    private void RemovePostTeam(string teamId)
+    {
+        if (IsChannelLocked) return;
+        var list = AllowedPostTeamIds.ToList();
+        list.Remove(teamId);
+        AllowedPostTeamIds = list;
+    }
+
+    private void RemovePostUser(string userId)
+    {
+        if (IsChannelLocked) return;
+        var list = AllowedPostUserIds.ToList();
+        list.Remove(userId);
+        AllowedPostUserIds = list;
+    }
+
+    private void Submit()
+    {
+        if (IsChannelLocked || string.IsNullOrWhiteSpace(ChannelName)) return;
+
+        string finalType = ChatChannelType.General;
+        string? finalLinkedId = null;
+
+        if (ExistingChannel?.ChannelType == ChatChannelType.Direct)
+        {
+            // Direct messages type is immutable and cannot be an announcement channel.
+            finalType = ChatChannelType.Direct;
+            finalLinkedId = ExistingChannel.LinkedEntityId;
+            IsAnnouncementOnly = false;
+            AllowedPostUserIds = [];
+            AllowedPostTeamIds = [];
+        }
+        else if (SelectedAccessType == "Project")
+        {
+            finalType = ChatChannelType.Project;
+            finalLinkedId = SelectedProjectId;
+        }
+        else if (SelectedAccessType == "Restricted")
+        {
+            if (SelectedUserIds.Any() || !SelectedTeamIds.Any())
+            {
+                finalType = ChatChannelType.Group;
+            }
+            else
+            {
+                finalType = ChatChannelType.Team;
+            }
+        }
+        else // Public
+        {
+            finalType = ChatChannelType.General;
+            SelectedTeamIds = [];
+            SelectedUserIds = [];
+        }
+
+        var result = new ChannelCreationResult
+        {
+            Name = ChannelName,
+            Description = Description,
+            Icon = Icon,
+            CategoryId = CategoryId,
+            Type = finalType,
+            AllowedTeamIds = SelectedTeamIds.ToList(),
+            ParticipantIds = SelectedUserIds.ToList(),
+            LinkedEntityId = finalLinkedId,
+            IsArchived = ExistingChannel?.IsArchived ?? false,
+            IsVoiceChannel = IsVoiceChannel,
+            IsEncrypted = IsEncrypted,
+            AudioBitrateKbps = AudioBitrateKbps,
+            IsAnnouncementOnly = IsAnnouncementOnly,
+            AllowedPostUserIds = AllowedPostUserIds.ToList(),
+            AllowedPostTeamIds = AllowedPostTeamIds.ToList()
+        };
+
+        MudDialog.Close(DialogResult.Ok(result));
+    }
+
+    private void ArchiveChannel()
+    {
+        if (IsChannelLocked) return;
+        var result = new ChannelCreationResult
+        {
+            Name = ChannelName,
+            Description = Description,
+            Icon = Icon,
+            CategoryId = CategoryId,
+            Type = ExistingChannel?.ChannelType ?? ChatChannelType.General,
+            AllowedTeamIds = SelectedTeamIds.ToList(),
+            ParticipantIds = SelectedUserIds.ToList(),
+            LinkedEntityId = ExistingChannel?.LinkedEntityId,
+            IsArchived = true,
+            IsVoiceChannel = ExistingChannel?.IsVoiceChannel ?? false,
+            IsEncrypted = ExistingChannel?.IsEncrypted ?? false,
+            AudioBitrateKbps = ExistingChannel?.AudioBitrateKbps ?? 64,
+            IsAnnouncementOnly = IsAnnouncementOnly,
+            AllowedPostUserIds = AllowedPostUserIds.ToList(),
+            AllowedPostTeamIds = AllowedPostTeamIds.ToList()
+        };
+        MudDialog.Close(DialogResult.Ok(result));
+    }
+
+    private void UnarchiveChannel()
+    {
+        if (IsChannelLocked) return;
+        var result = new ChannelCreationResult
+        {
+            Name = ChannelName,
+            Description = Description,
+            Icon = Icon,
+            CategoryId = CategoryId,
+            Type = ExistingChannel?.ChannelType ?? ChatChannelType.General,
+            AllowedTeamIds = SelectedTeamIds.ToList(),
+            ParticipantIds = SelectedUserIds.ToList(),
+            LinkedEntityId = ExistingChannel?.LinkedEntityId,
+            IsArchived = false,
+            IsVoiceChannel = ExistingChannel?.IsVoiceChannel ?? false,
+            IsEncrypted = ExistingChannel?.IsEncrypted ?? false,
+            AudioBitrateKbps = ExistingChannel?.AudioBitrateKbps ?? 64,
+            IsAnnouncementOnly = IsAnnouncementOnly,
+            AllowedPostUserIds = AllowedPostUserIds.ToList(),
+            AllowedPostTeamIds = AllowedPostTeamIds.ToList()
+        };
+        MudDialog.Close(DialogResult.Ok(result));
+    }
+
+    public class ChannelCreationResult
+    {
+        public string Name { get; set; } = "";
+        public string Description { get; set; } = "";
+        public string Icon { get; set; } = "";
+        public string? CategoryId { get; set; }
+        public string Type { get; set; } = "";
+        public string? LinkedEntityId { get; set; }
+        public List<string> AllowedTeamIds { get; set; } = [];
+        public List<string> ParticipantIds { get; set; } = [];
+        public bool IsArchived { get; set; }
+        public bool IsVoiceChannel { get; set; }
+        public bool IsEncrypted { get; set; }
+        public int AudioBitrateKbps { get; set; }
+        public bool IsAnnouncementOnly { get; set; }
+        public List<string> AllowedPostUserIds { get; set; } = [];
+        public List<string> AllowedPostTeamIds { get; set; } = [];
+    }
+}

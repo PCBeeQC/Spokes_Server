@@ -4,6 +4,7 @@ window.SoundManager = (function() {
     let isInitialized = false;
     let activeCallSource = null;
     let activePreviewSource = null;
+    let previewAudio = null;
     let callTimeout = null;
     let currentSinkId = '';
 
@@ -11,7 +12,7 @@ window.SoundManager = (function() {
         currentSinkId = localStorage.getItem('spokes_active_speaker_id') || '';
     } catch(e) {}
 
-    const defaultSoundsToLoad = ['channel_join', 'channel_leave', 'spokesnotif1'];
+    const defaultSoundsToLoad = ['spokesnotif1', 'channel_leave'];
 
     async function applySinkId() {
         if (audioCtx && typeof audioCtx.setSinkId === 'function') {
@@ -49,6 +50,36 @@ window.SoundManager = (function() {
         }
     }
 
+    function unlockAudio() {
+        try {
+            if (!audioCtx) {
+                const AudioContext = window.AudioContext || window.webkitAudioContext;
+                if (AudioContext) {
+                    audioCtx = new AudioContext();
+                    applySinkId();
+                }
+            }
+            if (audioCtx && audioCtx.state === 'suspended') {
+                audioCtx.resume().catch(() => {});
+            }
+            if (audioCtx) {
+                try {
+                    const buffer = audioCtx.createBuffer(1, 1, 22050);
+                    const source = audioCtx.createBufferSource();
+                    source.buffer = buffer;
+                    source.connect(audioCtx.destination);
+                    source.start(0);
+                } catch (e) {}
+            }
+        } catch (e) {}
+    }
+
+    // Attach unlock listeners for user gestures to satisfy iOS WebKit autoplay restrictions
+    const unlockEvents = ['touchstart', 'touchend', 'pointerdown', 'click', 'keydown'];
+    unlockEvents.forEach(evt => {
+        document.addEventListener(evt, unlockAudio, { passive: true, capture: true });
+    });
+
     function sanitizeSoundName(soundName) {
         if (!soundName) return '';
         let clean = soundName.trim();
@@ -66,15 +97,20 @@ window.SoundManager = (function() {
         try {
             if (!audioCtx) {
                 const AudioContext = window.AudioContext || window.webkitAudioContext;
-                audioCtx = new AudioContext();
+                if (AudioContext) {
+                    audioCtx = new AudioContext();
+                }
             }
 
             const response = await fetch(`/sounds/${key}.wav`);
             if (!response.ok) throw new Error(`HTTP ${response.status}`);
             const arrayBuffer = await response.arrayBuffer();
-            const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
-            audioBuffers[key] = audioBuffer;
-            return audioBuffer;
+            if (audioCtx) {
+                const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+                audioBuffers[key] = audioBuffer;
+                return audioBuffer;
+            }
+            return null;
         } catch (e) {
             console.warn(`[SoundManager] Failed to load sound ${soundName}:`, e);
             return null;
@@ -104,6 +140,36 @@ window.SoundManager = (function() {
             } catch (e) {}
             activePreviewSource = null;
         }
+        if (previewAudio) {
+            try {
+                previewAudio.pause();
+                previewAudio.currentTime = 0;
+            } catch (e) {}
+            previewAudio = null;
+        }
+    }
+
+    async function playViaHtmlAudio(key, isPreview) {
+        try {
+            stopPreview();
+            const audio = new Audio(`/sounds/${key}.wav`);
+            if (isPreview) {
+                previewAudio = audio;
+                audio.onended = function() {
+                    if (previewAudio === audio) previewAudio = null;
+                };
+            }
+            if (currentSinkId && typeof audio.setSinkId === 'function') {
+                try {
+                    await audio.setSinkId(currentSinkId === 'default' ? '' : currentSinkId);
+                } catch(e) {}
+            }
+            await audio.play();
+            return true;
+        } catch (e) {
+            console.warn('[SoundManager] HTML5 audio fallback failed:', e);
+            return false;
+        }
     }
 
     // Stop active call ringtone when the user focuses the window or navigates
@@ -118,6 +184,19 @@ window.SoundManager = (function() {
             return await loadSound(soundName);
         },
 
+        preloadSounds: async function(soundNames) {
+            if (!Array.isArray(soundNames)) return;
+            for (const name of soundNames) {
+                try {
+                    await loadSound(name);
+                } catch (e) {}
+            }
+        },
+
+        unlock: function() {
+            unlockAudio();
+        },
+
         play: async function (soundName, isPreview = false) {
             try {
                 if (!soundName || soundName === 'system_default') {
@@ -125,11 +204,13 @@ window.SoundManager = (function() {
                     return;
                 }
 
+                const key = sanitizeSoundName(soundName);
+                const isChannelLeave = key === 'channel_leave';
                 const isNativeMobile = window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform();
                 // CRITICAL FIX: Playing Web Audio on mobile WebViews during active WebRTC VoiceChat 
                 // forces the OS to switch AudioSession categories and revokes mic permissions.
-                // Previews in user settings are safe and permitted on mobile when requested.
-                if (isNativeMobile && !isPreview) {
+                // Previews in user settings and channel leave sounds (after WebRTC disconnect) are safe and permitted on mobile.
+                if (isNativeMobile && !isPreview && !isChannelLeave) {
                     return;
                 }
 
@@ -137,21 +218,10 @@ window.SoundManager = (function() {
                     await init();
                 }
 
-                if (!audioCtx) return;
-
-                if (audioCtx.state === 'suspended') {
-                    await audioCtx.resume();
-                }
-
-                const key = sanitizeSoundName(soundName);
-                let buffer = audioBuffers[key];
-                if (!buffer) {
-                    buffer = await loadSound(key);
-                }
-
-                if (!buffer) {
-                    console.warn(`[SoundManager] Sound ${soundName} not loaded or missing.`);
-                    return;
+                if (audioCtx && audioCtx.state === 'suspended') {
+                    try {
+                        await audioCtx.resume();
+                    } catch (e) {}
                 }
 
                 if (isPreview) {
@@ -163,27 +233,45 @@ window.SoundManager = (function() {
                     stopCallRingtone();
                 }
 
-                const source = audioCtx.createBufferSource();
-                source.buffer = buffer;
-                source.connect(audioCtx.destination);
+                // If audioCtx is available and running, attempt Web Audio playback
+                if (audioCtx) {
+                    let buffer = audioBuffers[key];
+                    if (!buffer) {
+                        buffer = await loadSound(key);
+                    }
 
-                if (isPreview) {
-                    activePreviewSource = source;
-                    source.onended = function() {
-                        if (activePreviewSource === source) activePreviewSource = null;
-                    };
-                } else if (isCall) {
-                    activeCallSource = source;
-                    source.onended = function() {
-                        if (activeCallSource === source) activeCallSource = null;
-                    };
-                    // 30 second safety timeout for ringtones
-                    callTimeout = setTimeout(() => {
-                        stopCallRingtone();
-                    }, 30000);
+                    if (buffer) {
+                        try {
+                            const source = audioCtx.createBufferSource();
+                            source.buffer = buffer;
+                            source.connect(audioCtx.destination);
+
+                            if (isPreview) {
+                                activePreviewSource = source;
+                                source.onended = function() {
+                                    if (activePreviewSource === source) activePreviewSource = null;
+                                };
+                            } else if (isCall) {
+                                activeCallSource = source;
+                                source.onended = function() {
+                                    if (activeCallSource === source) activeCallSource = null;
+                                };
+                                // 30 second safety timeout for ringtones
+                                callTimeout = setTimeout(() => {
+                                    stopCallRingtone();
+                                }, 30000);
+                            }
+
+                            source.start(0);
+                            return;
+                        } catch (e) {
+                            console.warn("[SoundManager] WebAudio playback failed, attempting HTML5 fallback:", e);
+                        }
+                    }
                 }
 
-                source.start(0);
+                // Fallback for iOS / suspended AudioContext / missing buffer / preview
+                await playViaHtmlAudio(key, isPreview);
 
             } catch (e) {
                 console.warn("[SoundManager] Failed to play sound", e);

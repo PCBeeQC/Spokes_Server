@@ -13,11 +13,23 @@ public class WeeklyPlanRepository : JsonRepository<WeeklyPlan>
         // Path: /Data/WeeklyPlans/{Year}/plan_{EmpId}_week_{Week}.json
         Path.Combine(_basePath, item.Year.ToString(), $"plan_{item.EmployeeId}_week_{item.WeekNumber}.json");
 
-    public WeeklyPlan GetByEmployeeAndWeek(string employeeId, int year, int week) =>
-        _cache.Values.FirstOrDefault(p =>
+    /// <summary>
+    /// Gets the persisted weekly plan for the specified employee and week, or null if no plan exists.
+    /// </summary>
+    public WeeklyPlan? GetByEmployeeAndWeek(string employeeId, int year, int week)
+    {
+        EnsureLoaded();
+        return _cache.Values.FirstOrDefault(p =>
             p.EmployeeId == employeeId &&
             p.Year == year &&
-            p.WeekNumber == week)
+            p.WeekNumber == week);
+    }
+
+    /// <summary>
+    /// Gets the persisted weekly plan for the specified employee and week, or returns an unpersisted default stub.
+    /// </summary>
+    public WeeklyPlan GetOrStubByEmployeeAndWeek(string employeeId, int year, int week) =>
+        GetByEmployeeAndWeek(employeeId, year, week)
         ?? new WeeklyPlan
         {
             EmployeeId = employeeId,

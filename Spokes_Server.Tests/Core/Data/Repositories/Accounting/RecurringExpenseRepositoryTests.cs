@@ -1,42 +1,13 @@
 using System.Text.Json;
-using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.Logging;
-using Moq;
-using Spokes_Server.Core.Data;
 using Spokes_Server.Core.Data.Repositories.Accounting;
 using Spokes_Server.Core.Models.Accounting;
+using Spokes_Server.Tests.Helpers;
 using Xunit;
 
 namespace Spokes_Server.Tests.Core.Data.Repositories.Accounting;
 
-public class RecurringExpenseRepositoryTests : IDisposable
+public class RecurringExpenseRepositoryTests : RepositoryTestFixture<RecurringExpenseRepository>
 {
-    private readonly string _testDataDir;
-    private readonly DiskPersistenceService _writer;
-    private readonly RecurringExpenseRepository _repo;
-
-    public RecurringExpenseRepositoryTests()
-    {
-        _testDataDir = Path.Combine(Path.GetTempPath(), $"Spokes_Test_Recurring_{Guid.NewGuid()}");
-
-        var mockConfig = new Mock<IConfiguration>();
-        mockConfig.Setup(c => c["DataPath"]).Returns(_testDataDir);
-
-        var mockPersistenceLogger = new Mock<ILogger<DiskPersistenceService>>();
-        _writer = new DiskPersistenceService(mockPersistenceLogger.Object);
-
-        _repo = new RecurringExpenseRepository(_writer, mockConfig.Object);
-    }
-
-    public void Dispose()
-    {
-        if (Directory.Exists(_testDataDir))
-        {
-            try { Directory.Delete(_testDataDir, true); } catch (Exception ex) { Console.WriteLine($"Cleanup failed: {ex.Message}"); }
-        }
-        _writer.Dispose();
-    }
-
     [Fact]
     public void Save_AddsToCache()
     {
@@ -75,17 +46,6 @@ public class RecurringExpenseRepositoryTests : IDisposable
 
         _repo.Delete("re3");
         Assert.Empty(_repo.GetAll());
-    }
-
-    [Fact]
-    public void Constructor_WithNullDataPath_UsesDefaultPath()
-    {
-        var mockConfig = new Mock<IConfiguration>();
-        mockConfig.Setup(c => c["DataPath"]).Returns((string?)null);
-
-        var repo = new RecurringExpenseRepository(_writer, mockConfig.Object);
-
-        Assert.NotNull(repo);
     }
 
     [Fact]

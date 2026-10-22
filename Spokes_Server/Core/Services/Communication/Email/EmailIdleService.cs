@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.IO;
+using System.Security.Cryptography;
 using System.Threading;
 using System.Threading.Tasks;
 using MailKit;
@@ -10,7 +11,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Spokes_Server.Core.Data.Repositories.Core;
 using Spokes_Server.Core.Data.Repositories.HR;
-using Spokes_Server.Core.Services.Core;
+using Spokes_Server.Core.Services.Security;
 
 namespace Spokes_Server.Core.Services.Communication.Email;
 
@@ -21,6 +22,7 @@ public class EmailIdleService : IDisposable
 {
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILogger<EmailIdleService> _logger;
+    private readonly IImapConnectionFactory _imapFactory;
 
     // Map: "EmployeeId:FolderPath" -> CancellationTokenSource (to cancel the running IDLE task)
     // We allow multiple active watchers per employee, differentiated by folder.
@@ -30,10 +32,29 @@ public class EmailIdleService : IDisposable
     public event Action<string, string, UniqueId>? MessageReceived;
     public event Action<string, string, UniqueId>? MessageFlagsChanged;
 
-    public EmailIdleService(IServiceScopeFactory scopeFactory, ILogger<EmailIdleService> logger)
+    internal void TriggerMessageReceived(string employeeId, string folderPath, UniqueId uid) =>
+        MessageReceived?.Invoke(employeeId, folderPath, uid);
+
+    internal void TriggerMessageFlagsChanged(string employeeId, string folderPath, UniqueId uid) =>
+        MessageFlagsChanged?.Invoke(employeeId, folderPath, uid);
+
+    public EmailIdleService(IServiceScopeFactory scopeFactory, ILogger<EmailIdleService> logger, IImapConnectionFactory? imapFactory = null)
     {
         _scopeFactory = scopeFactory;
         _logger = logger;
+        if (imapFactory != null)
+        {
+            _imapFactory = imapFactory;
+        }
+        else
+        {
+            using var scope = scopeFactory.CreateScope();
+            _imapFactory = scope.ServiceProvider.GetService<IImapConnectionFactory>()
+                ?? new ImapConnectionFactory(
+                    scope.ServiceProvider.GetRequiredService<CompanyProfileRepository>(),
+                    scope.ServiceProvider.GetRequiredService<EmployeeRepository>(),
+                    scope.ServiceProvider.GetRequiredService<EncryptionService>());
+        }
     }
 
     /// <summary>
@@ -77,29 +98,10 @@ public class EmailIdleService : IDisposable
         var stopToken = source.Token;
         _logger.LogInformation("Starting IDLE for {EmployeeId} - {FolderPath}", employeeId, folderPath);
 
-        // Create a dedicated scope for DB access
-        using var scope = _scopeFactory.CreateScope();
-        var employeesRepo = scope.ServiceProvider.GetRequiredService<EmployeeRepository>();
-        var companyProfileRepo = scope.ServiceProvider.GetRequiredService<CompanyProfileRepository>();
-        var encryptionService = scope.ServiceProvider.GetRequiredService<EncryptionService>();
-
-        var employee = employeesRepo.GetById(employeeId);
-        if (employee == null) return;
-
-        var username = employee.Email;
-        var password = encryptionService.Decrypt(employee.EncryptedEmailPassword);
-        var settings = companyProfileRepo.Get()?.EmailSettings;
-
-        if (settings == null || string.IsNullOrEmpty(username) || string.IsNullOrEmpty(settings.ImapHost)) return;
-
         try
         {
-            using var client = new ImapClient();
-            // Accept all certs if needed for dev
-            // client.ServerCertificateValidationCallback = (s, c, h, e) => true;
-
-            await client.ConnectAsync(settings.ImapHost, settings.ImapPort, settings.ImapSsl ? SecureSocketOptions.SslOnConnect : SecureSocketOptions.Auto, stopToken);
-            await client.AuthenticateAsync(username, password, stopToken);
+            using var client = await _imapFactory.CreateAuthenticatedClientAsync(employeeId, stopToken);
+            if (client == null) return;
 
             var folder = await client.GetFolderAsync(folderPath, stopToken);
             await folder.OpenAsync(FolderAccess.ReadOnly, stopToken);
@@ -183,8 +185,21 @@ public class EmailIdleService : IDisposable
     {
         foreach (var cts in _activeWatchers.Values)
         {
-            cts.Cancel();
-            cts.Dispose();
+            try
+            {
+                if (!cts.IsCancellationRequested)
+                {
+                    cts.Cancel();
+                }
+            }
+            catch (ObjectDisposedException) { }
+            catch (AggregateException) { }
+
+            try
+            {
+                cts.Dispose();
+            }
+            catch (ObjectDisposedException) { }
         }
         _activeWatchers.Clear();
     }

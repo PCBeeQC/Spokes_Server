@@ -18,6 +18,7 @@ using Spokes_Server.Core.Data.Repositories.HR;
 using Spokes_Server.Core.Models.Core;
 using Spokes_Server.Core.Models.HR;
 using Spokes_Server.Core.Security;
+using Spokes_Server.Tests.Helpers;
 
 namespace Spokes_Server.Tests.Core.Security;
 
@@ -58,8 +59,8 @@ public class DeviceTokenAuthHandlerTests : TestDataTestBase
         _persistence = new DiskPersistenceService(Mock.Of<ILogger<DiskPersistenceService>>());
         _sessionRepo = new DeviceSessionRepository(_persistence, mockConfig.Object);
         _employeeRepo = new EmployeeRepository(_persistence, mockConfig.Object);
-        _db = new Database(_sessionRepo, _employeeRepo);
-        _sessionService = new SessionService(_db);
+        _db = TestDatabaseFactory.Create(_sessionRepo, _employeeRepo);
+        _sessionService = new SessionService(_sessionRepo, _employeeRepo);
 
         _mockAuthService = new Mock<IAuthenticationService>();
         _mockAuthService

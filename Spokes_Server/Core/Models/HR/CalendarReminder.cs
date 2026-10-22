@@ -101,33 +101,6 @@ public class CalendarUserReminderPreference
     /// </summary>
     public List<CalendarReminder> PersonalReminders { get; set; } = [];
 
-    /// <summary>
-    /// Backward-compatibility alias for PersonalReminders.
-    /// </summary>
-    [System.Text.Json.Serialization.JsonIgnore]
-    public List<CalendarReminder> Reminders
-    {
-        get => PersonalReminders;
-        set => PersonalReminders = value ?? [];
-    }
-
-    /// <summary>
-    /// Backward-compatibility helper for legacy custom reminder checks.
-    /// </summary>
-    [System.Text.Json.Serialization.JsonIgnore]
-    public bool HasCustomReminders
-    {
-        get => !ReceiveEventReminders || (PersonalReminders != null && PersonalReminders.Count > 0);
-        set
-        {
-            if (!value)
-            {
-                ReceiveEventReminders = true;
-                PersonalReminders.Clear();
-            }
-        }
-    }
-
     public CalendarUserReminderPreference Clone()
     {
         return new CalendarUserReminderPreference

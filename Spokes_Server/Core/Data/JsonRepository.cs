@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Text.Json;
+using Microsoft.Extensions.Logging;
 
 namespace Spokes_Server.Core.Data;
 
@@ -13,62 +14,125 @@ namespace Spokes_Server.Core.Data;
 public abstract class JsonRepository<T> where T : class, IDataEntity
 {
     protected readonly DiskPersistenceService _writer;
-    protected readonly ConcurrentDictionary<string, T> _cache = new();
+    private readonly ConcurrentDictionary<string, T> _storage = new();
     protected readonly string _basePath;
+    protected readonly ILogger? _logger;
 
     // NEW: Store the search pattern (Default to *.json)
     protected readonly string _searchPattern;
 
+    protected volatile bool _isLoaded;
+    protected readonly object _loadLock = new();
+
+    /// <summary>
+    /// Thread-safe in-memory cache. Accessing this property guarantees that <see cref="EnsureLoaded"/> has run.
+    /// Derived repositories querying cache directly via <see cref="_cache"/> or <see cref="Cache"/> trigger lazy loading automatically.
+    /// </summary>
+    protected ConcurrentDictionary<string, T> _cache
+    {
+        get
+        {
+            EnsureLoaded();
+            return _storage;
+        }
+    }
+
+    /// <summary>
+    /// Thread-safe in-memory cache. Accessing this property guarantees that <see cref="EnsureLoaded"/> has run.
+    /// </summary>
+    protected ConcurrentDictionary<string, T> Cache => _cache;
+
+    /// <summary>
+    /// Direct access to underlying cache storage without triggering <see cref="EnsureLoaded"/>.
+    /// Used internally by disk loaders, cache clear operations, and bulk pruning routines.
+    /// </summary>
+    protected ConcurrentDictionary<string, T> RawCache => _storage;
+
     public JsonRepository(DiskPersistenceService writer, string basePath, string searchPattern = "*.json")
+        : this(writer, basePath, searchPattern, null)
+    {
+    }
+
+    public JsonRepository(DiskPersistenceService writer, string basePath, string searchPattern, ILogger? logger)
     {
         _writer = writer;
         _basePath = basePath;
         _searchPattern = searchPattern;
+        _logger = logger;
     }
 
     public event Action<T>? OnSaved;
+    public event Action<T>? OnDeleted;
+    public event Action? OnLoaded;
 
-    public virtual List<T> GetAll() => _cache.Values.ToList();
+    /// <summary>
+    /// Ensures that the repository state has been loaded from disk.
+    /// Thread-safe and idempotent; executed lazily on first read operation if not loaded eagerly.
+    /// </summary>
+    public virtual void EnsureLoaded()
+    {
+        if (_isLoaded) return;
+        lock (_loadLock)
+        {
+            if (_isLoaded) return;
+            LoadFromDisk();
+            _isLoaded = true;
+        }
+    }
 
-    public virtual Task<List<T>> GetAllAsync() => Task.FromResult(GetAll());
+    public virtual List<T> GetAll()
+    {
+        EnsureLoaded();
+        return _cache.Values.ToList();
+    }
 
-    public virtual T? GetById(string id) => _cache.TryGetValue(id, out var item) ? item : null;
-
-    public virtual Task<T?> GetByIdAsync(string id) => Task.FromResult(GetById(id));
+    public virtual T? GetById(string id)
+    {
+        EnsureLoaded();
+        return _cache.TryGetValue(id, out var item) ? item : null;
+    }
 
     public virtual void Save(T item)
     {
-        
+        EnsureLoaded();
         _cache[item.Id] = item;
         var path = GetFilePath(item);
         _writer.QueueWrite(path, item);
-        OnSaved?.Invoke(item);
+        RaiseOnSaved(item);
     }
 
-    public virtual async Task SaveAsync(T item)
+    public virtual void SaveBatch(IEnumerable<T> items)
     {
-        
-        _cache[item.Id] = item;
-        var path = GetFilePath(item);
-        await _writer.QueueWriteAsync(path, item);
-        OnSaved?.Invoke(item);
+        EnsureLoaded();
+        foreach (var item in items)
+        {
+            _cache[item.Id] = item;
+            var path = GetFilePath(item);
+            _writer.QueueWrite(path, item);
+            RaiseOnSaved(item);
+        }
     }
+
+    protected virtual void RaiseOnSaved(T item) => OnSaved?.Invoke(item);
+    protected virtual void RaiseOnLoaded() => OnLoaded?.Invoke();
 
     public virtual void Delete(string id)
     {
+        EnsureLoaded();
         if (_cache.TryRemove(id, out var item))
         {
             var path = GetFilePath(item);
             _writer.QueueDelete(path);
+            RaiseOnDeleted(item);
         }
     }
 
-    public virtual async Task DeleteAsync(string id)
+    protected virtual void RaiseOnDeleted(T item)
     {
-        if (_cache.TryRemove(id, out var item))
+        OnDeleted?.Invoke(item);
+        if (item is IHasAssociatedFiles fileBearer)
         {
-            var path = GetFilePath(item);
-            await _writer.QueueDeleteAsync(path);
+            RepositoryFileCascade.HandleEntityDeleted(fileBearer);
         }
     }
 
@@ -77,49 +141,67 @@ public abstract class JsonRepository<T> where T : class, IDataEntity
     // --- THE SMART LOADER ---
     public virtual void LoadFromDisk()
     {
-        if (!Directory.Exists(_basePath)) return;
+        lock (_loadLock)
+        {
+            if (!Directory.Exists(_basePath))
+            {
+                _isLoaded = true;
+                RaiseOnLoaded();
+                return;
+            }
 
-        string[] files = [];
-        try
-        {
-            // Use the specific pattern defined in the Constructor
-            files = Directory.GetFiles(_basePath, _searchPattern, SearchOption.AllDirectories);
-        }
-        catch (IOException ex)
-        {
-            Console.WriteLine($"[JsonRepo] Failed to read files from {_basePath}: {ex.Message}");
-            return;
-        }
-
-        var tempItems = new List<T>();
-        foreach (var file in files)
-        {
+            string[] files = [];
             try
             {
-                var json = File.ReadAllText(file);
-                var item = JsonSerializer.Deserialize<T>(json);
-                if (item != null)
-                {
-                    tempItems.Add(item);
-                }
-            }
-            catch (JsonException ex)
-            {
-                Console.WriteLine($"[JsonRepo] Failed to deserialize {file}: {ex.Message}");
+                // Use the specific pattern defined in the Constructor
+                files = Directory.GetFiles(_basePath, _searchPattern, SearchOption.AllDirectories);
             }
             catch (IOException ex)
             {
-                Console.WriteLine($"[JsonRepo] Failed to read {file}: {ex.Message}");
+                _logger?.LogError(ex, "[JsonRepo] Failed to read files from {BasePath}", _basePath);
+                return;
             }
+
+            var tempItems = new List<T>();
+            foreach (var file in files)
+            {
+                try
+                {
+                    var json = File.ReadAllText(file);
+                    var item = JsonSerializer.Deserialize<T>(json);
+                    if (item != null)
+                    {
+                        tempItems.Add(item);
+                    }
+                }
+                catch (JsonException ex)
+                {
+                    _logger?.LogWarning(ex, "[JsonRepo] Failed to deserialize {File}", file);
+                }
+                catch (IOException ex)
+                {
+                    _logger?.LogWarning(ex, "[JsonRepo] Failed to read {File}", file);
+                }
+            }
+
+            _storage.Clear();
+            foreach (var item in tempItems)
+            {
+                _storage[item.Id] = item;
+            }
+            _isLoaded = true;
         }
-        
-        _cache.Clear();
-        foreach (var item in tempItems)
-        {
-            _cache[item.Id] = item;
-        }
+        RaiseOnLoaded();
     }
 
     // NEW: Clear the cache (Used for Restore)
-    public virtual void Clear() => _cache.Clear();
+    public virtual void Clear()
+    {
+        lock (_loadLock)
+        {
+            _storage.Clear();
+            _isLoaded = true;
+        }
+        RaiseOnLoaded();
+    }
 }

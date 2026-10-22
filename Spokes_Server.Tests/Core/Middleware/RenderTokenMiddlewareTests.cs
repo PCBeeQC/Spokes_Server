@@ -7,13 +7,13 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Primitives;
 using Moq;
-using Spokes_Server.Aggregate;
 using Spokes_Server.Core.Constants;
 using Spokes_Server.Core.Data;
 using Spokes_Server.Core.Data.Repositories.Core;
 using Spokes_Server.Core.Middleware;
 using Spokes_Server.Core.Models.Core;
 using Spokes_Server.Core.Services.Documents;
+using Spokes_Server.Tests.Helpers;
 
 namespace Spokes_Server.Tests.Core.Middleware;
 
@@ -21,7 +21,6 @@ public class RenderTokenMiddlewareTests : TestDataTestBase
 {
     private readonly DiskPersistenceService _persistence;
     private readonly DeviceSessionRepository _sessionRepo;
-    private readonly Database _db;
     private readonly RenderTokenService _tokenService;
     private readonly Mock<IAuthenticationService> _authServiceMock;
     private readonly ServiceProvider _serviceProvider;
@@ -35,8 +34,6 @@ public class RenderTokenMiddlewareTests : TestDataTestBase
         _persistence = new DiskPersistenceService(mockLogger.Object);
 
         _sessionRepo = new DeviceSessionRepository(_persistence, mockConfig.Object);
-        _db = new Database(_sessionRepo, null!);
-
         _tokenService = new RenderTokenService();
 
         _authServiceMock = new Mock<IAuthenticationService>();
@@ -60,12 +57,14 @@ public class RenderTokenMiddlewareTests : TestDataTestBase
         base.Dispose();
     }
 
-    private DefaultHttpContext CreateHttpContext(string? renderToken = null)
+    private DefaultHttpContext CreateHttpContext(string? renderToken = null, System.Net.IPAddress? remoteIp = null)
     {
         var context = new DefaultHttpContext
         {
             RequestServices = _serviceProvider
         };
+
+        context.Connection.RemoteIpAddress = remoteIp ?? System.Net.IPAddress.Loopback;
 
         if (renderToken != null)
         {
@@ -93,7 +92,7 @@ public class RenderTokenMiddlewareTests : TestDataTestBase
         var middleware = new RenderTokenMiddleware(next);
 
         // Act
-        await middleware.InvokeAsync(context, _tokenService, _db);
+        await middleware.InvokeAsync(context, _tokenService, _sessionRepo);
 
         // Assert
         Assert.True(nextCalled);
@@ -123,7 +122,7 @@ public class RenderTokenMiddlewareTests : TestDataTestBase
         var middleware = new RenderTokenMiddleware(next);
 
         // Act
-        await middleware.InvokeAsync(context, _tokenService, _db);
+        await middleware.InvokeAsync(context, _tokenService, _sessionRepo);
 
         // Assert
         Assert.True(nextCalled);
@@ -153,7 +152,7 @@ public class RenderTokenMiddlewareTests : TestDataTestBase
         var middleware = new RenderTokenMiddleware(next);
 
         // Act
-        await middleware.InvokeAsync(context, _tokenService, _db);
+        await middleware.InvokeAsync(context, _tokenService, _sessionRepo);
 
         // Assert
         Assert.True(nextCalled);
@@ -169,7 +168,7 @@ public class RenderTokenMiddlewareTests : TestDataTestBase
     }
 
     [Fact]
-    public async Task InvokeAsync_ValidRenderToken_ConsumesTokenPersistsSessionSetsAdminUserSignsInAndCallsNext()
+    public async Task InvokeAsync_ValidRenderToken_PersistsSessionSetsScopedUserSignsInAndCallsNext()
     {
         // Arrange
         var token = _tokenService.CreateToken();
@@ -184,20 +183,20 @@ public class RenderTokenMiddlewareTests : TestDataTestBase
         var beforeTime = DateTime.UtcNow;
 
         // Act
-        await middleware.InvokeAsync(context, _tokenService, _db);
+        await middleware.InvokeAsync(context, _tokenService, _sessionRepo);
         var afterTime = DateTime.UtcNow;
 
         // Assert 1: Next middleware delegate was invoked
         Assert.True(nextCalled);
 
-        // Assert 2: Token is consumed and cannot be reused
-        Assert.False(_tokenService.ValidateAndConsume(token));
+        // Assert 2: Token remains valid for subsequent requests in the same render scope until explicitly revoked
+        Assert.True(_tokenService.ValidateToken(token, out var sessionId));
 
         // Assert 3: DeviceSession was persisted in the database for "system-renderer"
         var sessions = _sessionRepo.GetByEmployeeId("system-renderer").ToList();
         Assert.Single(sessions);
         var session = sessions[0];
-        Assert.False(string.IsNullOrWhiteSpace(session.Id));
+        Assert.Equal(sessionId, session.Id);
         Assert.Equal("system-renderer", session.EmployeeId);
         Assert.Equal("Headless Renderer", session.DeviceName);
         Assert.True(session.CreatedAt >= beforeTime.AddSeconds(-1) && session.CreatedAt <= afterTime.AddSeconds(1));
@@ -211,14 +210,17 @@ public class RenderTokenMiddlewareTests : TestDataTestBase
         Assert.Equal(CookieAuthenticationDefaults.AuthenticationScheme, user.Identity.AuthenticationType);
         Assert.Equal("headless-renderer", user.FindFirst(ClaimTypes.NameIdentifier)?.Value);
         Assert.Equal("Headless Renderer", user.FindFirst(ClaimTypes.Name)?.Value);
-        Assert.Equal("Admin", user.FindFirst(ClaimTypes.Role)?.Value);
-        Assert.True(user.IsInRole("Admin"));
+        Assert.Null(user.FindFirst(ClaimTypes.Role));
+        Assert.False(user.IsInRole("Admin"));
         Assert.Equal("system-renderer", user.FindFirst("EmployeeId")?.Value);
         Assert.Equal(session.Id, user.FindFirst("SessionId")?.Value);
+        Assert.Equal("DocumentExport", user.FindFirst("RenderScope")?.Value);
 
         var permissions = user.FindAll("Permission").Select(c => c.Value).ToList();
         Assert.Contains(AppPermissions.Projects.View, permissions);
+        Assert.Contains(AppPermissions.Purchases.ViewPOs, permissions);
         Assert.Contains(AppPermissions.Purchases.ManagePOs, permissions);
+        Assert.Contains(AppPermissions.BusinessDocuments.View, permissions);
 
         // Assert 5: Signed in via IAuthenticationService mock
         _authServiceMock.Verify(a => a.SignInAsync(
@@ -234,37 +236,41 @@ public class RenderTokenMiddlewareTests : TestDataTestBase
     }
 
     [Fact]
-    public async Task InvokeAsync_ReusedRenderToken_OnlySignsInOnceAndRejectsSecondRequest()
+    public async Task InvokeAsync_MultiRequestRenderLifecycle_AuthenticatesAllRequestsInScope_AndRejectsAfterRevoke()
     {
-        // Arrange
+        // Arrange: Simulate initial GET followed by /_blazor/negotiate and /_blazor WebSocket upgrade, then RevokeToken
         var token = _tokenService.CreateToken();
         var middleware = new RenderTokenMiddleware(ctx => Task.CompletedTask);
 
-        var context1 = CreateHttpContext(token);
-        var context2 = CreateHttpContext(token);
-        var initialUser2 = context2.User;
+        var contextInitialGet = CreateHttpContext(token);
+        var contextBlazorNegotiate = new DefaultHttpContext { RequestServices = _serviceProvider };
+        contextBlazorNegotiate.Request.Headers["X-Spokes-Render-Token"] = token;
 
-        // Act 1: First invocation with valid token succeeds
-        await middleware.InvokeAsync(context1, _tokenService, _db);
-        Assert.True(context1.User.Identity?.IsAuthenticated);
+        // Act 1: Initial GET request succeeds and creates session
+        await middleware.InvokeAsync(contextInitialGet, _tokenService, _sessionRepo);
+        Assert.True(contextInitialGet.User.Identity?.IsAuthenticated);
 
-        // Act 2: Second invocation with same token fails (token consumed)
-        await middleware.InvokeAsync(context2, _tokenService, _db);
+        // Act 2: Subsequent /_blazor/negotiate request with same active token also authenticates with same SessionId
+        await middleware.InvokeAsync(contextBlazorNegotiate, _tokenService, _sessionRepo);
+        Assert.True(contextBlazorNegotiate.User.Identity?.IsAuthenticated);
+        Assert.Equal(
+            contextInitialGet.User.FindFirst("SessionId")?.Value,
+            contextBlazorNegotiate.User.FindFirst("SessionId")?.Value);
 
-        // Assert
-        Assert.Same(initialUser2, context2.User);
-        Assert.False(context2.User.Identity?.IsAuthenticated ?? false);
-
-        // Verify only 1 session was created in database
+        // Verify only 1 session was created in database and SignInAsync was called only once
         Assert.Single(_sessionRepo.GetAll());
-
-        // Verify SignInAsync was called exactly once across both requests
         _authServiceMock.Verify(a => a.SignInAsync(
             It.IsAny<HttpContext>(),
             It.IsAny<string>(),
             It.IsAny<ClaimsPrincipal>(),
             It.IsAny<AuthenticationProperties>()),
             Times.Once);
+
+        // Act 3: Revoke token when render completes, then verify subsequent request is rejected
+        _tokenService.RevokeToken(token);
+        var contextAfterRevoke = CreateHttpContext(token);
+        await middleware.InvokeAsync(contextAfterRevoke, _tokenService, _sessionRepo);
+        Assert.False(contextAfterRevoke.User.Identity?.IsAuthenticated ?? false);
     }
 
     [Fact]
@@ -277,7 +283,110 @@ public class RenderTokenMiddlewareTests : TestDataTestBase
         var context = CreateHttpContext();
 
         // Act & Assert
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => middleware.InvokeAsync(context, _tokenService, _db));
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => middleware.InvokeAsync(context, _tokenService, _sessionRepo));
         Assert.Same(expectedException, ex);
+    }
+
+    [Fact]
+    public async Task InvokeAsync_RenderTokenFromNonLoopbackIp_AuthenticatesSuccessfully()
+    {
+        // Arrange
+        var token = _tokenService.CreateToken();
+        var context = CreateHttpContext(token, System.Net.IPAddress.Parse("192.168.1.100"));
+        var nextCalled = false;
+        RequestDelegate next = ctx =>
+        {
+            nextCalled = true;
+            return Task.CompletedTask;
+        };
+        var mockLogger = new Mock<ILogger<RenderTokenMiddleware>>();
+        var middleware = new RenderTokenMiddleware(next, mockLogger.Object);
+
+        // Act
+        await middleware.InvokeAsync(context, _tokenService, _sessionRepo);
+
+        // Assert
+        Assert.True(nextCalled);
+        Assert.Equal(StatusCodes.Status200OK, context.Response.StatusCode);
+        Assert.True(context.User.Identity?.IsAuthenticated);
+        Assert.Equal(RenderTokenMiddleware.HeadlessRendererName, context.User.Identity?.Name);
+    }
+
+    [Fact]
+    public async Task InvokeAsync_RenderTokenFromHeader_AuthenticatesSuccessfully()
+    {
+        // Arrange
+        var token = _tokenService.CreateToken();
+        var context = new DefaultHttpContext { RequestServices = _serviceProvider };
+        context.Connection.RemoteIpAddress = System.Net.IPAddress.Parse("10.0.0.5");
+        context.Request.Headers["X-Spokes-Render-Token"] = token;
+
+        var nextCalled = false;
+        RequestDelegate next = ctx =>
+        {
+            nextCalled = true;
+            return Task.CompletedTask;
+        };
+        var mockLogger = new Mock<ILogger<RenderTokenMiddleware>>();
+        var middleware = new RenderTokenMiddleware(next, mockLogger.Object);
+
+        // Act
+        await middleware.InvokeAsync(context, _tokenService, _sessionRepo);
+
+        // Assert
+        Assert.True(nextCalled);
+        Assert.True(context.User.Identity?.IsAuthenticated);
+        Assert.Equal(RenderTokenMiddleware.HeadlessRendererName, context.User.Identity?.Name);
+    }
+
+    [Fact]
+    public async Task InvokeAsync_RenderTokenFromNullRemoteIp_AuthenticatesSuccessfully()
+    {
+        // Arrange
+        var token = _tokenService.CreateToken();
+        var context = new DefaultHttpContext { RequestServices = _serviceProvider };
+        context.Connection.RemoteIpAddress = null;
+        context.Request.Query = new QueryCollection(new Dictionary<string, StringValues>
+        {
+            { "renderToken", token }
+        });
+
+        var nextCalled = false;
+        RequestDelegate next = ctx =>
+        {
+            nextCalled = true;
+            return Task.CompletedTask;
+        };
+        var mockLogger = new Mock<ILogger<RenderTokenMiddleware>>();
+        var middleware = new RenderTokenMiddleware(next, mockLogger.Object);
+
+        // Act
+        await middleware.InvokeAsync(context, _tokenService, _sessionRepo);
+
+        // Assert
+        Assert.True(nextCalled);
+        Assert.True(context.User.Identity?.IsAuthenticated);
+    }
+
+    [Fact]
+    public async Task InvokeAsync_InvalidRenderToken_ProceedsUnauthenticated()
+    {
+        // Arrange
+        var context = CreateHttpContext("bad-token", System.Net.IPAddress.Loopback);
+        var nextCalled = false;
+        RequestDelegate next = ctx =>
+        {
+            nextCalled = true;
+            return Task.CompletedTask;
+        };
+        var mockLogger = new Mock<ILogger<RenderTokenMiddleware>>();
+        var middleware = new RenderTokenMiddleware(next, mockLogger.Object);
+
+        // Act
+        await middleware.InvokeAsync(context, _tokenService, _sessionRepo);
+
+        // Assert
+        Assert.True(nextCalled);
+        Assert.False(context.User.Identity?.IsAuthenticated ?? false);
     }
 }

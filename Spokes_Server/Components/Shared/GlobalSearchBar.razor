@@ -1,10 +1,13 @@
 @inject SearchService SearchService
 @inject NavigationManager Nav
+@using Microsoft.Extensions.Localization
+@using Spokes_Server.Resources
+@inject IStringLocalizer<AppResources> Loc
 @implements IDisposable
 
 <div style="position: relative; width: 500px; margin: 0 8px;" @onfocusout="HandleFocusOut" @onfocusin="HandleFocusIn"
     tabindex="-1">
-    <MudTextField @bind-Value="_query" Placeholder="Search... (Ctrl+K)" Variant="Variant.Outlined" Margin="Margin.Dense"
+    <MudTextField @bind-Value="_query" Placeholder="@Loc["Search... (Ctrl+K)"]" Variant="Variant.Outlined" Margin="Margin.Dense"
         Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search"
         Immediate="true"
         TextChanged="OnSearchTextChanged" @ref="_searchField" OnKeyDown="OnKeyDown" Clearable="true" UserAttributes="@_inputAttributes" />
@@ -52,7 +55,7 @@
             Elevation="8">
             <div class="pa-4 d-flex flex-column align-center">
                 <MudIcon Icon="@Icons.Material.Outlined.SearchOff" Color="Color.Secondary" />
-                <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mt-1">No results found</MudText>
+                <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mt-1">@Loc["No results found"]</MudText>
             </div>
         </MudPaper>
     }

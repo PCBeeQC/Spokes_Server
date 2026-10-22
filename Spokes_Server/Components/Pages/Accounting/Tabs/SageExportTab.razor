@@ -1,0 +1,544 @@
+@using System.IO
+@using Spokes_Server.Aggregate
+@using Spokes_Server.Core.Configuration
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Services.Accounting.Export
+@using Spokes_Server.Components.Dialogs.Accounting
+@inject Database Db
+@inject ISage50ExportService SageExportService
+@inject IDialogService DialogService
+@inject ISnackbar Snackbar
+@inject IJSRuntime JS
+
+<MudPaper Elevation="0" Outlined="true" Class="pa-4 mb-4">
+    <div class="d-flex align-center justify-space-between flex-wrap gap-4">
+        <div>
+            <div class="d-flex align-center gap-2">
+                <MudIcon Icon="@Icons.Material.Filled.AccountBalance" Color="Color.Primary" />
+                <MudText Typo="Typo.h6">@BizLoc["Sage 50 Accounting Export"]</MudText>
+            </div>
+            <MudText Typo="Typo.body2" Class="text-muted">
+                @BizLoc["Export client sales invoices, supplier bills, recurring bills, employee expense reports, and commissions directly into Sage 50 Canadian Edition (.imp format) or CSV."]
+            </MudText>
+        </div>
+
+        <div class="d-flex align-center gap-2">
+            <MudButton Variant="Variant.Outlined" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Settings"
+                       OnClick="OpenConfigDialog">
+                @BizLoc["Configure Sage GL & Baseline"]
+            </MudButton>
+        </div>
+    </div>
+</MudPaper>
+
+<!-- Pre-Flight Blocking Errors Banner -->
+@if (_validationResult.Errors.Count > 0)
+{
+    <MudAlert Severity="Severity.Error" Variant="Variant.Outlined" Class="mb-3">
+        <div class="d-flex flex-column">
+            <MudText Typo="Typo.subtitle2" Style="font-weight: 700;">
+                @BizLoc["Blocking Export Errors"] (@_validationResult.Errors.Count)
+            </MudText>
+            <MudText Typo="Typo.caption" Class="mb-1">
+                @BizLoc["The following errors must be resolved before generating a Sage 50 (.imp) file:"]
+            </MudText>
+            <ul style="margin: 0; padding-left: 20px; font-size: 13px;">
+                @foreach (var err in _validationResult.Errors.Take(6))
+                {
+                    <li>@err</li>
+                }
+                @if (_validationResult.Errors.Count > 6)
+                {
+                    <li>...and @(_validationResult.Errors.Count - 6) more</li>
+                }
+            </ul>
+        </div>
+    </MudAlert>
+}
+
+<!-- Pre-Flight Non-Blocking Warnings Banner -->
+@if (_validationResult.Warnings.Count > 0)
+{
+    <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Class="mb-4">
+        <div class="d-flex flex-column">
+            <MudText Typo="Typo.subtitle2" Style="font-weight: 700;">
+                @BizLoc["Pre-Flight Validation Warnings"] (@_validationResult.Warnings.Count)
+            </MudText>
+            <MudText Typo="Typo.caption" Class="mb-1">
+                @BizLoc["Click any payable row below to review or adjust its tax breakdown, invoice number, or GL account:"]
+            </MudText>
+            <ul style="margin: 0; padding-left: 20px; font-size: 13px;">
+                @foreach (var w in _validationResult.Warnings.Take(6))
+                {
+                    <li>@w</li>
+                }
+                @if (_validationResult.Warnings.Count > 6)
+                {
+                    <li>...and @(_validationResult.Warnings.Count - 6) more</li>
+                }
+            </ul>
+        </div>
+    </MudAlert>
+}
+else if (_validationResult.Errors.Count == 0 && (FilteredInvoices.Count > 0 || FilteredPayables.Count > 0))
+{
+    <MudAlert Severity="Severity.Success" Variant="Variant.Outlined" Class="mb-4" Dense="true">
+        @BizLoc["Pre-flight validation passed: all transactions are ready for Sage 50 import."]
+    </MudAlert>
+}
+
+<!-- Filter & Export Action Toolbar -->
+<MudPaper Elevation="0" Outlined="true" Class="pa-4 mb-4">
+    <div class="d-flex align-center justify-space-between flex-wrap gap-4">
+        <div class="d-flex align-center flex-wrap gap-4">
+            <div style="min-width: 150px;">
+                <MudDatePicker Date="_startDate" DateChanged="OnStartDateChanged" Label="@BizLoc["From Date"]" Margin="Margin.Dense" />
+            </div>
+            <div style="min-width: 150px;">
+                <MudDatePicker Date="_endDate" DateChanged="OnEndDateChanged" Label="@BizLoc["To Date"]" Margin="Margin.Dense" />
+            </div>
+            <div style="min-width: 190px;">
+                <MudSelect T="SagePayableSourceType?" Value="_payableSourceFilter" ValueChanged="OnPayableSourceFilterChanged"
+                           Label="@BizLoc["Payable Stream"]" Margin="Margin.Dense" Clearable="true" Dense="true">
+                    <MudSelectItem T="SagePayableSourceType?" Value="@((SagePayableSourceType?)null)">@BizLoc["All Payables"]</MudSelectItem>
+                    <MudSelectItem T="SagePayableSourceType?" Value="@((SagePayableSourceType?)SagePayableSourceType.SupplierBill)">@BizLoc["Supplier & PO Bills"]</MudSelectItem>
+                    <MudSelectItem T="SagePayableSourceType?" Value="@((SagePayableSourceType?)SagePayableSourceType.RecurringBill)">@BizLoc["Recurring & One-Time Bills"]</MudSelectItem>
+                    <MudSelectItem T="SagePayableSourceType?" Value="@((SagePayableSourceType?)SagePayableSourceType.ExpenseReport)">@BizLoc["Expense Reports"]</MudSelectItem>
+                    <MudSelectItem T="SagePayableSourceType?" Value="@((SagePayableSourceType?)SagePayableSourceType.Commission)">@BizLoc["Commissions"]</MudSelectItem>
+                </MudSelect>
+            </div>
+            <div class="d-flex align-center">
+                <MudSwitch T="bool" Value="_includeExported" ValueChanged="OnIncludeExportedChanged" Color="Color.Primary" Label="@BizLoc["Include Already Exported"]" />
+            </div>
+        </div>
+
+        <div class="d-flex align-center flex-wrap gap-2">
+            @if (HasExportedSelection)
+            {
+                <MudButton Variant="Variant.Outlined" Color="Color.Warning" StartIcon="@Icons.Material.Filled.Undo"
+                           OnClick="UnmarkSelectedExported">
+                    @BizLoc["Unmark Exported"]
+                </MudButton>
+            }
+
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Download"
+                       OnClick="ExportSageImp"
+                       Disabled="@(!_validationResult.IsValid || (InvoicesToExport.Count == 0 && PayablesToExport.Count == 0))">
+                @BizLoc["Download Sage 50 (.imp)"]
+            </MudButton>
+
+            <MudButton Variant="Variant.Outlined" Color="Color.Secondary" StartIcon="@Icons.Material.Filled.TableChart"
+                       OnClick="ExportInvoicesCsv" Disabled="@(InvoicesToExport.Count == 0)">
+                @BizLoc["Export Invoices (CSV)"]
+            </MudButton>
+
+            <MudButton Variant="Variant.Outlined" Color="Color.Secondary" StartIcon="@Icons.Material.Filled.TableChart"
+                       OnClick="ExportPayablesCsv" Disabled="@(PayablesToExport.Count == 0)">
+                @BizLoc["Export Payables (CSV)"]
+            </MudButton>
+        </div>
+    </div>
+</MudPaper>
+
+<!-- Transaction Lists -->
+<MudTabs Elevation="0" Border="true" Outlined="true" Rounded="true" Class="mb-4">
+    <!-- CLIENT INVOICES (Sales) -->
+    <MudTabPanel Text="@($"{BizLoc["Client Invoices"]} ({FilteredInvoices.Count})")" Icon="@Icons.Material.Filled.AttachMoney">
+        <MudTable T="Invoice" Items="@FilteredInvoices" MultiSelection="true" @bind-SelectedItems="_selectedInvoices"
+                  Dense="true" Hover="true" Striped="true" Elevation="0">
+            <HeaderContent>
+                <MudTh>@BizLoc["Invoice #"]</MudTh>
+                <MudTh>@BizLoc["Date"]</MudTh>
+                <MudTh>@BizLoc["Due Date"]</MudTh>
+                <MudTh>@BizLoc["Client"]</MudTh>
+                <MudTh>@BizLoc["SubTotal"]</MudTh>
+                <MudTh>@BizLoc["TPS (5%)"]</MudTh>
+                <MudTh>@BizLoc["TVQ (9.975%)"]</MudTh>
+                <MudTh>@BizLoc["Total"]</MudTh>
+                <MudTh>@BizLoc["Status"]</MudTh>
+                <MudTh>@BizLoc["Sage Export Status"]</MudTh>
+            </HeaderContent>
+            <RowTemplate Context="inv">
+                <MudTd><b>@inv.InvoiceNumber</b></MudTd>
+                <MudTd>@inv.Date.ToShortDateString()</MudTd>
+                <MudTd>@inv.DueDate.ToShortDateString()</MudTd>
+                <MudTd>@GetClientName(inv)</MudTd>
+                <MudTd>@inv.SubTotal.ToString("C2")</MudTd>
+                <MudTd>@inv.TpsAmount.ToString("C2")</MudTd>
+                <MudTd>@inv.TvqAmount.ToString("C2")</MudTd>
+                <MudTd><b>@inv.GrandTotal.ToString("C2")</b></MudTd>
+                <MudTd><StatusChip Status="@inv.Status" /></MudTd>
+                <MudTd>
+                    @if (inv.ExportedToSageAt.HasValue)
+                    {
+                        <MudChip T="string" Color="Color.Success" Size="Size.Small" Variant="Variant.Outlined">
+                            @BizLoc["Exported"] @inv.ExportedToSageAt.Value.ToLocalTime().ToShortDateString()
+                        </MudChip>
+                    }
+                    else
+                    {
+                        <MudChip T="string" Color="Color.Warning" Size="Size.Small" Variant="Variant.Filled">
+                            @BizLoc["Pending Export"]
+                        </MudChip>
+                    }
+                </MudTd>
+            </RowTemplate>
+            <NoRecordsContent>
+                <div class="pa-4 text-center text-muted">@BizLoc["No client invoices match the filter criteria."]</div>
+            </NoRecordsContent>
+        </MudTable>
+    </MudTabPanel>
+
+    <!-- ALL PAYABLES (Bills, Recurring Bills, Expense Reports, Commissions) -->
+    <MudTabPanel Text="@($"{BizLoc["Payables & Bills"]} ({FilteredPayables.Count})")" Icon="@Icons.Material.Filled.MoneyOff">
+        <MudTable T="SagePayableExportItem" Items="@FilteredPayables" MultiSelection="true" @bind-SelectedItems="_selectedPayables"
+                  OnRowClick="OnPayableRowClick" RowStyle="cursor: pointer;" Dense="true" Hover="true" Striped="true" Elevation="0">
+            <HeaderContent>
+                <MudTh>@BizLoc["Stream"]</MudTh>
+                <MudTh>@BizLoc["Invoice / Ref #"]</MudTh>
+                <MudTh>@BizLoc["Date"]</MudTh>
+                <MudTh>@BizLoc["Vendor / Payee"]</MudTh>
+                <MudTh>@BizLoc["GL / Item"]</MudTh>
+                <MudTh>@BizLoc["SubTotal"]</MudTh>
+                <MudTh>@BizLoc["TPS (5%)"]</MudTh>
+                <MudTh>@BizLoc["TVQ (9.975%)"]</MudTh>
+                <MudTh>@BizLoc["Total"]</MudTh>
+                <MudTh>@BizLoc["Status"]</MudTh>
+                <MudTh>@BizLoc["Sage Export Status"]</MudTh>
+            </HeaderContent>
+            <RowTemplate Context="payable">
+                <MudTd>
+                    <MudChip T="string" Size="Size.Small" Color="@GetSourceColor(payable.SourceType)" Variant="Variant.Text">
+                        @GetSourceLabel(payable.SourceType)
+                    </MudChip>
+                </MudTd>
+                <MudTd><b>@payable.InvoiceOrReferenceNumber</b></MudTd>
+                <MudTd>@payable.Date.ToShortDateString()</MudTd>
+                <MudTd>@payable.VendorName</MudTd>
+                <MudTd>
+                    <MudText Typo="Typo.caption">@GetPayableGlPreview(payable)</MudText>
+                </MudTd>
+                <MudTd>@payable.SubTotal.ToString("C2")</MudTd>
+                <MudTd>@payable.TpsAmount.ToString("C2")</MudTd>
+                <MudTd>@payable.TvqAmount.ToString("C2")</MudTd>
+                <MudTd><b>@payable.TotalAmount.ToString("C2")</b></MudTd>
+                <MudTd><MudChip T="string" Size="Size.Small" Color="Color.Default">@payable.Status</MudChip></MudTd>
+                <MudTd>
+                    @if (payable.ExportedToSageAt.HasValue)
+                    {
+                        <MudChip T="string" Color="Color.Success" Size="Size.Small" Variant="Variant.Outlined">
+                            @BizLoc["Exported"] @payable.ExportedToSageAt.Value.ToLocalTime().ToShortDateString()
+                        </MudChip>
+                    }
+                    else
+                    {
+                        <MudChip T="string" Color="Color.Warning" Size="Size.Small" Variant="Variant.Filled">
+                            @BizLoc["Pending Export"]
+                        </MudChip>
+                    }
+                </MudTd>
+            </RowTemplate>
+            <NoRecordsContent>
+                <div class="pa-4 text-center text-muted">@BizLoc["No payable transactions match the filter criteria."]</div>
+            </NoRecordsContent>
+        </MudTable>
+    </MudTabPanel>
+</MudTabs>
+
+@code {
+    private DateTime? _startDate = DateTime.Today.AddDays(-60);
+    private DateTime? _endDate = DateTime.Today.AddDays(1);
+    private bool _includeExported = false;
+    private SagePayableSourceType? _payableSourceFilter = null;
+
+    private List<Invoice> _allInvoices = [];
+    private List<SagePayableExportItem> _allPayables = [];
+    private HashSet<Invoice> _selectedInvoices = [];
+    private HashSet<SagePayableExportItem> _selectedPayables = [];
+    private SageExportValidationResult _validationResult = new();
+
+    protected override void OnInitialized()
+    {
+        LoadData();
+    }
+
+    private void LoadData()
+    {
+        _allInvoices = Db.Invoices.GetAll()
+            .Where(inv => inv.Status != InvoiceStatus.Draft && inv.Status != InvoiceStatus.Void)
+            .ToList();
+
+        _allPayables = SageExportService.GetAllPayableExportItems();
+
+        _selectedInvoices.Clear();
+        _selectedPayables.Clear();
+
+        RunValidation();
+    }
+
+    private List<Invoice> FilteredInvoices => _allInvoices
+        .Where(i => (!_startDate.HasValue || i.Date.Date >= _startDate.Value.Date) &&
+                    (!_endDate.HasValue || i.Date.Date <= _endDate.Value.Date) &&
+                    (_includeExported || !i.ExportedToSageAt.HasValue))
+        .OrderByDescending(i => i.Date)
+        .ToList();
+
+    private List<SagePayableExportItem> FilteredPayables => _allPayables
+        .Where(p => (!_startDate.HasValue || p.Date.Date >= _startDate.Value.Date) &&
+                    (!_endDate.HasValue || p.Date.Date <= _endDate.Value.Date) &&
+                    (_includeExported || !p.ExportedToSageAt.HasValue) &&
+                    (!_payableSourceFilter.HasValue || p.SourceType == _payableSourceFilter.Value))
+        .OrderByDescending(p => p.Date)
+        .ToList();
+
+    private List<Invoice> InvoicesToExport => _selectedInvoices.Count > 0
+        ? FilteredInvoices.Where(i => _selectedInvoices.Contains(i)).ToList()
+        : FilteredInvoices;
+
+    private List<SagePayableExportItem> PayablesToExport => _selectedPayables.Count > 0
+        ? FilteredPayables.Where(p => _selectedPayables.Contains(p)).ToList()
+        : FilteredPayables;
+
+    private bool HasExportedSelection =>
+        _selectedInvoices.Any(i => i.ExportedToSageAt.HasValue) ||
+        _selectedPayables.Any(p => p.ExportedToSageAt.HasValue);
+
+    private void OnStartDateChanged(DateTime? newStart)
+    {
+        _startDate = newStart;
+        RunValidation();
+    }
+
+    private void OnEndDateChanged(DateTime? newEnd)
+    {
+        _endDate = newEnd;
+        RunValidation();
+    }
+
+    private void OnIncludeExportedChanged(bool include)
+    {
+        _includeExported = include;
+        RunValidation();
+    }
+
+    private void OnPayableSourceFilterChanged(SagePayableSourceType? sourceType)
+    {
+        _payableSourceFilter = sourceType;
+        RunValidation();
+    }
+
+    private void RunValidation()
+    {
+        var config = Db.CompanyProfile.GetAccounting().SageSettings ?? new Sage50ExportConfig();
+        _validationResult = SageExportService.ValidateForExport(FilteredInvoices, FilteredPayables, config);
+    }
+
+    private string GetClientName(Invoice inv)
+    {
+        var client = SageExportService.ResolveClientForInvoice(inv);
+        return !string.IsNullOrWhiteSpace(client?.BusinessName)
+            ? client.BusinessName
+            : BizLoc["Unknown"].Value;
+    }
+
+    private string GetSourceLabel(SagePayableSourceType type) => type switch
+    {
+        SagePayableSourceType.SupplierBill => BizLoc["Supplier Bill"].Value,
+        SagePayableSourceType.RecurringBill => BizLoc["Recurring Bill"].Value,
+        SagePayableSourceType.ExpenseReport => BizLoc["Expense Report"].Value,
+        SagePayableSourceType.Commission => BizLoc["Commission"].Value,
+        _ => type.ToString()
+    };
+
+    private Color GetSourceColor(SagePayableSourceType type) => type switch
+    {
+        SagePayableSourceType.SupplierBill => Color.Primary,
+        SagePayableSourceType.RecurringBill => Color.Info,
+        SagePayableSourceType.ExpenseReport => Color.Secondary,
+        SagePayableSourceType.Commission => Color.Tertiary,
+        _ => Color.Default
+    };
+
+    private string GetPayableGlPreview(SagePayableExportItem payable)
+    {
+        if (!string.IsNullOrWhiteSpace(payable.GlAccountCode))
+            return payable.GlAccountCode;
+        var config = Db.CompanyProfile.GetAccounting().SageSettings ?? new Sage50ExportConfig();
+        return payable.SourceType switch
+        {
+            SagePayableSourceType.RecurringBill => config.DefaultRecurringExpenseGl,
+            SagePayableSourceType.ExpenseReport => config.DefaultEmployeeExpenseGl,
+            SagePayableSourceType.Commission => config.DefaultCommissionGl,
+            _ => config.DefaultExpenseGl
+        };
+    }
+
+    private async Task OnPayableRowClick(TableRowClickEventArgs<SagePayableExportItem> args)
+    {
+        var item = args.Item;
+        if (item == null) return;
+
+        if (item.SourceType == SagePayableSourceType.SupplierBill)
+        {
+            var bill = item.UnderlyingEntity as Bill ?? Db.Bills.GetById(item.Id);
+            if (bill == null) return;
+
+            var parameters = new DialogParameters<BillEditorDialog> { { x => x.Bill, bill } };
+            var options = new DialogOptions { MaxWidth = MaxWidth.Large, FullWidth = true, CloseButton = true };
+            var dialog = await DialogService.ShowAsync<BillEditorDialog>(BizLoc["Edit Supplier Bill"].Value, parameters, options);
+            var res = await dialog.Result;
+            if (res != null && !res.Canceled && res.Data is Bill updatedBill)
+            {
+                Db.Bills.Save(updatedBill);
+                LoadData();
+            }
+        }
+        else if (item.SourceType == SagePayableSourceType.RecurringBill)
+        {
+            var expense = item.UnderlyingEntity as RecurringExpense ?? Db.RecurringExpenses.GetById(item.ParentEntityId ?? item.Id);
+            if (expense == null) return;
+
+            var parameters = new DialogParameters<RecurringExpenseDialog>
+            {
+                { x => x.Expense, expense },
+                { x => x.IsNew, false },
+                { x => x.ShowBillHistory, true },
+                { x => x.ActiveTabIndex, 1 }
+            };
+            var options = new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true, CloseButton = true };
+            var dialog = await DialogService.ShowAsync<RecurringExpenseDialog>(BizLoc["Edit Recurring Bill"].Value, parameters, options);
+            var res = await dialog.Result;
+            if (res != null && !res.Canceled && res.Data is RecurringExpense updatedExpense)
+            {
+                Db.RecurringExpenses.Save(updatedExpense);
+                LoadData();
+            }
+        }
+        else if (item.SourceType == SagePayableSourceType.ExpenseReport)
+        {
+            var report = item.UnderlyingEntity as ExpenseReport ?? Db.ExpenseReports.GetById(item.ParentEntityId ?? item.Id);
+            if (report == null) return;
+
+            var parameters = new DialogParameters<ExpenseReportDialog>
+            {
+                { x => x.Report, report },
+                { x => x.IsReadOnly, false }
+            };
+            var options = new DialogOptions { MaxWidth = MaxWidth.Large, FullWidth = true, CloseButton = true };
+            var dialog = await DialogService.ShowAsync<ExpenseReportDialog>(BizLoc["Edit Expense Report"].Value, parameters, options);
+            var res = await dialog.Result;
+            if (res != null && !res.Canceled && res.Data is ExpenseReport updatedReport)
+            {
+                Db.ExpenseReports.Save(updatedReport);
+                LoadData();
+            }
+        }
+    }
+
+    private async Task OpenConfigDialog()
+    {
+        var dialog = await DialogService.ShowAsync<SageExportConfigDialog>(BizLoc["Sage 50 Export Configuration"].Value, new DialogOptions
+        {
+            MaxWidth = MaxWidth.Large,
+            FullWidth = true,
+            CloseButton = true
+        });
+
+        var result = await dialog.Result;
+        if (result != null && !result.Canceled)
+        {
+            LoadData();
+            StateHasChanged();
+        }
+    }
+
+    private void UnmarkSelectedExported()
+    {
+        var invoices = _selectedInvoices.Where(i => i.ExportedToSageAt.HasValue).ToList();
+        var payables = _selectedPayables.Where(p => p.ExportedToSageAt.HasValue).ToList();
+        if (invoices.Count == 0 && payables.Count == 0) return;
+
+        SageExportService.UnmarkExported(invoices, payables);
+        Snackbar.Add(BizLoc["Selected transactions unmarked and ready for re-export."].Value, Severity.Info);
+        LoadData();
+    }
+
+    private async Task ExportSageImp()
+    {
+        var invoices = InvoicesToExport;
+        var payables = PayablesToExport;
+
+        if (invoices.Count == 0 && payables.Count == 0)
+        {
+            Snackbar.Add(BizLoc["No transactions to export"].Value, Severity.Warning);
+            return;
+        }
+
+        try
+        {
+            var config = Db.CompanyProfile.GetAccounting().SageSettings ?? new Sage50ExportConfig();
+            var validation = SageExportService.ValidateForExport(invoices, payables, config);
+            if (!validation.IsValid)
+            {
+                _validationResult = validation;
+                Snackbar.Add(BizLoc["Cannot export: please resolve blocking validation errors first."].Value, Severity.Error);
+                return;
+            }
+
+            var impBytes = SageExportService.GenerateSage50ImpBytes(invoices, payables, config);
+            var fileName = $"Sage50_Export_{DateTime.Now:yyyyMMdd_HHmmss}.imp";
+
+            using var stream = new MemoryStream(impBytes);
+            using var streamRef = new DotNetStreamReference(stream);
+            await JS.InvokeVoidAsync("downloadFileFromStream", fileName, streamRef);
+
+            var batchId = Guid.NewGuid().ToString();
+            SageExportService.MarkAsExported(invoices, payables, batchId);
+
+            Snackbar.Add($"Exported {invoices.Count} invoice(s) and {payables.Count} payable(s) to Sage 50 (.imp)", Severity.Success);
+            LoadData();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Export failed: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private async Task ExportInvoicesCsv()
+    {
+        var invoices = InvoicesToExport;
+        if (invoices.Count == 0) return;
+
+        try
+        {
+            var config = Db.CompanyProfile.GetAccounting().SageSettings ?? new Sage50ExportConfig();
+            var csv = SageExportService.GenerateSalesInvoicesCsv(invoices, config);
+            var fileName = $"Sales_Invoices_{DateTime.Now:yyyyMMdd_HHmmss}.csv";
+            await JS.InvokeVoidAsync("downloadFile", fileName, "text/csv", csv);
+            Snackbar.Add($"Exported {invoices.Count} invoice(s) to CSV", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"CSV Export failed: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private async Task ExportPayablesCsv()
+    {
+        var payables = PayablesToExport;
+        if (payables.Count == 0) return;
+
+        try
+        {
+            var config = Db.CompanyProfile.GetAccounting().SageSettings ?? new Sage50ExportConfig();
+            var csv = SageExportService.GeneratePurchaseInvoicesCsv(payables, config);
+            var fileName = $"Purchase_Payables_{DateTime.Now:yyyyMMdd_HHmmss}.csv";
+            await JS.InvokeVoidAsync("downloadFile", fileName, "text/csv", csv);
+            Snackbar.Add($"Exported {payables.Count} payable(s) to CSV", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"CSV Export failed: {ex.Message}", Severity.Error);
+        }
+    }
+}

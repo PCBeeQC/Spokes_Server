@@ -5,16 +5,15 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <IsPackable>false</IsPackable>
+    <!-- Suppress nullable noise and obsolete API compatibility tests in test project -->
+    <NoWarn>$(NoWarn);CS8600;CS8601;CS8602;CS8603;CS8604;CS8618;CS8619;CS8620;CS8625;CS0618</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="bunit" Version="2.11.3" />
     <PackageReference Include="coverlet.collector" Version="6.0.4" />
-    <PackageReference Include="Livekit.Server.Sdk.Dotnet" Version="1.2.3" />
-    <PackageReference Include="MailKit" Version="4.18.0" />
-    <PackageReference Include="Markdig" Version="1.3.2" />
     <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" Version="9.0.2" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
-    <PackageReference Include="MimeKit" Version="4.18.0" />
     <PackageReference Include="Moq" Version="4.20.72" />
     <PackageReference Include="xunit" Version="2.9.3" />
     <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
@@ -26,6 +25,12 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Spokes_Server\Spokes_Server.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="xunit.runner.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
   </ItemGroup>
 
 </Project>

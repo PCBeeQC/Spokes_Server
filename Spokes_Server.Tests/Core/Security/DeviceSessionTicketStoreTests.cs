@@ -12,6 +12,7 @@ using Spokes_Server.Core.Data.Repositories.HR;
 using Spokes_Server.Core.Models.Core;
 using Spokes_Server.Core.Models.HR;
 using Spokes_Server.Core.Security;
+using Spokes_Server.Tests.Helpers;
 
 namespace Spokes_Server.Tests.Core.Security;
 
@@ -38,13 +39,14 @@ public class DeviceSessionTicketStoreTests : IDisposable
 
         _sessionRepo = new DeviceSessionRepository(_persistence, mockConfig.Object);
         _employeeRepo = new EmployeeRepository(_persistence, mockConfig.Object);
-        _db = new Database(_sessionRepo, _employeeRepo);
+        _db = TestDatabaseFactory.Create(_sessionRepo, _employeeRepo);
 
         var services = new ServiceCollection();
+        services.AddScoped(_ => _sessionRepo);
         services.AddScoped(_ => _db);
         _serviceProvider = services.BuildServiceProvider();
 
-        _store = new DeviceSessionTicketStore(_serviceProvider);
+        _store = new DeviceSessionTicketStore(_sessionRepo);
     }
 
     public void Dispose()
@@ -53,7 +55,7 @@ public class DeviceSessionTicketStoreTests : IDisposable
         _persistence.Dispose();
         if (Directory.Exists(_tempDir))
         {
-            try { Directory.Delete(_tempDir, true); } catch { }
+            try { Directory.Delete(_tempDir, true); } catch (Exception ex) { System.Diagnostics.Debug.WriteLine(ex.Message); }
         }
     }
 

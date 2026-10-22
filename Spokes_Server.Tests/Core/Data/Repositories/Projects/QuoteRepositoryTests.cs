@@ -1,51 +1,31 @@
 using System.Text.Json;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Moq;
 using Spokes_Server.Core.Data;
 using Spokes_Server.Core.Data.Repositories.Projects;
 using Spokes_Server.Core.Models.Projects;
+using Spokes_Server.Tests.Helpers;
 using Xunit;
 
 namespace Spokes_Server.Tests.Core.Data.Repositories.Projects;
 
-public class QuoteRepositoryTests : IDisposable
+public class QuoteRepositoryTests : RepositoryTestBase
 {
-    private readonly string _testDataDir;
-    private readonly IConfiguration _config;
-    private readonly DiskPersistenceService _persistence;
     private readonly SequenceService _sequenceService;
     private readonly QuoteRepository _repository;
     private readonly Mock<ILogger<QuoteRepository>> _mockLogger;
 
-    public QuoteRepositoryTests()
+    public QuoteRepositoryTests() : base("QuoteRepo")
     {
-        _testDataDir = Path.Combine(Path.GetTempPath(), $"Spokes_Test_QuoteRepo_{Guid.NewGuid()}");
-        Directory.CreateDirectory(_testDataDir);
-
-        var configDict = new Dictionary<string, string> { { "DataPath", _testDataDir } };
-        _config = new ConfigurationBuilder().AddInMemoryCollection(configDict).Build();
-
-        _persistence = new DiskPersistenceService(new Mock<ILogger<DiskPersistenceService>>().Object);
-        _sequenceService = new SequenceService(_config);
+        _sequenceService = new SequenceService(Config);
         _mockLogger = new Mock<ILogger<QuoteRepository>>();
 
         _repository = new QuoteRepository(
-            _persistence,
-            _config,
+            _writer,
+            Config,
             _sequenceService,
             _mockLogger.Object
         );
-    }
-
-    public void Dispose()
-    {
-        _persistence.Dispose();
-        if (Directory.Exists(_testDataDir))
-        {
-            try { Directory.Delete(_testDataDir, true); }
-            catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"Cleanup error: {ex.Message}"); }
-        }
     }
 
     [Fact]
@@ -198,13 +178,23 @@ public class QuoteRepositoryTests : IDisposable
         _repository.Save(quote);
         
         // Wait briefly for DiskPersistenceService to flush
-        _persistence.FlushAll();
+        _writer.FlushAll();
 
-        // Assert
         var expectedPath = Path.Combine(_testDataDir, "Projects", projectId, "Quotes", $"{quoteId}.json");
         Assert.True(File.Exists(expectedPath), $"File should exist at {expectedPath}");
         
         var json = File.ReadAllText(expectedPath);
         Assert.Contains("Save Test", json);
+    }
+
+    [Fact]
+    public void Save_AddsToCache()
+    {
+        var quote = new Quote { Id = "q1_cache", ProjectId = "p1_cache", QuoteNumber = "Q-1" };
+        _repository.Save(quote);
+
+        var quotes = _repository.GetByProject("p1_cache");
+        Assert.Single(quotes);
+        Assert.Equal("Q-1", quotes.First().QuoteNumber);
     }
 }

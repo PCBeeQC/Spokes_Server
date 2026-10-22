@@ -1,0 +1,285 @@
+@using Spokes_Server.Aggregate
+@using Spokes_Server.Core.Constants
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Services.Accounting
+@inject Database Db
+@inject CompanyBillInboxService BillInboxService
+@inject IStringLocalizer<BusinessResources> BizLoc
+@inject IStringLocalizer<AppResources> Loc
+
+<MudDialog>
+    <DialogContent>
+        <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Class="mb-3" Icon="@Icons.Material.Filled.WarningAmber">
+            @BizLoc["Rejecting this draft bill will discard the unapproved draft liability from the ledger."]
+        </MudAlert>
+
+        <!-- Draft Bill Summary -->
+        <MudPaper Elevation="0" Outlined="true" Class="pa-3 mb-3" Style="background-color: var(--mud-palette-background-grey);">
+            <MudText Typo="Typo.caption" Color="Color.Secondary" Style="font-weight: 700; text-transform: uppercase;">
+                @BizLoc["Draft Bill to Reject"]
+            </MudText>
+            <MudGrid Spacing="1" Class="mt-1">
+                <MudItem xs="6">
+                    <MudText Typo="Typo.caption" Color="Color.Secondary">@BizLoc["Supplier"]</MudText>
+                    <MudText Typo="Typo.body2"><b>@DraftBill.SupplierName</b></MudText>
+                </MudItem>
+                <MudItem xs="6">
+                    <MudText Typo="Typo.caption" Color="Color.Secondary">@BizLoc["Amount"]</MudText>
+                    <MudText Typo="Typo.body2" Color="Color.Primary">
+                        <b>@DraftBill.Amount.ToString("C2") @(!string.IsNullOrEmpty(DraftBill.Currency) ? DraftBill.Currency : "CAD")</b>
+                    </MudText>
+                </MudItem>
+                <MudItem xs="6">
+                    <MudText Typo="Typo.caption" Color="Color.Secondary">@BizLoc["Invoice #"]</MudText>
+                    <MudText Typo="Typo.body2">@(!string.IsNullOrEmpty(DraftBill.InvoiceNumber) ? DraftBill.InvoiceNumber : "—")</MudText>
+                </MudItem>
+                <MudItem xs="6">
+                    <MudText Typo="Typo.caption" Color="Color.Secondary">@BizLoc["Date"]</MudText>
+                    <MudText Typo="Typo.body2">@DraftBill.Date.ToShortDateString()</MudText>
+                </MudItem>
+            </MudGrid>
+        </MudPaper>
+
+        <!-- Rejection Type Selection -->
+        <MudRadioGroup T="string" Value="@_rejectionType" ValueChanged="OnRejectionTypeChanged" Class="d-flex flex-column gap-2 mb-3">
+            <MudRadio T="string" Value="@("duplicate")" Color="Color.Primary">
+                <b>@BizLoc["This draft is a duplicate of a bill already entered in Spokes"]</b>
+            </MudRadio>
+
+            @if (_rejectionType == "duplicate")
+            {
+                <div class="ml-7 mb-2">
+                    @if (_candidateDuplicateBills.Count > 0)
+                    {
+                        <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-1 d-block">
+                            @BizLoc["Select the matching existing bill:"]
+                        </MudText>
+                        <MudRadioGroup T="string" @bind-Value="_selectedDuplicateBillId" Class="d-flex flex-column gap-1">
+                            @foreach (var candidate in _candidateDuplicateBills)
+                            {
+                                <MudRadio T="string" Value="@candidate.Id" Color="Color.Secondary" Dense="true">
+                                    <span style="font-size: 0.85rem;">
+                                        <b>@candidate.SupplierName</b> &bull; @candidate.Amount.ToString("C2")
+                                        (@(!string.IsNullOrWhiteSpace(candidate.InvoiceNumber) ? $"#{candidate.InvoiceNumber}" : candidate.Description), @candidate.Date.ToShortDateString())
+                                        <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined"
+                                                 Color="@(candidate.Status == BillStatus.Paid ? Color.Success : (candidate.AmountPaid > 0 ? Color.Warning : Color.Default))"
+                                                 Style="height: 18px; font-size: 0.65rem; padding: 0 4px; margin-left: 4px;">
+                                            @candidate.Status
+                                        </MudChip>
+                                    </span>
+                                </MudRadio>
+                            }
+                        </MudRadioGroup>
+                    }
+                    else
+                    {
+                        <MudAlert Severity="Severity.Info" Dense="true" Class="mb-2" Elevation="0">
+                            @BizLoc["No automatic duplicate candidate detected. You can search and link an existing bill below:"]
+                        </MudAlert>
+                    }
+
+                    <div class="mt-2">
+                        <MudButton Variant="Variant.Text" Color="Color.Primary" Size="Size.Small"
+                                   StartIcon="@Icons.Material.Filled.Search" OnClick="@(() => _showSearchBill = !_showSearchBill)">
+                            @(_showSearchBill ? BizLoc["Hide bill search"].Value : BizLoc["Search other existing bills in Spokes..."].Value)
+                        </MudButton>
+                    </div>
+
+                    @if (_showSearchBill)
+                    {
+                        <div class="mt-2 pa-2 mud-background-gray rounded">
+                            <MudTextField @bind-Value="_searchQuery" Placeholder="@BizLoc["Search supplier, invoice #, amount..."]" Immediate="true"
+                                          Variant="Variant.Outlined" Margin="Margin.Dense" Adornment="Adornment.Start"
+                                          AdornmentIcon="@Icons.Material.Filled.Search" Clearable="true" Class="mb-2" />
+                            <MudTable T="Bill" Items="FilteredSearchBills" Dense="true" Hover="true" FixedHeader="true" Height="180px"
+                                      SelectedItem="_searchedBill" SelectedItemChanged="@((Bill? b) => OnSearchedBillSelected(b))">
+                                <HeaderContent>
+                                    <MudTh>@BizLoc["Supplier"]</MudTh>
+                                    <MudTh>@BizLoc["Invoice #"]</MudTh>
+                                    <MudTh>@BizLoc["Date"]</MudTh>
+                                    <MudTh>@BizLoc["Amount"]</MudTh>
+                                    <MudTh>@BizLoc["Status"]</MudTh>
+                                </HeaderContent>
+                                <RowTemplate>
+                                    <MudTd DataLabel="Supplier"><b>@context.SupplierName</b></MudTd>
+                                    <MudTd DataLabel="Invoice #">@(!string.IsNullOrEmpty(context.InvoiceNumber) ? context.InvoiceNumber : "—")</MudTd>
+                                    <MudTd DataLabel="Date">@context.Date.ToShortDateString()</MudTd>
+                                    <MudTd DataLabel="Amount">@context.Amount.ToString("C2")</MudTd>
+                                    <MudTd DataLabel="Status">@context.Status</MudTd>
+                                </RowTemplate>
+                                <NoRecordsContent>
+                                    <div class="pa-2 text-center text-muted">
+                                        <MudText Typo="Typo.caption">@BizLoc["No matching bills found."]</MudText>
+                                    </div>
+                                </NoRecordsContent>
+                            </MudTable>
+                        </div>
+                    }
+
+                    @if (!string.IsNullOrEmpty(Email?.MatchedAttachmentPath) || Email?.Attachments.Count > 0)
+                    {
+                        <MudCheckBox @bind-Value="_attachDocumentToExisting" Color="Color.Primary" Dense="true" Class="mt-2">
+                            <span style="font-size: 0.85rem;">@BizLoc["Attach invoice document from email to the existing bill"]</span>
+                        </MudCheckBox>
+                    }
+                </div>
+            }
+
+            <MudRadio T="string" Value="@("discard")" Color="Color.Error">
+                <b>@BizLoc["Invalid bill / discard draft (not a duplicate)"]</b>
+            </MudRadio>
+
+            @if (_rejectionType == "discard")
+            {
+                <div class="ml-7 mb-2">
+                    <MudTextField @bind-Value="_rejectionReason" Label="@BizLoc["Reason for Rejection (Optional)"]"
+                                  Placeholder="@BizLoc["e.g. Price quote, payment confirmation, spam, or personal expense"]"
+                                  Variant="Variant.Outlined" Margin="Margin.Dense" Lines="2" />
+                    <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mt-1 d-block">
+                        @BizLoc["The draft bill will be permanently removed. If this email has no other drafts, the email will be marked as Dismissed."]
+                    </MudText>
+                </div>
+            }
+        </MudRadioGroup>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">@Loc["Cancel"]</MudButton>
+        <MudButton Color="Color.Error" Variant="Variant.Filled"
+                   StartIcon="@Icons.Material.Filled.Cancel"
+                   OnClick="Submit"
+                   Disabled="@(_rejectionType == "duplicate" && string.IsNullOrEmpty(_selectedDuplicateBillId))">
+            @BizLoc["Reject Draft"]
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
+
+    [Parameter] public Bill DraftBill { get; set; } = default!;
+    [Parameter] public EmailMessage? Email { get; set; }
+
+    private string _rejectionType = "duplicate";
+    private string? _selectedDuplicateBillId;
+    private bool _attachDocumentToExisting = true;
+    private string _rejectionReason = "";
+
+    private List<Bill> _candidateDuplicateBills = [];
+    private List<Bill> _allActiveBills = [];
+    private bool _showSearchBill = false;
+    private string _searchQuery = "";
+    private Bill? _searchedBill;
+
+    protected override void OnInitialized()
+    {
+        _candidateDuplicateBills = BillInboxService.GetSameSupplierSameAmountBills(DraftBill);
+
+        // Check if there is an active bill matching the exact invoice number as well
+        if (!string.IsNullOrWhiteSpace(DraftBill.InvoiceNumber))
+        {
+            var cleanInv = DraftBill.InvoiceNumber.Trim();
+            var invMatches = Db.Bills.GetAll()
+                .Where(b => b.Id != DraftBill.Id &&
+                            b.Status != BillStatus.Void &&
+                            b.Status != BillStatus.AwaitingApproval &&
+                            !string.IsNullOrWhiteSpace(b.InvoiceNumber) &&
+                            b.InvoiceNumber.Trim().Equals(cleanInv, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            foreach (var match in invMatches)
+            {
+                if (!_candidateDuplicateBills.Any(c => c.Id == match.Id))
+                {
+                    _candidateDuplicateBills.Add(match);
+                }
+            }
+        }
+
+        // Also check if the email already has matched duplicate bills in linked bill IDs
+        if (Email != null && Email.LinkedBillIds.Count > 0)
+        {
+            foreach (var id in Email.LinkedBillIds)
+            {
+                if (id != DraftBill.Id && !_candidateDuplicateBills.Any(c => c.Id == id))
+                {
+                    var existing = Db.Bills.GetById(id);
+                    if (existing != null && existing.Status != BillStatus.AwaitingApproval && existing.Status != BillStatus.Void)
+                    {
+                        _candidateDuplicateBills.Add(existing);
+                    }
+                }
+            }
+        }
+
+        if (_candidateDuplicateBills.Count > 0)
+        {
+            _rejectionType = "duplicate";
+            _selectedDuplicateBillId = _candidateDuplicateBills[0].Id;
+        }
+        else
+        {
+            _rejectionType = "discard";
+        }
+
+        _allActiveBills = Db.Bills.GetAll()
+            .Where(b => b.Id != DraftBill.Id && b.Status != BillStatus.Void && b.Status != BillStatus.AwaitingApproval)
+            .OrderByDescending(b => b.Date)
+            .ToList();
+    }
+
+    private void OnRejectionTypeChanged(string newType)
+    {
+        _rejectionType = newType;
+        if (_rejectionType == "duplicate" && string.IsNullOrEmpty(_selectedDuplicateBillId) && _candidateDuplicateBills.Count > 0)
+        {
+            _selectedDuplicateBillId = _candidateDuplicateBills[0].Id;
+        }
+    }
+
+    private IEnumerable<Bill> FilteredSearchBills
+    {
+        get
+        {
+            if (string.IsNullOrWhiteSpace(_searchQuery))
+            {
+                return _allActiveBills.Take(20);
+            }
+
+            return _allActiveBills.Where(b =>
+                b.SupplierName.Contains(_searchQuery, StringComparison.OrdinalIgnoreCase) ||
+                (!string.IsNullOrEmpty(b.InvoiceNumber) && b.InvoiceNumber.Contains(_searchQuery, StringComparison.OrdinalIgnoreCase)) ||
+                (!string.IsNullOrEmpty(b.Description) && b.Description.Contains(_searchQuery, StringComparison.OrdinalIgnoreCase)) ||
+                b.Amount.ToString("F2").Contains(_searchQuery, StringComparison.OrdinalIgnoreCase))
+                .Take(20);
+        }
+    }
+
+    private void OnSearchedBillSelected(Bill? bill)
+    {
+        _searchedBill = bill;
+        if (bill != null)
+        {
+            if (!_candidateDuplicateBills.Any(c => c.Id == bill.Id))
+            {
+                _candidateDuplicateBills.Add(bill);
+            }
+            _selectedDuplicateBillId = bill.Id;
+            _rejectionType = "duplicate";
+        }
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+
+    private void Submit()
+    {
+        var options = new RejectDraftBillOptions
+        {
+            IsDuplicate = _rejectionType == "duplicate",
+            DuplicateOfBillId = _rejectionType == "duplicate" ? _selectedDuplicateBillId : null,
+            RejectionReason = _rejectionType == "discard" ? _rejectionReason : null,
+            AttachDocumentToExistingBill = _attachDocumentToExisting
+        };
+        MudDialog.Close(DialogResult.Ok(options));
+    }
+}

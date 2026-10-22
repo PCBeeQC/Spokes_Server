@@ -5,12 +5,13 @@ using Spokes_Server.Core.Models.Projects;
 using Spokes_Server.Core.Models.Accounting;
 using Spokes_Server.Core.Models.HR;
 
+using System;
+using System.Collections.Generic;
+using System.Linq;
 using Spokes_Server.Core.Data;
+using Spokes_Server.Core.Models.Common;
 
-
-
-
-public class ChatMessage : IDataEntity
+public class ChatMessage : IDataEntity, IHasAssociatedFiles
 {
     public string Id { get; set; } = Guid.NewGuid().ToString();
 
@@ -47,11 +48,13 @@ public class ChatMessage : IDataEntity
 
     /// <summary>
     /// Type of the message. Default is "Text". Other options: "CallInvite"
+    /// <summary>
+    /// Type of message: Text, CallInvite, etc.
     /// </summary>
-    public string MessageType { get; set; } = "Text";
+    public string MessageType { get; set; } = ChatMessageType.Text;
 
     /// <summary>
-    /// Metadata related to the call if MessageType == "CallInvite" 
+    /// Metadata related to the call if MessageType == ChatMessageType.CallInvite (Active, Joined, Declined, Ended)
     /// </summary>
     public string CallStatus { get; set; } = string.Empty;
 
@@ -146,9 +149,14 @@ public class ChatMessage : IDataEntity
             yield return SenderId;
         }
     }
+
+    public IEnumerable<string> GetAssociatedFilePaths()
+    {
+        return Attachments?.Select(a => a.FilePath).Where(p => !string.IsNullOrWhiteSpace(p)) ?? Enumerable.Empty<string>();
+    }
 }
 
-public class ChatAttachment
+public class ChatAttachment : IFileAttachment
 {
     public string Id { get; set; } = Guid.NewGuid().ToString();
     public string FileName { get; set; } = string.Empty;
@@ -171,9 +179,13 @@ public class ChatAttachment
             {
                 return FilePath.Replace("/spokesapi/files/", "/spokesapi/files/thumb/");
             }
-            else if (FilePath.StartsWith("/internal/attachments/"))
+            if (FilePath.StartsWith("/internal/attachments/"))
             {
                 return FilePath.Replace("/internal/attachments/", "/internal/attachments/thumb/");
+            }
+            if (FilePath.StartsWith("/spokesapi/attachments/"))
+            {
+                return FilePath.Replace("/spokesapi/attachments/", "/spokesapi/attachments/thumb/");
             }
             
             return FilePath;
@@ -188,6 +200,22 @@ public static class ChatChannelType
     public const string Direct = "Direct";
     public const string General = "General";
     public const string Group = "Group";
+}
+
+public static class ChatMessageType
+{
+    public const string Text = "Text";
+    public const string CallInvite = "CallInvite";
+    public static readonly string[] All = [Text, CallInvite];
+}
+
+public static class CallStatus
+{
+    public const string Active = "Active";
+    public const string Joined = "Joined";
+    public const string Declined = "Declined";
+    public const string Ended = "Ended";
+    public static readonly string[] All = [Active, Joined, Declined, Ended];
 }
 
 

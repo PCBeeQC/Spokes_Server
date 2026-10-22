@@ -2,6 +2,7 @@ using System;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Components.Server.Circuits;
+using Microsoft.Extensions.Logging;
 
 namespace Spokes_Server.Core.Services.Communication.Voice;
 
@@ -14,10 +15,12 @@ namespace Spokes_Server.Core.Services.Communication.Voice;
 public class VoiceCircuitHandler : CircuitHandler
 {
     private readonly GlobalVoiceService _globalVoiceService;
+    private readonly ILogger<VoiceCircuitHandler>? _logger;
 
-    public VoiceCircuitHandler(GlobalVoiceService globalVoiceService)
+    public VoiceCircuitHandler(GlobalVoiceService globalVoiceService, ILogger<VoiceCircuitHandler>? logger = null)
     {
         _globalVoiceService = globalVoiceService;
+        _logger = logger;
     }
 
     public override Task OnConnectionDownAsync(Circuit circuit, CancellationToken cancellationToken)
@@ -45,7 +48,7 @@ public class VoiceCircuitHandler : CircuitHandler
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[VoiceCircuitHandler] Error syncing user on connection up: {ex.Message}");
+            _logger?.LogError(ex, "[VoiceCircuitHandler] Error syncing user on connection up: {Message}", ex.Message);
         }
 
         return base.OnConnectionUpAsync(circuit, cancellationToken);

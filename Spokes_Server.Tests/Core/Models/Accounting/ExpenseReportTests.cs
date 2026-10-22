@@ -20,8 +20,8 @@ public class ExpenseReportTests
         Assert.Equal(DateTime.Today, report.DateCreated);
         Assert.Null(report.DateSubmitted);
         Assert.Null(report.DatePaid);
-        Assert.NotNull(report.Items);
-        Assert.Empty(report.Items);
+        Assert.NotNull(report.LineItems);
+        Assert.Empty(report.LineItems);
         Assert.Equal(0m, report.TotalAmount);
         Assert.Equal(ExpenseReportStatus.Draft, report.Status);
     }
@@ -80,9 +80,9 @@ public class ExpenseReportTests
     {
         // Arrange
         var report = new ExpenseReport();
-        report.Items.Add(new ExpenseItem { Amount = 120.50m, IsKilometrage = false });
-        report.Items.Add(new ExpenseItem { IsKilometrage = true, Kilometers = 100m, KilometrageRate = 0.55m }); // 55.00
-        report.Items.Add(new ExpenseItem { Amount = 24.50m, IsKilometrage = false });
+        report.LineItems.Add(new ExpenseItem { Amount = 120.50m, IsKilometrage = false });
+        report.LineItems.Add(new ExpenseItem { IsKilometrage = true, Kilometers = 100m, KilometrageRate = 0.55m }); // 55.00
+        report.LineItems.Add(new ExpenseItem { Amount = 24.50m, IsKilometrage = false });
 
         // Act & Assert
         // 120.50 + 55.00 + 24.50 = 200.00
@@ -180,4 +180,75 @@ public class ExpenseReportTests
         Assert.Equal("Submitted", ExpenseReportStatus.Submitted);
         Assert.Equal("Paid", ExpenseReportStatus.Paid);
     }
+
+#pragma warning disable CS0618
+    [Fact]
+    public void ExpenseReport_LineItems_And_Items_AreSynchronized()
+    {
+        var report = new ExpenseReport();
+        var item = new ExpenseItem { Description = "Travel", Amount = 75m };
+
+        report.LineItems.Add(item);
+        Assert.Single(report.Items);
+        Assert.Same(item, report.Items[0]);
+        Assert.Equal(75m, report.TotalAmount);
+
+        var item2 = new ExpenseItem { Description = "Meal", Amount = 25m };
+        report.Items.Add(item2);
+        Assert.Equal(2, report.LineItems.Count);
+        Assert.Equal(100m, report.TotalAmount);
+    }
+
+    [Fact]
+    public void ExpenseReport_JsonDeserialization_SupportsLegacyItemsProperty()
+    {
+        const string legacyJson = """
+        {
+            "Id": "exp-1",
+            "Items": [
+                { "Description": "Hotel", "Amount": 120 }
+            ]
+        }
+        """;
+
+        var report = System.Text.Json.JsonSerializer.Deserialize<ExpenseReport>(legacyJson);
+        Assert.NotNull(report);
+        Assert.Single(report.LineItems);
+        Assert.Equal("Hotel", report.LineItems[0].Description);
+        Assert.Equal("Hotel", report.Items[0].Description);
+        Assert.Equal(120m, report.TotalAmount);
+    }
+
+    [Fact]
+    public void ExpenseReport_JsonDeserialization_SupportsLineItemsProperty()
+    {
+        const string modernJson = """
+        {
+            "Id": "exp-2",
+            "LineItems": [
+                { "Description": "Flight", "Amount": 300 }
+            ]
+        }
+        """;
+
+        var report = System.Text.Json.JsonSerializer.Deserialize<ExpenseReport>(modernJson);
+        Assert.NotNull(report);
+        Assert.Single(report.LineItems);
+        Assert.Equal("Flight", report.LineItems[0].Description);
+        Assert.Equal("Flight", report.Items[0].Description);
+        Assert.Equal(300m, report.TotalAmount);
+    }
+#pragma warning restore CS0618
+
+    [Fact]
+    public void ExpenseReport_JsonSerialization_WritesLineItemsProperty()
+    {
+        var report = new ExpenseReport { Id = "exp-3" };
+        report.LineItems.Add(new ExpenseItem { Description = "Taxi", Amount = 40m });
+
+        var json = System.Text.Json.JsonSerializer.Serialize(report);
+        Assert.Contains("\"LineItems\"", json);
+        Assert.DoesNotContain("\"LegacyItems\"", json);
+    }
 }
+

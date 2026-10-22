@@ -1,8 +1,8 @@
-@inject ChatService ChatService
+@inject ChatSecurityService ChatSecurityService
 @inject ScopedKeystoreService ScopedKeystore
 
 <div style="position: relative;">
-    <MudTextField @bind-Value="_searchQuery" Placeholder="Search messages..." Variant="Variant.Outlined"
+    <MudTextField @bind-Value="_searchQuery" Placeholder="@Loc["Search messages..."]" Variant="Variant.Outlined"
         Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search"
         DebounceInterval="500" Margin="Margin.Dense"
         OnDebounceIntervalElapsed="OnSearchChanged"
@@ -15,17 +15,17 @@
         <MudPaper Elevation="4" Class="pa-0" Style="position: absolute; top: 100%; right: 0; z-index: 100; min-width: 360px; max-width: 480px; max-height: 400px; overflow-y: auto; margin-top: 4px; border-radius: 8px;">
             <MudList T="string" Dense="true" Class="py-1">
                 <MudText Typo="Typo.caption" Color="Color.Secondary" Class="px-3 py-1">
-                    @_searchResults.Count result@(_searchResults.Count != 1 ? "s" : "") found
+                    @string.Format(Loc["{0} results found"].Value, _searchResults.Count)
                 </MudText>
                 @foreach (var msg in _searchResults)
                 {
                     var sender = Employees.FirstOrDefault(e => e.Id == msg.SenderId);
-                    var senderName = sender?.FullName ?? "Unknown";
+                    var senderName = sender?.FullName ?? Loc["Unknown"].Value;
                     var timeStr = msg.SentAt.ToLocalTime().ToString("MMM d, yyyy h:mm tt");
                     var content = string.IsNullOrEmpty(msg.Content)
-                        ? "[Attachment]"
+                        ? Loc["[Attachment]"].Value
                         : msg.Content;
-                    content = System.Text.RegularExpressions.Regex.Replace(content, @"!\[gif\]\([^)]+\)|\[gif\]", "Sent a GIF", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                    content = System.Text.RegularExpressions.Regex.Replace(content, @"!\[gif\]\([^)]+\)|\[gif\]", Loc["Sent a GIF"].Value, System.Text.RegularExpressions.RegexOptions.IgnoreCase);
                     content = content.Length > 80 ? content[..77] + "..." : content;
 
                     <MudListItem T="string" Dense="true" OnClick="@(() => SelectResult(msg.Id))">
@@ -47,7 +47,7 @@
     {
         <MudPaper Elevation="4" Class="pa-3" Style="position: absolute; top: 100%; right: 0; z-index: 100; min-width: 280px; margin-top: 4px; border-radius: 8px;">
             <MudText Typo="Typo.body2" Color="Color.Secondary" Align="Align.Center">
-                No messages found
+                @Loc["No messages found"]
             </MudText>
         </MudPaper>
     }
@@ -81,7 +81,7 @@
         }
 
         string? privateKey = ScopedKeystore.IsUnlocked ? ScopedKeystore.GetPrivateKey() : null;
-        _searchResults = await ChatService.SecureSearchMessagesAsync(ChannelId, query, CurrentUserId, privateKey);
+        _searchResults = await ChatSecurityService.SecureSearchMessagesAsync(ChannelId, query, CurrentUserId, privateKey);
     }
 
     private void ClearSearch()

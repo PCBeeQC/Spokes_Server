@@ -70,7 +70,7 @@
                     </MudTd>
                     <MudTd>
                         <MudTextField Value="@context.Note" ValueChanged="@((string v) => UpdateNote(context, v))"
-                            Placeholder="Specific focus..." Margin="Margin.Dense" DisableUnderLine="true"
+                            Placeholder="Specific focus..." Margin="Margin.Dense" Underline="false"
                             DebounceInterval="500" Disabled="@(!CanEdit)" />
                     </MudTd>
                     <MudTd>
@@ -134,7 +134,7 @@
     {
         if (CurrentEmployee == null) return;
 
-        CurrentPlan = Db.WeeklyPlans.GetByEmployeeAndWeek(CurrentEmployee.Id, CurrentYear, CurrentWeek);
+        CurrentPlan = Db.WeeklyPlans.GetOrStubByEmployeeAndWeek(CurrentEmployee.Id, CurrentYear, CurrentWeek);
 
         // Ensure name is up to date
         CurrentPlan.EmployeeName = $"{CurrentEmployee.FirstName} {CurrentEmployee.LastName}";
@@ -169,36 +169,36 @@
         {
             entry.ProjectId = proj.Id;
         }
-        _ = AutoSave();
+        AutoSave();
     }
     
     private void UpdateHours(PlanEntry entry, decimal hours)
     {
         entry.Hours = hours;
-        _ = AutoSave();
+        AutoSave();
     }
 
     private void UpdateNote(PlanEntry entry, string note)
     {
         entry.Note = note;
-        _ = AutoSave();
+        AutoSave();
     }
 
     private void AddEntry()
     {
         if (!CanEdit) return;
         CurrentPlan.Entries.Add(new PlanEntry { Hours = 4 }); // Default 4h block
-        _ = AutoSave();
+        AutoSave();
     }
 
     private void RemoveEntry(PlanEntry entry)
     {
         if (!CanEdit) return;
         CurrentPlan.Entries.Remove(entry);
-        _ = AutoSave();
+        AutoSave();
     }
 
-    private async Task AutoSave()
+    private void AutoSave()
     {
         IsSaving = true;
         StateHasChanged();

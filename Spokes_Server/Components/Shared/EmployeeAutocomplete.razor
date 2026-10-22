@@ -1,5 +1,10 @@
-@inject Database Db
-@using Spokes_Server.Core.Services.Core
+@using Spokes_Server.Core.Data.Repositories.HR
+@using Spokes_Server.Core.Configuration
+@using Spokes_Server.Core.Services.Identity
+@using Spokes_Server.Core.Services.Security
+@inject EmployeeRepository EmployeeRepo
+@inject UserService UserService
+@inject IUserPrivacyService PrivacyService
 
 <MudAutocomplete @ref="_autocomplete"
                  T="Employee"
@@ -8,7 +13,7 @@
                  SearchFunc="@InternalSearchFunc"
                  ToStringFunc="@(e => e?.FullName ?? "")"
                  Label="@Label"
-                 Placeholder="@Placeholder"
+                 Placeholder="@EffectivePlaceholder"
                  Variant="@Variant"
                  Margin="@Margin"
                  Clearable="@Clearable"
@@ -43,6 +48,8 @@
     [Parameter] public bool IncludeInactive { get; set; } = false;
     [Parameter] public bool IncludeSystemUsers { get; set; } = false;
     [Parameter] public bool ResetOnSelect { get; set; } = false;
+    [Parameter] public bool ExcludeCurrentUser { get; set; } = false;
+    [Parameter] public string? CurrentUserId { get; set; }
     [Parameter] public string Label { get; set; } = "Add User";
     [Parameter] public string? Placeholder { get; set; }
     [Parameter] public Variant Variant { get; set; } = Variant.Outlined;
@@ -54,6 +61,23 @@
     [Parameter] public bool Dense { get; set; } = false;
     [Parameter] public string Class { get; set; } = "";
     [Parameter] public string Style { get; set; } = "";
+
+    private Employee? _currentUser;
+
+    private string? EffectivePlaceholder =>
+        !string.IsNullOrEmpty(Placeholder)
+            ? Placeholder
+            : (PrivacyService.GetPrivacyConfig().DiscoveryMethod switch
+            {
+                UserDiscoveryMethod.ExactEmailOnly => Loc["Enter full email address..."].Value,
+                UserDiscoveryMethod.ExactEmailOrUsername => Loc["Enter email or full name..."].Value,
+                _ => null
+            });
+
+    protected override async Task OnInitializedAsync()
+    {
+        _currentUser = await UserService.GetEmployeeAsync();
+    }
 
     public Task ClearAsync() => _autocomplete != null ? _autocomplete.ClearAsync() : Task.CompletedTask;
 
@@ -74,24 +98,19 @@
         }
     }
 
-    private Task<IEnumerable<Employee>> InternalSearchFunc(string value, CancellationToken ct)
+    private async Task<IEnumerable<Employee>> InternalSearchFunc(string value, CancellationToken ct)
     {
         if (SearchFunc != null)
         {
-            return SearchFunc(value, ct);
+            return await SearchFunc(value, ct);
         }
 
-        var source = Employees ?? (IncludeInactive ? Db.Employees.GetAll() : Db.Employees.GetActiveEmployees());
-
-        if (!IncludeInactive)
+        if (_currentUser == null)
         {
-            source = source.Where(e => e.IsActive && !e.IsSuspended && !e.IsBanned);
+            _currentUser = await UserService.GetEmployeeAsync();
         }
 
-        if (!IncludeSystemUsers)
-        {
-            source = source.Where(e => !e.IsSystem && e.Id != AccountDeletionService.SystemDeletedUserId);
-        }
+        var source = Employees ?? (IncludeInactive ? EmployeeRepo.GetAll() : EmployeeRepo.GetActiveEmployees());
 
         if (ExcludedIds != null && ExcludedIds.Any())
         {
@@ -99,18 +118,15 @@
             source = source.Where(e => !excludedSet.Contains(e.Id));
         }
 
-        if (string.IsNullOrWhiteSpace(value))
+        if (ExcludeCurrentUser)
         {
-            return Task.FromResult(source.OrderBy(e => e.FullName).Take(20).AsEnumerable());
+            var effectiveCurrentUserId = !string.IsNullOrEmpty(CurrentUserId) ? CurrentUserId : _currentUser?.Id;
+            if (!string.IsNullOrEmpty(effectiveCurrentUserId))
+            {
+                source = source.Where(e => e.Id != effectiveCurrentUserId);
+            }
         }
 
-        var filtered = source.Where(e =>
-            e.FullName.Contains(value, StringComparison.OrdinalIgnoreCase) ||
-            (e.Position?.Contains(value, StringComparison.OrdinalIgnoreCase) ?? false) ||
-            (e.Email?.Contains(value, StringComparison.OrdinalIgnoreCase) ?? false))
-            .OrderBy(e => e.FullName)
-            .Take(20);
-
-        return Task.FromResult(filtered.AsEnumerable());
+        return await PrivacyService.SearchDiscoverableEmployeesAsync(_currentUser, value, source, 20);
     }
 }

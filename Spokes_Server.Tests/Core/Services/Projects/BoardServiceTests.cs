@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging;
 using Moq;
 using Spokes_Server.Core.Data;
 using Spokes_Server.Core.Data.Repositories.Projects;
+using Spokes_Server.Core.Helpers;
 using Spokes_Server.Core.Models.Projects;
 using Spokes_Server.Core.Services.Projects;
 
@@ -305,24 +306,43 @@ public class BoardServiceTests : IDisposable
         }
 
         [Fact]
-        public void UpdateCardProperty_WhenCardNotFound_ReturnsSafely()
+        public void UpdateCardProperty_WhenCardNotFound_ReturnsFailure()
         {
-            var exception = Record.Exception(() => _service.UpdateCardProperty("non-existent-card-id", "prop-1", "value"));
-            Assert.Null(exception);
+            var result = _service.UpdateCardProperty("non-existent-card-id", "prop-1", "value");
+            Assert.False(result.IsSuccess);
+            Assert.Equal("CARD_NOT_FOUND", result.Code);
         }
 
         [Fact]
-        public void AddComment_WhenCardNotFound_ReturnsSafely()
+        public void AddComment_WhenCardNotFound_ReturnsFailure()
         {
-            var exception = Record.Exception(() => _service.AddComment("non-existent-card-id", "user-1", "comment"));
-            Assert.Null(exception);
+            var result = _service.AddComment("non-existent-card-id", "user-1", "comment");
+            Assert.False(result.IsSuccess);
+            Assert.Equal("CARD_NOT_FOUND", result.Code);
         }
 
         [Fact]
-        public void LogActivity_WhenCardNotFound_ReturnsSafely()
+        public void LogActivity_WhenCardNotFound_ReturnsFailure()
         {
-            var exception = Record.Exception(() => _service.LogActivity("non-existent-card-id", "user-1", "action", "details"));
-            Assert.Null(exception);
+            var result = _service.LogActivity("non-existent-card-id", "user-1", "action", "details");
+            Assert.False(result.IsSuccess);
+            Assert.Equal("CARD_NOT_FOUND", result.Code);
+        }
+
+        [Fact]
+        public void UpdateCard_WhenCardNotFound_ReturnsFailure()
+        {
+            var result = _service.UpdateCard(new BoardCard { Id = "non-existent-card-id" });
+            Assert.False(result.IsSuccess);
+            Assert.Equal("CARD_NOT_FOUND", result.Code);
+        }
+
+        [Fact]
+        public void DeleteCard_WhenCardNotFound_ReturnsFailure()
+        {
+            var result = _service.DeleteCard("non-existent-card-id");
+            Assert.False(result.IsSuccess);
+            Assert.Equal("CARD_NOT_FOUND", result.Code);
         }
 
         [Fact]
@@ -332,8 +352,9 @@ public class BoardServiceTests : IDisposable
             var card = _service.CreateCard(board.Id, "Initial Card");
 
             card.Title = "Updated Card Title";
-            _service.UpdateCard(card);
+            var result = _service.UpdateCard(card);
 
+            Assert.True(result.IsSuccess);
             var reloaded = _boardCards.GetById(card.Id);
             Assert.NotNull(reloaded);
             Assert.Equal("Updated Card Title", reloaded.Title);

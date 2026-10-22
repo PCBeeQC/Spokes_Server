@@ -23,9 +23,6 @@ public class ChatChannelRepository : JsonRepository<ChatChannel>
         }
     }
 
-    /// <summary>
-    /// Get all channels of a specific type.
-    /// </summary>
     public List<ChatChannel> GetByType(string channelType) =>
         _cache.Values
             .Where(c => c.ChannelType == channelType)
@@ -38,6 +35,7 @@ public class ChatChannelRepository : JsonRepository<ChatChannel>
     /// </summary>
     public ChatChannel GetOrCreateDefaultGeneral()
     {
+        EnsureLoaded();
         var general = _cache.Values.FirstOrDefault(c => c.IsDefaultGeneral);
         if (general != null)
             return general;
@@ -58,17 +56,14 @@ public class ChatChannelRepository : JsonRepository<ChatChannel>
         return general;
     }
 
-    /// <summary>
-    /// Get channel for a specific project. Returns null if not found.
-    /// </summary>
-    public ChatChannel? GetProjectChannel(string projectId) =>
-        _cache.Values
+    public ChatChannel? GetProjectChannel(string projectId)
+    {
+        EnsureLoaded();
+        return _cache.Values
             .FirstOrDefault(c => c.ChannelType == ChatChannelType.Project &&
                                   c.LinkedEntityId == projectId);
+    }
 
-    /// <summary>
-    /// Get or create a channel for a project.
-    /// </summary>
     public ChatChannel GetOrCreateProjectChannel(string projectId, string projectName)
     {
         var channel = GetProjectChannel(projectId);
@@ -89,17 +84,14 @@ public class ChatChannelRepository : JsonRepository<ChatChannel>
         return channel;
     }
 
-    /// <summary>
-    /// Get channel for a specific team.
-    /// </summary>
-    public ChatChannel? GetTeamChannel(string teamId) =>
-        _cache.Values
+    public ChatChannel? GetTeamChannel(string teamId)
+    {
+        EnsureLoaded();
+        return _cache.Values
             .FirstOrDefault(c => c.ChannelType == ChatChannelType.Team &&
                                   c.LinkedEntityId == teamId);
+    }
 
-    /// <summary>
-    /// Get or create a channel for a team.
-    /// </summary>
     public ChatChannel GetOrCreateTeamChannel(string teamId, string teamName)
     {
         var channel = GetTeamChannel(teamId);
@@ -173,15 +165,15 @@ public class ChatChannelRepository : JsonRepository<ChatChannel>
         return channel;
     }
 
-    /// <summary>
-    /// Get all DM channels for a user.
-    /// </summary>
-    public List<ChatChannel> GetDirectChannelsForUser(string userId) =>
-        _cache.Values
+    public List<ChatChannel> GetDirectChannelsForUser(string userId)
+    {
+        EnsureLoaded();
+        return _cache.Values
             .Where(c => (c.ChannelType == ChatChannelType.Direct || c.ChannelType == ChatChannelType.Group) &&
                         (c.ParticipantIds.Contains(userId) || c.CreatedById == userId))
             .OrderByDescending(c => c.LastActivityAt)
             .ToList();
+    }
 
     /// <summary>
     /// Centralized, O(1) evaluation rule to check if a specific user can access a specific channel.
@@ -216,19 +208,15 @@ public class ChatChannelRepository : JsonRepository<ChatChannel>
         }
     }
 
-    /// <summary>
-    /// Get all channels a user has access to.
-    /// </summary>
-    public List<ChatChannel> GetChannelsForUser(string userId, List<string> userProjectIds, List<string> userTeamIds, bool isAdmin = false) =>
-        _cache.Values
+    public List<ChatChannel> GetChannelsForUser(string userId, List<string> userProjectIds, List<string> userTeamIds, bool isAdmin = false)
+    {
+        EnsureLoaded();
+        return _cache.Values
             .Where(c => EvaluateChannelAccessRule(c, userId, userProjectIds, userTeamIds, isAdmin))
             .OrderByDescending(c => c.LastActivityAt)
             .ToList();
+    }
 
-
-    /// <summary>
-    /// Update the last activity timestamp for a channel.
-    /// </summary>
     public void UpdateLastActivity(string channelId)
     {
         var channel = GetById(channelId);
@@ -239,18 +227,6 @@ public class ChatChannelRepository : JsonRepository<ChatChannel>
         }
     }
 
-    /// <summary>
-    /// Update the last activity timestamp for a channel asynchronously.
-    /// </summary>
-    public async Task UpdateLastActivityAsync(string channelId)
-    {
-        var channel = await GetByIdAsync(channelId);
-        if (channel != null)
-        {
-            channel.LastActivityAt = DateTime.UtcNow;
-            await SaveAsync(channel);
-        }
-    }
 
     /// <summary>
     /// Reconciles LastActivityAt against the latest actual message timestamp for all channels.
@@ -258,6 +234,7 @@ public class ChatChannelRepository : JsonRepository<ChatChannel>
     /// </summary>
     public void ReconcileChannelActivityTimestamps(ChatMessageRepository messageRepo)
     {
+        EnsureLoaded();
         foreach (var channel in _cache.Values)
         {
             var latestMsgTime = messageRepo.GetLatestMessageTimestamp(channel.Id);

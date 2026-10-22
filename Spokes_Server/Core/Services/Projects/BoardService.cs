@@ -1,5 +1,7 @@
 using System.Text.Json;
+using Microsoft.Extensions.Logging;
 using Spokes_Server.Core.Data.Repositories.Projects;
+using Spokes_Server.Core.Helpers;
 using Spokes_Server.Core.Models.Projects;
 
 namespace Spokes_Server.Core.Services.Projects;
@@ -9,12 +11,18 @@ public class BoardService
     private readonly BoardRepository _boards;
     private readonly BoardCardRepository _boardCards;
     private readonly BoardTemplateRepository _boardTemplates;
+    private readonly ILogger<BoardService>? _logger;
 
-    public BoardService(BoardRepository boards, BoardCardRepository boardCards, BoardTemplateRepository boardTemplates)
+    public BoardService(
+        BoardRepository boards,
+        BoardCardRepository boardCards,
+        BoardTemplateRepository boardTemplates,
+        ILogger<BoardService>? logger = null)
     {
         _boards = boards;
         _boardCards = boardCards;
         _boardTemplates = boardTemplates;
+        _logger = logger;
     }
 
     // --- BOARD OPERATIONS ---
@@ -102,13 +110,55 @@ public class BoardService
         return card;
     }
 
-    public void UpdateCard(BoardCard card)
+    public SpokesResult UpdateCard(BoardCard card)
+    {
+        if (card == null)
+        {
+            _logger?.LogWarning("UpdateCard failed: card cannot be null.");
+            return SpokesResult.Failure("Card cannot be null.", "INVALID_CARD");
+        }
+
+        if (string.IsNullOrWhiteSpace(card.Id))
+        {
+            _logger?.LogWarning("UpdateCard failed: card ID cannot be empty.");
+            return SpokesResult.Failure("Card ID cannot be empty.", "INVALID_CARD_ID");
+        }
+
+        var existing = _boardCards.GetById(card.Id);
+        if (existing == null)
+        {
+            _logger?.LogWarning("UpdateCard failed: card '{CardId}' not found.", card.Id);
+            return SpokesResult.Failure($"Card '{card.Id}' not found.", "CARD_NOT_FOUND");
+        }
+
+        return SaveCardDirect(card);
+    }
+
+    private SpokesResult SaveCardDirect(BoardCard card)
     {
         card.UpdatedAt = DateTime.Now;
         _boardCards.Save(card);
+        return SpokesResult.Success();
     }
 
-    public void DeleteCard(string cardId) => _boardCards.Delete(cardId);
+    public SpokesResult DeleteCard(string cardId)
+    {
+        if (string.IsNullOrWhiteSpace(cardId))
+        {
+            _logger?.LogWarning("DeleteCard failed: card ID cannot be empty.");
+            return SpokesResult.Failure("Card ID cannot be empty.", "INVALID_CARD_ID");
+        }
+
+        var existing = _boardCards.GetById(cardId);
+        if (existing == null)
+        {
+            _logger?.LogWarning("DeleteCard failed: card '{CardId}' not found.", cardId);
+            return SpokesResult.Failure($"Card '{cardId}' not found.", "CARD_NOT_FOUND");
+        }
+
+        _boardCards.Delete(cardId);
+        return SpokesResult.Success();
+    }
 
     // --- PROPERTY OPERATIONS ---
 
@@ -116,19 +166,40 @@ public class BoardService
     /// Update a specific property value for a card. 
     /// Handles logic like "if this is a select property, ensure the option exists" if needed.
     /// </summary>
-    public void UpdateCardProperty(string cardId, string propertyId, string value)
+    public SpokesResult UpdateCardProperty(string cardId, string propertyId, string value)
     {
+        if (string.IsNullOrWhiteSpace(cardId))
+        {
+            _logger?.LogWarning("UpdateCardProperty failed: card ID cannot be empty.");
+            return SpokesResult.Failure("Card ID cannot be empty.", "INVALID_CARD_ID");
+        }
+
         var card = _boardCards.GetById(cardId);
-        if (card == null) return;
+        if (card == null)
+        {
+            _logger?.LogWarning("UpdateCardProperty failed: card '{CardId}' not found.", cardId);
+            return SpokesResult.Failure($"Card '{cardId}' not found.", "CARD_NOT_FOUND");
+        }
 
         card.PropertyValues[propertyId] = value;
-        UpdateCard(card);
+        return SaveCardDirect(card);
     }
+
     // --- COMMENTS & ACTIVITY ---
-    public void AddComment(string cardId, string userId, string text)
+    public SpokesResult AddComment(string cardId, string userId, string text)
     {
+        if (string.IsNullOrWhiteSpace(cardId))
+        {
+            _logger?.LogWarning("AddComment failed: card ID cannot be empty.");
+            return SpokesResult.Failure("Card ID cannot be empty.", "INVALID_CARD_ID");
+        }
+
         var card = _boardCards.GetById(cardId);
-        if (card == null) return;
+        if (card == null)
+        {
+            _logger?.LogWarning("AddComment failed: card '{CardId}' not found.", cardId);
+            return SpokesResult.Failure($"Card '{cardId}' not found.", "CARD_NOT_FOUND");
+        }
 
         var comment = new BoardCardComment
         {
@@ -139,14 +210,33 @@ public class BoardService
         };
         card.Comments.Add(comment);
 
-        LogActivity(card.Id, userId, "commented", text);
-        UpdateCard(card);
+        var activity = new BoardCardActivity
+        {
+            CardId = cardId,
+            UserId = userId,
+            Action = "commented",
+            Details = text,
+            CreatedAt = DateTime.Now
+        };
+        card.ActivityLog.Insert(0, activity);
+
+        return SaveCardDirect(card);
     }
 
-    public void LogActivity(string cardId, string userId, string action, string details)
+    public SpokesResult LogActivity(string cardId, string userId, string action, string details)
     {
+        if (string.IsNullOrWhiteSpace(cardId))
+        {
+            _logger?.LogWarning("LogActivity failed: card ID cannot be empty.");
+            return SpokesResult.Failure("Card ID cannot be empty.", "INVALID_CARD_ID");
+        }
+
         var card = _boardCards.GetById(cardId);
-        if (card == null) return;
+        if (card == null)
+        {
+            _logger?.LogWarning("LogActivity failed: card '{CardId}' not found.", cardId);
+            return SpokesResult.Failure($"Card '{cardId}' not found.", "CARD_NOT_FOUND");
+        }
 
         var activity = new BoardCardActivity
         {
@@ -157,9 +247,8 @@ public class BoardService
             CreatedAt = DateTime.Now
         };
         card.ActivityLog.Insert(0, activity); // Newest first
-        UpdateCard(card);
+        return SaveCardDirect(card);
     }
-    // --- TEMPLATES & PORTABILITY ---
 
     // --- TEMPLATES & PORTABILITY ---
 
@@ -351,49 +440,51 @@ public class BoardService
 
     public Board? ImportBoardFromJson(string json, string ownerId = "")
     {
+        BoardExport? export;
         try
         {
-            var export = JsonSerializer.Deserialize<BoardExport>(json);
-            if (export?.Board == null) throw new Exception("Invalid Board JSON");
-
-            var oldBoard = export.Board;
-
-            // Create New Board (Clone)
-            var newBoard = oldBoard;
-            newBoard.Id = Guid.NewGuid().ToString();
-            newBoard.Title += " (Imported)";
-            newBoard.CreatedAt = DateTime.Now;
-            newBoard.UpdatedAt = DateTime.Now;
-            newBoard.OwnerId = ownerId;
-            newBoard.MemberIds = !string.IsNullOrEmpty(ownerId) ? [ownerId] : [];
-
-            _boards.Save(newBoard);
-
-            // Cards
-            if (export.Cards != null)
-            {
-                foreach (var card in export.Cards)
-                {
-                    card.Id = Guid.NewGuid().ToString();
-                    card.BoardId = newBoard.Id;
-
-                    if (card.Comments != null)
-                        card.Comments.ForEach(c => c.Id = Guid.NewGuid().ToString());
-
-                    if (card.ActivityLog != null)
-                        card.ActivityLog.ForEach(a => a.Id = Guid.NewGuid().ToString());
-
-                    _boardCards.Save(card);
-                }
-            }
-
-            return newBoard;
+            export = JsonSerializer.Deserialize<BoardExport>(json);
         }
-        catch (Exception ex)
+        catch (JsonException ex)
         {
-            Console.WriteLine($"Import Failed: {ex.Message}");
+            _logger?.LogError(ex, "Import board from JSON failed: {Message}", ex.Message);
             return null;
         }
+
+        if (export?.Board == null) return null;
+
+        var oldBoard = export.Board;
+
+        // Create New Board (Clone)
+        var newBoard = oldBoard;
+        newBoard.Id = Guid.NewGuid().ToString();
+        newBoard.Title += " (Imported)";
+        newBoard.CreatedAt = DateTime.Now;
+        newBoard.UpdatedAt = DateTime.Now;
+        newBoard.OwnerId = ownerId;
+        newBoard.MemberIds = !string.IsNullOrEmpty(ownerId) ? [ownerId] : [];
+
+        _boards.Save(newBoard);
+
+        // Cards
+        if (export.Cards != null)
+        {
+            foreach (var card in export.Cards)
+            {
+                card.Id = Guid.NewGuid().ToString();
+                card.BoardId = newBoard.Id;
+
+                if (card.Comments != null)
+                    card.Comments.ForEach(c => c.Id = Guid.NewGuid().ToString());
+
+                if (card.ActivityLog != null)
+                    card.ActivityLog.ForEach(a => a.Id = Guid.NewGuid().ToString());
+
+                _boardCards.Save(card);
+            }
+        }
+
+        return newBoard;
     }
 
     public class BoardExport

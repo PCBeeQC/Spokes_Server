@@ -1,10 +1,10 @@
 @page "/business/documents"
+@attribute [Authorize(Policy = AppPermissions.BusinessDocuments.View)]
 @using Spokes_Server.Core.Constants
 @inject Database Db
 @inject IDialogService DialogService
 @inject ISnackbar Snackbar
 @inject NavigationManager Nav
-@inject UserService UserService
 
 <PageTitle>Business Documents</PageTitle>
 
@@ -36,14 +36,14 @@
             <MudTd DataLabel="Name">@doc.Name</MudTd>
             <MudTd DataLabel="Created">@doc.CreatedAt.ToLocalTime().ToString("g")</MudTd>
             <MudTd DataLabel="Status">
-                <MudChip T="string" Size="Size.Small" Color="@(doc.Status == "Final" ? Color.Success : Color.Info)">
+                <MudChip T="string" Size="Size.Small" Color="@(doc.Status == ProjectDocumentStatus.Final ? Color.Success : Color.Info)">
                     @doc.Status
                 </MudChip>
             </MudTd>
             <MudTd>
                 <div class="d-flex gap-1">
                     <MudButton Variant="Variant.Outlined" Size="Size.Small" StartIcon="@Icons.Material.Filled.Visibility" OnClick="@(() => OpenViewer(doc))">View</MudButton>
-                    @if (CanEdit && doc.Status != "Final")
+                    @if (CanEdit && doc.Status != ProjectDocumentStatus.Final)
                     {
                         <MudTooltip Text="Rename">
                             <MudIconButton Icon="@Icons.Material.Filled.Edit" Size="Size.Small"
@@ -67,21 +67,10 @@
     private List<ProjectDocument> _documents = [];
     private bool CanEdit;
 
-    protected override async Task OnInitializedAsync()
+    protected override void OnInitialized()
     {
-        await LoadPermissions();
-        if (!CanEdit)
-        {
-            Nav.NavigateTo("/");
-            return;
-        }
+        CanEdit = true;
         Reload();
-    }
-
-    private async Task LoadPermissions()
-    {
-        var emp = await UserService.GetEmployeeAsync();
-        if (emp != null) CanEdit = emp.HasPermission(AppPermissions.BusinessDocuments.View);
     }
 
     private void Reload()
@@ -100,7 +89,7 @@
                 StandardDocumentId = string.Empty,
                 Name = name,
                 ResolvedBody = "",
-                Status = "Draft",
+                Status = ProjectDocumentStatus.Draft,
                 IsManualEdit = true,
                 CreatedAt = DateTime.UtcNow,
                 UpdatedAt = DateTime.UtcNow

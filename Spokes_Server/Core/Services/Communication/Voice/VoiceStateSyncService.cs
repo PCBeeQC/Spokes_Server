@@ -10,110 +10,109 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
-using Spokes_Server.Aggregate;
+using Spokes_Server.Core.Data.Repositories.Core;
 using Spokes_Server.Core.Services.Communication.Chat;
 
-namespace Spokes_Server.Core.Services.Communication.Voice
-{
-    public class VoiceStateSyncService : BackgroundService
-    {
-        private readonly IServiceProvider _serviceProvider;
-        private readonly ILogger<VoiceStateSyncService> _logger;
-        private readonly IConfiguration _config;
+namespace Spokes_Server.Core.Services.Communication.Voice;
 
-        public VoiceStateSyncService(IServiceProvider serviceProvider, ILogger<VoiceStateSyncService> logger, IConfiguration config)
+public class VoiceStateSyncService : BackgroundService
+{
+    private readonly IServiceProvider _serviceProvider;
+    private readonly ILogger<VoiceStateSyncService> _logger;
+    private readonly IConfiguration _config;
+
+    public VoiceStateSyncService(IServiceProvider serviceProvider, ILogger<VoiceStateSyncService> logger, IConfiguration config)
+    {
+        _serviceProvider = serviceProvider;
+        _logger = logger;
+        _config = config;
+    }
+
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        if (_config.GetValue<bool>("Spokes_DemoMode") || _config.GetValue<bool>("Spokes_DemoSetup"))
         {
-            _serviceProvider = serviceProvider;
-            _logger = logger;
-            _config = config;
+            return;
         }
 
-        protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+        // Give LiveKit time to boot up.
+        await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken);
+
+        while (!stoppingToken.IsCancellationRequested)
         {
-            if (_config.GetValue<bool>("Spokes_DemoMode") || _config.GetValue<bool>("Spokes_DemoSetup"))
+            try
             {
-                return;
-            }
+                using var scope = _serviceProvider.CreateScope();
+                var chatState = scope.ServiceProvider.GetRequiredService<ChatStateService>();
+                var voiceChannelService = scope.ServiceProvider.GetRequiredService<VoiceChannelService>();
+                var systemConfigs = scope.ServiceProvider.GetRequiredService<SystemConfigRepository>();
+                var httpClientFactory = scope.ServiceProvider.GetRequiredService<IHttpClientFactory>();
 
-            // Give LiveKit time to boot up.
-            await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken);
+                var config = systemConfigs.Get();
+                var apiKey = config.LiveKitApiKey;
+                var apiSecret = config.LiveKitApiSecret;
 
-            while (!stoppingToken.IsCancellationRequested)
-            {
-                try
+                var voicePort = _config["Spokes_Voice_Port"] ?? Environment.GetEnvironmentVariable("Spokes_Voice_Port") ?? "7880";
+                var liveKitUrl = $"http://127.0.0.1:{voicePort}";
+
+                var activeChannelIds = chatState.GetAllActiveVoiceChannels();
+
+                var roomServiceClient = new RoomServiceClient(liveKitUrl, apiKey, apiSecret);
+
+                foreach (var channelId in activeChannelIds)
                 {
-                    using var scope = _serviceProvider.CreateScope();
-                    var chatState = scope.ServiceProvider.GetRequiredService<ChatStateService>();
-                    var chatService = scope.ServiceProvider.GetRequiredService<ChatService>();
-                    var db = scope.ServiceProvider.GetRequiredService<Database>();
-                    var httpClientFactory = scope.ServiceProvider.GetRequiredService<IHttpClientFactory>();
+                    if (stoppingToken.IsCancellationRequested) break;
 
-                    var config = db.SystemConfigs.Get();
-                    var apiKey = config.LiveKitApiKey;
-                    var apiSecret = config.LiveKitApiSecret;
+                    var roomName = $"channel-{channelId}";
+                    var serverParticipants = chatState.GetVoiceParticipants(channelId).ToList();
 
-                    var voicePort = Environment.GetEnvironmentVariable("Spokes_Voice_Port") ?? "7880";
-                    var liveKitUrl = $"http://127.0.0.1:{voicePort}";
+                    if (serverParticipants.Count == 0) continue;
 
-                    var activeChannelIds = chatState.GetAllActiveVoiceChannels();
+                    List<string> livekitParticipantIdentities = [];
 
-                    var roomServiceClient = new RoomServiceClient(liveKitUrl, apiKey, apiSecret);
-
-                    foreach (var channelId in activeChannelIds)
+                    try
                     {
-                        if (stoppingToken.IsCancellationRequested) break;
-
-                        var roomName = $"channel-{channelId}";
-                        var serverParticipants = chatState.GetVoiceParticipants(channelId).ToList();
-
-                        if (serverParticipants.Count == 0) continue;
-
-                        List<string> livekitParticipantIdentities = [];
-
-                        try
+                        var listResponse = await roomServiceClient.ListParticipants(new ListParticipantsRequest { Room = roomName });
+                        foreach (var participant in listResponse.Participants)
                         {
-                            var listResponse = await roomServiceClient.ListParticipants(new ListParticipantsRequest { Room = roomName });
-                            foreach (var participant in listResponse.Participants)
-                            {
-                                livekitParticipantIdentities.Add(participant.Identity);
-                            }
+                            livekitParticipantIdentities.Add(participant.Identity);
                         }
-                        catch (Exception ex)
+                    }
+                    catch (Exception ex)
+                    {
+                        if (ex.Message.Contains("room not found", StringComparison.OrdinalIgnoreCase) || 
+                            ex.Message.Contains("could not find room", StringComparison.OrdinalIgnoreCase))
                         {
-                            if (ex.Message.Contains("room not found", StringComparison.OrdinalIgnoreCase) || 
-                                ex.Message.Contains("could not find room", StringComparison.OrdinalIgnoreCase))
-                            {
-                                // Safe to assume room is empty
-                            }
-                            else
-                            {
-                                _logger.LogWarning($"[VoiceStateSync] Transient error contacting LiveKit for {roomName}: {ex.Message}");
-                                continue;
-                            }
+                            // Safe to assume room is empty
                         }
-
-                        // Check who is missing from LiveKit but still registered in C#
-                        foreach (var userId in serverParticipants)
+                        else
                         {
-                            bool isInLiveKit = livekitParticipantIdentities.Contains(userId);
-                            if (!isInLiveKit)
-                            {
-                                _logger.LogInformation($"[VoiceStateSync] User {userId} missing from LiveKit room {roomName}. Kicking from ChatStateService.");
-                                // The user's WebRTC connection actually dropped (or tab closed). 
-                                // We safely remove them from the C# state.
-                                await chatService.LeaveVoiceAsync(userId, channelId);
-                            }
+                            _logger.LogWarning($"[VoiceStateSync] Transient error contacting LiveKit for {roomName}: {ex.Message}");
+                            continue;
+                        }
+                    }
+
+                    // Check who is missing from LiveKit but still registered in C#
+                    foreach (var userId in serverParticipants)
+                    {
+                        bool isInLiveKit = livekitParticipantIdentities.Contains(userId);
+                        if (!isInLiveKit)
+                        {
+                            _logger.LogInformation($"[VoiceStateSync] User {userId} missing from LiveKit room {roomName}. Kicking from ChatStateService.");
+                            // The user's WebRTC connection actually dropped (or tab closed). 
+                            // We safely remove them from the C# state.
+                            await voiceChannelService.LeaveVoiceAsync(channelId, userId, stoppingToken);
                         }
                     }
                 }
-                catch (Exception ex)
-                {
-                    _logger.LogWarning($"[VoiceStateSync] Watchdog loop exception: {ex.Message}");
-                }
-
-                // Wait 5 seconds before checking again.
-                await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken);
             }
+            catch (Exception ex)
+            {
+                _logger.LogWarning($"[VoiceStateSync] Watchdog loop exception: {ex.Message}");
+            }
+
+            // Wait 5 seconds before checking again.
+            await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken);
         }
     }
 }

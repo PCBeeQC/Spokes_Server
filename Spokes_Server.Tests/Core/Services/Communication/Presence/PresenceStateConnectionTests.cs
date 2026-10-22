@@ -27,7 +27,13 @@ public class PresenceStateConnectionTests
     [Fact]
     public void IsConnectionActivelyViewed_RegisteredUnfocused_ReturnsFalse()
     {
-        _presenceState.RegisterConnection("user1", "sub-1", "Mobile", isFocused: false);
+        _presenceState.RegisterConnection(new ConnectionRegistrationOptions
+        {
+            UserId = "user1",
+            SubscriptionId = "sub-1",
+            DeviceType = "Mobile",
+            IsFocused = false
+        });
 
         Assert.False(_presenceState.IsConnectionActivelyViewed("sub-1"));
     }
@@ -35,7 +41,13 @@ public class PresenceStateConnectionTests
     [Fact]
     public void IsConnectionActivelyViewed_RegisteredFocused_ReturnsTrue()
     {
-        _presenceState.RegisterConnection("user1", "sub-1", "Mobile", isFocused: true);
+        _presenceState.RegisterConnection(new ConnectionRegistrationOptions
+        {
+            UserId = "user1",
+            SubscriptionId = "sub-1",
+            DeviceType = "Mobile",
+            IsFocused = true
+        });
 
         Assert.True(_presenceState.IsConnectionActivelyViewed("sub-1"));
     }
@@ -43,7 +55,13 @@ public class PresenceStateConnectionTests
     [Fact]
     public void IsConnectionActivelyViewed_FocusChangedToFalse_ReturnsFalse()
     {
-        _presenceState.RegisterConnection("user1", "sub-1", "Mobile", isFocused: true);
+        _presenceState.RegisterConnection(new ConnectionRegistrationOptions
+        {
+            UserId = "user1",
+            SubscriptionId = "sub-1",
+            DeviceType = "Mobile",
+            IsFocused = true
+        });
         Assert.True(_presenceState.IsConnectionActivelyViewed("sub-1"));
 
         _presenceState.SetConnectionFocus("user1", "sub-1", false);
@@ -53,7 +71,13 @@ public class PresenceStateConnectionTests
     [Fact]
     public void IsConnectionActivelyViewed_RemovedConnection_ReturnsFalse()
     {
-        _presenceState.RegisterConnection("user1", "sub-1", "Mobile", isFocused: true);
+        _presenceState.RegisterConnection(new ConnectionRegistrationOptions
+        {
+            UserId = "user1",
+            SubscriptionId = "sub-1",
+            DeviceType = "Mobile",
+            IsFocused = true
+        });
         Assert.True(_presenceState.IsConnectionActivelyViewed("sub-1"));
 
         _presenceState.RemoveConnection("sub-1");
@@ -72,7 +96,12 @@ public class PresenceStateConnectionTests
     [Fact]
     public void IsConnectionMobile_DesktopConnection_ReturnsFalse()
     {
-        _presenceState.RegisterConnection("user1", "sub-desk", "Desktop");
+        _presenceState.RegisterConnection(new ConnectionRegistrationOptions
+        {
+            UserId = "user1",
+            SubscriptionId = "sub-desk",
+            DeviceType = "Desktop"
+        });
 
         Assert.False(_presenceState.IsConnectionMobile("sub-desk"));
     }
@@ -83,7 +112,12 @@ public class PresenceStateConnectionTests
     [InlineData("MOBILE")]
     public void IsConnectionMobile_MobileConnection_ReturnsTrue(string deviceType)
     {
-        _presenceState.RegisterConnection("user1", "sub-mob", deviceType);
+        _presenceState.RegisterConnection(new ConnectionRegistrationOptions
+        {
+            UserId = "user1",
+            SubscriptionId = "sub-mob",
+            DeviceType = deviceType
+        });
 
         Assert.True(_presenceState.IsConnectionMobile("sub-mob"));
     }

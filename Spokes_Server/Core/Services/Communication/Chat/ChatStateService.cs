@@ -19,13 +19,17 @@ public class ChatStateService
     public event Action<string, string, string, string>? ReactionRemoved; // channelId, messageId, emoji, userId
     public event Action<string, string, List<string>>? MessageRead; // channelId, messageId, readBy
     public event Action<ReportedMessage>? ModerationAlertReceived;
+    public event Action<ReportedMessage>? ModerationReportUpdated;
     public event Action<Employee>? EmployeeProfileUpdated;
     public event Action<CalendarEvent>? CalendarEventUpdated;
+    public event Action<string>? CalendarEventDeleted;
 
     // Methods to trigger events
     public void NotifyCalendarEventUpdated(CalendarEvent calendarEvent) => CalendarEventUpdated?.Invoke(calendarEvent);
+    public void NotifyCalendarEventDeleted(string eventId) => CalendarEventDeleted?.Invoke(eventId);
     public void NotifyMessageReceived(ChatMessage message) => MessageReceived?.Invoke(message);
     public void NotifyModerationAlert(ReportedMessage report) => ModerationAlertReceived?.Invoke(report);
+    public void NotifyModerationReportUpdated(ReportedMessage report) => ModerationReportUpdated?.Invoke(report);
     public void NotifyEmployeeProfileUpdated(Employee employee) => EmployeeProfileUpdated?.Invoke(employee);
     public void NotifyUserTyping(string channelId, string userId, string userName) => UserTyping?.Invoke(channelId, userId, userName);
     public void NotifyUserStoppedTyping(string channelId, string userId) => UserStoppedTyping?.Invoke(channelId, userId);
@@ -49,24 +53,31 @@ public class ChatStateService
     public event Action<string, string[]>? VoiceActiveSpeakersChanged;
     public event Action<string, string, bool>? VoiceUserMutedChanged;
 
-    public void NotifyVoiceMemberJoined(string channelId, string userId)
+    public bool NotifyVoiceMemberJoined(string channelId, string userId)
     {
+        bool added;
         lock (_voiceLock)
         {
             if (!_voiceParticipants.ContainsKey(channelId)) _voiceParticipants[channelId] = new HashSet<string>();
-            _voiceParticipants[channelId].Add(userId);
+            added = _voiceParticipants[channelId].Add(userId);
         }
-        VoiceMemberJoined?.Invoke(channelId, userId);
+        if (added)
+        {
+            VoiceMemberJoined?.Invoke(channelId, userId);
+        }
+        return added;
     }
 
-    public void NotifyVoiceMemberLeft(string channelId, string userId)
+    public bool NotifyVoiceMemberLeft(string channelId, string userId)
     {
+        bool wasRemoved = false;
         bool wasMuted = false;
+        string[]? updatedSpeakers = null;
         lock (_voiceLock)
         {
             if (_voiceParticipants.ContainsKey(channelId))
             {
-                _voiceParticipants[channelId].Remove(userId);
+                wasRemoved = _voiceParticipants[channelId].Remove(userId);
                 if (_voiceParticipants[channelId].Count == 0) _voiceParticipants.Remove(channelId);
             }
             if (_mutedUsers.ContainsKey(channelId))
@@ -74,21 +85,26 @@ public class ChatStateService
                 wasMuted = _mutedUsers[channelId].Remove(userId);
                 if (_mutedUsers[channelId].Count == 0) _mutedUsers.Remove(channelId);
             }
-            if (_activeSpeakersList.ContainsKey(channelId))
+            if (_activeSpeakersList.TryGetValue(channelId, out var existingSpeakers))
             {
-                var speakers = _activeSpeakersList[channelId].ToList();
+                var speakers = existingSpeakers.ToList();
                 if (speakers.Remove(userId))
                 {
-                    _activeSpeakersList[channelId] = speakers.ToArray();
-                    NotifyVoiceActiveSpeakersChanged(channelId, speakers.ToArray());
+                    updatedSpeakers = speakers.ToArray();
+                    _activeSpeakersList[channelId] = updatedSpeakers;
                 }
             }
+        }
+        if (updatedSpeakers != null)
+        {
+            VoiceActiveSpeakersChanged?.Invoke(channelId, updatedSpeakers);
         }
         if (wasMuted)
         {
             VoiceUserMutedChanged?.Invoke(channelId, userId, false);
         }
         VoiceMemberLeft?.Invoke(channelId, userId);
+        return wasRemoved;
     }
 
     public void SetUserSpeaking(string channelId, string userId, bool isSpeaking)

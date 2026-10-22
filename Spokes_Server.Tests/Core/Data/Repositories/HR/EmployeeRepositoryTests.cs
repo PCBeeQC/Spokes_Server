@@ -1,52 +1,12 @@
-using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.Logging;
-using Moq;
-using Spokes_Server.Core.Data;
 using Spokes_Server.Core.Data.Repositories.HR;
 using Spokes_Server.Core.Models.HR;
+using Spokes_Server.Tests.Helpers;
 using Xunit;
 
 namespace Spokes_Server.Tests.Core.Data.Repositories.HR;
 
-public class EmployeeRepositoryTests : IDisposable
+public class EmployeeRepositoryTests : RepositoryTestFixture<EmployeeRepository>
 {
-    private readonly string _testDataDir;
-    private readonly DiskPersistenceService _writer;
-    private readonly EmployeeRepository _repo;
-
-    public EmployeeRepositoryTests()
-    {
-        _testDataDir = Path.Combine(Path.GetTempPath(), $"Spokes_Test_Employees_{Guid.NewGuid()}");
-
-        var mockConfig = new Mock<IConfiguration>();
-        mockConfig.Setup(c => c["DataPath"]).Returns(_testDataDir);
-
-        var mockPersistenceLogger = new Mock<ILogger<DiskPersistenceService>>();
-        _writer = new DiskPersistenceService(mockPersistenceLogger.Object);
-
-        _repo = new EmployeeRepository(_writer, mockConfig.Object);
-    }
-
-    public void Dispose()
-    {
-        if (Directory.Exists(_testDataDir))
-        {
-            try { Directory.Delete(_testDataDir, true); } catch (Exception ex) { Console.WriteLine($"Cleanup failed: {ex.Message}"); }
-        }
-        _writer.Dispose();
-    }
-
-    [Fact]
-    public void Constructor_WithNullDataPath_UsesDefaultPath()
-    {
-        var mockConfig = new Mock<IConfiguration>();
-        mockConfig.Setup(c => c["DataPath"]).Returns((string?)null);
-
-        var repo = new EmployeeRepository(_writer, mockConfig.Object);
-
-        Assert.NotNull(repo);
-    }
-
     [Fact]
     public void Save_And_GetById_ReturnsEmployee()
     {
@@ -124,10 +84,7 @@ public class EmployeeRepositoryTests : IDisposable
         var emp = new Employee { Id = "emp-disk", FirstName = "Disk", LastName = "User" };
         File.WriteAllText(Path.Combine(empDir, "profile.json"), System.Text.Json.JsonSerializer.Serialize(emp));
 
-        var mockConfig = new Mock<IConfiguration>();
-        mockConfig.Setup(c => c["DataPath"]).Returns(_testDataDir);
-
-        var newRepo = new EmployeeRepository(_writer, mockConfig.Object);
+        var newRepo = new EmployeeRepository(_writer, Config);
         newRepo.LoadFromDisk();
 
         var loaded = newRepo.GetById("emp-disk");
@@ -152,10 +109,7 @@ public class EmployeeRepositoryTests : IDisposable
 
         File.WriteAllText(Path.Combine(empDir, "profile.json"), System.Text.Json.JsonSerializer.Serialize(emp));
 
-        var mockConfig = new Mock<IConfiguration>();
-        mockConfig.Setup(c => c["DataPath"]).Returns(_testDataDir);
-
-        var newRepo = new EmployeeRepository(_writer, mockConfig.Object);
+        var newRepo = new EmployeeRepository(_writer, Config);
         newRepo.LoadFromDisk();
 
         var loaded = newRepo.GetById("emp-mig");
@@ -183,10 +137,7 @@ public class EmployeeRepositoryTests : IDisposable
 
         File.WriteAllText(Path.Combine(empDir, "profile.json"), System.Text.Json.JsonSerializer.Serialize(emp));
 
-        var mockConfig = new Mock<IConfiguration>();
-        mockConfig.Setup(c => c["DataPath"]).Returns(_testDataDir);
-
-        var newRepo = new EmployeeRepository(_writer, mockConfig.Object);
+        var newRepo = new EmployeeRepository(_writer, Config);
         // Should not throw
         newRepo.LoadFromDisk();
 

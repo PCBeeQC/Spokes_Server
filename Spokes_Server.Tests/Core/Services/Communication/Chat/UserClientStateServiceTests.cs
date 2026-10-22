@@ -11,10 +11,11 @@ using Spokes_Server.Core.Data;
 using Spokes_Server.Core.Data.Repositories.Communication;
 using Spokes_Server.Core.Data.Repositories.Core;
 using Spokes_Server.Core.Data.Repositories.HR;
-using Spokes_Server.Core.Hubs;
+using Spokes_Server.Hubs;
 using Spokes_Server.Core.Services.Communication;
 using Spokes_Server.Core.Services.Communication.Chat;
 using Xunit;
+using Spokes_Server.Tests.Helpers;
 
 namespace Spokes_Server.Tests.Core.Services.Communication.Chat;
 
@@ -25,8 +26,7 @@ public class UserClientStateServiceTests : IDisposable
     private readonly UserClientStateRepository _clientStatesRepo;
     private readonly Mock<Database> _mockDb;
     private readonly ChatStateService _chatState;
-    private readonly Mock<IHubContext<ChatHub>> _mockHubContext;
-    private readonly Mock<IClientProxy> _mockClientProxy;
+    private readonly Mock<IChatRealtimeGateway> _mockRealtimeGateway;
     private readonly UserClientStateService _service;
 
     public UserClientStateServiceTests()
@@ -42,26 +42,22 @@ public class UserClientStateServiceTests : IDisposable
         var sessionRepo = new DeviceSessionRepository(_writer, mockConfig.Object);
         var empRepo = new EmployeeRepository(_writer, mockConfig.Object);
 
-        _mockDb = new Mock<Database>(sessionRepo, empRepo);
+        _mockDb = TestDatabaseFactory.CreateMock(sessionRepo, empRepo);
         _mockDb.Setup(d => d.ClientStates).Returns(_clientStatesRepo);
 
         _chatState = new ChatStateService();
 
-        _mockHubContext = new Mock<IHubContext<ChatHub>>();
-        var mockClients = new Mock<IHubClients>();
-        _mockClientProxy = new Mock<IClientProxy>();
-        _mockHubContext.Setup(h => h.Clients).Returns(mockClients.Object);
-        mockClients.Setup(c => c.Group(It.IsAny<string>())).Returns(_mockClientProxy.Object);
+        _mockRealtimeGateway = new Mock<IChatRealtimeGateway>();
 
         var serviceLogger = Mock.Of<ILogger<UserClientStateService>>();
-        _service = new UserClientStateService(_mockDb.Object, _chatState, _mockHubContext.Object, serviceLogger);
+        _service = new UserClientStateService(_clientStatesRepo, () => _mockDb.Object.ChatChannels, _chatState, _mockRealtimeGateway.Object, serviceLogger);
     }
 
     public void Dispose()
     {
         if (Directory.Exists(_testDataDir))
         {
-            try { Directory.Delete(_testDataDir, true); } catch { }
+            try { Directory.Delete(_testDataDir, true); } catch (Exception ex) { System.Diagnostics.Debug.WriteLine(ex.Message); }
         }
         _writer.Dispose();
     }
@@ -121,8 +117,8 @@ public class UserClientStateServiceTests : IDisposable
 
         // Assert
         Assert.True(stoppedEventFired);
-        _mockClientProxy.Verify(
-            p => p.SendCoreAsync("UserStoppedTyping", It.IsAny<object[]>(), default),
+        _mockRealtimeGateway.Verify(
+            p => p.SendToChannelAsync("chan1", "UserStoppedTyping", It.IsAny<object>(), default),
             Times.Once);
     }
 

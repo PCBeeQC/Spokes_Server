@@ -7,13 +7,15 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Moq;
+using Microsoft.AspNetCore.Authorization;
 using Spokes_Server.Controllers;
 using Spokes_Server.Core.Constants;
 using Spokes_Server.Core.Data;
 using Spokes_Server.Core.Data.Repositories.Core;
 using Spokes_Server.Core.Data.Repositories.HR;
 using Spokes_Server.Core.Models.HR;
-using Spokes_Server.Core.Services.Core;
+using Spokes_Server.Core.Helpers;
+using Spokes_Server.Core.Security;
 
 namespace Spokes_Server.Tests.Controllers;
 
@@ -22,7 +24,6 @@ public class BackupControllerTests : TestDataTestBase
     private readonly DiskPersistenceService _persistence;
     private readonly EmployeeRepository _employeeRepo;
     private readonly BackupService _backupService;
-    private readonly UserService _userService;
     private readonly string _backupsDir;
 
     public BackupControllerTests()
@@ -37,11 +38,7 @@ public class BackupControllerTests : TestDataTestBase
         _persistence = new DiskPersistenceService(persistenceLogger.Object);
 
         _employeeRepo = new EmployeeRepository(_persistence, config);
-        var openIdRepo = new OpenIdAccountRepository(_persistence, config);
         var companyRepo = new CompanyProfileRepository(_persistence, config);
-
-        var mockAuthState = new Mock<Microsoft.AspNetCore.Components.Authorization.AuthenticationStateProvider>();
-        _userService = new UserService(mockAuthState.Object, _employeeRepo, openIdRepo);
 
         var backupLogger = new Mock<ILogger<BackupService>>();
         _backupService = new BackupService(backupLogger.Object, companyRepo, config);
@@ -64,17 +61,12 @@ public class BackupControllerTests : TestDataTestBase
             { "Spokes_DemoMode", demoMode ? "true" : "false" }
         }).Build();
 
-        var services = new ServiceCollection();
-        services.AddSingleton<IConfiguration>(config);
-        var serviceProvider = services.BuildServiceProvider();
-
-        return new BackupController(_backupService, _userService)
+        return new BackupController(_backupService, config)
         {
             ControllerContext = new ControllerContext
             {
                 HttpContext = new DefaultHttpContext
                 {
-                    RequestServices = serviceProvider,
                     User = user ?? new ClaimsPrincipal(new ClaimsIdentity())
                 }
             }
@@ -104,120 +96,85 @@ public class BackupControllerTests : TestDataTestBase
         var result = controller.DownloadBackup("Spokes_Backup_1.zip");
 
         // Assert
-        Assert.IsType<ForbidResult>(result);
+        var forbidden = Assert.IsType<ObjectResult>(result);
+        Assert.Equal(403, forbidden.StatusCode);
+        var payload = Assert.IsType<SpokesResult>(forbidden.Value);
+        Assert.False(payload.IsSuccess);
     }
 
     [Fact]
-    public void DownloadBackup_WhenUserNotFound_ReturnsUnauthorized()
+    public void Constructor_WithDependencies_InitializesSuccessfully()
     {
-        // Arrange - unauthenticated user
-        var controller = CreateController();
-
-        // Act
-        var result = controller.DownloadBackup("Spokes_Backup_1.zip");
-
-        // Assert
-        var unauthorizedResult = Assert.IsType<UnauthorizedObjectResult>(result);
-        Assert.Equal("User profile not active or not found", unauthorizedResult.Value);
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>()).Build();
+        var controller = new BackupController(_backupService, config);
+        Assert.NotNull(controller);
     }
 
     [Fact]
-    public void DownloadBackup_WhenUserClaimsExistButEmployeeMissing_ReturnsUnauthorized()
+    public async Task DownloadBackup_PolicyAuthorization_AllowsAdmin()
     {
-        // Arrange - authenticated user with non-existent employee ID
-        var user = CreateUserPrincipal("missing_emp");
-        var controller = CreateController(user);
+        var admin = new Employee { Id = "admin1", IsAdmin = true, IsActive = true };
+        _employeeRepo.Save(admin);
+        var handler = new PermissionAuthorizationHandler(_employeeRepo);
+        var requirement = new PermissionRequirement(AppPermissions.Admin.ManageSettings);
+        var context = new AuthorizationHandlerContext(new[] { requirement }, CreateUserPrincipal("admin1"), null);
 
-        // Act
-        var result = controller.DownloadBackup("Spokes_Backup_1.zip");
+        await handler.HandleAsync(context);
 
-        // Assert
-        var unauthorizedResult = Assert.IsType<UnauthorizedObjectResult>(result);
-        Assert.Equal("User profile not active or not found", unauthorizedResult.Value);
+        Assert.True(context.HasSucceeded);
     }
 
     [Fact]
-    public void DownloadBackup_WhenUserIsInactive_ReturnsUnauthorized()
+    public async Task DownloadBackup_PolicyAuthorization_AllowsUserWithManageSettingsPermission()
     {
-        // Arrange
-        var emp = new Employee { Id = "emp_inactive", IsActive = false, IsAdmin = true };
+        var emp = new Employee { Id = "emp_settings", IsActive = true, Permissions = new List<string> { AppPermissions.Admin.ManageSettings } };
         _employeeRepo.Save(emp);
-        var controller = CreateController(CreateUserPrincipal("emp_inactive"));
+        var handler = new PermissionAuthorizationHandler(_employeeRepo);
+        var requirement = new PermissionRequirement(AppPermissions.Admin.ManageSettings);
+        var context = new AuthorizationHandlerContext(new[] { requirement }, CreateUserPrincipal("emp_settings"), null);
 
-        // Act
-        var result = controller.DownloadBackup("Spokes_Backup_1.zip");
+        await handler.HandleAsync(context);
 
-        // Assert
-        var unauthorizedResult = Assert.IsType<UnauthorizedObjectResult>(result);
-        Assert.Equal("User profile not active or not found", unauthorizedResult.Value);
+        Assert.True(context.HasSucceeded);
     }
 
     [Fact]
-    public void DownloadBackup_WhenUserIsSuspended_ReturnsUnauthorized()
+    public async Task DownloadBackup_PolicyAuthorization_RejectsUserWithoutManageSettingsPermission()
     {
-        // Arrange
-        var emp = new Employee { Id = "emp_suspended", IsActive = true, IsSuspended = true, IsAdmin = true };
-        _employeeRepo.Save(emp);
-        var controller = CreateController(CreateUserPrincipal("emp_suspended"));
-
-        // Act
-        var result = controller.DownloadBackup("Spokes_Backup_1.zip");
-
-        // Assert
-        var unauthorizedResult = Assert.IsType<UnauthorizedObjectResult>(result);
-        Assert.Equal("User profile not active or not found", unauthorizedResult.Value);
-    }
-
-    [Fact]
-    public void DownloadBackup_WhenUserIsBanned_ReturnsUnauthorized()
-    {
-        // Arrange
-        var emp = new Employee { Id = "emp_banned", IsActive = true, IsSuspended = false, IsBanned = true, IsAdmin = true };
-        _employeeRepo.Save(emp);
-        var controller = CreateController(CreateUserPrincipal("emp_banned"));
-
-        // Act
-        var result = controller.DownloadBackup("Spokes_Backup_1.zip");
-
-        // Assert
-        var unauthorizedResult = Assert.IsType<UnauthorizedObjectResult>(result);
-        Assert.Equal("User profile not active or not found", unauthorizedResult.Value);
-    }
-
-    [Fact]
-    public void DownloadBackup_WhenUserNotAdminAndLacksManageSettingsPermission_ReturnsForbid()
-    {
-        // Arrange
         var emp = new Employee { Id = "emp_noperm", IsActive = true, IsAdmin = false };
         _employeeRepo.Save(emp);
-        var controller = CreateController(CreateUserPrincipal("emp_noperm"));
+        var handler = new PermissionAuthorizationHandler(_employeeRepo);
+        var requirement = new PermissionRequirement(AppPermissions.Admin.ManageSettings);
+        var context = new AuthorizationHandlerContext(new[] { requirement }, CreateUserPrincipal("emp_noperm"), null);
 
-        // Act
-        var result = controller.DownloadBackup("Spokes_Backup_1.zip");
+        await handler.HandleAsync(context);
 
-        // Assert
-        Assert.IsType<ForbidResult>(result);
+        Assert.False(context.HasSucceeded);
     }
 
-    [Fact]
-    public void DownloadBackup_WhenUserHasOtherPermissionsButNotManageSettings_ReturnsForbid()
+    [Theory]
+    [InlineData(false, false, false)] // Inactive
+    [InlineData(true, true, false)]  // Suspended
+    [InlineData(true, false, true)]  // Banned
+    public async Task DownloadBackup_PolicyAuthorization_RejectsInactiveSuspendedOrBannedUser(bool isActive, bool isSuspended, bool isBanned)
     {
-        // Arrange
         var emp = new Employee
         {
-            Id = "emp_wrongperm",
-            IsActive = true,
-            IsAdmin = false,
-            Permissions = new List<string> { "Accounting.Invoices.Manage", "HR.Employees.View" }
+            Id = "emp_disallowed",
+            IsActive = isActive,
+            IsSuspended = isSuspended,
+            IsBanned = isBanned,
+            IsAdmin = true,
+            Permissions = new List<string> { AppPermissions.Admin.ManageSettings }
         };
         _employeeRepo.Save(emp);
-        var controller = CreateController(CreateUserPrincipal("emp_wrongperm"));
+        var handler = new PermissionAuthorizationHandler(_employeeRepo);
+        var requirement = new PermissionRequirement(AppPermissions.Admin.ManageSettings);
+        var context = new AuthorizationHandlerContext(new[] { requirement }, CreateUserPrincipal("emp_disallowed"), null);
 
-        // Act
-        var result = controller.DownloadBackup("Spokes_Backup_1.zip");
+        await handler.HandleAsync(context);
 
-        // Assert
-        Assert.IsType<ForbidResult>(result);
+        Assert.False(context.HasSucceeded);
     }
 
     [Theory]
@@ -243,7 +200,9 @@ public class BackupControllerTests : TestDataTestBase
 
         // Assert
         var badRequestResult = Assert.IsType<BadRequestObjectResult>(result);
-        Assert.Equal("Invalid file name", badRequestResult.Value);
+        var payload = Assert.IsType<SpokesResult>(badRequestResult.Value);
+        Assert.False(payload.IsSuccess);
+        Assert.Equal("Invalid file name", payload.Error);
     }
 
     [Fact]
@@ -258,7 +217,9 @@ public class BackupControllerTests : TestDataTestBase
         var result = controller.DownloadBackup("Spokes_Backup_NonExistent.zip");
 
         // Assert
-        Assert.IsType<NotFoundResult>(result);
+        var notFound = Assert.IsType<NotFoundObjectResult>(result);
+        var payload = Assert.IsType<SpokesResult>(notFound.Value);
+        Assert.False(payload.IsSuccess);
     }
 
     [Fact]
@@ -276,7 +237,9 @@ public class BackupControllerTests : TestDataTestBase
         var result = controller.DownloadBackup("Spokes_Backup_Different.zip");
 
         // Assert
-        Assert.IsType<NotFoundResult>(result);
+        var notFoundResult = Assert.IsType<NotFoundObjectResult>(result);
+        var payloadResult = Assert.IsType<SpokesResult>(notFoundResult.Value);
+        Assert.False(payloadResult.IsSuccess);
     }
 
     [Fact]
@@ -375,5 +338,22 @@ public class BackupControllerTests : TestDataTestBase
         Assert.Equal(fileName, physicalFile.FileDownloadName);
         Assert.Equal(filePath, physicalFile.FileName);
         Assert.True(physicalFile.EnableRangeProcessing);
+    }
+
+    [Fact]
+    public void DownloadBackup_HasAuthorizePolicyAttribute()
+    {
+        var classAuthorize = typeof(BackupController).GetCustomAttributes(typeof(Microsoft.AspNetCore.Authorization.AuthorizeAttribute), true);
+        Assert.NotEmpty(classAuthorize);
+
+        var method = typeof(BackupController).GetMethod(nameof(BackupController.DownloadBackup));
+        Assert.NotNull(method);
+
+        var authAttrs = method.GetCustomAttributes(typeof(Microsoft.AspNetCore.Authorization.AuthorizeAttribute), true)
+            .Cast<Microsoft.AspNetCore.Authorization.AuthorizeAttribute>()
+            .ToList();
+
+        Assert.NotEmpty(authAttrs);
+        Assert.Equal(AppPermissions.Admin.ManageSettings, authAttrs[0].Policy);
     }
 }

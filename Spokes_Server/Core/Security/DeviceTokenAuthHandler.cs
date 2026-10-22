@@ -3,7 +3,9 @@ namespace Spokes_Server.Core.Security;
 using System.Security.Claims;
 using System.Text.Encodings.Web;
 using Microsoft.AspNetCore.Authentication;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using Spokes_Server.Core.Services.Security;
 
 /// <summary>
 /// Options for the DeviceToken authentication scheme.
@@ -101,19 +103,23 @@ public class DeviceTokenAuthHandler : AuthenticationHandler<DeviceTokenAuthOptio
 
         var (session, employee) = result.Value;
 
-        // 4. Update LastSeenAt (throttled to 1 minute)
-        sessionService.TouchLastSeen(session);
+        // 4. Update LastSeenAt (throttled to 1 minute), skipping passive background badge polling
+        if (!path.StartsWith("/spokesapi/push/unread-count"))
+        {
+            sessionService.TouchLastSeen(session);
+        }
+        sessionService.AdoptLegacySessionDeviceId(session, deviceId);
 
         if (isBearerAuth)
         {
             // Mobile API: authenticate request without touching cookies
-            Console.WriteLine($"[DeviceTokenAuth] API Bearer auth successful for: {employee.FullName}");
+            Logger.LogDebug("API Bearer auth successful for: {FullName}", employee.FullName);
         }
         else
         {
             // Desktop: silent renewal — issue a fresh Spokes_Session_v3 cookie
-            Console.WriteLine($"[DeviceTokenAuth] Silent renewal successful for: {employee.FullName}");
-            await sessionService.SignInAndExtendAsync(Context, session, employee);
+            Logger.LogDebug("Silent renewal successful for: {FullName}", employee.FullName);
+            await sessionService.SignInAndExtendAsync(Context, session, employee, deviceId);
         }
 
         // 5. Build the principal and return success

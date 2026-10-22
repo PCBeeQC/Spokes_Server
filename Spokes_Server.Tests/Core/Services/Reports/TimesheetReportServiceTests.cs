@@ -17,7 +17,6 @@ using Spokes_Server.Core.Models.Core;
 using Spokes_Server.Core.Models.HR;
 using Spokes_Server.Core.Models.Projects;
 using Spokes_Server.Core.Models.Reports;
-using Spokes_Server.Core.Services.Core;
 using Spokes_Server.Core.Services.Reports;
 using Xunit;
 
@@ -57,7 +56,7 @@ public class TimesheetReportServiceTests : IDisposable
             }
         });
 
-        _service = new TimesheetReportService(_db);
+        _service = new TimesheetReportService(_db.HrContext, _db.ProjectsContext, _db.CoreContext);
     }
 
     public void Dispose()
@@ -65,17 +64,17 @@ public class TimesheetReportServiceTests : IDisposable
         _serviceProvider.Dispose();
         if (Directory.Exists(_testDataDir))
         {
-            try { Directory.Delete(_testDataDir, true); } catch { }
+            try { Directory.Delete(_testDataDir, true); } catch (Exception ex) { System.Diagnostics.Debug.WriteLine(ex.Message); }
         }
     }
 
     [Theory]
-    [InlineData(1.5, TimeDisplayFormat.Duration_HHMM, "1:30")]
-    [InlineData(1.5, TimeDisplayFormat.Decimal_Hours, "1.50 h")]
-    [InlineData(0.25, TimeDisplayFormat.Duration_HHMM, "0:15")]
-    [InlineData(0.0, TimeDisplayFormat.Duration_HHMM, "0:00")]
-    [InlineData(42.75, TimeDisplayFormat.Duration_HHMM, "42:45")]
-    [InlineData(42.75, TimeDisplayFormat.Decimal_Hours, "42.75 h")]
+    [InlineData(1.5, TimeDisplayFormat.DurationHhmm, "1:30")]
+    [InlineData(1.5, TimeDisplayFormat.DecimalHours, "1.50 h")]
+    [InlineData(0.25, TimeDisplayFormat.DurationHhmm, "0:15")]
+    [InlineData(0.0, TimeDisplayFormat.DurationHhmm, "0:00")]
+    [InlineData(42.75, TimeDisplayFormat.DurationHhmm, "42:45")]
+    [InlineData(42.75, TimeDisplayFormat.DecimalHours, "42.75 h")]
     public void FormatDuration_ReturnsExpectedStrings(decimal hours, TimeDisplayFormat format, string expected)
     {
         var result = _service.FormatDuration(hours, format);
@@ -257,7 +256,7 @@ public class TimesheetReportServiceTests : IDisposable
             }
         };
 
-        var csv = _service.GenerateDetailedCsv(entries, TimeDisplayFormat.Duration_HHMM);
+        var csv = _service.GenerateDetailedCsv(entries, TimeDisplayFormat.DurationHhmm);
 
         Assert.Contains("Date,Employee,Project,Client,Task,Description,Is Billable,Rate,Hours,Amount", csv);
         Assert.Contains("Jane Doe", csv);
@@ -301,7 +300,7 @@ public class TimesheetReportServiceTests : IDisposable
             }
         };
 
-        var csv = _service.GenerateSummaryCsv(groups, TimeDisplayFormat.Decimal_Hours);
+        var csv = _service.GenerateSummaryCsv(groups, TimeDisplayFormat.DecimalHours);
 
         Assert.Contains("Title,Subtitle,Duration,Billable Hours,Billable Amount", csv);
         Assert.Contains("Project Alpha", csv);
@@ -334,7 +333,7 @@ public class TimesheetReportServiceTests : IDisposable
             ]
         };
 
-        var csv = _service.GenerateWeeklyCsv(matrix, TimeDisplayFormat.Duration_HHMM);
+        var csv = _service.GenerateWeeklyCsv(matrix, TimeDisplayFormat.DurationHhmm);
 
         Assert.Contains("Alice", csv);
         Assert.Contains("Total", csv);
@@ -418,5 +417,49 @@ public class TimesheetReportServiceTests : IDisposable
         var unrounded = _service.ApplyFiltersAndRounding(entries, criteria, applyRounding: false);
         Assert.Single(unrounded);
         Assert.Equal(1.18m, unrounded[0].Entry.Hours);
+    }
+
+    [Fact]
+    public async Task LoadAllEntriesAsync_WhenWorkTypeIdIsNull_DoesNotThrowAndDefaultsRate()
+    {
+        var project = new Project
+        {
+            Id = "proj-null-worktype",
+            Name = "Website",
+            Client = new ClientInfo { BusinessName = "Client A" }
+        };
+        _db.Projects.Save(project);
+
+        var employee = new Employee
+        {
+            Id = "emp-null-worktype",
+            FirstName = "Alice",
+            LastName = "Smith"
+        };
+        _db.Employees.Save(employee);
+
+        var timesheet = new Timesheet
+        {
+            Id = "ts-null-worktype",
+            EmployeeId = "emp-null-worktype",
+            Year = 2026,
+            WeekNumber = 10,
+            Entries = new List<TimeEntry>
+            {
+                new()
+                {
+                    ProjectId = "proj-null-worktype",
+                    WorkTypeId = null!,
+                    Date = DateTime.Today,
+                    Hours = 4m,
+                    IsBillable = true
+                }
+            }
+        };
+        _db.Timesheets.Save(timesheet);
+
+        var entries = await _service.LoadAllEntriesAsync();
+        Assert.Single(entries);
+        Assert.Equal(0m, entries[0].HourlyRate);
     }
 }

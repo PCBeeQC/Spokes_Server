@@ -1,0 +1,8 @@
+<Project>
+  <PropertyGroup>
+    <!-- Enable fast incremental build acceleration across project references -->
+    <AccelerateBuildsInVisualStudio>true</AccelerateBuildsInVisualStudio>
+    <!-- Produce reference assemblies to enable downstream projects to compile against API surface -->
+    <ProduceReferenceAssembly>true</ProduceReferenceAssembly>
+  </PropertyGroup>
+</Project>

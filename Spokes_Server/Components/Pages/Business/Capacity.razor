@@ -403,7 +403,7 @@
         var curr = start;
         while(curr <= end)
         {
-            list.Add((curr.Year, ISOWeek.GetWeekOfYear(curr.ToDateTime(TimeOnly.MinValue))));
+            list.Add((ISOWeek.GetYear(curr.ToDateTime(TimeOnly.MinValue)), ISOWeek.GetWeekOfYear(curr.ToDateTime(TimeOnly.MinValue))));
             curr = curr.AddDays(7);
         }
         return list.Distinct().ToList();

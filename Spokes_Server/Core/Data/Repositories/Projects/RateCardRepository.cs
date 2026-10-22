@@ -1,4 +1,4 @@
-using Spokes_Server.Core.Models.Accounting;
+using Spokes_Server.Core.Models.Projects;
 
 namespace Spokes_Server.Core.Data.Repositories.Projects;
 

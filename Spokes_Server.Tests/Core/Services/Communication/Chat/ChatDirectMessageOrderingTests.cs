@@ -45,7 +45,7 @@ public class ChatDirectMessageOrderingTests : IDisposable
         _writer.Dispose();
         if (Directory.Exists(_testDataDir))
         {
-            try { Directory.Delete(_testDataDir, true); } catch { }
+            try { Directory.Delete(_testDataDir, true); } catch (Exception ex) { System.Diagnostics.Debug.WriteLine(ex.Message); }
         }
     }
 

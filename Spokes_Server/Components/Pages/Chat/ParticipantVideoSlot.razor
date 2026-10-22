@@ -9,7 +9,8 @@
 <video id="@($"participant-video-{ParticipantId}")"
        autoplay playsinline webkit-playsinline muted
        style="position: absolute; top: 0; left: 0; width: 100%; height: 100%;
-              object-fit: contain; background: #000; z-index: 1; opacity: 0; pointer-events: none; transition: opacity 0.3s ease;">
+              object-fit: contain; background: #000; z-index: 1; opacity: 0; pointer-events: none; transition: opacity 0.3s ease;
+              transform: translateZ(0); will-change: transform;">
 </video>
 
 @code {

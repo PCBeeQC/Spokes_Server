@@ -1,0 +1,279 @@
+@using Spokes_Server.Core.Configuration
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Services.UI
+@using Microsoft.Extensions.Localization
+@inject IStringLocalizer<AppResources> Loc
+@inject AppLabelService AppLabels
+
+<style>
+    .privacy-preset-alert.mud-alert {
+        align-items: center !important;
+    }
+    .privacy-preset-alert .mud-alert-icon {
+        align-self: center !important;
+        display: flex !important;
+        align-items: center !important;
+    }
+    .privacy-preset-alert .mud-alert-message {
+        width: 100% !important;
+        flex-grow: 1 !important;
+    }
+</style>
+
+<MudStack Spacing="4">
+    @* --- Preset Header & Policy Overview Card --- *@
+    <SettingsCard Title="@Loc["User Privacy & Discovery"]"
+                  Icon="@Icons.Material.Filled.Security"
+                  Description="@(string.Format(Loc["Control how {0} can discover and contact one another on this {1}."].Value, AppLabels.Employees.ToLower(), AppLabels.Company.ToLower()))"
+                  ShowDivider="false">
+        <MudGrid>
+            <MudItem xs="12" sm="8" md="6">
+                <MudSelect T="PrivacyPreset" Label="@Loc["Privacy Preset"]" Variant="Variant.Outlined" Margin="Margin.Dense" ShrinkLabel="true"
+                           Value="Profile.Privacy.Preset" ValueChanged="OnPresetChanged">
+                    <MudSelectItem Value="@PrivacyPreset.Open">@(string.Format(Loc["Open (Standard {0} directory and search)"].Value, AppLabels.Company.ToLower()))</MudSelectItem>
+                    <MudSelectItem Value="@PrivacyPreset.TeamSilo">@(string.Format(Loc["{0} Silo (Isolated to members within shared {1})"].Value, AppLabels.Team, AppLabels.Teams.ToLower()))</MudSelectItem>
+                    <MudSelectItem Value="@PrivacyPreset.TeamAndExactDiscovery">@(string.Format(Loc["{0} + Exact Discovery ({1} silo with exact email or full name lookup)"].Value, AppLabels.Team, AppLabels.Team.ToLower()))</MudSelectItem>
+                    <MudSelectItem Value="@PrivacyPreset.PrivateContactsOnly">@Loc["Private Contacts Only (No directory; connect via exact credentials)"]</MudSelectItem>
+                    <MudSelectItem Value="@PrivacyPreset.StealthSupportOnly">@(string.Format(Loc["Stealth / Support Only ({0} can only see and reach staff)"].Value, AppLabels.Employees))</MudSelectItem>
+                    <MudSelectItem Value="@PrivacyPreset.Custom">@Loc["Custom Configuration"]</MudSelectItem>
+                </MudSelect>
+            </MudItem>
+        </MudGrid>
+
+        @if (!IsCustom)
+        {
+            <MudAlert Severity="Severity.Info" Variant="Variant.Text" Class="privacy-preset-alert mt-3 py-2 px-3" Icon="@Icons.Material.Filled.Info">
+                <div class="d-flex flex-column flex-sm-row justify-space-between align-start align-sm-center gap-2 w-100" style="width: 100%;">
+                    <div>
+                        <MudText Typo="Typo.body2">
+                            <b>@Loc["Active Preset:"] @GetPresetDisplayName(Profile.Privacy.Preset)</b>
+                        </MudText>
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">
+                            @GetPresetDescription(Profile.Privacy.Preset)
+                        </MudText>
+                    </div>
+                    <MudButton StartIcon="@Icons.Material.Filled.Tune" Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small" OnClick="EnableCustomMode" Class="flex-shrink-0 align-self-end align-self-sm-center">
+                        @Loc["Customize Settings"]
+                    </MudButton>
+                </div>
+            </MudAlert>
+        }
+        else
+        {
+            <MudAlert Severity="Severity.Normal" Variant="Variant.Text" Class="privacy-preset-alert mt-3 py-2 px-3" Icon="@Icons.Material.Filled.Tune">
+                <MudText Typo="Typo.body2">
+                    <b>@Loc["Custom Configuration Active"]</b>
+                </MudText>
+                <MudText Typo="Typo.caption" Color="Color.Secondary">
+                    @Loc["Individual privacy, channel, and discovery policies can be customized below."]
+                </MudText>
+            </MudAlert>
+        }
+    </SettingsCard>
+
+    @if (IsCustom)
+    {
+        @* --- Card 1: Directory & User Discovery --- *@
+        <SettingsCard Title="@(string.Format(Loc["Directory & {0} Discovery"].Value, AppLabels.Employee))"
+                      Icon="@Icons.Material.Filled.PersonSearch"
+                      Description="@(string.Format(Loc["Configure default {0} visibility and how {1} find and connect with one another."].Value, AppLabels.Employee.ToLower(), AppLabels.Employees.ToLower()))">
+            <MudGrid>
+                <MudItem xs="12" sm="6">
+                    <MudSelect T="NetworkScope" Label="@Loc["Base Network Scope"]" Variant="Variant.Outlined" Margin="Margin.Dense" ShrinkLabel="true"
+                               Value="Profile.Privacy.BaseScope" ValueChanged="@(async (NetworkScope scope) => { Profile.Privacy.BaseScope = scope; await TriggerSave(); })"
+                               HelperText="@(string.Format(Loc["Default visibility boundary for {0}."].Value, AppLabels.Employees.ToLower()))">
+                        <MudSelectItem Value="@NetworkScope.All">@Loc["All (Everyone visible)"]</MudSelectItem>
+                        <MudSelectItem Value="@NetworkScope.SameTeam">@(string.Format(Loc["Same {0} Only"].Value, AppLabels.Team))</MudSelectItem>
+                        <MudSelectItem Value="@NetworkScope.ContactsOnly">@Loc["Contacts Only"]</MudSelectItem>
+                        <MudSelectItem Value="@NetworkScope.None">@Loc["None (Isolated)"]</MudSelectItem>
+                    </MudSelect>
+                </MudItem>
+
+                <MudItem xs="12" sm="6">
+                    <MudSelect T="UserDiscoveryMethod" Label="@Loc["Out-of-Band Discovery Method"]" Variant="Variant.Outlined" Margin="Margin.Dense" ShrinkLabel="true"
+                               Value="Profile.Privacy.DiscoveryMethod" ValueChanged="@(async (UserDiscoveryMethod method) => { Profile.Privacy.DiscoveryMethod = method; await TriggerSave(); })"
+                               HelperText="@(string.Format(Loc["How {0} find people outside their base network."].Value, AppLabels.Employees.ToLower()))">
+                        <MudSelectItem Value="@UserDiscoveryMethod.OpenSearch">@Loc["Open Partial Search"]</MudSelectItem>
+                        <MudSelectItem Value="@UserDiscoveryMethod.ExactEmailOnly">@Loc["Exact Email Only"]</MudSelectItem>
+                        <MudSelectItem Value="@UserDiscoveryMethod.ExactEmailOrUsername">@Loc["Exact Email or Full Name"]</MudSelectItem>
+                        <MudSelectItem Value="@UserDiscoveryMethod.None">@Loc["Disabled"]</MudSelectItem>
+                    </MudSelect>
+                </MudItem>
+
+                <MudItem xs="12">
+                    <SettingsSwitchRow Title="@(string.Format(Loc["Allow {0} Directory Browsing"].Value, AppLabels.Company))"
+                                       Description="@(string.Format(Loc["Enable {0} to browse the {1} directory."].Value, AppLabels.Employees.ToLower(), AppLabels.Company.ToLower()))"
+                                       Value="Profile.Privacy.AllowDirectoryBrowsing"
+                                       ValueChanged="@(async (bool val) => { Profile.Privacy.AllowDirectoryBrowsing = val; await TriggerSave(); })" />
+                </MudItem>
+            </MudGrid>
+        </SettingsCard>
+
+        @* --- Card 2: Staff & Administration Access --- *@
+        <SettingsCard Title="@Loc["Staff & Support Access"]"
+                      Icon="@Icons.Material.Filled.AdminPanelSettings"
+                      Description="@(string.Format(Loc["Determine if {0} can find administrators and contact support when discovery is limited."].Value, AppLabels.Employees.ToLower()))">
+            <MudGrid>
+                <MudItem xs="12" sm="6">
+                    <MudSelect T="AdminVisibilityMode" Label="@Loc["Admin Visibility"]" Variant="Variant.Outlined" Margin="Margin.Dense" ShrinkLabel="true"
+                               Value="Profile.Privacy.AdminVisibility" ValueChanged="@(async (AdminVisibilityMode mode) => { Profile.Privacy.AdminVisibility = mode; await TriggerSave(); })"
+                               HelperText="@(string.Format(Loc["Controls whether staff can be discovered even when {0} discovery is restricted."].Value, AppLabels.Employee.ToLower()))">
+                        <MudSelectItem Value="@AdminVisibilityMode.AllAdmins">@Loc["All Admins Discoverable"]</MudSelectItem>
+                        <MudSelectItem Value="@AdminVisibilityMode.DesignatedAdminsOnly">@Loc["Designated Admins Only"]</MudSelectItem>
+                        <MudSelectItem Value="@AdminVisibilityMode.None">@Loc["Hidden (Follows base scope)"]</MudSelectItem>
+                    </MudSelect>
+                </MudItem>
+
+                @if (Profile.Privacy.AdminVisibility == AdminVisibilityMode.DesignatedAdminsOnly)
+                {
+                    <MudItem xs="12" sm="6">
+                        <MudSelect T="string" Label="@Loc["Designated Support Admins"]" MultiSelection="true" Variant="Variant.Outlined" Margin="Margin.Dense" ShrinkLabel="true"
+                                   SelectedValues="Profile.Privacy.DesignatedAdminIds"
+                                   SelectedValuesChanged="OnDesignatedAdminsChanged"
+                                   ToStringFunc="@GetAdminDisplayName"
+                                   MultiSelectionTextFunc="@FormatDesignatedAdminsText"
+                                   HelperText="@Loc["Select administrators who will appear in the directory as reachable support contacts."]">
+                            @foreach (var admin in ActiveAdmins)
+                            {
+                                <MudSelectItem Value="@admin.Id">@admin.FullName (@admin.Email)</MudSelectItem>
+                            }
+                        </MudSelect>
+                    </MudItem>
+                }
+            </MudGrid>
+        </SettingsCard>
+
+        @* --- Card 3: Public Channels & Chat Communication --- *@
+        <SettingsCard Title="@Loc["Public Channels & Chat"]"
+                      Icon="@Icons.Material.Filled.Forum"
+                      Description="@Loc["Manage public channel posting, member roster privacy, and broadcast announcement reactions."]">
+            <MudGrid>
+                <MudItem xs="12" sm="6">
+                    <MudSelect T="PublicChannelPolicy" Label="@Loc["Public Channels Policy"]" Variant="Variant.Outlined" Margin="Margin.Dense" ShrinkLabel="true"
+                               Value="Profile.Privacy.PublicChannels" ValueChanged="@(async (PublicChannelPolicy policy) => { Profile.Privacy.PublicChannels = policy; await TriggerSave(); })"
+                               HelperText="@(string.Format(Loc["Define who can participate in public {0} channels."].Value, AppLabels.Company.ToLower()))">
+                        <MudSelectItem Value="@PublicChannelPolicy.Allowed">@(string.Format(Loc["Allowed (All {0} can post & chat)"].Value, AppLabels.Employees.ToLower()))</MudSelectItem>
+                        <MudSelectItem Value="@PublicChannelPolicy.AnnouncementOnly">@(string.Format(Loc["Announcement Only (Staff post, {0} read)"].Value, AppLabels.Employees.ToLower()))</MudSelectItem>
+                        <MudSelectItem Value="@PublicChannelPolicy.Disabled">@Loc["Disabled (No public channels)"]</MudSelectItem>
+                    </MudSelect>
+                </MudItem>
+
+                <MudItem xs="12" sm="6">
+                    <MudSelect T="AnnouncementReactionMode" Label="@Loc["Announcement Channel Reactions"]" Variant="Variant.Outlined" Margin="Margin.Dense" ShrinkLabel="true"
+                               Value="Profile.Privacy.AnnouncementReactions" ValueChanged="@(async (AnnouncementReactionMode mode) => { Profile.Privacy.AnnouncementReactions = mode; await TriggerSave(); })"
+                               HelperText="@(string.Format(Loc["Control whether announcement reactions display {0} names or anonymous counts."].Value, AppLabels.Employee.ToLower()))">
+                        <MudSelectItem Value="@AnnouncementReactionMode.Allowed">@(string.Format(Loc["Allowed (Standard with {0} names)"].Value, AppLabels.Employee.ToLower()))</MudSelectItem>
+                        <MudSelectItem Value="@AnnouncementReactionMode.CountOnly">@Loc["Anonymous Counts Only (Names hidden)"]</MudSelectItem>
+                        <MudSelectItem Value="@AnnouncementReactionMode.Disabled">@Loc["Disabled"]</MudSelectItem>
+                    </MudSelect>
+                </MudItem>
+
+                <MudItem xs="12">
+                    <SettingsSwitchRow Title="@(string.Format(Loc["Hide Public Channel {0} List"].Value, AppLabels.Employee))"
+                                       Description="@(string.Format(Loc["Prevents non-admin {0} from viewing the complete roster in public channels."].Value, AppLabels.Employees.ToLower()))"
+                                       Value="Profile.Privacy.HidePublicChannelMemberList"
+                                       ValueChanged="@(async (bool val) => { Profile.Privacy.HidePublicChannelMemberList = val; await TriggerSave(); })" />
+                </MudItem>
+            </MudGrid>
+        </SettingsCard>
+
+        @* --- Card 4: Calendar & Media Sharing --- *@
+        <SettingsCard Title="@Loc["Calendar & Media Sharing"]"
+                      Icon="@Icons.Material.Filled.PermMedia"
+                      Description="@Loc["Control event creation permissions and photo album audience visibility."]">
+            <MudStack Spacing="1">
+                <SettingsSwitchRow Title="@(string.Format(Loc["Allow Regular {0} to Create {1}-Wide Calendar Events"].Value, AppLabels.Employees, AppLabels.Company))"
+                                   Description="@(string.Format(Loc["When enabled, standard {0} can schedule events visible on the {1} calendar."].Value, AppLabels.Employees.ToLower(), AppLabels.Company.ToLower()))"
+                                   Value="Profile.Privacy.AllowNonAdminsCompanyWideCalendar"
+                                   ValueChanged="@(async (bool val) => { Profile.Privacy.AllowNonAdminsCompanyWideCalendar = val; await TriggerSave(); })" />
+
+                <MudDivider />
+
+                <SettingsSwitchRow Title="@(string.Format(Loc["Restrict Album {0} List on Public Channels"].Value, AppLabels.Employee))"
+                                   Description="@(string.Format(Loc["Hides viewer and shared {0} lists on photo albums linked to public channels."].Value, AppLabels.Employee.ToLower()))"
+                                   Value="Profile.Privacy.RestrictAlbumAudienceVisibility"
+                                   ValueChanged="@(async (bool val) => { Profile.Privacy.RestrictAlbumAudienceVisibility = val; await TriggerSave(); })" />
+            </MudStack>
+        </SettingsCard>
+    }
+</MudStack>
+
+@code {
+    [Parameter, EditorRequired]
+    public CompanyProfile Profile { get; set; } = default!;
+
+    [Parameter]
+    public List<Employee> ActiveAdmins { get; set; } = [];
+
+    [Parameter]
+    public EventCallback OnSaved { get; set; }
+
+    [Parameter]
+    public bool IsFriendEdition { get; set; }
+
+    private bool IsCustom => Profile.Privacy.Preset == PrivacyPreset.Custom;
+
+    private async Task OnPresetChanged(PrivacyPreset preset)
+    {
+        Profile.Privacy.ApplyPreset(preset);
+        await TriggerSave();
+    }
+
+    private async Task EnableCustomMode()
+    {
+        Profile.Privacy.Preset = PrivacyPreset.Custom;
+        await TriggerSave();
+    }
+
+    private async Task OnDesignatedAdminsChanged(IEnumerable<string> ids)
+    {
+        Profile.Privacy.DesignatedAdminIds = ids?.ToList() ?? new List<string>();
+        await TriggerSave();
+    }
+
+    private async Task TriggerSave()
+    {
+        if (OnSaved.HasDelegate)
+        {
+            await OnSaved.InvokeAsync();
+        }
+    }
+
+    private string GetPresetDisplayName(PrivacyPreset preset) => preset switch
+    {
+        PrivacyPreset.Open => Loc["Open"].Value,
+        PrivacyPreset.TeamSilo => string.Format(Loc["{0} Silo"].Value, AppLabels.Team),
+        PrivacyPreset.TeamAndExactDiscovery => string.Format(Loc["{0} + Exact Discovery"].Value, AppLabels.Team),
+        PrivacyPreset.PrivateContactsOnly => Loc["Private Contacts Only"].Value,
+        PrivacyPreset.StealthSupportOnly => Loc["Stealth / Support Only"].Value,
+        PrivacyPreset.Custom => Loc["Custom Configuration"].Value,
+        _ => preset.ToString()
+    };
+
+    private string GetPresetDescription(PrivacyPreset preset) => preset switch
+    {
+        PrivacyPreset.Open => string.Format(Loc["All {0} are discoverable across the {1} with open search and directory browsing."].Value, AppLabels.Employees.ToLower(), AppLabels.Company.ToLower()),
+        PrivacyPreset.TeamSilo => string.Format(Loc["{0} are strictly scoped to shared {1}. Directory browsing and out-of-band discovery are disabled."].Value, AppLabels.Employees, AppLabels.Teams.ToLower()),
+        PrivacyPreset.TeamAndExactDiscovery => string.Format(Loc["{0} are scoped to shared {1}, but can connect across {2} by searching exact emails or full names."].Value, AppLabels.Employees, AppLabels.Teams.ToLower(), AppLabels.Teams.ToLower()),
+        PrivacyPreset.PrivateContactsOnly => string.Format(Loc["{0} directory and public channels are disabled. {1} only see and reach explicit private contacts."].Value, AppLabels.Company, AppLabels.Employees),
+        PrivacyPreset.StealthSupportOnly => string.Format(Loc["{0} are isolated from each other and can only discover and contact designated administrators for support."].Value, AppLabels.Employees),
+        _ => string.Empty
+    };
+
+    private string GetAdminDisplayName(string adminId)
+    {
+        if (string.IsNullOrEmpty(adminId)) return string.Empty;
+        var admin = ActiveAdmins.FirstOrDefault(a => a.Id == adminId);
+        return admin != null ? admin.FullName : adminId;
+    }
+
+    private string FormatDesignatedAdminsText(IReadOnlyList<string> selectedIds)
+    {
+        if (selectedIds == null || selectedIds.Count == 0) return string.Empty;
+        var names = selectedIds
+            .Select(id => ActiveAdmins.FirstOrDefault(a => a.Id == id)?.FullName)
+            .Where(name => !string.IsNullOrEmpty(name))
+            .ToList();
+        return names.Count > 0 ? string.Join(", ", names) : string.Empty;
+    }
+}

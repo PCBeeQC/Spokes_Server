@@ -5,17 +5,18 @@
 @inject Database Db
 @inject IDialogService DialogService
 @inject ISnackbar Snackbar
-@inject Spokes_Server.Core.Services.Core.AppLabelService AppLabels
+@inject AppLabelService AppLabels
 @inject NavigationManager Nav
 @inject UserService UserService
+@inject IUserPrivacyService PrivacyService
 
 <div class="d-flex flex-wrap gap-4 align-center mb-6">
-    <MudTextField @bind-Value="searchString" Placeholder="@($"Search {AppLabels.Teams}")" Variant="Variant.Outlined" Margin="Margin.Dense" Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search" IconSize="Size.Medium" Class="flex-grow-1" Style="max-width: 600px; background-color: var(--mud-palette-surface);" />
+    <MudTextField @bind-Value="searchString" Placeholder="@string.Format(Loc["Search {0}"].Value, AppLabels.Teams)" Variant="Variant.Outlined" Margin="Margin.Dense" Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search" IconSize="Size.Medium" Class="flex-grow-1" Style="max-width: 600px; background-color: var(--mud-palette-surface);" />
     <MudSpacer />
     @if (_isAdminOrManager)
     {
         <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.GroupAdd" OnClick="AddTeam">
-            Create @AppLabels.Team
+            @string.Format(Loc["Create {0}"].Value, AppLabels.Team)
         </MudButton>
     }
 </div>
@@ -32,12 +33,12 @@
                             <div class="d-flex align-center gap-1" style="width: 100%;">
                                 <MudText Typo="Typo.subtitle1" Class="flex-grow-1 text-truncate" Style="font-weight: 700;">@context.Name</MudText>
                             </div>
-                            <MudText Typo="Typo.body2" Color="Color.Secondary" Class="text-truncate" Style="width: 100%;">@(GetEmployeeName(context.LeaderId)) (Leader)</MudText>
+                            <MudText Typo="Typo.body2" Color="Color.Secondary" Class="text-truncate" Style="width: 100%;">@(string.Format(Loc["{0} (Leader)"].Value, GetEmployeeName(context.LeaderId)))</MudText>
                             
                             <div class="d-flex align-center mt-2">
                                 <MudIcon Icon="@Icons.Material.Filled.Group" Size="Size.Small" Color="Color.Secondary" Class="mr-1" Style="font-size: 16px;" />
                                 <MudText Typo="Typo.caption" Color="Color.Secondary" Style="font-weight: 500;">
-                                    @GetMemberCount(context) Members
+                                    @(GetMemberCount(context) == 1 ? string.Format(Loc["{0} Member"].Value, GetMemberCount(context)) : string.Format(Loc["{0} Members"].Value, GetMemberCount(context)))
                                 </MudText>
                             </div>
                         </div>
@@ -46,34 +47,21 @@
                             @if (_isAdminOrManager)
                             {
                                 <MudMenu Icon="@Icons.Material.Filled.MoreVert" Size="Size.Small" AnchorOrigin="Origin.BottomRight" TransformOrigin="Origin.TopRight" Dense="true" @onclick:stopPropagation="true">
-                                    <MudMenuItem Icon="@Icons.Material.Filled.Edit" OnClick="@(() => EditTeam(context))">Edit</MudMenuItem>
-                                    <MudMenuItem Icon="@Icons.Material.Filled.Delete" IconColor="Color.Error" OnClick="@(() => DeleteTeam(context))">Delete</MudMenuItem>
+                                    <MudMenuItem Icon="@Icons.Material.Filled.Edit" OnClick="@(() => EditTeam(context))">@Loc["Edit"]</MudMenuItem>
+                                    <MudMenuItem Icon="@Icons.Material.Filled.Delete" IconColor="Color.Error" OnClick="@(() => DeleteTeam(context))">@Loc["Delete"]</MudMenuItem>
                                 </MudMenu>
                             }
                         </div>
                     </div>
                 </MudCardContent>
                 <MudCardActions Class="px-4 pb-4 pt-0 d-flex justify-space-between align-center">
-                    <MudButton Variant="Variant.Text" Color="Color.Primary" Size="Size.Small" OnClick="@(() => ViewTeam(context))">View @AppLabels.Team</MudButton>
-                    <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small" Class="rounded-pill px-4" Style="text-transform: none; font-weight: 600;" DisableElevation="true" OnClick="@(() => InitiateTeamMessage(context))">Message</MudButton>
+                    <MudButton Variant="Variant.Text" Color="Color.Primary" Size="Size.Small" OnClick="@(() => ViewTeam(context))">@string.Format(Loc["View {0}"].Value, AppLabels.Team)</MudButton>
+                    <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small" Class="rounded-pill px-4" Style="text-transform: none; font-weight: 600;" DropShadow="false" OnClick="@(() => InitiateTeamMessage(context))">@Loc["Message"]</MudButton>
                 </MudCardActions>
             </MudCard>
         </MudItem>
     }
 </MudGrid>
-
-<style>
-    .directory-card {
-        transition: transform 0.2s ease, box-shadow 0.2s ease;
-        border: 1px solid var(--mud-palette-lines-default);
-        min-height: 180px; /* guarantees all cards are the same height */
-    }
-    .directory-card:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 4px 12px rgba(0,0,0,0.08) !important;
-        border-color: var(--mud-palette-primary-hover);
-    }
-</style>
 
 @code {
     private List<Team> TeamList = [];
@@ -100,7 +88,11 @@
         return false;
     }
 
-    private void RefreshList() => TeamList = Db.Teams.GetAll().OrderBy(t => t.Name).ToList();
+    private void RefreshList()
+    {
+        var allTeams = Db.Teams.GetAll().OrderBy(t => t.Name);
+        TeamList = PrivacyService.FilterDiscoverableTeams(_currentUser, allTeams);
+    }
 
     private string GetEmployeeName(string id)
     {
@@ -126,7 +118,7 @@
     private async Task AddTeam()
     {
         var t = new Team();
-        var result = await ShowDialog(t, $"Create New {AppLabels.Team}");
+        var result = await ShowDialog(t, string.Format(Loc["Create New {0}"].Value, AppLabels.Team));
         if (result != null)
         {
             Db.Teams.Save(result.Team);
@@ -164,7 +156,8 @@
     {
         // Clone to avoid live edit
         var clone = System.Text.Json.JsonSerializer.Deserialize<Team>(System.Text.Json.JsonSerializer.Serialize(team));
-        var result = await ShowDialog(clone, "Edit Team");
+        if (clone == null) return;
+        var result = await ShowDialog(clone, string.Format(Loc["Edit {0}"].Value, AppLabels.Team));
         if (result != null)
         {
             Db.Teams.Save(result.Team);
@@ -204,20 +197,20 @@
     {
         var parameters = new DialogParameters
         {
-            ["ContentText"] = $"Are you sure you want to delete {team.Name}? Members will need to be reassigned.",
-            ["ButtonText"] = "Delete",
+            ["ContentText"] = string.Format(Loc["Are you sure you want to delete {0}? Members will need to be reassigned."].Value, team.Name),
+            ["ButtonText"] = Loc["Delete"].Value,
             ["Color"] = Color.Error
         };
 
         var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Small };
-        var dialog = await DialogService.ShowAsync<ConfirmDialog>("Delete Team?", parameters, options);
+        var dialog = await DialogService.ShowAsync<ConfirmDialog>(string.Format(Loc["Delete {0}?"].Value, AppLabels.Team), parameters, options);
         var result = await dialog.Result;
 
-        if (!result.Canceled)
+        if (result is { Canceled: false })
         {
             Db.Teams.Delete(team.Id);
             RefreshList();
-            Snackbar.Add("Team deleted", Severity.Success);
+            Snackbar.Add(string.Format(Loc["{0} deleted"].Value, AppLabels.Team), Severity.Success);
         }
     }
 
@@ -232,7 +225,7 @@
         var dialog = await DialogService.ShowAsync<TeamDialog>(title, parameters);
         var result = await dialog.Result;
 
-        if (!result.Canceled && result.Data is TeamDialog.TeamDialogResult data)
+        if (result is { Canceled: false, Data: TeamDialog.TeamDialogResult data })
         {
             return data;
         }

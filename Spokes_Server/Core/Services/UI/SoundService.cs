@@ -2,7 +2,8 @@ using Microsoft.JSInterop;
 using System.Threading.Tasks;
 using Spokes_Server.Core.Models.Communication.Notifications;
 using Spokes_Server.Core.Services.Communication.Notifications;
-using Spokes_Server.Core.Services.Core;
+using Spokes_Server.Core.Services.Communication.Notifications.Presentation;
+using Spokes_Server.Core.Services.Identity;
 
 namespace Spokes_Server.Core.Services.UI;
 
@@ -17,22 +18,17 @@ public class SoundService : ISoundService
         _userService = userService;
     }
 
-    public ValueTask PlayChannelJoinAsync()
+    public Task PlayChannelLeaveAsync()
     {
-        return _js.InvokeVoidAsync("SoundManager.play", "channel_join", false);
+        return _js.InvokeVoidAsync("SoundManager.play", "channel_leave", false).AsTask();
     }
 
-    public ValueTask PlayChannelLeaveAsync()
-    {
-        return _js.InvokeVoidAsync("SoundManager.play", "channel_leave", false);
-    }
-
-    public ValueTask PlaySoundAsync(string soundName, bool isPreview = false)
+    public Task PlaySoundAsync(string soundName, bool isPreview = false)
     {
         if (string.IsNullOrWhiteSpace(soundName) || soundName == NotificationSoundIds.SystemDefault)
-            return ValueTask.CompletedTask;
+            return Task.CompletedTask;
 
-        return _js.InvokeVoidAsync("SoundManager.play", soundName, isPreview);
+        return _js.InvokeVoidAsync("SoundManager.play", soundName, isPreview).AsTask();
     }
 
     public async Task PlayNotificationSoundAsync(string category, string? explicitSoundId = null, bool isPreview = false)
@@ -52,13 +48,13 @@ public class SoundService : ISoundService
         }
     }
 
-    public ValueTask StopCallRingtoneAsync()
+    public Task StopCallRingtoneAsync()
     {
-        return _js.InvokeVoidAsync("SoundManager.stopCallRingtone");
+        return _js.InvokeVoidAsync("SoundManager.stopCallRingtone").AsTask();
     }
 
-    public ValueTask StopPreviewAsync()
+    public Task StopPreviewAsync()
     {
-        return _js.InvokeVoidAsync("SoundManager.stopPreview");
+        return _js.InvokeVoidAsync("SoundManager.stopPreview").AsTask();
     }
 }

@@ -1,12 +1,11 @@
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
-using Microsoft.AspNetCore.Components;
-using MudBlazor;
-using Spokes_Server.Components.Shared;
 using Spokes_Server.Core.Data.Repositories.Communication;
 using Spokes_Server.Core.Models.Communication;
 using Spokes_Server.Core.Services.Communication;
+using Spokes_Server.Core.Services.Communication.Notifications;
+using Spokes_Server.Core.Services.Communication.Notifications.Presentation;
 using Spokes_Server.Core.Services.Communication.Presence;
 
 namespace Spokes_Server.Core.Services.Communication.Email;
@@ -15,10 +14,9 @@ namespace Spokes_Server.Core.Services.Communication.Email;
 /// Service that provides global email notifications.
 /// Tracks unread inbox email count and shows snackbars when new emails arrive.
 /// </summary>
-public class EmailNotificationService : IUserNotificationService, IAsyncDisposable
+public class EmailNotificationService : IAsyncDisposable
 {
-    private readonly ISnackbar _snackbar;
-    private readonly NavigationManager _nav;
+    private readonly IUiNotificationPresenter _presenter;
     private readonly EmailSyncStateService _syncState;
     private readonly EmailFolderRepository _emailFolders;
     private readonly EmailMessageRepository _emailMessages;
@@ -30,16 +28,14 @@ public class EmailNotificationService : IUserNotificationService, IAsyncDisposab
     public event Action? OnUnreadCountChanged;
 
     public EmailNotificationService(
-        ISnackbar snackbar,
-        NavigationManager nav,
+        IUiNotificationPresenter presenter,
         EmailSyncStateService syncState,
         EmailFolderRepository emailFolders,
         EmailMessageRepository emailMessages,
         UserCircuitContext? circuitContext = null,
         PresenceStateService? presenceState = null)
     {
-        _snackbar = snackbar;
-        _nav = nav;
+        _presenter = presenter ?? NullUiNotificationPresenter.Instance;
         _syncState = syncState;
         _emailFolders = emailFolders;
         _emailMessages = emailMessages;
@@ -53,9 +49,9 @@ public class EmailNotificationService : IUserNotificationService, IAsyncDisposab
         return _circuitContext.ShouldDisplayInAppNotification(_presenceState);
     }
 
-    public async Task InitializeAsync(string userId)
+    public Task InitializeAsync(string userId)
     {
-        if (_currentUserId != null) return; // Already initialized
+        if (_currentUserId != null) return Task.CompletedTask; // Already initialized
 
         _currentUserId = userId;
 
@@ -66,7 +62,7 @@ public class EmailNotificationService : IUserNotificationService, IAsyncDisposab
         _syncState.OnNewEmailReceived += OnNewEmailReceived;
         _syncState.OnUnreadCountChanged += HandleUnreadCountChanged;
 
-        await Task.CompletedTask;
+        return Task.CompletedTask;
     }
 
     private void HandleUnreadCountChanged(string employeeId)
@@ -102,36 +98,16 @@ public class EmailNotificationService : IUserNotificationService, IAsyncDisposab
         LoadUnreadCount();
 
         // Show snackbar notification if they are not already on the email page and actively viewing the app
-        var currentUri = _nav.Uri;
-        if (currentUri.Contains("/email", StringComparison.OrdinalIgnoreCase)) return;
+        if (_presenter.IsOnEmailPage()) return;
         if (!ShouldDisplayInAppNotification()) return;
 
-        _snackbar.Add<EmailNotificationContent>(
-            new Dictionary<string, object>
-            {
-                { "SenderName", msg.FromName },
-                { "Subject", msg.Subject },
-                { "Snippet", msg.Snippet }
-            },
-            Severity.Normal,
-            config =>
-            {
-                config.VisibleStateDuration = 5000;
-                config.ShowCloseIcon = true;
-                config.SnackbarVariant = Variant.Filled;
-                config.HideIcon = true;
-                config.OnClick = _ =>
-                {
-                    _nav.NavigateTo("/email");
-                    return Task.CompletedTask;
-                };
-            });
+        _presenter.ShowEmailNotification(msg.FromName, msg.Subject, msg.Snippet);
     }
 
-    public async ValueTask DisposeAsync()
+    public ValueTask DisposeAsync()
     {
         _syncState.OnNewEmailReceived -= OnNewEmailReceived;
         _syncState.OnUnreadCountChanged -= HandleUnreadCountChanged;
-        await Task.CompletedTask;
+        return ValueTask.CompletedTask;
     }
 }

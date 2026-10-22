@@ -88,7 +88,7 @@
                             insert, <b>Esc</b> to close</MudText>
                     </div>
                     <div id="@($"{ElementId}-panel")" style="max-height: 180px; overflow-y: auto; padding: 0 4px 4px 4px;">
-                        <MudList T="ContextTagDefinition" Dense="true" Clickable="true">
+                        <MudList T="ContextTagDefinition" Dense="true" ReadOnly="false">
                             @{
                                 int index = 0;
                                 foreach (var group in filtered.GroupBy(t => t.Category))

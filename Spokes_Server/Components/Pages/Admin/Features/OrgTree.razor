@@ -1,6 +1,5 @@
-@using Spokes_Server.Core.Models.HR
-@using Spokes_Server.Core.Data
-@inject Database Db
+@using Spokes_Server.Aggregate.Contexts
+@inject HrContext Hr
 @inject NavigationManager Nav
 
 <MudPaper Class="pa-4" Elevation="0" Outlined="true">
@@ -8,44 +7,47 @@
     
     @if (TreeItems.Any())
     {
-         <MudTreeView Items="TreeItems" MultiSelection="false">
+         <MudTreeView T="Employee" Items="TreeItems" SelectionMode="SelectionMode.SingleSelection">
             <ItemTemplate>
-                <MudTreeViewItem @bind-Expanded="@context.Expanded" Items="@context.Children" Value="@context.Value">
+                <MudTreeViewItem T="Employee" @bind-Expanded="@context.Expanded" Items="@context.Children" Value="@context.Value">
                     <Content>
                         <MudTreeViewItemToggleButton @bind-Expanded="@context.Expanded" Visible="@context.HasChildren" />
-                        <MudPaper Elevation="0" Class="d-flex flex-wrap align-center gap-3 pa-2 my-1 border-solid border-1 mud-border-primary" Style="width: 100%; border-radius: 8px;">
-                             @if (context.Value.HasCustomAvatar)
-                             {
-                                 <MudAvatar Size="Size.Medium">
-                                     <MudImage Src="@($"/spokesapi/Media/Avatar/{context.Value.Id}?v={context.Value.AvatarVersion}")" ObjectFit="ObjectFit.Cover" />
-                                 </MudAvatar>
-                             }
-                             else
-                             {
-                                 <MudAvatar Size="Size.Medium" Style="@($"background-color: {context.Value.ProfileColor ?? Colors.DeepPurple.Default}; color: {Colors.Shades.White};")">
-                                     @context.Value.FirstName?.FirstOrDefault()@context.Value.LastName?.FirstOrDefault()
-                                 </MudAvatar>
-                             }
+                        @if (context.Value is { } emp)
+                        {
+                            <MudPaper Elevation="0" Class="d-flex flex-wrap align-center gap-3 pa-2 my-1 border-solid border-1 mud-border-primary" Style="width: 100%; border-radius: 8px;">
+                                 @if (emp.HasCustomAvatar)
+                                 {
+                                     <MudAvatar Size="Size.Medium">
+                                         <MudImage Src="@($"/spokesapi/Media/Avatar/{emp.Id}?v={emp.AvatarVersion}")" ObjectFit="ObjectFit.Cover" />
+                                     </MudAvatar>
+                                 }
+                                 else
+                                 {
+                                     <MudAvatar Size="Size.Medium" Style="@($"background-color: {emp.ProfileColor ?? Colors.DeepPurple.Default}; color: {Colors.Shades.White};")">
+                                         @emp.FirstName?.FirstOrDefault()@emp.LastName?.FirstOrDefault()
+                                     </MudAvatar>
+                                 }
                                  <div class="d-flex flex-column">
-                                 <MudText Typo="Typo.body1"><b>@context.Value.FullName</b></MudText>
-                                 <div class="d-flex align-center gap-2 flex-wrap">
-                                     <MudText Typo="Typo.caption" Color="Color.Secondary">@context.Value.Position</MudText>
-                                     @if (!string.IsNullOrEmpty(GetTeamName(context.Value.TeamId)))
-                                     {
-                                         <MudChip T="string" Size="Size.Small" Variant="Variant.Text" Color="Color.Info" Class="ml-2">@GetTeamName(context.Value.TeamId)</MudChip>
-                                     }
-                                     @foreach(var ledTeam in GetTeamsLedBy(context.Value.Id))
-                                     {
-                                          <MudChip T="string" Size="Size.Small" Variant="Variant.Filled" Color="Color.Primary" Icon="@Icons.Material.Filled.Star" Class="ml-2">Lead of @ledTeam.Name</MudChip>
-                                     }
+                                     <MudText Typo="Typo.body1"><b>@emp.FullName</b></MudText>
+                                     <div class="d-flex align-center gap-2 flex-wrap">
+                                         <MudText Typo="Typo.caption" Color="Color.Secondary">@emp.Position</MudText>
+                                         @if (!string.IsNullOrEmpty(GetTeamName(emp.TeamId)))
+                                         {
+                                             <MudChip T="string" Size="Size.Small" Variant="Variant.Text" Color="Color.Info" Class="ml-2">@GetTeamName(emp.TeamId)</MudChip>
+                                         }
+                                         @foreach(var ledTeam in GetTeamsLedBy(emp.Id))
+                                         {
+                                              <MudChip T="string" Size="Size.Small" Variant="Variant.Filled" Color="Color.Primary" Icon="@Icons.Material.Filled.Star" Class="ml-2">Lead of @ledTeam.Name</MudChip>
+                                         }
+                                     </div>
                                  </div>
-                             </div>
-                             <MudSpacer />
-                             <MudTooltip Text="Edit Timesheet">
-                                <MudIconButton Icon="@Icons.Material.Filled.EditCalendar" Size="Size.Small" Color="Color.Default" 
-                                               OnClick="@(() => OpenTimesheet(context.Value.Id))" />
-                             </MudTooltip>
-                        </MudPaper>
+                                 <MudSpacer />
+                                 <MudTooltip Text="Edit Timesheet">
+                                    <MudIconButton Icon="@Icons.Material.Filled.EditCalendar" Size="Size.Small" Color="Color.Default" 
+                                                   OnClick="@(() => OpenTimesheet(emp.Id))" />
+                                 </MudTooltip>
+                            </MudPaper>
+                        }
                     </Content>
                 </MudTreeViewItem>
             </ItemTemplate>
@@ -65,8 +67,8 @@
 
     protected override void OnInitialized()
     {
-        AllEmployees = Db.Employees.GetAll().Where(e => e.IsActive).ToList();
-        AllTeams = Db.Teams.GetAll();
+        AllEmployees = Hr.Employees.GetAll().Where(e => e.IsActive).ToList();
+        AllTeams = Hr.Teams.GetAll();
         BuildTree();
     }
 

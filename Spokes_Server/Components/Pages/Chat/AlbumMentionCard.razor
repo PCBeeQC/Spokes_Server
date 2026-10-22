@@ -1,17 +1,20 @@
 @using Spokes_Server.Core.Services.Security
 @using Spokes_Server.Core.Services.Communication.Chat
+@using Spokes_Server.Core.Services.Communication.Presence
 @inject Database Db
 @inject NavigationManager NavManager
 @inject FileTokenService FileTokenService
+@inject UserCircuitContext CircuitContext
 @inject ScopedKeystoreService ScopedKeystoreService
 @inject AlbumService AlbumService
+@implements IDisposable
 
 @if (_album == null || !_isAvailableInContext)
 {
     <MudCard Class="pa-3" Style="width: 100%; max-width: 350px; border-radius: 8px; border: 1px dashed var(--mud-palette-divider); box-shadow: none; background: transparent;">
         <div class="d-flex align-center gap-3">
             <MudIcon Icon="@Icons.Material.Filled.BrokenImage" Color="Color.Secondary" />
-            <MudText Typo="Typo.body2" Color="Color.Secondary" Style="font-style: italic;">This album is no longer available.</MudText>
+            <MudText Typo="Typo.body2" Color="Color.Secondary" Style="font-style: italic;">@Loc["This album is no longer available."]</MudText>
         </div>
     </MudCard>
 }
@@ -21,18 +24,18 @@ else
         <div class="d-flex align-center justify-space-between gap-2 mb-2">
             <div class="d-flex align-center gap-3" style="overflow: hidden;">
                 <MudAvatar Size="Size.Medium" Style="background: color-mix(in srgb, var(--mud-palette-success) 15%, transparent); color: var(--mud-palette-success);">
-                    <MudIcon Icon="@Icons.Material.Filled.PhotoAlbum" Size="Size.Small" />
+                    <MudIcon Icon="@(_isLocked ? Icons.Material.Filled.Lock : Icons.Material.Filled.PhotoAlbum)" Size="Size.Small" />
                 </MudAvatar>
                 <div style="overflow: hidden;">
                     <MudText Typo="Typo.subtitle2" Style="font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">@_album.Title</MudText>
                     <MudText Typo="Typo.caption" Color="Color.Secondary">
-                        @(Employees.FirstOrDefault(e => e.Id == _album.OwnerId)?.FullName ?? "Unknown")
+                        @(Employees.FirstOrDefault(e => e.Id == _album.OwnerId)?.FullName ?? Loc["Unknown"].Value)
                     </MudText>
                 </div>
             </div>
-            <MudButton OnClick="NavigateToAlbum" Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small" Class="flex-shrink-0 py-1 px-2" Style="text-transform: none; border-radius: 6px; font-size: 0.75rem; font-weight: 600;">Go to album</MudButton>
+            <MudButton OnClick="NavigateToAlbum" Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small" Class="flex-shrink-0 py-1 px-2" Style="text-transform: none; border-radius: 6px; font-size: 0.75rem; font-weight: 600;">@Loc["Go to album"]</MudButton>
         </div>
-        @if (_album.Media.Any())
+        @if (_album.Media.Any() && !_isLocked)
         {
             <div class="mt-2" style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; border-radius: 4px; overflow: hidden;">
                 @foreach (var media in _album.Media.Take(9))
@@ -41,8 +44,8 @@ else
                         @if (media.ContentType.StartsWith("image/"))
                         {
                             <MudImage Src="@GetTokenizedUrl(media, true)" 
-                                        ObjectFit="ObjectFit.Cover" 
-                                        Style="width: 100%; height: 100%; object-fit: cover;" />
+                                      ObjectFit="ObjectFit.Cover" 
+                                      Style="width: 100%; height: 100%; object-fit: cover;" />
                         }
                         else if (media.ContentType.StartsWith("video/"))
                         {
@@ -75,9 +78,21 @@ else
 
     private Album? _album;
     private bool _isAvailableInContext;
+    private bool _isLocked;
     private string? _cachedPlainAlbumKey;
 
+    protected override void OnInitialized()
+    {
+        ScopedKeystoreService.OnUnlocked += HandleVaultStateChanged;
+        ScopedKeystoreService.OnLocked += HandleVaultStateChanged;
+    }
+
     protected override void OnParametersSet()
+    {
+        RefreshAlbumState();
+    }
+
+    private void RefreshAlbumState()
     {
         _album = Db.Albums.GetById(AlbumId);
         if (_album != null)
@@ -91,20 +106,36 @@ else
                 _isAvailableInContext = _album.OwnerId == CurrentUserId || _album.ContributorUserIds.Contains(CurrentUserId ?? "");
             }
 
-            if (_isAvailableInContext && _album.IsEncrypted && !string.IsNullOrEmpty(CurrentUserId))
+            if (_isAvailableInContext)
             {
-                var privateKey = ScopedKeystoreService.IsUnlocked ? ScopedKeystoreService.GetPrivateKey() : null;
-                _cachedPlainAlbumKey = AlbumService.GetPlainAlbumKey(_album, CurrentUserId, privateKey);
+                _isLocked = AlbumService.IsAlbumLocked(_album, CurrentUserId, ScopedKeystoreService.GetPrivateKey(), out _cachedPlainAlbumKey);
             }
             else
             {
+                _isLocked = true;
                 _cachedPlainAlbumKey = null;
             }
         }
         else
         {
+            _isLocked = false;
             _cachedPlainAlbumKey = null;
         }
+    }
+
+    private void HandleVaultStateChanged()
+    {
+        InvokeAsync(() =>
+        {
+            RefreshAlbumState();
+            StateHasChanged();
+        });
+    }
+
+    public void Dispose()
+    {
+        ScopedKeystoreService.OnUnlocked -= HandleVaultStateChanged;
+        ScopedKeystoreService.OnLocked -= HandleVaultStateChanged;
     }
 
     private void NavigateToAlbum()
@@ -127,7 +158,7 @@ else
         if (_album == null || string.IsNullOrEmpty(CurrentUserId)) return isThumbnail ? media.ThumbnailUrl : media.FilePath;
         
         string baseUrl = isThumbnail ? media.ThumbnailUrl : media.FilePath;
-        string token = FileTokenService.GenerateAccessToken("albums", _album.Id, baseUrl, _cachedPlainAlbumKey);
+        string token = FileTokenService.GenerateAccessToken("albums", _album.Id, baseUrl, _cachedPlainAlbumKey, CurrentUserId, CircuitContext?.SessionId);
         return $"{baseUrl}?t={token}";
     }
 }

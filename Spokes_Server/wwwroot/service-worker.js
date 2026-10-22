@@ -41,6 +41,12 @@ self.addEventListener('push', function (event) {
 
     const showNotif = async () => {
         try {
+            if (options.tag !== 'test-push') {
+                const windowClients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+                if (windowClients.some(c => c.focused && c.visibilityState === 'visible')) {
+                    return;
+                }
+            }
             await self.registration.showNotification(data.title || 'Spokes Chat', options);
             if (options.tag === 'test-push') {
                 const clients = await self.clients.matchAll();

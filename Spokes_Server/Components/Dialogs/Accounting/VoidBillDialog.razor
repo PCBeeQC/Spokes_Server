@@ -1,0 +1,65 @@
+@using Spokes_Server.Core.Models.Accounting
+
+<MudDialog>
+    <DialogContent>
+        <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Class="mb-4">
+            Voiding this bill will cancel the liability and remove it from outstanding payables. This action will be recorded in the audit trail.
+        </MudAlert>
+
+        <MudPaper Elevation="0" Outlined="true" Class="pa-3 mb-4" Style="background-color: var(--mud-palette-background-grey);">
+            <MudGrid Spacing="1">
+                <MudItem xs="6">
+                    <MudText Typo="Typo.caption" Color="Color.Secondary">Supplier</MudText>
+                    <MudText Typo="Typo.body2"><b>@Bill.SupplierName</b></MudText>
+                </MudItem>
+                <MudItem xs="6">
+                    <MudText Typo="Typo.caption" Color="Color.Secondary">Amount</MudText>
+                    <MudText Typo="Typo.body2" Color="Color.Error"><b>@Bill.Amount.ToString("C2")</b></MudText>
+                </MudItem>
+                <MudItem xs="6">
+                    <MudText Typo="Typo.caption" Color="Color.Secondary">Invoice / Description</MudText>
+                    <MudText Typo="Typo.body2">@(string.IsNullOrWhiteSpace(Bill.Description) ? "Bill" : Bill.Description)</MudText>
+                </MudItem>
+                <MudItem xs="6">
+                    <MudText Typo="Typo.caption" Color="Color.Secondary">Date</MudText>
+                    <MudText Typo="Typo.body2">@Bill.Date.ToShortDateString()</MudText>
+                </MudItem>
+            </MudGrid>
+
+            @if (!string.IsNullOrEmpty(Bill.PurchaseOrderId))
+            {
+                <MudAlert Severity="Severity.Info" Dense="true" Class="mt-3">
+                    This bill is linked to Purchase Order <b>@Bill.PurchaseOrderId</b>. Voiding it will release @Bill.Amount.ToString("C2") back to the purchase order.
+                </MudAlert>
+            }
+        </MudPaper>
+
+        <MudTextField @bind-Value="Reason" Label="Reason for Voiding" Required="true" Lines="3"
+                      Variant="Variant.Outlined" Class="mt-2"
+                      Placeholder="e.g., Returned to provider; provider canceled/voided the bill before payment."
+                      AutoFocus="true" />
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+        <MudButton Color="Color.Error" Variant="Variant.Filled" StartIcon="@Icons.Material.Filled.Block"
+                   OnClick="Submit" Disabled="@(string.IsNullOrWhiteSpace(Reason))">
+            Void Bill
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
+
+    [Parameter] public Bill Bill { get; set; } = default!;
+
+    private string Reason { get; set; } = string.Empty;
+
+    private void Cancel() => MudDialog.Cancel();
+
+    private void Submit()
+    {
+        if (string.IsNullOrWhiteSpace(Reason)) return;
+        MudDialog.Close(DialogResult.Ok(Reason.Trim()));
+    }
+}

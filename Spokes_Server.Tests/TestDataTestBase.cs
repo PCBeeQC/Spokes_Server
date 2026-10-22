@@ -1,27 +1,26 @@
 using System.IO;
 
-namespace Spokes_Server.Tests
+namespace Spokes_Server.Tests;
+
+public abstract class TestDataTestBase : IDisposable
 {
-    public abstract class TestDataTestBase : IDisposable
+    protected readonly string _testDataPath;
+
+    protected TestDataTestBase()
     {
-        protected readonly string _testDataPath;
+        _testDataPath = Path.Combine(Path.GetTempPath(), "Spokes_Test_Data_" + Guid.NewGuid().ToString());
+        Directory.CreateDirectory(_testDataPath);
+    }
 
-        protected TestDataTestBase()
+    public virtual void Dispose()
+    {
+        if (Directory.Exists(_testDataPath))
         {
-            _testDataPath = Path.Combine(Path.GetTempPath(), "Spokes_Test_Data_" + Guid.NewGuid().ToString());
-            Directory.CreateDirectory(_testDataPath);
-        }
-
-        public virtual void Dispose()
-        {
-            if (Directory.Exists(_testDataPath))
+            try
             {
-                try
-                {
-                    Directory.Delete(_testDataPath, true);
-                }
-                catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"Cleanup error: {ex.Message}"); }
+                Directory.Delete(_testDataPath, true);
             }
+            catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"Cleanup error: {ex.Message}"); }
         }
     }
 }

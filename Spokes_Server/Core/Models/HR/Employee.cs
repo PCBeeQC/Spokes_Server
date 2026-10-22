@@ -4,7 +4,7 @@ using System.Text.Json.Serialization;
 using Spokes_Server.Core.Models.Core;
 using Spokes_Server.Core.Data;
 
-public class Employee : IDataEntity
+public class Employee : IDataEntity, IHasAssociatedFiles
 {
     public string Id { get; set; } = Guid.NewGuid().ToString();
 
@@ -15,7 +15,10 @@ public class Employee : IDataEntity
     }
 
     public override int GetHashCode() => Id?.GetHashCode() ?? base.GetHashCode();
-    public string? OidcSub { get; set; } // Legacy property for backwards compatibility and data migration
+
+    [JsonPropertyName("OidcSub")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? MigratedOidcSub { get; set; }
 
     // Identity
     public string FirstName { get; set; } = string.Empty;
@@ -48,9 +51,11 @@ public class Employee : IDataEntity
 
     // Privacy Settings
     public bool IsEmailPublic { get; set; }
+    public HashSet<string> ContactUserIds { get; set; } = [];
 
     // UI Preferences
     public bool IsDarkMode { get; set; } = true;
+    public string PreferredLanguage { get; set; } = "en-US";
     public bool ChatPublicCollapsed { get; set; }
     public bool ChatProjectsCollapsed { get; set; }
     public bool ChatTeamsCollapsed { get; set; }
@@ -66,6 +71,7 @@ public class Employee : IDataEntity
     public bool ModerationNotificationsEnabled { get; set; } = true;
     public bool LimitConsecutiveNotificationSounds { get; set; }
     public int ConsecutiveNotificationSoundLimit { get; set; } = 3;
+    public bool MuteSharedCalendarAlertsByDefault { get; set; }
     public Dictionary<string, string> NotificationSounds { get; set; } = [];
 
     public string GetNotificationSound(string categoryId) =>
@@ -127,10 +133,11 @@ public class Employee : IDataEntity
     [JsonIgnore]
     public bool IsSelectable => IsActive && !IsSuspended && !IsBanned && !IsSystem;
 
-    // Secure Chat Keys
+    // Secure Chat / Vault Keys
     public string? PublicKey { get; set; }
     public string? EncryptedPrivateKey { get; set; }
-    public bool HasChatPassword => !string.IsNullOrEmpty(EncryptedPrivateKey);
+    public bool HasVaultPassword => !string.IsNullOrEmpty(EncryptedPrivateKey);
+
     public bool DismissedChatWizardPermanently { get; set; }
     public DateTimeOffset? ChatWizardRemindLaterDate { get; set; }
 
@@ -146,11 +153,51 @@ public class Employee : IDataEntity
     // The Flexible Permission List
     public List<string> Permissions { get; set; } = [];
     
-    // Dynamic Permission Group Link
-    public string? PermissionGroupId { get; set; }
+    // Dynamic Permission Group Links (Multi-role support)
+    public List<string> PermissionGroupIds { get; set; } = [];
+
+    // Backward-compatibility property for single PermissionGroupId in JSON
+    public string? PermissionGroupId
+    {
+        get => PermissionGroupIds.FirstOrDefault();
+        set
+        {
+            if (string.IsNullOrEmpty(value))
+            {
+                PermissionGroupIds.Clear();
+                PermissionGroups.Clear();
+            }
+            else
+            {
+                PermissionGroupIds = [value];
+            }
+        }
+    }
     
     [JsonIgnore]
-    public PermissionGroup? PermissionGroup { get; set; }
+    public List<PermissionGroup> PermissionGroups { get; set; } = [];
+
+    [JsonIgnore]
+    public PermissionGroup? PermissionGroup
+    {
+        get => PermissionGroups.FirstOrDefault();
+        set
+        {
+            PermissionGroups.Clear();
+            if (value != null)
+            {
+                PermissionGroups.Add(value);
+                if (!string.IsNullOrEmpty(value.Id))
+                {
+                    PermissionGroupIds = [value.Id];
+                }
+            }
+            else
+            {
+                PermissionGroupIds.Clear();
+            }
+        }
+    }
 
     // Blocked Users
     public List<string> BlockedUserIds { get; set; } = [];
@@ -161,12 +208,20 @@ public class Employee : IDataEntity
         if (!IsActive || IsSuspended || IsBanned) return false;
         if (IsAdmin) return true;
         
-        if (!string.IsNullOrEmpty(PermissionGroupId))
+        if (PermissionGroupIds.Count > 0)
         {
-            return PermissionGroup != null && PermissionGroup.Permissions.Contains(permission);
+            return PermissionGroups.Any(g => g != null && g.Permissions.Contains(permission));
         }
 
         return Permissions.Contains(permission);
+    }
+
+    public IEnumerable<string> GetAssociatedFilePaths()
+    {
+        if (!string.IsNullOrWhiteSpace(AvatarFile))
+        {
+            yield return AvatarFile;
+        }
     }
 }
 

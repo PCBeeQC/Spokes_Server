@@ -236,6 +236,44 @@ public class OvertimeServiceTests : IDisposable
             Assert.True(weeklyResult.IsOvertime);
         }
 
+        [Fact]
+        public void CalculateHourBank_AcrossYearBoundary_MatchesIsoYearInTimesheet()
+        {
+            var userId = "emp-boundary";
+            // December 30, 2024 is a Monday belonging to ISO year 2025, week 1
+            var startDate = new DateOnly(2024, 12, 30);
+            var employee = new Employee
+            {
+                Id = userId,
+                DateOfJoining = startDate,
+                EmploymentEndDate = new DateOnly(2025, 1, 5),
+                WeeklyHours = 40
+            };
+            _employees.Save(employee);
+
+            // Timesheet for ISO year 2025, week 1 (Dec 30 2024 - Jan 5 2025)
+            var ts = new Timesheet
+            {
+                EmployeeId = userId,
+                Year = 2025,
+                WeekNumber = 1
+            };
+            ts.Entries.Add(new TimeEntry { Hours = 44 });
+            _timesheets.Save(ts);
+
+            // Calculate hour bank for range [2024-12-30 .. 2025-01-06]
+            var result = _service.CalculateHourBank(userId);
+
+            Assert.Equal(1, result.WeeksTracked);
+            Assert.Equal(44, result.TotalWorkedHours);
+            Assert.Equal(40, result.TotalExpectedHours);
+            Assert.Equal(4, result.HourBank);
+
+            var audit = _service.GetHourBankAuditTrail(userId);
+            Assert.Single(audit);
+            Assert.Equal(4, audit[0].Hours);
+        }
+
         private DateOnly GetMonday(DateOnly date)
         {
             var dt = date.ToDateTime(TimeOnly.MinValue);

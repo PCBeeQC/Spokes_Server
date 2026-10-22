@@ -3,6 +3,7 @@ using Spokes_Server.Core.Services.Communication;
 using System.Threading;
 using System.Threading.Tasks;
 
+using Spokes_Server.Core.Models.Core;
 using Spokes_Server.Core.Services.Communication.Chat;
 
 namespace Spokes_Server.Core.Services.Communication.Presence;
@@ -16,16 +17,52 @@ public class UserCircuitContext
     public string? UserId { get; set; }
     public string? SessionId { get; set; }
     public string? SubscriptionId { get; set; }
-    public string DeviceType { get; set; } = "Desktop";
+    private string _deviceType = Core.Models.Core.DeviceType.Desktop;
+    public string DeviceType
+    {
+        get => _deviceType;
+        set
+        {
+            if (!string.Equals(_deviceType, value, StringComparison.OrdinalIgnoreCase))
+            {
+                _deviceType = value;
+                NotifyDeviceTypeChanged();
+            }
+        }
+    }
+
     public bool HasPushEnabled { get; set; }
+    public bool IsCapacitorApp { get; set; }
     public bool IsFocused { get; set; }
+    public bool IsIdle { get; set; }
     public bool IsConnected { get; set; } = true;
 
-    public bool IsMobile => string.Equals(DeviceType, "Mobile", StringComparison.OrdinalIgnoreCase);
-    public bool IsActivelyViewed => IsConnected && IsFocused;
+    private bool _isMobileViewport;
+    public bool IsMobileViewport
+    {
+        get => _isMobileViewport;
+        set
+        {
+            if (_isMobileViewport != value)
+            {
+                _isMobileViewport = value;
+                NotifyDeviceTypeChanged();
+            }
+        }
+    }
+
+    public bool IsMobile => string.Equals(DeviceType, Core.Models.Core.DeviceType.Mobile, StringComparison.OrdinalIgnoreCase);
+    public bool IsMobileLayout => IsMobileViewport;
+    public bool IsActivelyViewed => IsConnected && IsFocused && !IsIdle;
 
     public event Action? OnFocusChanged;
     public void NotifyFocusChanged() => OnFocusChanged?.Invoke();
+
+    public event Action<bool>? OnChatChannelOpenChanged;
+    public void NotifyChatChannelOpenChanged(bool isOpen) => OnChatChannelOpenChanged?.Invoke(isOpen);
+
+    public event Action? OnDeviceTypeChanged;
+    public void NotifyDeviceTypeChanged() => OnDeviceTypeChanged?.Invoke();
 
     /// <summary>
     /// Evaluates whether an in-app notification (snackbar / audio) should be displayed in this circuit.
@@ -59,12 +96,12 @@ public class PresenceCircuitHandler : CircuitHandler
 {
     private readonly PresenceStateService _presenceState;
     private readonly UserCircuitContext _circuitContext;
-    private readonly UserClientStateService _clientStateService;
+    private readonly IUserClientStateService _clientStateService;
 
     public PresenceCircuitHandler(
         PresenceStateService presenceState,
         UserCircuitContext circuitContext,
-        UserClientStateService clientStateService)
+        IUserClientStateService clientStateService)
     {
         _presenceState = presenceState;
         _circuitContext = circuitContext;
@@ -105,7 +142,17 @@ public class PresenceCircuitHandler : CircuitHandler
         if (!string.IsNullOrEmpty(_circuitContext.UserId))
         {
             var connectionId = _circuitContext.SubscriptionId ?? circuit.Id;
-            _presenceState.RegisterConnection(_circuitContext.UserId, connectionId, _circuitContext.DeviceType, _circuitContext.HasPushEnabled, _circuitContext.SessionId, false);
+            _presenceState.RegisterConnection(new ConnectionRegistrationOptions
+            {
+                UserId = _circuitContext.UserId,
+                SubscriptionId = connectionId,
+                DeviceType = _circuitContext.DeviceType,
+                HasPushEnabled = _circuitContext.HasPushEnabled,
+                IsCapacitorApp = _circuitContext.IsCapacitorApp,
+                SessionId = _circuitContext.SessionId,
+                IsFocused = false,
+                IsReconnect = true
+            });
         }
         // Note: Since they just reconnected, we cannot guarantee focus state. 
         // The browser's visibilitychange or focus event will correct this.

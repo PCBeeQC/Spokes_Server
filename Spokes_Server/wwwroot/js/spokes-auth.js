@@ -183,56 +183,31 @@ window.spokesAuth.refreshSessionAsync = async function() {
 
             const isNative = typeof window.isCapacitorNative === 'function' ? window.isCapacitorNative() : Boolean(window.Capacitor?.isNativePlatform?.());
 
-            const reqBody = {
-                refreshToken: refreshRes.value,
-                deviceId: deviceId
-            };
-
-            // 1. Prime the Native Cookie Jar (so it doesn't wipe WebView later)
-            if (isNative && window.Capacitor?.Plugins?.CapacitorHttp?.post) {
-                try {
-                    await window.Capacitor.Plugins.CapacitorHttp.post({
-                        url: new URL('/spokesapi/auth/refresh', window.location.origin).href,
-                        headers: {
-                            'Content-Type': 'application/json',
-                            'X-Spokes-Client': 'mobile'
-                        },
-                        data: reqBody
-                    });
-                } catch (e) { console.warn('[spokesAuth] Native cookie prime failed:', e); }
-            }
-
+            // A single fetch() is enough: with CapacitorHttp's fetch patch disabled, fetch, navigation
+            // and the Blazor WebSocket all share the WebView cookie store, and the session cookie value
+            // is stable (server-side ticket store), so no native-jar priming or iframe sync is needed.
             const r = await fetch('/spokesapi/auth/refresh', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                     'X-Spokes-Client': isNative ? 'mobile' : 'web'
                 },
-                body: JSON.stringify(reqBody),
+                body: JSON.stringify({
+                    refreshToken: refreshRes.value,
+                    deviceId: deviceId
+                }),
                 cache: 'no-store'
             });
 
             if (r.ok) {
                 try {
-                    // Force WKWebView cookie sync via hidden iframe
-                    if (isNative) {
-                        const iframe = document.createElement('iframe');
-                        iframe.style.display = 'none';
-                        iframe.src = '/spokesapi/auth/current-session?t=' + Date.now();
-                        document.body.appendChild(iframe);
-                        setTimeout(() => { if (iframe.parentNode) iframe.remove(); }, 5000);
-                    }
-                    
                     const data = await r.json();
-                    if (data && data.expiresInSeconds) {
-                        const validUntil = Date.now() + (data.expiresInSeconds * 1000);
-                        await Promise.all([
-                            Prefs.set({ key: ('spokes_session_last_refresh_' + window.location.hostname), value: Date.now().toString() }),
-                            Prefs.set({ key: ('spokes_session_valid_until_' + window.location.hostname), value: validUntil.toString() })
-                        ]);
+                    if (data && data.expiresInSeconds && window.__spokesSession) {
+                        // Read by the resume logic in App.razor to decide whether a refresh is needed before reconnecting.
+                        window.__spokesSession.expiresAt = Date.now() + (data.expiresInSeconds * 1000);
                     }
                 } catch (jsonErr) {
-                    console.warn('[spokesAuth] Failed to parse refresh response or set preferences:', jsonErr);
+                    console.warn('[spokesAuth] Failed to parse refresh response:', jsonErr);
                 }
                 return true;
             } else {
@@ -240,7 +215,6 @@ window.spokesAuth.refreshSessionAsync = async function() {
                 if (r.status === 401) {
                     try { await Prefs.remove({ key: refreshKey }); } catch(e) {}
                     try { await Prefs.remove({ key: 'spokes_refresh' }); } catch(e) {}
-                    try { await Prefs.remove({ key: ('spokes_session_valid_until_' + window.location.hostname) }); } catch(e) {}
                 } else {
                     console.warn('[spokesAuth] Server returned transient or request error during refresh:', r.status);
                 }

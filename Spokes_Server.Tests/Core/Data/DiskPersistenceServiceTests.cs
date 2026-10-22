@@ -2,198 +2,219 @@ using Microsoft.Extensions.Logging;
 using Moq;
 using Spokes_Server.Core.Data;
 
-namespace Spokes_Server.Tests.Core.Data
+namespace Spokes_Server.Tests.Core.Data;
+
+public class DiskPersistenceServiceTests : IDisposable
 {
-    public class DiskPersistenceServiceTests : IDisposable
+    private readonly string _testDataDir;
+    private readonly DiskPersistenceService _service;
+
+    public DiskPersistenceServiceTests()
     {
-        private readonly string _testDataDir;
-        private readonly DiskPersistenceService _service;
+        _testDataDir = Path.Combine(Path.GetTempPath(), $"Spokes_Test_Disk_{Guid.NewGuid()}");
+        var mockLogger = new Mock<ILogger<DiskPersistenceService>>();
+        _service = new DiskPersistenceService(mockLogger.Object);
+    }
 
-        public DiskPersistenceServiceTests()
+    public void Dispose()
+    {
+        if (Directory.Exists(_testDataDir))
         {
-            _testDataDir = Path.Combine(Path.GetTempPath(), $"Spokes_Test_Disk_{Guid.NewGuid()}");
-            var mockLogger = new Mock<ILogger<DiskPersistenceService>>();
-            _service = new DiskPersistenceService(mockLogger.Object);
-        }
-
-        public void Dispose()
-        {
-            if (Directory.Exists(_testDataDir))
-            {
-                try 
-                { 
-                    Directory.Delete(_testDataDir, true); 
-                } 
-                catch (Exception ex) 
-                { 
-                    System.Diagnostics.Debug.WriteLine($"Failed to delete test directory: {ex.Message}"); 
-                }
+            try 
+            { 
+                Directory.Delete(_testDataDir, true); 
+            } 
+            catch (Exception ex) 
+            { 
+                System.Diagnostics.Debug.WriteLine($"Failed to delete test directory: {ex.Message}"); 
             }
-            _service.Dispose();
         }
+        _service.Dispose();
+    }
 
-        [Fact]
-        public async Task QueueWrite_WritesFileToDisk()
-        {
-            var filePath = Path.Combine(_testDataDir, "test.json");
-            var data = new { Name = "Test Data", Value = 42 };
+    [Fact]
+    public async Task QueueWrite_WritesFileToDisk()
+    {
+        var filePath = Path.Combine(_testDataDir, "test.json");
+        var data = new { Name = "Test Data", Value = 42 };
 
-            _service.QueueWrite(filePath, data);
+        _service.QueueWrite(filePath, data);
 
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
-            await _service.StartAsync(cts.Token);
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        await _service.StartAsync(cts.Token);
+        await _service.StopAsync(CancellationToken.None);
 
-            // Wait for queue processing
-            await Task.Delay(500);
-            await _service.StopAsync(CancellationToken.None);
+        Assert.True(File.Exists(filePath));
+        var content = await File.ReadAllTextAsync(filePath);
+        Assert.Contains("Test Data", content);
+        Assert.Contains("42", content);
+    }
 
-            Assert.True(File.Exists(filePath));
-            var content = await File.ReadAllTextAsync(filePath);
-            Assert.Contains("Test Data", content);
-            Assert.Contains("42", content);
-        }
+    [Fact]
+    public async Task QueueDelete_DeletesFileFromDisk()
+    {
+        Directory.CreateDirectory(_testDataDir);
+        var filePath = Path.Combine(_testDataDir, "test2.json");
+        await File.WriteAllTextAsync(filePath, "dummy content");
 
-        [Fact]
-        public async Task QueueDelete_DeletesFileFromDisk()
-        {
-            Directory.CreateDirectory(_testDataDir);
-            var filePath = Path.Combine(_testDataDir, "test2.json");
-            await File.WriteAllTextAsync(filePath, "dummy content");
+        _service.QueueDelete(filePath);
 
-            _service.QueueDelete(filePath);
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        await _service.StartAsync(cts.Token);
+        await _service.StopAsync(CancellationToken.None);
 
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
-            await _service.StartAsync(cts.Token);
+        Assert.False(File.Exists(filePath));
+    }
 
-            // Wait for queue processing
-            await Task.Delay(500);
-            await _service.StopAsync(CancellationToken.None);
+    [Fact]
+    public async Task QueueWrite_OverwritesExistingFile()
+    {
+        Directory.CreateDirectory(_testDataDir);
+        var filePath = Path.Combine(_testDataDir, "test3.json");
+        await File.WriteAllTextAsync(filePath, "old content");
 
-            Assert.False(File.Exists(filePath));
-        }
+        var data = new { Name = "New Data" };
+        _service.QueueWrite(filePath, data);
 
-        [Fact]
-        public async Task QueueWrite_OverwritesExistingFile()
-        {
-            Directory.CreateDirectory(_testDataDir);
-            var filePath = Path.Combine(_testDataDir, "test3.json");
-            await File.WriteAllTextAsync(filePath, "old content");
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        await _service.StartAsync(cts.Token);
+        await _service.StopAsync(CancellationToken.None);
 
-            var data = new { Name = "New Data" };
-            _service.QueueWrite(filePath, data);
+        Assert.True(File.Exists(filePath));
+        var content = await File.ReadAllTextAsync(filePath);
+        Assert.Contains("New Data", content);
+        Assert.DoesNotContain("old content", content);
+    }
 
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
-            await _service.StartAsync(cts.Token);
+    [Fact]
+    public void FlushAll_ProcessesAllQueuedWrites_WithoutStartingBackgroundService()
+    {
+        var file1 = Path.Combine(_testDataDir, "flush1.json");
+        var file2 = Path.Combine(_testDataDir, "flush2.json");
+        var data1 = new { Name = "First", Value = 1 };
+        var data2 = new { Name = "Second", Value = 2 };
 
-            await Task.Delay(500);
-            await _service.StopAsync(CancellationToken.None);
+        _service.QueueWrite(file1, data1);
+        _service.QueueWrite(file2, data2);
 
-            Assert.True(File.Exists(filePath));
-            var content = await File.ReadAllTextAsync(filePath);
-            Assert.Contains("New Data", content);
-            Assert.DoesNotContain("old content", content);
-        }
+        _service.FlushAll();
 
-        [Fact]
-        public void FlushAll_ProcessesAllQueuedWrites_WithoutStartingBackgroundService()
-        {
-            var file1 = Path.Combine(_testDataDir, "flush1.json");
-            var file2 = Path.Combine(_testDataDir, "flush2.json");
-            var data1 = new { Name = "First", Value = 1 };
-            var data2 = new { Name = "Second", Value = 2 };
+        Assert.True(File.Exists(file1));
+        Assert.True(File.Exists(file2));
+        var content1 = File.ReadAllText(file1);
+        var content2 = File.ReadAllText(file2);
+        Assert.Contains("First", content1);
+        Assert.Contains("Second", content2);
+    }
 
-            _service.QueueWrite(file1, data1);
-            _service.QueueWrite(file2, data2);
+    [Fact]
+    public async Task FlushAllAsync_ProcessesAllQueuedWrites_WithoutStartingBackgroundService()
+    {
+        var file1 = Path.Combine(_testDataDir, "flush_async1.json");
+        var file2 = Path.Combine(_testDataDir, "flush_async2.json");
+        var data1 = new { Name = "FirstAsync", Value = 10 };
+        var data2 = new { Name = "SecondAsync", Value = 20 };
 
-            _service.FlushAll();
+        _service.QueueWrite(file1, data1);
+        _service.QueueWrite(file2, data2);
 
-            Assert.True(File.Exists(file1));
-            Assert.True(File.Exists(file2));
-            var content1 = File.ReadAllText(file1);
-            var content2 = File.ReadAllText(file2);
-            Assert.Contains("First", content1);
-            Assert.Contains("Second", content2);
-        }
+        await _service.FlushAllAsync();
 
-        [Fact]
-        public void FlushAll_ProcessesAllQueuedDeletes_WithoutStartingBackgroundService()
-        {
-            Directory.CreateDirectory(_testDataDir);
-            var file1 = Path.Combine(_testDataDir, "del1.json");
-            var file2 = Path.Combine(_testDataDir, "del2.json");
-            File.WriteAllText(file1, "content1");
-            File.WriteAllText(file2, "content2");
+        Assert.True(File.Exists(file1));
+        Assert.True(File.Exists(file2));
+        var content1 = await File.ReadAllTextAsync(file1);
+        var content2 = await File.ReadAllTextAsync(file2);
+        Assert.Contains("FirstAsync", content1);
+        Assert.Contains("SecondAsync", content2);
+    }
 
-            _service.QueueDelete(file1);
-            _service.QueueDelete(file2);
+    [Fact]
+    public void FlushAll_ProcessesAllQueuedDeletes_WithoutStartingBackgroundService()
+    {
+        Directory.CreateDirectory(_testDataDir);
+        var file1 = Path.Combine(_testDataDir, "del1.json");
+        var file2 = Path.Combine(_testDataDir, "del2.json");
+        File.WriteAllText(file1, "content1");
+        File.WriteAllText(file2, "content2");
 
-            _service.FlushAll();
+        _service.QueueDelete(file1);
+        _service.QueueDelete(file2);
 
-            Assert.False(File.Exists(file1));
-            Assert.False(File.Exists(file2));
-        }
+        _service.FlushAll();
 
-        [Fact]
-        public async Task QueueWriteAsync_WritesFileToDisk()
-        {
-            var filePath = Path.Combine(_testDataDir, "async_write.json");
-            var data = new { Message = "Async Write Test", Count = 100 };
+        Assert.False(File.Exists(file1));
+        Assert.False(File.Exists(file2));
+    }
 
-            await _service.QueueWriteAsync(filePath, data);
-            _service.FlushAll();
 
-            Assert.True(File.Exists(filePath));
-            var content = await File.ReadAllTextAsync(filePath);
-            Assert.Contains("Async Write Test", content);
-            Assert.Contains("100", content);
-        }
+    [Fact]
+    public void QueueWrite_CreatesParentDirectoriesIfMissing()
+    {
+        var nestedPath = Path.Combine(_testDataDir, "sub", "nested", "file.json");
+        var data = new { Message = "Nested Directory Test" };
 
-        [Fact]
-        public async Task QueueDeleteAsync_DeletesFileFromDisk()
-        {
-            Directory.CreateDirectory(_testDataDir);
-            var filePath = Path.Combine(_testDataDir, "async_delete.json");
-            await File.WriteAllTextAsync(filePath, "temp content");
+        _service.QueueWrite(nestedPath, data);
+        _service.FlushAll();
 
-            await _service.QueueDeleteAsync(filePath);
-            _service.FlushAll();
+        Assert.True(File.Exists(nestedPath));
+        var content = File.ReadAllText(nestedPath);
+        Assert.Contains("Nested Directory Test", content);
+    }
 
-            Assert.False(File.Exists(filePath));
-        }
+    [Fact]
+    public async Task ExecuteAsync_FlushesRemainingItemsOnExit()
+    {
+        var file1 = Path.Combine(_testDataDir, "exit_flush1.json");
+        var file2 = Path.Combine(_testDataDir, "exit_flush2.json");
 
-        [Fact]
-        public void QueueWrite_CreatesParentDirectoriesIfMissing()
-        {
-            var nestedPath = Path.Combine(_testDataDir, "sub", "nested", "file.json");
-            var data = new { Message = "Nested Directory Test" };
+        _service.QueueWrite(file1, new { Value = "Remaining1" });
+        _service.QueueWrite(file2, new { Value = "Remaining2" });
 
-            _service.QueueWrite(nestedPath, data);
-            _service.FlushAll();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        await _service.StartAsync(cts.Token);
+        await _service.StopAsync(CancellationToken.None);
 
-            Assert.True(File.Exists(nestedPath));
-            var content = File.ReadAllText(nestedPath);
-            Assert.Contains("Nested Directory Test", content);
-        }
+        Assert.True(File.Exists(file1));
+        Assert.True(File.Exists(file2));
+        var content1 = await File.ReadAllTextAsync(file1);
+        var content2 = await File.ReadAllTextAsync(file2);
+        Assert.Contains("Remaining1", content1);
+        Assert.Contains("Remaining2", content2);
+    }
 
-        [Fact]
-        public async Task ExecuteAsync_FlushesRemainingItemsOnExit()
-        {
-            var file1 = Path.Combine(_testDataDir, "exit_flush1.json");
-            var file2 = Path.Combine(_testDataDir, "exit_flush2.json");
+    [Fact]
+    public void QueueWrite_Success_CallsRecordPersistenceSuccess()
+    {
+        var mockHealth = new Mock<IStorageHealthNotifier>();
+        var mockLog = new Mock<IStoragePersistenceLogger>();
+        var mockLogger = new Mock<ILogger<DiskPersistenceService>>();
+        using var service = new DiskPersistenceService(mockLogger.Object, mockHealth.Object, mockLog.Object);
 
-            _service.QueueWrite(file1, new { Value = "Remaining1" });
-            _service.QueueWrite(file2, new { Value = "Remaining2" });
+        var filePath = Path.Combine(_testDataDir, "health_success.json");
+        service.QueueWrite(filePath, new { Foo = "Bar" });
+        service.FlushAll();
 
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-            await _service.StartAsync(cts.Token);
-            await _service.StopAsync(CancellationToken.None);
+        Assert.True(File.Exists(filePath));
+        mockHealth.Verify(h => h.RecordPersistenceSuccess(), Times.Once);
+        mockHealth.Verify(h => h.RecordPersistenceFailure(), Times.Never);
+        mockLog.Verify(l => l.LogError(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>()), Times.Never);
+    }
 
-            Assert.True(File.Exists(file1));
-            Assert.True(File.Exists(file2));
-            var content1 = await File.ReadAllTextAsync(file1);
-            var content2 = await File.ReadAllTextAsync(file2);
-            Assert.Contains("Remaining1", content1);
-            Assert.Contains("Remaining2", content2);
-        }
+    [Fact]
+    public void QueueWrite_Failure_CallsRecordPersistenceFailureAndLogsError()
+    {
+        var mockHealth = new Mock<IStorageHealthNotifier>();
+        var mockLog = new Mock<IStoragePersistenceLogger>();
+        var mockLogger = new Mock<ILogger<DiskPersistenceService>>();
+        using var service = new DiskPersistenceService(mockLogger.Object, mockHealth.Object, mockLog.Object);
+
+        // Path with invalid characters or illegal null character will throw IOException / ArgumentException on File.Create
+        var invalidPath = Path.Combine(_testDataDir, "invalid\0name.json");
+        service.QueueWrite(invalidPath, new { Foo = "Bar" });
+        service.FlushAll();
+
+        mockHealth.Verify(h => h.RecordPersistenceFailure(), Times.Once);
+        mockLog.Verify(l => l.LogError("Storage", It.IsAny<string>(), It.IsAny<string?>()), Times.Once);
     }
 }
+

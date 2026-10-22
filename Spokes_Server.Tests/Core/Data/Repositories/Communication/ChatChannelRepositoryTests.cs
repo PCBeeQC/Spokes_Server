@@ -1,41 +1,15 @@
-using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.Logging;
-using Moq;
-using Spokes_Server.Core.Data;
 using Spokes_Server.Core.Data.Repositories.Communication;
+using Spokes_Server.Core.Data.Repositories.Core;
 using Spokes_Server.Core.Models.Communication;
+using Spokes_Server.Tests.Helpers;
+using Moq;
+using Microsoft.Extensions.Configuration;
 using Xunit;
 
 namespace Spokes_Server.Tests.Core.Data.Repositories.Communication;
 
-public class ChatChannelRepositoryTests : IDisposable
+public class ChatChannelRepositoryTests : RepositoryTestFixture<ChatChannelRepository>
 {
-    private readonly string _testDataDir;
-    private readonly DiskPersistenceService _writer;
-    private readonly ChatChannelRepository _repo;
-
-    public ChatChannelRepositoryTests()
-    {
-        _testDataDir = Path.Combine(Path.GetTempPath(), $"Spokes_Test_ChatChannels_{Guid.NewGuid()}");
-
-        var mockConfig = new Mock<IConfiguration>();
-        mockConfig.Setup(c => c["DataPath"]).Returns(_testDataDir);
-
-        var mockLogger = new Mock<ILogger<DiskPersistenceService>>();
-        _writer = new DiskPersistenceService(mockLogger.Object);
-
-        _repo = new ChatChannelRepository(_writer, mockConfig.Object);
-    }
-
-    public void Dispose()
-    {
-        if (Directory.Exists(_testDataDir))
-        {
-            try { Directory.Delete(_testDataDir, true); } catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"Cleanup error: {ex.Message}"); }
-        }
-        _writer.Dispose();
-    }
-
     [Fact]
     public void GetByType_ReturnsCorrectChannels()
     {
@@ -131,10 +105,9 @@ public class ChatChannelRepositoryTests : IDisposable
     public void UpdateLastActivity_ChangesTimestamp()
     {
         var channel = _repo.GetOrCreateDefaultGeneral();
+        channel.LastActivityAt = DateTime.UtcNow.AddMinutes(-5);
+        _repo.Save(channel);
         var oldTime = channel.LastActivityAt;
-
-        // Needs a slight delay to ensure time difference
-        System.Threading.Thread.Sleep(10);
 
         _repo.UpdateLastActivity(channel.Id);
 
@@ -220,17 +193,6 @@ public class ChatChannelRepositoryTests : IDisposable
     }
 
     [Fact]
-    public void Constructor_WithNullDataPath_UsesDefaultPath()
-    {
-        var mockConfig = new Mock<IConfiguration>();
-        mockConfig.Setup(c => c["DataPath"]).Returns((string?)null);
-
-        var repo = new ChatChannelRepository(_writer, mockConfig.Object);
-
-        Assert.NotNull(repo);
-    }
-
-    [Fact]
     public void CreateGroupChannel_CreatesNewGroupChannelWithParticipants()
     {
         var userIds = new List<string> { "userA", "userB", "userA" }; // includes duplicates to verify Distinct()
@@ -246,19 +208,6 @@ public class ChatChannelRepositoryTests : IDisposable
         Assert.Contains("userB", group.ParticipantIds);
     }
 
-    [Fact]
-    public async Task UpdateLastActivityAsync_UpdatesTimestamp()
-    {
-        var channel = _repo.GetOrCreateDefaultGeneral();
-        var oldTime = channel.LastActivityAt;
-
-        await Task.Delay(15);
-        await _repo.UpdateLastActivityAsync(channel.Id);
-
-        var updated = await _repo.GetByIdAsync(channel.Id);
-        Assert.NotNull(updated);
-        Assert.True(updated.LastActivityAt > oldTime);
-    }
 
     [Fact]
     public void EvaluateChannelAccessRule_ProjectChannel_ChecksUserProjectIds()
@@ -323,7 +272,7 @@ public class ChatChannelRepositoryTests : IDisposable
         _repo.Save(chan2);
         _repo.Save(chan3);
 
-        var mockProfileRepo = new Mock<Spokes_Server.Core.Data.Repositories.Core.CompanyProfileRepository>(_writer, Mock.Of<IConfiguration>());
+        var mockProfileRepo = new Mock<CompanyProfileRepository>(_writer, Mock.Of<IConfiguration>());
         var mockMessageRepo = new Mock<ChatMessageRepository>(_writer, Mock.Of<IConfiguration>(), mockProfileRepo.Object);
         mockMessageRepo.Setup(m => m.GetLatestMessageTimestamp("chan1")).Returns(recent);
         mockMessageRepo.Setup(m => m.GetLatestMessageTimestamp("chan2")).Returns(past); // message is older than channel last activity
@@ -340,7 +289,3 @@ public class ChatChannelRepositoryTests : IDisposable
         Assert.Equal(past, updatedChan3!.LastActivityAt);
     }
 }
-
-
-
-

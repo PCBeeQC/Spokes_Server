@@ -1,7 +1,7 @@
 @using Spokes_Server.Core.Models.Projects
 @using Spokes_Server.Core.Data
-@using Spokes_Server.Components.Pages.Admin
-@inject Database Db
+@using Spokes_Server.Core.Data.Repositories.Projects
+@inject WorkTypeRepository WorkTypes
 @inject IDialogService DialogService
 @inject ISnackbar Snackbar
 
@@ -44,7 +44,7 @@
 
     protected override void OnInitialized() => Refresh();
 
-    private void Refresh() => List = Db.WorkTypes.GetAll().OrderBy(x => x.Name).ToList();
+    private void Refresh() => List = WorkTypes.GetAll().OrderBy(x => x.Name).ToList();
 
     private Task OpenCreateDialog() => OpenDialog(new WorkType(), "New Task");
     private Task OpenEditDialog(WorkType item) => OpenDialog(item, "Edit Task");
@@ -58,7 +58,7 @@
 
         if (result == true)
         {
-            Db.WorkTypes.Delete(item.Id);
+            WorkTypes.Delete(item.Id);
             Refresh();
             Snackbar.Add("Task Deleted", Severity.Warning);
         }
@@ -70,9 +70,9 @@
         var dialog = await DialogService.ShowAsync<WorkTypeDialog>(title, parameters);
         var result = await dialog.Result;
 
-        if (!result.Canceled)
+        if (result is { Canceled: false, Data: WorkType workType })
         {
-            Db.WorkTypes.Save((WorkType)result.Data);
+            WorkTypes.Save(workType);
             Refresh();
             Snackbar.Add("Saved", Severity.Success);
         }

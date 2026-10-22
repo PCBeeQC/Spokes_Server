@@ -3,7 +3,7 @@ namespace Spokes_Server.Core.Security;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.Extensions.DependencyInjection;
-using Spokes_Server.Aggregate;
+using Spokes_Server.Core.Data.Repositories.Core;
 
 /// <summary>
 /// Server-side authentication ticket store backed by DeviceSession JSON repository.
@@ -22,11 +22,11 @@ using Spokes_Server.Aggregate;
 public class DeviceSessionTicketStore : ITicketStore
 {
     private const string KeyPrefix = "session-";
-    private readonly IServiceProvider _serviceProvider;
+    private readonly DeviceSessionRepository _sessions;
 
-    public DeviceSessionTicketStore(IServiceProvider serviceProvider)
+    public DeviceSessionTicketStore(DeviceSessionRepository sessions)
     {
-        _serviceProvider = serviceProvider;
+        _sessions = sessions;
     }
 
     /// <summary>
@@ -69,10 +69,7 @@ public class DeviceSessionTicketStore : ITicketStore
         if (string.IsNullOrEmpty(sessionId))
             return Task.FromResult<AuthenticationTicket?>(null);
 
-        using var scope = _serviceProvider.CreateScope();
-        var db = scope.ServiceProvider.GetRequiredService<Database>();
-
-        var session = db.DeviceSessions.GetById(sessionId);
+        var session = _sessions.GetById(sessionId);
         if (session == null || session.ExpiresAt <= DateTime.UtcNow)
             return Task.FromResult<AuthenticationTicket?>(null);
 
@@ -102,14 +99,11 @@ public class DeviceSessionTicketStore : ITicketStore
         if (string.IsNullOrEmpty(sessionId))
             return Task.CompletedTask;
 
-        using var scope = _serviceProvider.CreateScope();
-        var db = scope.ServiceProvider.GetRequiredService<Database>();
-
-        var session = db.DeviceSessions.GetById(sessionId);
+        var session = _sessions.GetById(sessionId);
         if (session != null)
         {
             session.TicketData = null;
-            db.DeviceSessions.Save(session);
+            _sessions.Save(session);
         }
         return Task.CompletedTask;
     }
@@ -120,15 +114,12 @@ public class DeviceSessionTicketStore : ITicketStore
         if (string.IsNullOrEmpty(sessionId))
             return;
 
-        using var scope = _serviceProvider.CreateScope();
-        var db = scope.ServiceProvider.GetRequiredService<Database>();
-
-        var session = db.DeviceSessions.GetById(sessionId);
+        var session = _sessions.GetById(sessionId);
         if (session != null)
         {
             var ticketBytes = TicketSerializer.Default.Serialize(ticket);
             session.TicketData = Convert.ToBase64String(ticketBytes);
-            db.DeviceSessions.Save(session);
+            _sessions.Save(session);
         }
     }
 

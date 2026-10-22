@@ -1,52 +1,12 @@
-using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.Logging;
-using Moq;
-using Spokes_Server.Core.Data;
 using Spokes_Server.Core.Data.Repositories.HR;
 using Spokes_Server.Core.Models.HR;
+using Spokes_Server.Tests.Helpers;
 using Xunit;
 
 namespace Spokes_Server.Tests.Core.Data.Repositories.HR;
 
-public class WeeklyPlanRepositoryTests : IDisposable
+public class WeeklyPlanRepositoryTests : RepositoryTestFixture<WeeklyPlanRepository>
 {
-    private readonly string _testDataDir;
-    private readonly DiskPersistenceService _writer;
-    private readonly WeeklyPlanRepository _repo;
-
-    public WeeklyPlanRepositoryTests()
-    {
-        _testDataDir = Path.Combine(Path.GetTempPath(), $"Spokes_Test_WeeklyPlans_{Guid.NewGuid()}");
-
-        var mockConfig = new Mock<IConfiguration>();
-        mockConfig.Setup(c => c["DataPath"]).Returns(_testDataDir);
-
-        var mockPersistenceLogger = new Mock<ILogger<DiskPersistenceService>>();
-        _writer = new DiskPersistenceService(mockPersistenceLogger.Object);
-
-        _repo = new WeeklyPlanRepository(_writer, mockConfig.Object);
-    }
-
-    public void Dispose()
-    {
-        if (Directory.Exists(_testDataDir))
-        {
-            try { Directory.Delete(_testDataDir, true); } catch (Exception ex) { Console.WriteLine($"Cleanup failed: {ex.Message}"); }
-        }
-        _writer.Dispose();
-    }
-
-    [Fact]
-    public void Constructor_WithNullDataPath_UsesDefaultPath()
-    {
-        var mockConfig = new Mock<IConfiguration>();
-        mockConfig.Setup(c => c["DataPath"]).Returns((string?)null);
-
-        var repo = new WeeklyPlanRepository(_writer, mockConfig.Object);
-
-        Assert.NotNull(repo);
-    }
-
     [Fact]
     public void Save_And_GetById_ReturnsWeeklyPlan()
     {
@@ -107,9 +67,17 @@ public class WeeklyPlanRepositoryTests : IDisposable
     }
 
     [Fact]
-    public void GetByEmployeeAndWeek_WhenNotExists_ReturnsNewPlan()
+    public void GetByEmployeeAndWeek_WhenNotExists_ReturnsNull()
     {
         var result = _repo.GetByEmployeeAndWeek("emp-99", 2026, 30);
+
+        Assert.Null(result);
+    }
+
+    [Fact]
+    public void GetOrStubByEmployeeAndWeek_WhenNotExists_ReturnsNewPlan()
+    {
+        var result = _repo.GetOrStubByEmployeeAndWeek("emp-99", 2026, 30);
 
         Assert.NotNull(result);
         Assert.Equal("emp-99", result.EmployeeId);
@@ -158,10 +126,7 @@ public class WeeklyPlanRepositoryTests : IDisposable
 
         File.WriteAllText(Path.Combine(targetDir, "plan_emp-disk_week_25.json"), System.Text.Json.JsonSerializer.Serialize(plan));
 
-        var mockConfig = new Mock<IConfiguration>();
-        mockConfig.Setup(c => c["DataPath"]).Returns(_testDataDir);
-
-        var newRepo = new WeeklyPlanRepository(_writer, mockConfig.Object);
+        var newRepo = new WeeklyPlanRepository(_writer, Config);
         newRepo.LoadFromDisk();
 
         var loaded = newRepo.GetById("plan-loaded");

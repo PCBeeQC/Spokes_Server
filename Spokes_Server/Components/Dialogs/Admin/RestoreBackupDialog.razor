@@ -1,0 +1,185 @@
+@inject BackupService BackupSvc
+@inject ILogger<RestoreBackupDialog> Logger
+
+<MudDialog>
+    <DialogContent>
+        <div class="d-flex flex-column align-center text-center px-4 py-6">
+            @if (CurrentState == State.Confirming)
+            {
+                <MudIcon Icon="@Icons.Material.Filled.Warning" Color="Color.Error" Style="font-size: 64px;" Class="mb-4" />
+                <MudText Typo="Typo.h5" GutterBottom="true">@Loc["Restore Backup?"]</MudText>
+                <MudText Typo="Typo.body1" Class="mb-4">
+                    @((MarkupString)string.Format(Loc["Are you sure you want to restore from <b>{0}</b>?"].Value, EffectiveBackupName))
+                </MudText>
+                @if (ExistingBackup != null)
+                {
+                    <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-3">
+                        @Loc["Size:"] @FormatFileSize(ExistingBackup.SizeBytes) • @Loc["Created:"] @ExistingBackup.CreatedAt.ToString("g")
+                    </MudText>
+                }
+                <MudAlert Severity="Severity.Error" Variant="Variant.Filled" Class="mb-2">
+                    <b>@Loc["WARNING:"]</b> @Loc["All current data will be overwritten and lost. This action cannot be undone."]
+                </MudAlert>
+            }
+            else if (CurrentState == State.Uploading)
+            {
+                <MudIcon Icon="@Icons.Material.Filled.CloudUpload" Color="Color.Primary" Style="font-size: 64px;" Class="mb-4" />
+                <MudText Typo="Typo.h5" GutterBottom="true">@Loc["Uploading Backup"]</MudText>
+                <MudProgressLinear Color="Color.Primary" Value="@UploadProgress" Class="my-4" Size="Size.Large" />
+                <MudText Typo="Typo.h6" Color="Color.Primary">@UploadProgress%</MudText>
+            }
+            else if (CurrentState == State.Restoring)
+            {
+                <MudIcon Icon="@Icons.Material.Filled.SettingsBackupRestore" Color="Color.Primary" Style="font-size: 64px;" Class="mb-4" />
+                <MudText Typo="Typo.h5" GutterBottom="true">@Loc["Restoring Database"]</MudText>
+                <MudProgressLinear Color="Color.Primary" Value="@RestoreProgress" Class="my-4" Size="Size.Large" />
+                <MudText Typo="Typo.h6" Color="Color.Primary">@RestoreStage (@RestoreProgress%)</MudText>
+                @if (!string.IsNullOrEmpty(RestoreDetail))
+                {
+                    <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mt-1" Style="max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                        @RestoreDetail
+                    </MudText>
+                }
+            }
+            else if (CurrentState == State.Error)
+            {
+                <MudIcon Icon="@Icons.Material.Filled.Error" Color="Color.Error" Style="font-size: 64px;" Class="mb-4" />
+                <MudText Typo="Typo.h5" GutterBottom="true">@Loc["Restore Failed"]</MudText>
+                <MudText Typo="Typo.body1" Color="Color.Error">@ErrorMessage</MudText>
+            }
+        </div>
+    </DialogContent>
+    <DialogActions>
+        @if (CurrentState == State.Confirming)
+        {
+            <MudButton OnClick="Close" Variant="Variant.Text">@Loc["Close"]</MudButton>
+            <MudButton Color="Color.Error" Variant="Variant.Filled" OnClick="StartRestore">@Loc["I Understand, Restore"]</MudButton>
+        }
+        else if (CurrentState == State.Error)
+        {
+            <MudButton OnClick="Close" Color="Color.Primary" Variant="Variant.Filled">@Loc["Close"]</MudButton>
+        }
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
+    [Parameter] public IBrowserFile? File { get; set; }
+    [Parameter] public BackupFileInfo? ExistingBackup { get; set; }
+    [Parameter] public string? BackupPath { get; set; }
+    [Parameter] public string? BackupName { get; set; }
+
+    private enum State { Confirming, Uploading, Restoring, Error }
+    private State CurrentState = State.Confirming;
+    private int UploadProgress = 0;
+    private int RestoreProgress = 0;
+    private string RestoreStage = "Preparing...";
+    private string? RestoreDetail;
+    private string ErrorMessage = "";
+
+    private string EffectiveBackupName =>
+        File?.Name ?? ExistingBackup?.FileName ?? BackupName ?? "backup";
+
+    private void Close() => MudDialog.Cancel();
+
+    private async Task StartRestore()
+    {
+        string? targetFilePath = null;
+        bool isTempFile = false;
+
+        try
+        {
+            if (File != null)
+            {
+                CurrentState = State.Uploading;
+                StateHasChanged();
+
+                targetFilePath = Path.Combine(Path.GetTempPath(), $"spokes_restore_{Guid.NewGuid():N}.spkbackup");
+                isTempFile = true;
+
+                await using (var fs = new FileStream(targetFilePath, FileMode.Create, FileAccess.Write, FileShare.None, 81920, useAsync: true))
+                await using (var stream = File.OpenReadStream(long.MaxValue))
+                {
+                    var buffer = new byte[81920]; // 80KB chunks
+                    int bytesRead;
+                    long totalRead = 0;
+                    long totalSize = File.Size;
+
+                    while ((bytesRead = await stream.ReadAsync(buffer, 0, buffer.Length)) != 0)
+                    {
+                        await fs.WriteAsync(buffer.AsMemory(0, bytesRead));
+                        totalRead += bytesRead;
+                        int newProgress = totalSize > 0 ? (int)(totalRead * 100 / totalSize) : 0;
+
+                        if (newProgress > UploadProgress)
+                        {
+                            UploadProgress = newProgress;
+                            StateHasChanged();
+                        }
+                    }
+                } // Stream is safely disposed and closed before restore begins!
+            }
+            else
+            {
+                targetFilePath = ExistingBackup?.FilePath ?? BackupPath;
+            }
+
+            if (string.IsNullOrEmpty(targetFilePath) || !System.IO.File.Exists(targetFilePath))
+            {
+                ErrorMessage = Loc["Backup file not found."].Value;
+                CurrentState = State.Error;
+                StateHasChanged();
+                return;
+            }
+
+            CurrentState = State.Restoring;
+            RestoreStage = Loc["Initializing restore..."].Value;
+            RestoreProgress = 0;
+            StateHasChanged();
+
+            var progress = new Progress<BackupRestoreProgress>(p =>
+            {
+                RestoreStage = p.Stage;
+                RestoreProgress = p.Percentage;
+                RestoreDetail = p.Detail;
+                InvokeAsync(StateHasChanged);
+            });
+
+            var restoreResult = await BackupSvc.RestoreBackupAsync(targetFilePath, Logger, progress: progress);
+
+            if (isTempFile && targetFilePath != null)
+            {
+                try { System.IO.File.Delete(targetFilePath); } catch { }
+            }
+
+            if (restoreResult.Success)
+            {
+                MudDialog.Close(DialogResult.Ok(restoreResult.CasdoorRestarted));
+            }
+            else
+            {
+                ErrorMessage = restoreResult.ErrorMessage ?? Loc["Failed to restore backup."].Value;
+                CurrentState = State.Error;
+                StateHasChanged();
+            }
+        }
+        catch (Exception ex)
+        {
+            if (isTempFile && targetFilePath != null)
+            {
+                try { System.IO.File.Delete(targetFilePath); } catch { }
+            }
+            ErrorMessage = ex.Message;
+            CurrentState = State.Error;
+            StateHasChanged();
+        }
+    }
+
+    private static string FormatFileSize(long bytes)
+    {
+        if (bytes < 1024) return $"{bytes} B";
+        if (bytes < 1024 * 1024) return $"{bytes / 1024.0:F1} KB";
+        if (bytes < 1024 * 1024 * 1024) return $"{bytes / (1024.0 * 1024):F1} MB";
+        return $"{bytes / (1024.0 * 1024 * 1024):F2} GB";
+    }
+}

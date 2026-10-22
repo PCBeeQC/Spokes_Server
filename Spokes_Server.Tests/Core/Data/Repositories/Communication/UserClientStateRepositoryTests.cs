@@ -1,44 +1,12 @@
-using System;
-using System.IO;
-using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.Logging;
-using Moq;
-using Spokes_Server.Core.Data;
 using Spokes_Server.Core.Data.Repositories.Communication;
 using Spokes_Server.Core.Models.Communication;
+using Spokes_Server.Tests.Helpers;
 using Xunit;
 
 namespace Spokes_Server.Tests.Core.Data.Repositories.Communication;
 
-public class UserClientStateRepositoryTests : IDisposable
+public class UserClientStateRepositoryTests : RepositoryTestFixture<UserClientStateRepository>
 {
-    private readonly string _testDataDir;
-    private readonly DiskPersistenceService _writer;
-    private readonly Mock<IConfiguration> _mockConfig;
-    private readonly UserClientStateRepository _repo;
-
-    public UserClientStateRepositoryTests()
-    {
-        _testDataDir = Path.Combine(Path.GetTempPath(), $"Spokes_Test_ClientStates_{Guid.NewGuid()}");
-
-        _mockConfig = new Mock<IConfiguration>();
-        _mockConfig.Setup(c => c["DataPath"]).Returns(_testDataDir);
-
-        var mockLogger = new Mock<ILogger<DiskPersistenceService>>();
-        _writer = new DiskPersistenceService(mockLogger.Object);
-
-        _repo = new UserClientStateRepository(_writer, _mockConfig.Object);
-    }
-
-    public void Dispose()
-    {
-        if (Directory.Exists(_testDataDir))
-        {
-            try { Directory.Delete(_testDataDir, true); } catch { }
-        }
-        _writer.Dispose();
-    }
-
     [Fact]
     public void SaveDraft_And_GetDraft_ReturnsSavedDraft()
     {

@@ -9,6 +9,8 @@
 @inject ISnackbar Snackbar
 @inject NavigationManager Nav
 @inject UserService UserService
+@using Spokes_Server.Core.Services.Storage
+@inject IFileService FileService
 
 <MudGrid Class="mb-4 align-center">
     <MudItem xs="6">
@@ -37,7 +39,7 @@
                 <MudTd DataLabel="Name">@doc.Name</MudTd>
                 <MudTd DataLabel="Created">@doc.CreatedAt.ToLocalTime().ToString("g")</MudTd>
                 <MudTd DataLabel="Status">
-                    <MudChip T="string" Size="Size.Small" Color="@(doc.Status == "Final" ? Color.Success : Color.Info)">
+                    <MudChip T="string" Size="Size.Small" Color="@(doc.Status == ProjectDocumentStatus.Final ? Color.Success : Color.Info)">
                         @doc.Status
                     </MudChip>
                 </MudTd>
@@ -48,7 +50,7 @@
                                            OnClick="@(() => OpenViewer(doc))" />
                         </MudTooltip> *@
                         <MudButton Variant="Variant.Outlined" Size="Size.Small" StartIcon="@Icons.Material.Filled.Visibility" OnClick="@(() => OpenViewer(doc))">View</MudButton>
-                        @if (CanEdit && doc.Status != "Final")
+                        @if (CanEdit && doc.Status != ProjectDocumentStatus.Final)
                         {
                             <MudTooltip Text="Rename">
                                 <MudIconButton Icon="@Icons.Material.Filled.Edit" Size="Size.Small"
@@ -154,32 +156,29 @@
             <RowTemplate>
                 <MudTd>
                     <MudTextField @bind-Value="context.PoNumber" Label="PO #" Margin="Margin.Dense" OnBlur="AutoSave"
-                                  Disabled="@(!IsEditing)" Variant="@(IsEditing? Variant.Text: Variant.Text)"
-                                  DisableUnderLine="@(!IsEditing)" />
+                                  Disabled="@(!IsEditing)" Variant="Variant.Text"
+                                  Underline="@IsEditing" />
                 </MudTd>
                 <MudTd>
                     <MudDatePicker Date="context.DateReceived"
                                    DateChanged="@((DateTime? d) => { context.DateReceived = d; AutoSave(); })" Label="Date"
-                                   Margin="Margin.Dense" Editable="true" Disabled="@(!IsEditing)" DisableToolbar="@(!IsEditing)" />
+                                   Margin="Margin.Dense" Editable="true" Disabled="@(!IsEditing)" ShowToolbar="@IsEditing" />
                 </MudTd>
                 <MudTd>
                     <MudNumericField Value="context.Amount"
                                      ValueChanged="@((decimal v) => { context.Amount = v; AutoSave(); })" Label="Amount" Format="N2"
                                      Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.AttachMoney"
-                                     Margin="Margin.Dense" Disabled="@(!IsEditing)" DisableUnderLine="@(!IsEditing)"
+                                     Margin="Margin.Dense" Disabled="@(!IsEditing)" Underline="@IsEditing"
                                      HideSpinButtons="@(!IsEditing)" />
                 </MudTd>
                 <MudTd>
                     @if (!string.IsNullOrEmpty(context.FilePath))
                     {
-                        <div class="d-flex align-center gap-2">
-                            <MudLink Href="@context.FilePath" Target="_blank" Typo="Typo.body2">View</MudLink>
-                            @if (IsEditing)
-                            {
-                                <MudIconButton Icon="@Icons.Material.Filled.Delete" Color="Color.Error" Size="Size.Small"
-                                               Title="Remove File" OnClick="@(() => RemoveFile(context))" />
-                            }
-                        </div>
+                        <FileAttachmentChip FileName="@context.FileName"
+                                            FilePath="@context.FilePath"
+                                            ContentType="@context.MimeType"
+                                            ReadOnly="@(!IsEditing)"
+                                            OnRemove="@(async _ => await RemoveFile(context))" />
                     }
                     else if (IsEditing)
                     {
@@ -224,7 +223,7 @@
 
     private List<ProjectDocument> _documents = [];
     private bool CanEdit = false;
-    private CompanyProfile Profile;
+    private CompanyProfile? Profile;
 
     protected override async Task OnInitializedAsync()
     {
@@ -247,11 +246,11 @@
 
     class PurchaseRow
     {
-        public string Id { get; set; }
+        public string Id { get; set; } = string.Empty;
         public DateTime Date { get; set; }
-        public string PoNumber { get; set; }
-        public string Description { get; set; }
-        public string PartNumber { get; set; }
+        public string PoNumber { get; set; } = string.Empty;
+        public string Description { get; set; } = string.Empty;
+        public string PartNumber { get; set; } = string.Empty;
 
         public decimal NetTotal { get; set; }
         public decimal TaxAmount { get; set; }
@@ -263,12 +262,12 @@
 
     private void LoadPurchases()
     {
-        var allPos = Db.Purchases.GetAll().Where(p => p.Status != "Void");
+        var allPos = Db.PurchaseOrders.GetAll().Where(p => p.Status != PurchaseOrderStatus.Void);
         PurchaseRows.Clear();
 
         foreach (var po in allPos)
         {
-            var myItems = po.Items.Where(i => i.ProjectId == ProjectId);
+            var myItems = po.LineItems.Where(i => i.ProjectId == ProjectId);
 
             foreach (var item in myItems)
             {
@@ -315,7 +314,7 @@
                 ProjectId = ProjectId,
                 StandardDocumentId = template.Id,
                 Name = name,
-                Status = "Draft",
+                Status = ProjectDocumentStatus.Draft,
                 CreatedAt = DateTime.UtcNow,
                 UpdatedAt = DateTime.UtcNow
             };
@@ -339,7 +338,7 @@
                 StandardDocumentId = string.Empty,
                 Name = name,
                 ResolvedBody = "",
-                Status = "Draft",
+                Status = ProjectDocumentStatus.Draft,
                 IsManualEdit = true,
                 CreatedAt = DateTime.UtcNow,
                 UpdatedAt = DateTime.UtcNow
@@ -413,11 +412,11 @@
 
     private void AddPurchaseOrder()
     {
-        Project.PurchaseOrders.Add(new ClientPO());
+        Project.PurchaseOrders.Add(new ClientPo());
         AutoSave();
     }
 
-    private async Task RemovePO(ClientPO po)
+    private async Task RemovePO(ClientPo po)
     {
         bool? result = await DialogService.ShowMessageBoxAsync(
         "Delete Purchase Order",
@@ -426,27 +425,39 @@
 
         if (result == true)
         {
+            await FileService.DeleteAssociatedFilesAsync(po);
             Project.PurchaseOrders.Remove(po);
             AutoSave(); // Also save the changes
             StateHasChanged();
         }
     }
 
-    private void RemoveFile(ClientPO po)
+    private async Task RemoveFile(ClientPo po)
     {
+        if (!string.IsNullOrEmpty(po.FilePath))
+        {
+            await FileService.DeleteAsync(po.FilePath);
+        }
         po.FilePath = "";
+        po.FileName = "";
         po.MimeType = "";
         AutoSave();
+        StateHasChanged();
     }
 
     private void AutoSave() => Db.Projects.Save(Project);
 
-    private void HandlePoApiUpload(List<ApiFileUpload.UploadResult> results, ClientPO po)
+    private async Task HandlePoApiUpload(List<ApiFileUpload.UploadResult> results, ClientPo po)
     {
         var result = results.FirstOrDefault();
         if (result != null)
         {
+            if (!string.IsNullOrEmpty(po.FilePath) && po.FilePath != result.FilePath)
+            {
+                await FileService.DeleteAsync(po.FilePath);
+            }
             po.FilePath = result.FilePath;
+            po.FileName = result.FileName;
             po.MimeType = result.ContentType;
             Snackbar.Add("PO File Uploaded", Severity.Success);
 

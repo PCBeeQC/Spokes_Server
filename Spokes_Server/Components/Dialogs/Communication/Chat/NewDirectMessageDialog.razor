@@ -1,0 +1,178 @@
+@using Spokes_Server.Core.Services.Security
+@using Spokes_Server.Core.Configuration
+@using Spokes_Server.Core.Data.Repositories.HR
+@inject IUserPrivacyService PrivacyService
+@inject EmployeeRepository EmployeeRepo
+@inject ISnackbar Snackbar
+
+<MudDialog>
+    <TitleContent>
+        <MudText Typo="Typo.h6">
+            <MudIcon Icon="@Icons.Material.Filled.PersonAdd" Class="mr-2" />
+            @Loc["Start a Direct Message"]
+        </MudText>
+    </TitleContent>
+    <DialogContent>
+        <div class="d-flex flex-column gap-4 pb-2" style="max-height: 70vh; overflow-y: auto;">
+            @* --- Select Participants Card --- *@
+            <MudPaper Elevation="0" Outlined="true" Class="rounded-lg overflow-hidden flex-shrink-0">
+                <div class="d-flex align-center px-4 py-3">
+                    <MudIcon Icon="@Icons.Material.Filled.GroupAdd" Size="Size.Small" Class="mr-2 flex-shrink-0" />
+                    <MudText Typo="Typo.subtitle2">@Loc["Select Participants"]</MudText>
+                </div>
+                <MudDivider />
+                <div class="px-4 py-4 d-flex flex-column gap-3">
+                    <EmployeeAutocomplete Label="@Loc["Select people"]" Margin="Margin.Dense"
+                                          Employees="@Employees" ExcludedIds="@_selectedEmployees.Select(e => e.Id)"
+                                          ValueChanged="AddEmployee" ResetOnSelect="true" Class="ma-0" />
+
+                    @if (_canDiscoverOutOfBand)
+                    {
+                        <div class="d-flex align-center gap-2 mt-1">
+                            <MudTextField @bind-Value="_lookupIdentifier" Placeholder="@_lookupPlaceholder" Variant="Variant.Outlined"
+                                          Margin="Margin.Dense" Immediate="true" Class="flex-grow-1 ma-0"
+                                          OnKeyDown="@(async e => { if (e.Key == "Enter") await LookupAndAddContact(); })" />
+                            <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small" Disabled="@(string.IsNullOrWhiteSpace(_lookupIdentifier) || _isLookingUp)"
+                                       OnClick="LookupAndAddContact">
+                                @if (_isLookingUp)
+                                {
+                                    <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-1" />
+                                }
+                                @Loc["Add"]
+                            </MudButton>
+                        </div>
+                        @if (!string.IsNullOrEmpty(_lookupError))
+                        {
+                            <MudText Typo="Typo.caption" Color="Color.Error" Class="mt-n2">@_lookupError</MudText>
+                        }
+                    }
+
+                    @if (_selectedEmployees.Any())
+                    {
+                        <div class="d-flex flex-wrap gap-2 mt-2">
+                            @foreach (var emp in _selectedEmployees)
+                            {
+                                <EmployeeChip Employee="@emp" Color="Color.Primary" Variant="Variant.Filled" OnClose="@(() => RemoveEmployee(emp))" Size="Size.Small" />
+                            }
+                        </div>
+                    }
+                </div>
+            </MudPaper>
+
+            @* --- Encryption Card --- *@
+            <MudPaper Elevation="0" Outlined="true" Class="rounded-lg overflow-hidden flex-shrink-0">
+                <div class="d-flex align-center justify-space-between ps-4 pe-2 py-1">
+                    <div class="d-flex align-center min-w-0 mr-2">
+                        <MudIcon Icon="@Icons.Material.Filled.Lock" Size="Size.Small" Class="mr-2 flex-shrink-0" />
+                        <MudText Typo="Typo.subtitle2">@Loc["Channel Encryption"]</MudText>
+                    </div>
+                    <MudSwitch @bind-Value="_isEncrypted" Color="Color.Primary" Class="ma-0 flex-shrink-0" />
+                </div>
+                <MudDivider />
+                @if (_isEncrypted)
+                {
+                    <div class="px-4 py-4 d-flex flex-column gap-3">
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">
+                            @Loc["This will encrypt your messages on the server's disk. Your vault password will be required to read messages."]
+                        </MudText>
+                    </div>
+                }
+            </MudPaper>
+        </div>
+    </DialogContent>
+    <DialogActions>
+        <MudSpacer />
+        <MudButton OnClick="Cancel">@Loc["Cancel"]</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="Submit" Disabled="!_selectedEmployees.Any()">
+            @Loc["Start Chat"]
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
+
+    [Parameter] public List<Employee> Employees { get; set; } = [];
+    [Parameter] public string? CurrentUserId { get; set; }
+
+    private List<Employee> _selectedEmployees = [];
+    private bool _isEncrypted;
+
+    private bool _canDiscoverOutOfBand;
+    private string _lookupPlaceholder = "";
+    private string _lookupIdentifier = "";
+    private string? _lookupError;
+    private bool _isLookingUp;
+    private Employee? _currentEmployee;
+
+    protected override void OnInitialized()
+    {
+        var privacy = PrivacyService.GetPrivacyConfig();
+        _canDiscoverOutOfBand = privacy.DiscoveryMethod is UserDiscoveryMethod.ExactEmailOnly or UserDiscoveryMethod.ExactEmailOrUsername;
+        _lookupPlaceholder = privacy.DiscoveryMethod == UserDiscoveryMethod.ExactEmailOnly
+            ? Loc["Add by full email address..."].Value
+            : Loc["Add by email or full name..."].Value;
+
+        if (!string.IsNullOrEmpty(CurrentUserId))
+        {
+            _currentEmployee = EmployeeRepo.GetById(CurrentUserId);
+        }
+    }
+
+    private async Task LookupAndAddContact()
+    {
+        if (string.IsNullOrWhiteSpace(_lookupIdentifier) || _currentEmployee == null) return;
+        _isLookingUp = true;
+        _lookupError = null;
+
+        try
+        {
+            var result = await PrivacyService.AddContactByIdentifierAsync(_currentEmployee, _lookupIdentifier);
+            if (result.Status == AddContactStatus.Success && result.Contact != null)
+            {
+                AddEmployee(result.Contact);
+                _lookupIdentifier = "";
+                Snackbar.Add(result.Message ?? Loc["Contact added!"].Value, Severity.Success);
+            }
+            else if (result.Status == AddContactStatus.AlreadyConnected && result.Contact != null)
+            {
+                AddEmployee(result.Contact);
+                _lookupIdentifier = "";
+            }
+            else
+            {
+                _lookupError = result.Message ?? Loc["User not found."].Value;
+            }
+        }
+        catch (Exception ex)
+        {
+            _lookupError = ex.Message;
+        }
+        finally
+        {
+            _isLookingUp = false;
+        }
+    }
+
+    private void AddEmployee(Employee? employee)
+    {
+        if (employee != null && !_selectedEmployees.Any(e => e.Id == employee.Id))
+        {
+            _selectedEmployees.Add(employee);
+        }
+        StateHasChanged();
+    }
+
+    private void RemoveEmployee(Employee employee) => _selectedEmployees.RemoveAll(e => e.Id == employee.Id);
+
+    private void Cancel() => MudDialog.Cancel();
+
+    private void Submit()
+    {
+        if (_selectedEmployees.Any())
+        {
+            var userIds = _selectedEmployees.Select(e => e.Id).ToList();
+            MudDialog.Close(DialogResult.Ok((userIds, _isEncrypted)));
+        }
+    }
+}

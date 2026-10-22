@@ -1,13 +1,13 @@
 <MudPaper Elevation="0" Class="pa-2" Style="border-bottom: 1px solid var(--mud-palette-divider);">
     <div class="d-flex align-center gap-2">
-        <MudIconButton Icon="@Icons.Material.Filled.ArrowBack" Size="Size.Small" Class="d-md-none mr-2"
+        <MudIconButton id="chat-mobile-back-btn" Icon="@Icons.Material.Filled.ArrowBack" Size="Size.Small" Class="d-md-none mr-2"
             OnClick="OnGoBack" />
 
         <MudIcon Icon="@GetChannelIcon()" Size="Size.Small" />
         <MudText Typo="Typo.h6"><b>@DisplayName</b></MudText>
         @if (Channel?.IsEncrypted == true)
         {
-            <MudTooltip Text="Channel Encrypted">
+            <MudTooltip Text="@Loc["Channel Encrypted"]">
                 <MudIcon Icon="@Icons.Material.Filled.Lock" Size="Size.Small" Color="Color.Info" Class="mt-1" />
             </MudTooltip>
         }
@@ -25,7 +25,7 @@
         @* Join Voice *@
         @if (Channel?.ChannelType == ChatChannelType.Direct && !IsSelfDirectMessage())
         {
-            <MudTooltip Text="Start Voice Call" Class="mr-2">
+            <MudTooltip Text="@Loc["Start Voice Call"]" Class="mr-2">
                 <MudIconButton Icon="@Icons.Material.Filled.Call" Size="Size.Small"
                     Color="Color.Info" OnClick="OnJoinVoice" />
             </MudTooltip>
@@ -38,60 +38,59 @@
                 <ChatSearchBar ChannelId="@Channel?.Id" CurrentUserId="@CurrentUserId" Employees="Employees" OnResultSelected="OnSearchResultSelected" />
             }
         </MudHidden>
-        <MudTooltip Text="Search messages">
+        <MudTooltip Text="@Loc["Search messages"]">
             <MudIconButton Icon="@Icons.Material.Filled.Search" Size="Size.Small"
                 Color="@(_showSearch ? Color.Primary : Color.Default)" OnClick="ToggleSearch" />
         </MudTooltip>
 
         @* Channel info *@
-        <MudTooltip Text="Channel info">
+        <MudTooltip Text="@Loc["Channel info"]">
             <MudIconButton Icon="@Icons.Material.Filled.Info" Size="Size.Small"
                 Color="@(ShowInfoPanel ? Color.Primary : Color.Default)" OnClick="OnToggleInfo" />
         </MudTooltip>
 
         @* Notification Level Bell Menu *@
-        <MudTooltip Text="Notification settings" Placement="Placement.Left" Class="mr-4">
+        <MudTooltip Text="@Loc["Notification settings"]" Placement="Placement.Left" Class="mr-4">
             <MudMenu Icon="@GetNotificationIcon()" Size="Size.Small" Dense="true" Class="mt-1"
                 Color="@GetNotificationColor()" AnchorOrigin="Origin.BottomRight" TransformOrigin="Origin.TopRight">
-                <MudMenuItem OnClick="@(() => SetNotificationLevel("All"))">
+                <MudMenuItem OnClick="@(() => SetNotificationLevel(ChatNotificationLevel.All))">
                     <div class="d-flex align-center gap-2">
                         <MudIcon Icon="@Icons.Material.Filled.Notifications" Size="Size.Small"
-                            Color="@(NotificationLevel == "All" ? Color.Success : Color.Default)" />
+                            Color="@(NotificationLevel == ChatNotificationLevel.All ? Color.Success : Color.Default)" />
                         <div>
-                            <MudText Typo="Typo.body2" Style="@(NotificationLevel == "All" ? "font-weight: 600;" : "")">
-                                All
-                                Messages
+                            <MudText Typo="Typo.body2" Style="@(NotificationLevel == ChatNotificationLevel.All ? "font-weight: 600;" : "")">
+                                @Loc["All Messages"]
                             </MudText>
                             <MudText Typo="Typo.caption" Color="Color.Secondary">
-                                Get notified for every new message
+                                @Loc["Get notified for every new message"]
                             </MudText>
                         </div>
                     </div>
                 </MudMenuItem>
-                <MudMenuItem OnClick="@(() => SetNotificationLevel("Mentions"))">
+                <MudMenuItem OnClick="@(() => SetNotificationLevel(ChatNotificationLevel.Mentions))">
                     <div class="d-flex align-center gap-2">
                         <MudIcon Icon="@Icons.Material.Filled.AlternateEmail" Size="Size.Small"
-                            Color="@(NotificationLevel == "Mentions" ? Color.Warning : Color.Default)" />
+                            Color="@(NotificationLevel == ChatNotificationLevel.Mentions ? Color.Warning : Color.Default)" />
                         <div>
                             <MudText Typo="Typo.body2"
-                                Style="@(NotificationLevel == "Mentions" ? "font-weight: 600;" : "")">
-                                Mentions Only
+                                Style="@(NotificationLevel == ChatNotificationLevel.Mentions ? "font-weight: 600;" : "")">
+                                @Loc["Mentions Only"]
                             </MudText>
-                            <MudText Typo="Typo.caption" Color="Color.Secondary">Only when you're @@mentioned</MudText>
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">@Loc["Only when you're @mentioned"]</MudText>
                         </div>
                     </div>
                 </MudMenuItem>
-                <MudMenuItem OnClick="@(() => SetNotificationLevel("None"))">
+                <MudMenuItem OnClick="@(() => SetNotificationLevel(ChatNotificationLevel.None))">
                     <div class="d-flex align-center gap-2">
                         <MudIcon Icon="@Icons.Material.Filled.NotificationsOff" Size="Size.Small"
-                            Color="@(NotificationLevel == "None" ? Color.Error : Color.Default)" />
+                            Color="@(NotificationLevel == ChatNotificationLevel.None ? Color.Error : Color.Default)" />
                         <div>
                             <MudText Typo="Typo.body2"
-                                Style="@(NotificationLevel == "None" ? "font-weight: 600;" : "")">
-                                Muted
+                                Style="@(NotificationLevel == ChatNotificationLevel.None ? "font-weight: 600;" : "")">
+                                @Loc["Muted"]
                             </MudText>
                             <MudText Typo="Typo.caption" Color="Color.Secondary">
-                                No notifications from this channel
+                                @Loc["No notifications from this channel"]
                             </MudText>
                         </div>
                     </div>
@@ -118,7 +117,7 @@
     [Parameter] public string DisplayName { get; set; } = "";
     [Parameter] public EventCallback OnGoBack { get; set; }
     [Parameter] public EventCallback OnJoinVoice { get; set; }
-    [Parameter] public string NotificationLevel { get; set; } = "All";
+    [Parameter] public string NotificationLevel { get; set; } = ChatNotificationLevel.All;
     [Parameter] public EventCallback<string> OnNotificationLevelChanged { get; set; }
     [Parameter] public List<Employee> Employees { get; set; } = [];
     [Parameter] public EventCallback<string> OnSearchResultSelected { get; set; }
@@ -150,15 +149,15 @@
 
     private string GetNotificationIcon() => NotificationLevel switch
     {
-        "None" => Icons.Material.Filled.NotificationsOff,
-        "Mentions" => Icons.Material.Filled.AlternateEmail,
+        ChatNotificationLevel.None => Icons.Material.Filled.NotificationsOff,
+        ChatNotificationLevel.Mentions => Icons.Material.Filled.AlternateEmail,
         _ => Icons.Material.Filled.Notifications
     };
 
     private Color GetNotificationColor() => NotificationLevel switch
     {
-        "None" => Color.Error,
-        "Mentions" => Color.Warning,
+        ChatNotificationLevel.None => Color.Error,
+        ChatNotificationLevel.Mentions => Color.Warning,
         _ => Color.Success
     };
 

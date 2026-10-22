@@ -1,0 +1,809 @@
+@page "/albums/{AlbumId}/remote/{SessionId}"
+@attribute [Authorize(Policy = AppPermissions.Albums.View)]
+@implements IDisposable
+@using Microsoft.AspNetCore.SignalR
+@using Spokes_Server.Components.Layout
+@using Spokes_Server.Core.Constants
+@using Spokes_Server.Core.Data
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Services.Communication.Chat
+@using Spokes_Server.Core.Services.Identity
+@using Spokes_Server.Core.Services.Security
+@using Spokes_Server.Hubs
+@inject Database Db
+@inject NavigationManager Nav
+@inject UserService UserService
+@inject AlbumService AlbumService
+@inject ScopedKeystoreService KeystoreService
+@inject FileTokenService FileTokenService
+@inject ISlideshowSessionService SessionService
+@inject IHubContext<SlideshowHub> HubContext
+@inject ISnackbar Snackbar
+@inject IServiceProvider ServiceProvider
+@inject IJSRuntime JS
+
+<PageTitle>@Loc["TV Remote"] - @_album?.Title</PageTitle>
+
+<style>
+    .remote-root {
+        max-width: 520px;
+        width: 100%;
+        margin: 0 auto;
+        padding: 10px 14px;
+        height: 100%;
+        max-height: 100%;
+        flex: 1 1 auto;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+        user-select: none;
+        box-sizing: border-box;
+        overflow: hidden;
+    }
+    .preview-card {
+        border-radius: 16px;
+        overflow: hidden;
+        background: #181820;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+        display: flex;
+        flex-direction: column;
+        flex: 1 1 auto;
+        min-height: 0;
+        margin-bottom: 8px;
+    }
+    .active-photo-wrapper {
+        position: relative;
+        width: 100%;
+        flex: 1 1 auto;
+        min-height: 100px;
+        max-height: 38vh;
+        background: #0d0d12;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        overflow: hidden;
+    }
+    .remote-stage-container {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 100%;
+        height: 100%;
+        transition: transform 0.08s ease-out;
+        will-change: transform;
+    }
+    .active-photo {
+        max-width: 100%;
+        max-height: 100%;
+        object-fit: contain;
+        user-select: none;
+        -webkit-user-drag: none;
+        pointer-events: none;
+    }
+    .dual-remote-item {
+        flex: 1 1 50%;
+        height: 100%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        position: relative;
+        overflow: hidden;
+        border-radius: 8px;
+        background: #000;
+    }
+    .slide-num-badge {
+        position: absolute;
+        bottom: 6px;
+        left: 6px;
+        background: rgba(0, 0, 0, 0.7);
+        color: #fff;
+        font-size: 0.75rem;
+        font-weight: 700;
+        padding: 2px 6px;
+        border-radius: 4px;
+        backdrop-filter: blur(4px);
+    }
+    .filmstrip-strip {
+        display: flex;
+        gap: 6px;
+        overflow-x: auto;
+        padding: 4px 2px;
+        scroll-behavior: smooth;
+        -webkit-overflow-scrolling: touch;
+    }
+    .filmstrip-thumb {
+        width: 48px;
+        height: 48px;
+        border-radius: 6px;
+        object-fit: cover;
+        cursor: pointer;
+        opacity: 0.6;
+        border: 2px solid transparent;
+        transition: all 0.2s ease;
+        flex-shrink: 0;
+    }
+    .filmstrip-thumb.active {
+        opacity: 1;
+        border-color: var(--mud-palette-primary);
+        transform: scale(1.06);
+    }
+    .up-next-card {
+        background: rgba(255, 255, 255, 0.05);
+        border: 1px dashed rgba(255, 255, 255, 0.2);
+        border-radius: 12px;
+        padding: 6px 12px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        flex-shrink: 0;
+        margin-bottom: 8px;
+    }
+    .up-next-thumb {
+        width: 64px;
+        height: 64px;
+        border-radius: 8px;
+        object-fit: cover;
+        flex-shrink: 0;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+    }
+</style>
+
+<div class="remote-root">
+    @* --- TOP HEADER (2 ROWS) --- *@
+    <div class="mb-2">
+        <MudText Typo="Typo.h6" Style="font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+            @_album?.Title
+        </MudText>
+        <div class="d-flex align-center justify-space-between mt-1">
+            <div class="d-flex align-center gap-2">
+                <MudChip T="string" Size="Size.Small" Color="Color.Success" Variant="Variant.Outlined" Class="ma-0">
+                    <MudIcon Icon="@Icons.Material.Filled.Tv" Size="Size.Small" Class="mr-1" />
+                    @Loc["Connected to TV"]
+                </MudChip>
+                <MudText Typo="Typo.caption" Color="Color.Secondary">
+                    @if (IsDualPortrait && NextMedia != null)
+                    {
+                        @string.Format(Loc["Photos {0} & {1} of {2}"].Value, _currentIndex + 1, _currentIndex + 2, _mediaItems.Count)
+                    }
+                    else
+                    {
+                        @string.Format(Loc["Photo {0} of {1}"].Value, _currentIndex + 1, _mediaItems.Count)
+                    }
+                </MudText>
+            </div>
+            <MudButton Variant="Variant.Outlined" Color="Color.Error" Size="Size.Small" StartIcon="@Icons.Material.Filled.TvOff" OnClick="Disconnect">
+                @Loc["Disconnect"]
+            </MudButton>
+        </div>
+    </div>
+
+    @* --- ACTIVE PHOTO STAGE & ZOOM CONTROLLER --- *@
+    @if (CurrentMedia != null)
+    {
+        <div class="preview-card mb-2">
+            @if (CurrentMedia.ContentType.StartsWith("video/"))
+            {
+                @* VIDEO PREVIEW CONTAINER (LIGHTWEIGHT POSTER + PLAYING ON TV INDICATOR) *@
+                <div class="active-photo-wrapper" style="cursor: default; position: relative;">
+                    <img src="@GetMediaUrl(CurrentMedia, thumb: true)" 
+                         alt="@CurrentMedia.FileName" 
+                         class="active-photo" 
+                         style="max-width: 100%; max-height: 100%; object-fit: contain; opacity: 0.85;" />
+
+                    <div class="d-flex flex-column align-center justify-center" 
+                         style="position: absolute; inset: 0; pointer-events: none; background: rgba(0,0,0,0.35);">
+                        <MudIcon Icon="@(_isVideoPlaying ? Icons.Material.Filled.Tv : Icons.Material.Filled.PauseCircle)" 
+                                 Style="font-size: 3rem; color: rgba(255, 255, 255, 0.9); filter: drop-shadow(0 2px 8px rgba(0,0,0,0.7));" />
+                        <MudText Typo="Typo.caption" Style="color: rgba(255,255,255,0.95); font-weight: 700; text-shadow: 0 1px 4px rgba(0,0,0,0.9); margin-top: 4px;">
+                            @(_isVideoPlaying ? Loc["Playing on TV"] : Loc["Paused on TV"])
+                        </MudText>
+                    </div>
+                </div>
+
+                @* LIVE SCRUB BAR & TIMESTAMPS *@
+                <div class="px-3 pt-2 pb-1 d-flex flex-column gap-1" style="background: rgba(0,0,0,0.6); border-top: 1px solid rgba(255,255,255,0.08);">
+                    <div class="d-flex align-center justify-space-between" style="font-size: 0.75rem; color: rgba(255,255,255,0.7); font-variant-numeric: tabular-nums;">
+                        <span>@FormatTime(_videoCurrentTime)</span>
+                        <span>@FormatTime(_videoDuration)</span>
+                    </div>
+                    <input type="range" 
+                           min="0" 
+                           max="@(_videoDuration > 0 ? _videoDuration.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture) : "1.0")" 
+                           step="0.1" 
+                           value="@_videoCurrentTime.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture)" 
+                           @oninput="HandleScrubInput" 
+                           @onchange="HandleScrubChange" 
+                           class="remote-scrub-bar" 
+                           style="width: 100%; accent-color: var(--mud-palette-primary); cursor: pointer;" />
+                </div>
+
+                @* VIDEO CONTROLS TOOLBAR *@
+                <div class="pa-2 d-flex align-center justify-space-between" style="background: rgba(0,0,0,0.5); border-top: 1px solid rgba(255,255,255,0.08);">
+                    <div class="d-flex align-center gap-2">
+                        <MudIconButton Icon="@(_isVideoPlaying ? Icons.Material.Filled.Pause : Icons.Material.Filled.PlayArrow)" 
+                                       Color="Color.Primary" Variant="Variant.Filled" Size="Size.Medium" OnClick="ToggleVideoPlay" />
+                        
+                        <MudTooltip Text="@(_isVideoLooping ? Loc["Auto-Loop Enabled"] : Loc["Auto-Loop Disabled"])">
+                            <MudIconButton Icon="@Icons.Material.Filled.Repeat" 
+                                           Color="@(_isVideoLooping ? Color.Primary : Color.Default)" 
+                                           Variant="@(_isVideoLooping ? Variant.Filled : Variant.Outlined)" 
+                                           Size="Size.Medium" OnClick="ToggleVideoLoop" />
+                        </MudTooltip>
+                    </div>
+
+                    <MudTooltip Text="@(_isVideoMuted ? Loc["Unmute TV"] : Loc["Mute TV"])">
+                        <MudIconButton Icon="@(_isVideoMuted ? Icons.Material.Filled.VolumeOff : Icons.Material.Filled.VolumeUp)" 
+                                       Color="@(_isVideoMuted ? Color.Default : Color.Primary)" 
+                                       Variant="Variant.Outlined" Size="Size.Medium" OnClick="ToggleVideoMute" />
+                    </MudTooltip>
+                </div>
+            }
+            else
+            {
+                <div id="remote-photo-wrapper"
+                     class="active-photo-wrapper" 
+                     style="@GetWrapperCursorStyle()"
+                     @ondblclick="ResetZoom">
+                    @if (IsDualPortrait && NextMedia != null)
+                    {
+                        @* DUAL PORTRAIT SIDE-BY-SIDE PREVIEW *@
+                        <div class="d-flex gap-2 align-center justify-center w-100 h-100 pa-1" style="overflow: hidden;">
+                            <div class="dual-remote-item">
+                                <img src="@GetMediaUrl(CurrentMedia)" alt="@CurrentMedia.FileName" class="active-photo" />
+                                <span class="slide-num-badge">@(_currentIndex + 1)</span>
+                            </div>
+                            <div class="dual-remote-item">
+                                <img src="@GetMediaUrl(NextMedia)" alt="@NextMedia.FileName" class="active-photo" />
+                                <span class="slide-num-badge">@(_currentIndex + 2)</span>
+                            </div>
+                        </div>
+                    }
+                    else
+                    {
+                        <div id="remote-stage-container" class="remote-stage-container" style="@GetZoomStyle()">
+                            <img src="@GetMediaUrl(CurrentMedia)" alt="@CurrentMedia.FileName" class="active-photo" />
+                        </div>
+                    }
+
+                    @if (_currentZoom > 1.0 && !IsDualPortrait)
+                    {
+                        <div style="position: absolute; top: 8px; right: 8px; z-index: 10;">
+                            <MudChip T="string" Color="Color.Primary" Size="Size.Small" OnClose="ResetZoom">
+                                @($"{Math.Round(_currentZoom * 100)}%")
+                            </MudChip>
+                        </div>
+                    }
+                </div>
+
+                @* ZOOM CONTROL TOOLBAR (SINGLE PHOTO ONLY) *@
+                @if (!IsDualPortrait)
+                {
+                    <div class="d-flex align-center justify-space-between px-3 py-1" style="background: rgba(0,0,0,0.4); border-top: 1px solid rgba(255,255,255,0.08);">
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">@Loc["Zoom on TV:"]</MudText>
+                        <div class="d-flex align-center gap-1">
+                            <MudIconButton Icon="@Icons.Material.Filled.Remove" Size="Size.Small" Disabled="@(_currentZoom <= 1.0)" OnClick="ZoomOut" />
+                            <MudButton Variant="Variant.Text" Size="Size.Small" OnClick="ResetZoom" Style="min-width: 48px; font-size: 0.8rem;">
+                                @($"{Math.Round(_currentZoom * 100)}%")
+                            </MudButton>
+                            <MudIconButton Icon="@Icons.Material.Filled.Add" Size="Size.Small" Disabled="@(_currentZoom >= 3.0)" OnClick="ZoomIn" />
+                        </div>
+                    </div>
+                }
+            }
+        </div>
+
+        @* --- UP NEXT & SKIP ACTION --- *@
+        @if (UpcomingMedia != null)
+        {
+            <div class="up-next-card mb-2">
+                <div class="d-flex align-center gap-3">
+                    <img src="@GetMediaUrl(UpcomingMedia, thumb: true)" alt="@UpcomingMedia.FileName" class="up-next-thumb" />
+                    <div>
+                        <MudText Typo="Typo.caption" Style="color: rgba(255,255,255,0.6); font-weight: 600;">@Loc["UP NEXT"]</MudText>
+                        <MudText Typo="Typo.body2" Style="font-weight: 500; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                            @UpcomingMedia.FileName
+                        </MudText>
+                    </div>
+                </div>
+                <MudButton Variant="Variant.Filled" Color="Color.Default" Size="Size.Small" StartIcon="@Icons.Material.Filled.SkipNext" OnClick="SkipUpcomingPhoto" Class="rounded-lg">
+                    @Loc["Skip"]
+                </MudButton>
+            </div>
+        }
+
+        @* --- PRIMARY NAVIGATION BUTTONS --- *@
+        <div class="d-flex align-center justify-space-between gap-3 my-1">
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Large" StartIcon="@Icons.Material.Filled.ArrowBack" 
+                       Disabled="@(_currentIndex <= 0)" OnClick="PrevSlide" Class="flex-grow-1 py-2 rounded-xl" Style="font-size: 1.05rem; font-weight: 700;">
+                @Loc["Previous"]
+            </MudButton>
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Large" EndIcon="@Icons.Material.Filled.ArrowForward" 
+                       Disabled="@(_currentIndex >= _mediaItems.Count - 1)" OnClick="NextSlide" Class="flex-grow-1 py-2 rounded-xl" Style="font-size: 1.05rem; font-weight: 700;">
+                @Loc["Next"]
+            </MudButton>
+        </div>
+
+        @* --- HORIZONTAL FILMSTRIP --- *@
+        <div class="mt-1">
+            <MudText Typo="Typo.caption" Color="Color.Secondary" Class="px-1 mb-1">@Loc["Tap photo to jump:"]</MudText>
+            <div class="filmstrip-strip">
+                @for (int i = 0; i < _mediaItems.Count; i++)
+                {
+                    var index = i;
+                    var item = _mediaItems[index];
+                    bool isActive = (index == _currentIndex) || (IsDualPortrait && index == _currentIndex + 1);
+                    <img src="@GetMediaUrl(item, thumb: true)" alt="@item.FileName" 
+                         class="filmstrip-thumb @(isActive ? "active" : "")" 
+                         @onclick="() => JumpToSlide(index)" />
+                }
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter] public string AlbumId { get; set; } = string.Empty;
+    [Parameter] public string SessionId { get; set; } = string.Empty;
+
+    private Album? _album;
+    private Employee? _currentUser;
+    private List<AlbumMedia> _mediaItems = [];
+    private int _currentIndex = 0;
+    private string? _cachedPlainAlbumKey;
+
+    private double _currentZoom = 1.0;
+    private double _panX = 0;
+    private double _panY = 0;
+
+    private bool _isVideoPlaying = true;
+    private bool _isVideoMuted = true;
+    private bool _isVideoLooping = true;
+    private double _videoCurrentTime = 0;
+    private double _videoDuration = 0;
+    private bool _isScrubbing = false;
+    private DateTime _lastScrubBroadcast = DateTime.MinValue;
+    private string? _lastRenderedMediaId;
+    private AlbumMedia? CurrentMedia => 
+        (_currentIndex >= 0 && _currentIndex < _mediaItems.Count) ? _mediaItems[_currentIndex] : null;
+
+    private AlbumMedia? NextMedia => 
+        (_currentIndex + 1 < _mediaItems.Count) ? _mediaItems[_currentIndex + 1] : null;
+
+    private static bool IsMediaPortrait(AlbumMedia? m) => 
+        m != null && !m.ContentType.StartsWith("video/", StringComparison.OrdinalIgnoreCase) && m.ImageHeight.HasValue && m.ImageWidth.HasValue && m.ImageHeight.Value > m.ImageWidth.Value;
+
+    private bool IsDualPortrait => 
+        IsMediaPortrait(CurrentMedia) && IsMediaPortrait(NextMedia);
+
+    private AlbumMedia? UpcomingMedia => 
+        IsDualPortrait 
+            ? (_currentIndex + 2 < _mediaItems.Count ? _mediaItems[_currentIndex + 2] : null)
+            : NextMedia;
+
+    private string GetWrapperCursorStyle()
+    {
+        if (_currentZoom <= 1.0 || IsDualPortrait) return string.Empty;
+        return "touch-action: none; cursor: grab;";
+    }
+
+    protected override void OnInitialized()
+    {
+        SessionService.OnTvVideoDurationKnown += HandleTvVideoDurationKnown;
+        SessionService.OnTvVideoTimeUpdated += HandleTvVideoTimeUpdated;
+        SessionService.OnTvVideoEnded += HandleTvVideoEnded;
+    }
+
+    private void HandleTvVideoDurationKnown(string sessionId, double duration)
+    {
+        if (sessionId != SessionId) return;
+        InvokeAsync(() =>
+        {
+            if (duration > 0 && Math.Abs(_videoDuration - duration) > 0.1)
+            {
+                _videoDuration = duration;
+                StateHasChanged();
+            }
+        });
+    }
+
+    private void HandleTvVideoTimeUpdated(string sessionId, double currentTime, bool isPlaying, double duration)
+    {
+        if (sessionId != SessionId) return;
+        if (_isScrubbing) return;
+
+        InvokeAsync(() =>
+        {
+            _videoCurrentTime = currentTime;
+            _isVideoPlaying = isPlaying;
+            if (duration > 0 && Math.Abs(_videoDuration - duration) > 1.0)
+            {
+                _videoDuration = duration;
+            }
+            StateHasChanged();
+        });
+    }
+
+    private void HandleTvVideoEnded(string sessionId)
+    {
+        if (sessionId != SessionId) return;
+        InvokeAsync(() =>
+        {
+            _isVideoPlaying = false;
+            _videoCurrentTime = _videoDuration;
+            StateHasChanged();
+        });
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        _currentUser = await UserService.GetEmployeeAsync();
+        _album = Db.Albums.GetById(AlbumId);
+
+        if (_album != null)
+        {
+            _mediaItems = _album.Media;
+            if (_album.IsEncrypted && _currentUser != null)
+            {
+                var privateKey = KeystoreService.IsUnlocked ? KeystoreService.GetPrivateKey() : null;
+                _cachedPlainAlbumKey = AlbumService.GetPlainAlbumKey(_album, _currentUser.Id, privateKey);
+            }
+        }
+
+        var session = SessionService.GetSessionById(SessionId);
+        if (session != null)
+        {
+            _currentIndex = session.CurrentIndex;
+            if (_currentIndex >= 0 && _currentIndex < _mediaItems.Count)
+            {
+                var dur = _mediaItems[_currentIndex].DurationSeconds;
+                if (dur.HasValue)
+                {
+                    _videoDuration = dur.Value;
+                }
+            }
+            if (session.FileBridge == null && _album != null && _currentUser != null)
+            {
+                var allowedMedia = _album.Media.ToDictionary(m => m.Id, m => System.IO.Path.GetFileName(m.FilePath));
+                var bridge = new UserScopedSlideshowBridge(ServiceProvider, _currentUser, _album.Id, _cachedPlainAlbumKey, allowedMedia);
+                SessionService.AttachBridge(session.SessionId, bridge);
+            }
+        }
+    }
+
+    private async Task NextSlide()
+    {
+        int step = IsDualPortrait ? 2 : 1;
+        if (_currentIndex + step < _mediaItems.Count)
+        {
+            await JumpToSlide(_currentIndex + step);
+        }
+        else if (_currentIndex < _mediaItems.Count - 1)
+        {
+            await JumpToSlide(_mediaItems.Count - 1);
+        }
+    }
+
+    private async Task PrevSlide()
+    {
+        if (_currentIndex <= 0) return;
+
+        if (_currentIndex >= 2 && IsMediaPortrait(_mediaItems[_currentIndex - 2]) && IsMediaPortrait(_mediaItems[_currentIndex - 1]))
+        {
+            await JumpToSlide(_currentIndex - 2);
+        }
+        else
+        {
+            await JumpToSlide(_currentIndex - 1);
+        }
+    }
+
+    private async Task JumpToSlide(int index)
+    {
+        if (index < 0 || index >= _mediaItems.Count) return;
+        _currentIndex = index;
+        _currentZoom = 1.0;
+        _panX = 0;
+        _panY = 0;
+        _videoCurrentTime = 0;
+        var itemDur = _mediaItems[index].DurationSeconds;
+        _videoDuration = (itemDur.HasValue && itemDur.Value > 0) ? itemDur.Value : 0;
+        _isScrubbing = false;
+        _isVideoPlaying = true;
+        await UpdateJsZoomState();
+
+        SessionService.UpdateCurrentIndex(SessionId, index);
+        SessionService.NotifySlideChanged(SessionId, index);
+        var session = SessionService.GetSessionById(SessionId);
+        if (session != null && !string.IsNullOrEmpty(session.TvConnectionId))
+        {
+            await HubContext.Clients.Client(session.TvConnectionId).SendAsync("SlideChanged", index);
+        }
+    }
+
+    private async Task SkipUpcomingPhoto()
+    {
+        int step = IsDualPortrait ? 2 : 1;
+        int skipTargetIndex = _currentIndex + step + 1;
+        if (skipTargetIndex < _mediaItems.Count)
+        {
+            await JumpToSlide(skipTargetIndex);
+        }
+        else if (_currentIndex + step < _mediaItems.Count)
+        {
+            await JumpToSlide(_currentIndex + step);
+        }
+    }
+
+    private void ClampPan()
+    {
+        if (_currentZoom <= 1.0)
+        {
+            _panX = 0;
+            _panY = 0;
+            return;
+        }
+        double maxPan = ((_currentZoom - 1.0) / (2.0 * _currentZoom)) * 100.0;
+        _panX = Math.Clamp(_panX, -maxPan, maxPan);
+        _panY = Math.Clamp(_panY, -maxPan, maxPan);
+    }
+
+    private async Task UpdateJsZoomState()
+    {
+        try
+        {
+            await JS.InvokeVoidAsync("updateSlideshowRemoteZoom", "remote-photo-wrapper", _currentZoom, _panX, _panY);
+        }
+        catch { }
+    }
+
+    private async Task ZoomIn()
+    {
+        _currentZoom = Math.Min(3.0, _currentZoom + 0.35);
+        ClampPan();
+        await UpdateJsZoomState();
+        await BroadcastZoom();
+    }
+
+    private async Task ZoomOut()
+    {
+        _currentZoom = Math.Max(1.0, _currentZoom - 0.35);
+        if (_currentZoom <= 1.0)
+        {
+            _currentZoom = 1.0;
+            _panX = 0;
+            _panY = 0;
+        }
+        else
+        {
+            ClampPan();
+        }
+        await UpdateJsZoomState();
+        await BroadcastZoom();
+    }
+
+    private async Task ResetZoom()
+    {
+        _currentZoom = 1.0;
+        _panX = 0;
+        _panY = 0;
+        await UpdateJsZoomState();
+        await BroadcastZoom();
+    }
+
+    private async Task BroadcastZoom(bool isPanning = false)
+    {
+        SessionService.NotifyZoomUpdated(SessionId, _currentZoom, _panX, _panY, isPanning);
+        var session = SessionService.GetSessionById(SessionId);
+        if (session != null && !string.IsNullOrEmpty(session.TvConnectionId))
+        {
+            await HubContext.Clients.Client(session.TvConnectionId).SendAsync("ZoomUpdated", _currentZoom, _panX, _panY, isPanning);
+        }
+    }
+
+    private async Task ToggleVideoPlay()
+    {
+        _isVideoPlaying = !_isVideoPlaying;
+        if (_isVideoPlaying && _videoDuration > 0 && Math.Abs(_videoCurrentTime - _videoDuration) < 0.5)
+        {
+            _videoCurrentTime = 0;
+        }
+        await BroadcastVideo();
+    }
+
+    private async Task ToggleVideoLoop()
+    {
+        _isVideoLooping = !_isVideoLooping;
+        await BroadcastVideo();
+    }
+
+    private async Task ToggleVideoMute()
+    {
+        _isVideoMuted = !_isVideoMuted;
+        await BroadcastVideo();
+    }
+
+    private async Task HandleScrubInput(ChangeEventArgs e)
+    {
+        if (e.Value != null && double.TryParse(e.Value.ToString(), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var targetTime))
+        {
+            _isScrubbing = true;
+            _videoCurrentTime = targetTime;
+
+            if ((DateTime.UtcNow - _lastScrubBroadcast).TotalMilliseconds >= 100)
+            {
+                _lastScrubBroadcast = DateTime.UtcNow;
+                await BroadcastVideo();
+            }
+        }
+    }
+
+    private async Task HandleScrubChange(ChangeEventArgs e)
+    {
+        if (e.Value != null && double.TryParse(e.Value.ToString(), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var targetTime))
+        {
+            _videoCurrentTime = targetTime;
+        }
+        _isScrubbing = false;
+        _lastScrubBroadcast = DateTime.UtcNow;
+        await BroadcastVideo();
+    }
+
+    private async Task BroadcastVideo()
+    {
+        SessionService.NotifyVideoControlUpdated(SessionId, _isVideoPlaying, _videoCurrentTime, _isVideoMuted, _isVideoLooping);
+        var session = SessionService.GetSessionById(SessionId);
+        if (session != null && !string.IsNullOrEmpty(session.TvConnectionId))
+        {
+            await HubContext.Clients.Client(session.TvConnectionId).SendAsync("VideoControlUpdated", _isVideoPlaying, _videoCurrentTime, _isVideoMuted, _isVideoLooping);
+        }
+    }
+
+    [JSInvokable]
+    public void OnRemoteTimeUpdate(double currentTime)
+    {
+        if (!_isScrubbing)
+        {
+            if (Math.Abs(_videoCurrentTime - currentTime) >= 0.5)
+            {
+                _videoCurrentTime = currentTime;
+                StateHasChanged();
+            }
+        }
+    }
+
+    [JSInvokable]
+    public void OnRemoteDurationKnown(double duration)
+    {
+        if (duration > 0 && Math.Abs(_videoDuration - duration) > 0.1)
+        {
+            _videoDuration = duration;
+            StateHasChanged();
+        }
+    }
+
+    [JSInvokable]
+    public async Task OnRemoteVideoEnded()
+    {
+        if (!_isVideoLooping)
+        {
+            _isVideoPlaying = false;
+            _videoCurrentTime = _videoDuration;
+            await BroadcastVideo();
+            StateHasChanged();
+        }
+    }
+
+    private static string FormatTime(double seconds)
+    {
+        if (double.IsNaN(seconds) || double.IsInfinity(seconds) || seconds < 0)
+        {
+            return "0:00";
+        }
+        var ts = TimeSpan.FromSeconds(seconds);
+        return ts.Hours > 0 
+            ? ts.ToString(@"h\:mm\:ss") 
+            : ts.ToString(@"m\:ss");
+    }
+
+    private async Task Disconnect()
+    {
+        try
+        {
+            await JS.InvokeVoidAsync("spokesCast.endCastSession");
+        }
+        catch { }
+
+        try
+        {
+            await JS.InvokeVoidAsync("spokesExternalDisplay.stopPresentation");
+        }
+        catch { }
+
+        var session = SessionService.GetSessionById(SessionId);
+        if (session != null && !string.IsNullOrEmpty(session.TvConnectionId))
+        {
+            await HubContext.Clients.Client(session.TvConnectionId).SendAsync("SessionEnded");
+        }
+        SessionService.EndSession(SessionId);
+        Nav.NavigateTo($"/albums/{AlbumId}");
+    }
+
+    private string GetMediaUrl(AlbumMedia media, bool thumb = false)
+    {
+        return thumb 
+            ? $"/spokesapi/slideshow/{SessionId}/media/{media.Id}/thumb" 
+            : $"/spokesapi/slideshow/{SessionId}/media/{media.Id}";
+    }
+
+    private string GetZoomStyle()
+    {
+        if (Math.Abs(_currentZoom - 1.0) < 0.01) return string.Empty;
+        var scaleStr = _currentZoom.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture);
+        var xStr = _panX.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture);
+        var yStr = _panY.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture);
+        return $"transform: scale({scaleStr}) translate3d({xStr}%, {yStr}%, 0);";
+    }
+
+    private DotNetObjectReference<SlideshowRemote>? _dotNetRef;
+    private bool _jsInitialized = false;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender || !_jsInitialized)
+        {
+            try
+            {
+                _dotNetRef?.Dispose();
+                _dotNetRef = DotNetObjectReference.Create(this);
+                await JS.InvokeVoidAsync("spokesExternalDisplay.initListener", _dotNetRef);
+                _jsInitialized = true;
+            }
+            catch { }
+        }
+
+        if (CurrentMedia != null && (firstRender || CurrentMedia.Id != _lastRenderedMediaId))
+        {
+            _lastRenderedMediaId = CurrentMedia.Id;
+            if (!CurrentMedia.ContentType.StartsWith("video/", StringComparison.OrdinalIgnoreCase))
+            {
+                try
+                {
+                    await JS.InvokeVoidAsync("initSlideshowRemoteDrag", "remote-photo-wrapper", "remote-stage-container", _dotNetRef);
+                }
+                catch { }
+            }
+        }
+    }
+
+    [JSInvokable]
+    public async Task OnJsPanUpdated(double panX, double panY, bool isPanning = false)
+    {
+        _panX = panX;
+        _panY = panY;
+        await BroadcastZoom(isPanning);
+    }
+
+    [JSInvokable]
+    public async Task OnExternalDisplayChanged(bool isConnected)
+    {
+        if (!isConnected)
+        {
+            await InvokeAsync(Disconnect);
+        }
+    }
+
+    public void Dispose()
+    {
+        SessionService.OnTvVideoDurationKnown -= HandleTvVideoDurationKnown;
+        SessionService.OnTvVideoTimeUpdated -= HandleTvVideoTimeUpdated;
+        SessionService.OnTvVideoEnded -= HandleTvVideoEnded;
+        try
+        {
+            _ = JS.InvokeVoidAsync("cleanupSlideshowRemoteDrag", "remote-photo-wrapper");
+        }
+        catch { }
+        _dotNetRef?.Dispose();
+    }
+}

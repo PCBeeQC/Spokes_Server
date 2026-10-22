@@ -1,0 +1,148 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<root>
+  <xsd:schema id="root" xmlns="" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:msdata="urn:schemas-microsoft-com:xml-msdata">
+    <xsd:import namespace="http://www.w3.org/XML/1998/namespace" />
+    <xsd:element name="root" msdata:IsDataSet="true">
+      <xsd:complexType>
+        <xsd:choice maxOccurs="unbounded">
+          <xsd:element name="metadata">
+            <xsd:complexType>
+              <xsd:sequence>
+                <xsd:element name="value" type="xsd:string" minOccurs="0" />
+              </xsd:sequence>
+              <xsd:attribute name="name" use="required" type="xsd:string" />
+              <xsd:attribute name="type" type="xsd:string" />
+              <xsd:attribute name="mimetype" type="xsd:string" />
+              <xsd:attribute ref="xml:space" />
+            </xsd:complexType>
+          </xsd:element>
+          <xsd:element name="assembly">
+            <xsd:complexType>
+              <xsd:attribute name="alias" type="xsd:string" />
+              <xsd:attribute name="name" type="xsd:string" />
+            </xsd:complexType>
+          </xsd:element>
+          <xsd:element name="data">
+            <xsd:complexType>
+              <xsd:sequence>
+                <xsd:element name="value" type="xsd:string" minOccurs="0" msdata:Ordinal="1" />
+                <xsd:element name="comment" type="xsd:string" minOccurs="0" msdata:Ordinal="2" />
+              </xsd:sequence>
+              <xsd:attribute name="name" use="required" type="xsd:string" msdata:Ordinal="0" />
+              <xsd:attribute name="type" type="xsd:string" msdata:Ordinal="3" />
+              <xsd:attribute name="mimetype" type="xsd:string" msdata:Ordinal="4" />
+              <xsd:attribute ref="xml:space" />
+            </xsd:complexType>
+          </xsd:element>
+          <xsd:element name="resheader">
+            <xsd:complexType>
+              <xsd:sequence>
+                <xsd:element name="value" type="xsd:string" minOccurs="0" msdata:Ordinal="1" />
+              </xsd:sequence>
+              <xsd:attribute name="name" use="required" type="xsd:string" />
+            </xsd:complexType>
+          </xsd:element>
+        </xsd:choice>
+      </xsd:complexType>
+    </xsd:element>
+  </xsd:schema>
+  <resheader name="resmimetype">
+    <value>text/microsoft-resx</value>
+  </resheader>
+  <resheader name="version">
+    <value>2.0</value>
+  </resheader>
+  <resheader name="reader">
+    <value>System.Resources.ResXResourceReader, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
+  </resheader>
+  <resheader name="writer">
+    <value>System.Resources.ResXResourceWriter, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
+  </resheader>
+  <!-- Business Actions & Navigation -->
+  <data name="New Project" xml:space="preserve">
+    <value>Neues Projekt</value>
+  </data>
+  <data name="Log Time" xml:space="preserve">
+    <value>Zeit erfassen</value>
+  </data>
+  <data name="New Expense" xml:space="preserve">
+    <value>Neue Ausgabe</value>
+  </data>
+  <data name="Start Timer" xml:space="preserve">
+    <value>Timer starten</value>
+  </data>
+  <data name="Stop Timer" xml:space="preserve">
+    <value>Timer stoppen</value>
+  </data>
+  <data name="PROJECTS" xml:space="preserve">
+    <value>PROJEKTE</value>
+  </data>
+  <data name="Linked to Project" xml:space="preserve">
+    <value>Mit Projekt verknüpft</value>
+  </data>
+  <data name="Select Project" xml:space="preserve">
+    <value>Projekt auswählen</value>
+  </data>
+  <data name="Access will be determined by the Project's settings." xml:space="preserve">
+    <value>Der Zugriff wird durch die Projekteinstellungen bestimmt.</value>
+  </data>
+  <data name="Org Chart" xml:space="preserve">
+    <value>Organigramm</value>
+  </data>
+  <data name="Document Templates" xml:space="preserve">
+    <value>Dokumentvorlagen</value>
+  </data>
+  <data name="Project Statuses" xml:space="preserve">
+    <value>Projektstatus</value>
+  </data>
+  <data name="Email Server" xml:space="preserve">
+    <value>E-Mail-Server</value>
+  </data>
+  <data name="Timesheets" xml:space="preserve">
+    <value>Stundenzettel</value>
+  </data>
+  <!-- HR & Employee Details -->
+  <data name="HR Details" xml:space="preserve">
+    <value>HR-Details</value>
+  </data>
+  <data name="Email Password" xml:space="preserve">
+    <value>E-Mail-Passwort</value>
+  </data>
+  <data name="New Email Password" xml:space="preserve">
+    <value>Neues E-Mail-Passwort</value>
+  </data>
+  <data name="Position / Title" xml:space="preserve">
+    <value>Position / Titel</value>
+  </data>
+  <data name="Weekly Capacity (Hours)" xml:space="preserve">
+    <value>Wöchentliche Kapazität (Stunden)</value>
+  </data>
+  <data name="Hire Date" xml:space="preserve">
+    <value>Einstellungsdatum</value>
+  </data>
+  <data name="Termination Date" xml:space="preserve">
+    <value>Kündigungsdatum</value>
+  </data>
+  <data name="Date of Birth" xml:space="preserve">
+    <value>Geburtsdatum</value>
+  </data>
+  <!-- Profile & User Settings -->
+  <data name="Document Signature" xml:space="preserve">
+    <value>Dokumentsignatur</value>
+  </data>
+  <data name="Upload Signature" xml:space="preserve">
+    <value>Signatur hochladen</value>
+  </data>
+  <data name="Professional Information" xml:space="preserve">
+    <value>Berufliche Daten</value>
+  </data>
+  <data name="Personal Phone" xml:space="preserve">
+    <value>Persönliche Telefonnummer</value>
+  </data>
+  <data name="Chat Messages" xml:space="preserve">
+    <value>Chat-Nachrichten</value>
+  </data>
+  <data name="Emails" xml:space="preserve">
+    <value>E-Mails</value>
+  </data>
+</root>

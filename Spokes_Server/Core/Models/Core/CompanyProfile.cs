@@ -1,123 +1,132 @@
 namespace Spokes_Server.Core.Models.Core;
 
-using System.Text.Json;
+using System.Collections.Generic;
+using System.Linq;
 using System.Text.Json.Serialization;
+using Spokes_Server.Core.Configuration;
 using Spokes_Server.Core.Data;
-using Spokes_Server.Core.Models.Projects;
+using Spokes_Server.Core.Models.HR;
 
 public class CompanyProfile : IDataEntity
 {
     public string Id { get; set; } = "GlobalProfile";
 
-    
-
     // Application Edition
     [JsonConverter(typeof(LegacyEditionConverter))]
     public string Edition { get; set; } = "Family";
 
-    // Branding
-    public string CompanyName { get; set; } = "My Spokes";
-    public string LogoBase64 { get; set; } = string.Empty;
-    public string IconBase64 { get; set; } = string.Empty; // Small square logo / favicon
-    public int LogoVersion { get; set; } = 1;
-    public int IconVersion { get; set; } = 1;
+    // Domain Configurations
+    public BrandingConfig Branding { get; set; } = new();
+    public ContactConfig Contact { get; set; } = new();
+    public DocumentNumberingConfig DocumentNumbering { get; set; } = new();
+    public AccountingConfig Accounting { get; set; } = new();
+    public ChatConfig Chat { get; set; } = new();
+    public PushConfig Push { get; set; } = new();
+    private BackupConfig _backup = new();
+    public BackupConfig Backup { get => _backup ??= new(); set => _backup = value ?? new(); }
+    public LicensingConfig Licensing { get; set; } = new();
+    public StorageConfig Storage { get; set; } = new();
+    public AuthConfig Auth { get; set; } = new();
+    public PrivacyConfig Privacy { get; set; } = new();
+    public AlbumConfig Albums { get; set; } = new();
+
+    // Domain settings
+    public EmailServerSettings EmailSettings { get; set; } = new();
+    public ModerationSettings Moderation { get; set; } = new();
+    public TimesheetSettings TimesheetConfig { get; set; } = new();
+    public HRSettings HRConfig { get; set; } = new();
+
+    // Branding accessors (delegated to BrandingConfig)
+    public string CompanyName { get => Branding.CompanyName; set => Branding.CompanyName = value; }
+    public string LogoBase64 { get => Branding.LogoBase64; set => Branding.LogoBase64 = value; }
+    public string IconBase64 { get => Branding.IconBase64; set => Branding.IconBase64 = value; }
+    public int LogoVersion { get => Branding.LogoVersion; set => Branding.LogoVersion = value; }
+    public int IconVersion { get => Branding.IconVersion; set => Branding.IconVersion = value; }
+    public string PrimaryColor { get => Branding.PrimaryColor; set => Branding.PrimaryColor = value; }
+    public string SecondaryColor { get => Branding.SecondaryColor; set => Branding.SecondaryColor = value; }
 
     [JsonIgnore]
-    public bool HasCustomLogo => !string.IsNullOrEmpty(LogoBase64);
+    public bool HasCustomLogo => Branding.HasCustomLogo;
 
     [JsonIgnore]
-    public bool HasCustomIcon => !string.IsNullOrEmpty(IconBase64);
+    public bool HasCustomIcon => Branding.HasCustomIcon;
 
-    public string PrimaryColor { get; set; } = "#7e6fff";
-    public string SecondaryColor { get; set; } = "#1E88E5";
+    // Document Numbering accessors (delegated to DocumentNumberingConfig)
+    public string QuotePrefix { get => DocumentNumbering.QuotePrefix; set => DocumentNumbering.QuotePrefix = value; }
+    public string InvoicePrefix { get => DocumentNumbering.InvoicePrefix; set => DocumentNumbering.InvoicePrefix = value; }
 
-    // Document Numbering
-    public string QuotePrefix { get; set; } = "Q";
-    public string InvoicePrefix { get; set; } = "INV";
+    // Contact accessors (delegated to ContactConfig)
+    public string AddressStreet { get => Contact.AddressStreet; set => Contact.AddressStreet = value; }
+    public string AddressCity { get => Contact.AddressCity; set => Contact.AddressCity = value; }
+    public string AddressZip { get => Contact.AddressZip; set => Contact.AddressZip = value; }
+    public string AddressState { get => Contact.AddressState; set => Contact.AddressState = value; }
+    public string AddressCountry { get => Contact.AddressCountry; set => Contact.AddressCountry = value; }
+    public string PhoneNumber { get => Contact.PhoneNumber; set => Contact.PhoneNumber = value; }
+    public string Website { get => Contact.Website; set => Contact.Website = value; }
+    public string PrivacyPolicyUrl { get => Contact.PrivacyPolicyUrl; set => Contact.PrivacyPolicyUrl = value; }
+
+    // Accounting accessors (delegated to AccountingConfig)
+    public decimal DefaultInternalCommission { get => Accounting.DefaultInternalCommission; set => Accounting.DefaultInternalCommission = value; }
+    public decimal DefaultExternalCommission { get => Accounting.DefaultExternalCommission; set => Accounting.DefaultExternalCommission = value; }
+    public decimal KilometrageRate { get => Accounting.KilometrageRate; set => Accounting.KilometrageRate = value; }
+    public decimal DefaultTaxRate { get => Accounting.DefaultTaxRate; set => Accounting.DefaultTaxRate = value; }
+    public string CurrencySymbol { get => Accounting.CurrencySymbol; set => Accounting.CurrencySymbol = value; }
+    public string DateFormat { get => Accounting.DateFormat; set => Accounting.DateFormat = value; }
+    public List<string> SupportedCurrencies { get => Accounting.SupportedCurrencies; set => Accounting.SupportedCurrencies = value; }
+
+    // Chat accessors (delegated to ChatConfig)
+    public string DefaultPublicChannelSubscription { get => Chat.DefaultPublicChannelSubscription; set => Chat.DefaultPublicChannelSubscription = value; }
+    public string PublicChannelMasterPassword { get => Chat.PublicChannelMasterPassword; set => Chat.PublicChannelMasterPassword = value; }
+    public int MaxChatCacheSizeMb { get => Chat.MaxChatCacheSizeMb; set => Chat.MaxChatCacheSizeMb = value; }
+    public string GifProvider { get => Chat.GifProvider; set => Chat.GifProvider = value; }
+    public string GifApiKey { get => Chat.GifApiKey; set => Chat.GifApiKey = value; }
+
+    // Push accessors (delegated to PushConfig)
+    public string VapidPublicKey { get => Push.VapidPublicKey; set => Push.VapidPublicKey = value; }
+    public string VapidPrivateKey { get => Push.VapidPrivateKey; set => Push.VapidPrivateKey = value; }
+    public string VapidSubject { get => Push.VapidSubject; set => Push.VapidSubject = value; }
+
+    // Backup accessors (delegated to BackupConfig)
+    public bool BackupsEnabled { get => Backup.BackupsEnabled; set => Backup.BackupsEnabled = value; }
+    public int BackupRetentionCount { get => Backup.BackupRetentionCount; set => Backup.BackupRetentionCount = value; }
+    public string BackupTimeLocal { get => Backup.BackupTimeLocal; set => Backup.BackupTimeLocal = value; }
+    public bool BackupEmployeeEmails { get => Backup.BackupEmployeeEmails; set => Backup.BackupEmployeeEmails = value; }
+    public bool EncryptBackupsWithMasterPassword { get => Backup.EncryptBackupsWithMasterPassword; set => Backup.EncryptBackupsWithMasterPassword = value; }
+
+    // Licensing accessors (delegated to LicensingConfig)
+    public string LicensePayload { get => Licensing.LicensePayload; set => Licensing.LicensePayload = value; }
+    public bool SendUsageStatistics { get => Licensing.SendUsageStatistics; set => Licensing.SendUsageStatistics = value; }
+
+    // Storage accessors (delegated to StorageConfig)
+    public long MaxFileUploadSizeBytes { get => Storage.MaxFileUploadSizeBytes; set => Storage.MaxFileUploadSizeBytes = value; }
+
+    // Auth accessors (delegated to AuthConfig)
+    public bool AutoCreateEmployeeOnFirstLogin { get => Auth.AutoCreateEmployeeOnFirstLogin; set => Auth.AutoCreateEmployeeOnFirstLogin = value; }
+
+    // Privacy accessors (delegated to PrivacyConfig)
+    public PrivacyPreset PrivacyPreset { get => Privacy.Preset; set => Privacy.Preset = value; }
 
     // Task Translations
     public List<string> TaskTranslationLanguages { get; set; } = [];
 
-    // Contact (Physical Location)
-    public string AddressStreet { get; set; } = string.Empty;
-    public string AddressCity { get; set; } = string.Empty;
-    public string AddressZip { get; set; } = string.Empty;
-    public string AddressState { get; set; } = string.Empty;
-    public string AddressCountry { get; set; } = "Canada";
-    public string PhoneNumber { get; set; } = string.Empty;
-    public string Website { get; set; } = string.Empty;
-    public string PrivacyPolicyUrl { get; set; } = "https://spokes.sh/privacy/";
-
-    // Commission Defaults
-    public decimal DefaultInternalCommission { get; set; } = 5.0m;
-    public decimal DefaultExternalCommission { get; set; } = 10.0m;
-
-    // Expenses
-    public decimal KilometrageRate { get; set; } = 0.55m; // $/km
-    public decimal DefaultTaxRate { get; set; } = 0.14975m;
-    public string CurrencySymbol { get; set; } = "$";
-    public List<string> SupportedCurrencies { get; set; } = ["CAD", "USD", "EUR"];
-
-
-    // REMOVED: Banking and Tax ID fields (Now in Template)
-
     // Project Status Configuration
     public List<ProjectStatusConfig> ProjectStatuses { get; set; } = [];
 
-    // Default Calendar Category Configuration (Server template for new users & resets)
+    // Default Calendar Category Configuration
     public List<CalendarCategory> CalendarCategories { get; set; } = [];
 
-    // Email Server Settings (Global)
-    public EmailServerSettings EmailSettings { get; set; } = new();
+    // System TimeZone
     public string TimeZoneId { get; set; } = string.Empty;
+
+    // Server Time & NTP Configuration
+    public TimeConfig Time { get; set; } = new();
 
     // Permissions & Roles
     public List<PermissionGroup> PermissionGroups { get; set; } = [];
     public string DefaultPermissionGroupId { get; set; } = string.Empty;
 
-    // Push Notifications (VAPID Keys)
-    public string VapidPublicKey { get; set; } = string.Empty;
-    public string VapidPrivateKey { get; set; } = string.Empty;
-    public string VapidSubject { get; set; } = "mailto:admin@yourcompany.com";
-
-    // OpenID Authentication Settings
-    public bool AutoCreateEmployeeOnFirstLogin { get; set; } = true;
-
-    // Chat Settings
-    public string DefaultPublicChannelSubscription { get; set; } = "Mentions";
-    public string PublicChannelMasterPassword { get; set; } = string.Empty;
-    public int MaxChatCacheSizeMb { get; set; } = 500;
-
-    // File Uploads
-    public long MaxFileUploadSizeBytes { get; set; } = 268435456; // 256MB default
-
-    // Gif Integration
-    public string GifProvider { get; set; } = "Spokes Default Provider"; // 'Spokes Default Provider', 'Tenor', 'Giphy', or 'Klipy'
-    public string GifApiKey { get; set; } = string.Empty;
-
-    // Backup Settings
-    public bool BackupsEnabled { get; set; }
-    public int BackupRetentionCount { get; set; } = 5;
-    public string BackupTimeLocal { get; set; } = "03:00"; // HH:mm Local
-    public bool BackupEmployeeEmails { get; set; }
-
-    // Licensing Settings
-    public string LicensePayload { get; set; } = string.Empty;
-    public bool SendUsageStatistics { get; set; } = true;
-
-    // Content Moderation
-    public ModerationSettings Moderation { get; set; } = new();
-
-    // Timesheet Settings
-    public TimesheetSettings TimesheetConfig { get; set; } = new();
-
-    // HR & Overtime Settings
-    public HRSettings HRConfig { get; set; } = new();
-
     public CompanyProfile()
     {
-        // Initialize Defaults if empty (Constructor runs on new object, JSON deserialization might overwrite this if property exists)
-        // We will also check this on load in the Service/Repository if needed, but a constructor init is safe for new profiles.
         if (ProjectStatuses == null || !ProjectStatuses.Any())
         {
             ProjectStatuses =
@@ -138,82 +147,4 @@ public class CompanyProfile : IDataEntity
             CalendarCategories = CalendarCategoryDefaults.GetSystemDefaults();
         }
     }
-}
-
-public class EmailServerSettings
-{
-    public string ImapHost { get; set; } = "";
-    public int ImapPort { get; set; } = 993;
-    public bool ImapSsl { get; set; } = true;
-
-    public string SmtpHost { get; set; } = "";
-    public int SmtpPort { get; set; } = 587;
-    public bool SmtpSsl { get; set; } // StartTLS usually
-}
-
-public enum TextModerationAction
-{
-    Block,
-    Sanitize
-}
-
-public class ModerationSettings
-{
-    public bool EnableTextFilter { get; set; }
-    public TextModerationAction TextAction { get; set; } = TextModerationAction.Block;
-    public List<string> BlockedWords { get; set; } = [];
-}
-
-public class TimesheetSettings
-{
-    // Features
-    public bool EnableWeeklyPlan { get; set; } = true;
-    
-    // Approval Workflow
-    public bool RequireApproval { get; set; }
-    
-    // Timesheet Locking
-    public bool EnableTimesheetLocking { get; set; }
-    public int LockTimesheetsOlderThanDays { get; set; } = 30;
-    
-    // Required Fields
-    public bool RequireProject { get; set; } = true;
-    public bool RequireTask { get; set; } = true;
-    public bool RequireNote { get; set; }
-    
-    // Rounding (applied to reports/exports only)
-    public bool EnableRounding { get; set; }
-    public int RoundingIntervalMinutes { get; set; } = 15;     // 5, 6, 15, or 30
-    public string RoundingDirection { get; set; } = "Nearest"; // "Up", "Down", "Nearest"
-}
-
-public class LegacyEditionConverter : JsonConverter<string>
-{
-    public override bool HandleNull => true;
-
-    public override string Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
-    {
-        if (reader.TokenType == JsonTokenType.Number)
-        {
-            int value = reader.GetInt32();
-            return value == 0 ? "Family" : "Business";
-        }
-        else if (reader.TokenType == JsonTokenType.String)
-        {
-            return reader.GetString() ?? "Business";
-        }
-
-        return "Business";
-    }
-
-    public override void Write(Utf8JsonWriter writer, string value, JsonSerializerOptions options) =>
-        writer.WriteStringValue(value);
-}
-
-public class HRSettings
-{
-    public bool EnableHourBank { get; set; } = true;
-    public string OvertimeCalculationMode { get; set; } = "Weekly"; // "Weekly", "Daily", "None"
-    public decimal DailyOvertimeThreshold { get; set; } = 8m; 
-    public decimal MaxBankableHours { get; set; } = 0; // 0 = unlimited
 }

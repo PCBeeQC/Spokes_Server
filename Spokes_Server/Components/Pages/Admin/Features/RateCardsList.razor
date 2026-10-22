@@ -1,7 +1,7 @@
 @using Spokes_Server.Core.Models.Accounting
 @using Spokes_Server.Core.Data
-@using Spokes_Server.Components.Pages.Admin
-@inject Database Db
+@using Spokes_Server.Core.Data.Repositories.Projects
+@inject RateCardRepository RateCards
 @inject IDialogService DialogService
 @inject ISnackbar Snackbar
 
@@ -42,7 +42,7 @@
 @code {
     private List<RateCard> List = [];
     protected override void OnInitialized() => Refresh();
-    private void Refresh() => List = Db.RateCards.GetAll().OrderBy(x => x.Name).ToList();
+    private void Refresh() => List = RateCards.GetAll().OrderBy(x => x.Name).ToList();
 
     private Task OpenCreateDialog() => OpenDialog(new RateCard(), "New Rate Card");
     private Task OpenEditDialog(RateCard item) => OpenDialog(item, "Edit Rate Card");
@@ -56,9 +56,9 @@
         var dialog = await DialogService.ShowAsync<RateCardDialog>(title, parameters);
         var result = await dialog.Result;
 
-        if (!result.Canceled)
+        if (result is { Canceled: false, Data: RateCard rateCard })
         {
-            Db.RateCards.Save((RateCard)result.Data);
+            RateCards.Save(rateCard);
             Refresh();
             Snackbar.Add("Saved", Severity.Success);
         }

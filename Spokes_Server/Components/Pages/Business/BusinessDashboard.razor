@@ -392,15 +392,15 @@
 
         // Revenue MTD
         TotalInvoicedThisMonth = allInvoices
-        .Where(i => i.Date >= startOfMonth && i.Status != "Draft" && i.Status != "Void")
+        .Where(i => i.Date >= startOfMonth && i.Status != InvoiceStatus.Draft && i.Status != InvoiceStatus.Void)
         .Sum(i => i.GrandTotal);
 
         TotalInvoicedLastMonth = allInvoices
-        .Where(i => i.Date >= startOfLastMonth && i.Date <= endOfLastMonth && i.Status != "Draft" && i.Status != "Void")
+        .Where(i => i.Date >= startOfLastMonth && i.Date <= endOfLastMonth && i.Status != InvoiceStatus.Draft && i.Status != InvoiceStatus.Void)
         .Sum(i => i.GrandTotal);
 
         // AR Due
-        var unpaidInvoices = allInvoices.Where(i => i.Status != "Paid" && i.Status != "Void" && i.BalanceDue > 0).ToList();
+        var unpaidInvoices = allInvoices.Where(i => i.Status != InvoiceStatus.Paid && i.Status != InvoiceStatus.Void && i.BalanceDue > 0).ToList();
         TotalARDue = unpaidInvoices.Sum(i => i.BalanceDue);
         UnpaidInvoicesCount = unpaidInvoices.Count;
 
@@ -408,7 +408,7 @@
         ActiveProjectsCount = allProjects.Count(p => p.Status == ProjectStatus.InProduction);
 
         // Pipeline (Sent quotes not yet accepted)
-        var pendingQuotes = allQuotes.Where(q => q.Status == "Final").ToList();
+        var pendingQuotes = allQuotes.Where(q => q.Status == QuoteStatus.Final).ToList();
         PipelineValue = pendingQuotes.Sum(q => q.GrandTotal);
         PendingQuotesCount = pendingQuotes.Count;
     }
@@ -424,18 +424,18 @@
 
         // Invoices due within 7 days (or overdue) with balance
         InvoicesDueSoon = allInvoices
-        .Where(i => i.Status != "Paid" && i.Status != "Void" && i.BalanceDue > 0 && i.DueDate <= sevenDaysFromNow)
+        .Where(i => i.Status != InvoiceStatus.Paid && i.Status != InvoiceStatus.Void && i.BalanceDue > 0 && i.DueDate <= sevenDaysFromNow)
         .OrderBy(i => i.DueDate)
         .ToList();
 
         // Stale quotes (Sent more than 30 days ago)
         StaleQuotes = allQuotes
-        .Where(q => q.Status == "Final" && q.Date < thirtyDaysAgo)
+        .Where(q => q.Status == QuoteStatus.Final && q.Date < thirtyDaysAgo)
         .OrderBy(q => q.Date)
         .ToList();
 
         // Draft quotes count
-        DraftQuotesCount = allQuotes.Count(q => q.Status == "Draft");
+        DraftQuotesCount = allQuotes.Count(q => q.Status == QuoteStatus.Draft);
     }
 
     private void LoadProjectStatus()
@@ -473,7 +473,7 @@ ProjectStatus.Completed
             // Check for Over Budget
             var projectTimesheets = allTimesheets.SelectMany(t => t.Entries).Where(e => e.ProjectId == project.Id);
             var actualHours = projectTimesheets.Sum(e => e.Hours);
-            var acceptedQuote = allQuotes.FirstOrDefault(q => q.ProjectId == project.Id && q.Status == "Accepted");
+            var acceptedQuote = allQuotes.FirstOrDefault(q => q.ProjectId == project.Id && q.Status == QuoteStatus.Accepted);
             var quotedHours = acceptedQuote?.LaborItems.Sum(l => l.Hours) ?? 0;
 
             if (quotedHours > 0 && actualHours > quotedHours)
@@ -491,7 +491,7 @@ ProjectStatus.Completed
             }
 
             // Check for Aging AR
-            var projectInvoices = allInvoices.Where(i => i.ProjectId == project.Id && i.Status != "Paid" && i.Status != "Void" &&
+            var projectInvoices = allInvoices.Where(i => i.ProjectId == project.Id && i.Status != InvoiceStatus.Paid && i.Status != InvoiceStatus.Void &&
             i.BalanceDue > 0);
             var oldestUnpaid = projectInvoices.OrderBy(i => i.Date).FirstOrDefault();
             if (oldestUnpaid != null && (today - oldestUnpaid.Date).Days > 30)
@@ -542,12 +542,12 @@ ProjectStatus.Completed
 
         // Received: Paid this month
         MoneyInReceived = allInvoices
-        .Where(i => i.Status == "Paid" && i.Date >= startOfMonth && i.Date <= endOfMonth)
+        .Where(i => i.Status == InvoiceStatus.Paid && i.Date >= startOfMonth && i.Date <= endOfMonth)
         .Sum(i => i.AmountPaid);
 
         // Pending: Due by end of this month (includes overdue)
         MoneyInPending = allInvoices
-        .Where(i => i.Status != "Paid" && i.Status != "Void" && i.DueDate <= endOfMonth)
+        .Where(i => i.Status != InvoiceStatus.Paid && i.Status != InvoiceStatus.Void && i.DueDate <= endOfMonth)
         .Sum(i => i.BalanceDue);
 
         // --- 2. Money Out ---
@@ -564,7 +564,7 @@ ProjectStatus.Completed
         ExpensesThisMonth = reports.Sum(r => r.TotalAmount);
 
         // 2b. Bills (Standard and POs)
-        var bills = Db.Bills.GetAll().Where(b => b.Date >= startOfMonth && b.Date <= endOfMonth).ToList();
+        var bills = Db.Bills.GetAll().Where(b => b.Status != BillStatus.Void && b.Date >= startOfMonth && b.Date <= endOfMonth).ToList();
         foreach (var b in bills)
         {
             if (!string.IsNullOrEmpty(b.PurchaseOrderId))
@@ -588,20 +588,21 @@ ProjectStatus.Completed
         var ledgers = Db.CommissionLedgerRecords.GetAll();
         foreach (var record in ledgers)
         {
-            if (record.Status == "Paid" || record.DatePaid.HasValue)
+            if (record.Status == CommissionStatus.Paid || record.DatePaid.HasValue)
             {
-                if (record.DatePaid.Value >= startOfMonth && record.DatePaid.Value <= endOfMonth)
+                var paidDate = record.DatePaid ?? record.DateGenerated;
+                if (paidDate >= startOfMonth && paidDate <= endOfMonth)
                 {
                     CommissionsThisMonth += record.CommissionAmount;
                 }
             }
-            else if (record.Status == "Payable")
+            else if (record.Status == CommissionStatus.Payable)
             {
                 CommissionsThisMonth += record.CommissionAmount;
             }
-            else if (record.Status == "Clawback") // Negative amount, deducts from cash out
+            else if (record.Status == CommissionStatus.Clawback) // Negative amount, deducts from cash out
             {
-                if (!record.DatePaid.HasValue || (record.DatePaid.Value >= startOfMonth && record.DatePaid.Value <= endOfMonth))
+                if (record.DatePaid is not { } clawbackDate || (clawbackDate >= startOfMonth && clawbackDate <= endOfMonth))
                 {
                     CommissionsThisMonth += record.CommissionAmount; // CommissionAmount is negative for clawbacks
                 }

@@ -2,42 +2,22 @@ using System.Text.Json;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Moq;
-using Spokes_Server.Core.Data;
 using Spokes_Server.Core.Data.Repositories.Projects;
 using Spokes_Server.Core.Models.Projects;
+using Spokes_Server.Tests.Helpers;
+using Xunit;
 
 namespace Spokes_Server.Tests.Core.Data.Repositories.Projects;
 
-public class ProjectDocumentRepositoryTests : IDisposable
+public class ProjectDocumentRepositoryTests : RepositoryTestBase
 {
-    private readonly string _testDataDir;
-    private readonly IConfiguration _config;
-    private readonly DiskPersistenceService _persistence;
     private readonly Mock<ILogger<ProjectDocumentRepository>> _mockLogger;
     private readonly ProjectDocumentRepository _repository;
 
-    public ProjectDocumentRepositoryTests()
+    public ProjectDocumentRepositoryTests() : base("ProjectDocumentRepository")
     {
-        _testDataDir = Path.Combine(Path.GetTempPath(), $"Spokes_Test_ProjectDocumentRepository_{Guid.NewGuid()}");
-        Directory.CreateDirectory(_testDataDir);
-
-        var configDict = new Dictionary<string, string> { { "DataPath", _testDataDir } };
-        _config = new ConfigurationBuilder().AddInMemoryCollection(configDict).Build();
-
-        _persistence = new DiskPersistenceService(new Mock<ILogger<DiskPersistenceService>>().Object);
         _mockLogger = new Mock<ILogger<ProjectDocumentRepository>>();
-
-        _repository = new ProjectDocumentRepository(_persistence, _config, _mockLogger.Object);
-    }
-
-    public void Dispose()
-    {
-        _persistence.Dispose();
-        if (Directory.Exists(_testDataDir))
-        {
-            try { Directory.Delete(_testDataDir, true); }
-            catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"Cleanup error: {ex.Message}"); }
-        }
+        _repository = new ProjectDocumentRepository(_writer, Config, _mockLogger.Object);
     }
 
     [Fact]
@@ -139,10 +119,10 @@ public class ProjectDocumentRepositoryTests : IDisposable
         _repository.Save(bizDoc);
         
         // Allow disk writer to flush
-        _persistence.FlushAll();
+        _writer.FlushAll();
 
         // Create a NEW repo instance to test loading from disk
-        var newRepo = new ProjectDocumentRepository(_persistence, _config, _mockLogger.Object);
+        var newRepo = new ProjectDocumentRepository(_writer, Config, _mockLogger.Object);
 
         // Act
         newRepo.LoadFromDisk();
@@ -162,9 +142,9 @@ public class ProjectDocumentRepositoryTests : IDisposable
         var emptyDir = Path.Combine(Path.GetTempPath(), $"Spokes_Empty_{Guid.NewGuid()}");
         Directory.CreateDirectory(emptyDir);
         
-        var configDict = new Dictionary<string, string> { { "DataPath", emptyDir } };
-        var config = new ConfigurationBuilder().AddInMemoryCollection(configDict).Build();
-        var emptyRepo = new ProjectDocumentRepository(_persistence, config, _mockLogger.Object);
+        var mockConfig = new Mock<IConfiguration>();
+        mockConfig.Setup(c => c["DataPath"]).Returns(emptyDir);
+        var emptyRepo = new ProjectDocumentRepository(_writer, mockConfig.Object, _mockLogger.Object);
 
         // Act & Assert
         // This should not throw, it should simply return with empty cache

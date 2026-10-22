@@ -1,0 +1,3648 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<root>
+  <xsd:schema xmlns="" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:msdata="urn:schemas-microsoft-com:xml-msdata" id="root">
+    <xsd:import namespace="http://www.w3.org/XML/1998/namespace"/>
+    <xsd:element name="root" msdata:IsDataSet="true">
+      <xsd:complexType>
+        <xsd:choice maxOccurs="unbounded">
+          <xsd:element name="metadata">
+            <xsd:complexType>
+              <xsd:sequence>
+                <xsd:element name="value" type="xsd:string" minOccurs="0"/>
+              </xsd:sequence>
+              <xsd:attribute name="name" use="required" type="xsd:string"/>
+              <xsd:attribute name="type" type="xsd:string"/>
+              <xsd:attribute name="mimetype" type="xsd:string"/>
+              <xsd:attribute ref="xml:space"/>
+            </xsd:complexType>
+          </xsd:element>
+          <xsd:element name="assembly">
+            <xsd:complexType>
+              <xsd:attribute name="alias" type="xsd:string"/>
+              <xsd:attribute name="name" type="xsd:string"/>
+            </xsd:complexType>
+          </xsd:element>
+          <xsd:element name="data">
+            <xsd:complexType>
+              <xsd:sequence>
+                <xsd:element name="value" type="xsd:string" minOccurs="0" msdata:Ordinal="1"/>
+                <xsd:element name="comment" type="xsd:string" minOccurs="0" msdata:Ordinal="2"/>
+              </xsd:sequence>
+              <xsd:attribute name="name" use="required" type="xsd:string" msdata:Ordinal="0"/>
+              <xsd:attribute name="type" type="xsd:string" msdata:Ordinal="3"/>
+              <xsd:attribute name="mimetype" type="xsd:string" msdata:Ordinal="4"/>
+              <xsd:attribute ref="xml:space"/>
+            </xsd:complexType>
+          </xsd:element>
+          <xsd:element name="resheader">
+            <xsd:complexType>
+              <xsd:sequence>
+                <xsd:element name="value" type="xsd:string" minOccurs="0" msdata:Ordinal="1"/>
+              </xsd:sequence>
+              <xsd:attribute name="name" use="required" type="xsd:string"/>
+            </xsd:complexType>
+          </xsd:element>
+        </xsd:choice>
+      </xsd:complexType>
+    </xsd:element>
+  </xsd:schema>
+  <resheader name="resmimetype">
+    <value>text/microsoft-resx</value>
+  </resheader>
+  <resheader name="version">
+    <value>2.0</value>
+  </resheader>
+  <resheader name="reader">
+    <value>System.Resources.ResXResourceReader, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
+  </resheader>
+  <resheader name="writer">
+    <value>System.Resources.ResXResourceWriter, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
+  </resheader>
+  <!-- Common Actions & Buttons -->
+  <data name="Save" xml:space="preserve">
+    <value>Speichern</value>
+  </data>
+  <data name="Cancel" xml:space="preserve">
+    <value>Abbrechen</value>
+  </data>
+  <data name="Delete" xml:space="preserve">
+    <value>Löschen</value>
+  </data>
+  <data name="Edit" xml:space="preserve">
+    <value>Bearbeiten</value>
+  </data>
+  <data name="Close" xml:space="preserve">
+    <value>Schließen</value>
+  </data>
+  <data name="Search" xml:space="preserve">
+    <value>Suchen</value>
+  </data>
+  <data name="Add" xml:space="preserve">
+    <value>Neu</value>
+  </data>
+  <data name="Remove" xml:space="preserve">
+    <value>Entfernen</value>
+  </data>
+  <data name="Confirm" xml:space="preserve">
+    <value>Bestätigen</value>
+  </data>
+  <data name="Back" xml:space="preserve">
+    <value>Zurück</value>
+  </data>
+  <data name="Next" xml:space="preserve">
+    <value>Nächste</value>
+  </data>
+  <data name="Upload" xml:space="preserve">
+    <value>Hochladen</value>
+  </data>
+  <data name="Download" xml:space="preserve">
+    <value>Download</value>
+  </data>
+  <!-- Navigation & Shell -->
+  <data name="Home" xml:space="preserve">
+    <value>Zuhause</value>
+  </data>
+  <data name="Chat" xml:space="preserve">
+    <value>Chat</value>
+  </data>
+  <data name="Email" xml:space="preserve">
+    <value>E-Mail</value>
+  </data>
+  <data name="Calendar" xml:space="preserve">
+    <value>Kalender</value>
+  </data>
+  <data name="Albums" xml:space="preserve">
+    <value>Alben</value>
+  </data>
+  <data name="TaskDefinitions" xml:space="preserve">
+    <value>Aufgabendefinitionen</value>
+  </data>
+  <data name="StandardDocuments" xml:space="preserve">
+    <value>Standarddokumente</value>
+  </data>
+  <data name="Settings" xml:space="preserve">
+    <value>Einstellungen</value>
+  </data>
+  <data name="DemoSettings" xml:space="preserve">
+    <value>Demo-Einstellungen</value>
+  </data>
+  <data name="Moderation" xml:space="preserve">
+    <value>Moderation</value>
+  </data>
+  <data name="UserSettings" xml:space="preserve">
+    <value>Benutzereinstellungen</value>
+  </data>
+  <data name="Profile" xml:space="preserve">
+    <value>Profil</value>
+  </data>
+  <data name="Logout" xml:space="preserve">
+    <value>Abmelden</value>
+  </data>
+  <data name="SwitchTheme" xml:space="preserve">
+    <value>Theme wechseln</value>
+  </data>
+  <!-- Language & Region -->
+  <data name="LanguageAndRegion" xml:space="preserve">
+    <value>Sprache &amp; Region</value>
+  </data>
+  <data name="SelectLanguageDescription" xml:space="preserve">
+    <value>Wählen Sie Ihre bevorzugte Anzeigesprache für die Anwendung.</value>
+  </data>
+  <!-- Edition / AppLabelService Terms -->
+  <data name="Members" xml:space="preserve">
+    <value>Mitglieder</value>
+  </data>
+  <!-- User Settings & Profile Sections -->
+  <data name="Security" xml:space="preserve">
+    <value>Sicherheit</value>
+  </data>
+  <data name="Manage" xml:space="preserve">
+    <value>Verwalten</value>
+  </data>
+  <data name="UploadAvatar" xml:space="preserve">
+    <value>Avatar hochladen</value>
+  </data>
+  <data name="ProfileColorUsedIfNoAvatar" xml:space="preserve">
+    <value>Profilfarbe (wenn kein Avatar verwendet)</value>
+  </data>
+  <data name="FirstName" xml:space="preserve">
+    <value>Vorname</value>
+  </data>
+  <data name="LastName" xml:space="preserve">
+    <value>Nachname</value>
+  </data>
+  <data name="Address" xml:space="preserve">
+    <value>Adresse</value>
+  </data>
+  <data name="MakeMyEmailVisibleToOtherUsers" xml:space="preserve">
+    <value>Meine E-Mail für andere Benutzer sichtbar machen</value>
+  </data>
+  <data name="-- None (Chat Only) --" xml:space="preserve">
+    <value>-- Keine (Chat nur) --</value>
+  </data>
+  <data name="(+1 day)" xml:space="preserve">
+    <value>(+1 Tag)</value>
+  </data>
+  <data name="(unnamed)" xml:space="preserve">
+    <value>(unbenannt)</value>
+  </data>
+  <data name="[Attachment]" xml:space="preserve">
+    <value>[Attachment]</value>
+  </data>
+  <data name="{0} (Leader)" xml:space="preserve">
+    <value>{0} (Anführer)</value>
+  </data>
+  <data name="{0} '{1}' created" xml:space="preserve">
+    <value>{0} '{1}' erstellt</value>
+  </data>
+  <data name="{0} '{1}' deleted" xml:space="preserve">
+    <value>{0} '{1}' gelöscht</value>
+  </data>
+  <data name="{0} and {1} are typing..." xml:space="preserve">
+    <value>{0} und {1} tippen...</value>
+  </data>
+  <data name="{0} Attendees" xml:space="preserve">
+    <value>{0} Teilnehmer</value>
+  </data>
+  <data name="{0} by {1}" xml:space="preserve">
+    <value>{0} von {1}</value>
+  </data>
+  <data name="{0} channel" xml:space="preserve">
+    <value>{0} Kanal</value>
+  </data>
+  <data name="{0} channel · {1} members" xml:space="preserve">
+    <value>{0} Kanal · {1} Mitglieder</value>
+  </data>
+  <data name="{0} Color" xml:space="preserve">
+    <value>{0} Farbe</value>
+  </data>
+  <data name="{0} days" xml:space="preserve">
+    <value>{0} Tage</value>
+  </data>
+  <data name="{0} days (All day)" xml:space="preserve">
+    <value>{0} Tage (ganztägig)</value>
+  </data>
+  <data name="{0} deleted" xml:space="preserve">
+    <value>{0} gelöscht</value>
+  </data>
+  <data name="{0} Directory" xml:space="preserve">
+    <value>{0} Verzeichnis</value>
+  </data>
+  <data name="{0} directory browsing is disabled on this {1}." xml:space="preserve">
+    <value>{0} Verzeichnissuche ist auf dieser {1} deaktiviert.</value>
+  </data>
+  <data name="{0} Edition" xml:space="preserve">
+    <value>{0} Edition</value>
+  </data>
+  <data name="{0} events scheduled" xml:space="preserve">
+    <value>{0} Ereignisse geplant</value>
+  </data>
+  <data name="{0} hr" xml:space="preserve">
+    <value>{0} Stunde</value>
+  </data>
+  <data name="{0} hrs" xml:space="preserve">
+    <value>{0} Stunden</value>
+  </data>
+  <data name="{0} is typing..." xml:space="preserve">
+    <value>{0} schreibt...</value>
+  </data>
+  <data name="{0} item" xml:space="preserve">
+    <value>{0} Element</value>
+  </data>
+  <data name="{0} items" xml:space="preserve">
+    <value>{0} Elemente</value>
+  </data>
+  <data name="{0} Leader" xml:space="preserve">
+    <value>{0} Anführer</value>
+  </data>
+  <data name="{0} Member" xml:space="preserve">
+    <value>{0} Mitglied</value>
+  </data>
+  <data name="{0} Members" xml:space="preserve">
+    <value>{0} Mitglieder</value>
+  </data>
+  <data name="{0} Members ({1})" xml:space="preserve">
+    <value>{0} Mitglieder ({1})</value>
+  </data>
+  <data name="{0} mins" xml:space="preserve">
+    <value>{0} Minuten</value>
+  </data>
+  <data name="{0} months, {1} days" xml:space="preserve">
+    <value>{0} Monate, {1} Tage</value>
+  </data>
+  <data name="{0} Name" xml:space="preserve">
+    <value>{0} Name</value>
+  </data>
+  <data name="{0} name is required" xml:space="preserve">
+    <value>{0} Name ist erforderlich</value>
+  </data>
+  <data name="{0} of {1}" xml:space="preserve">
+    <value>{0} von {1}</value>
+  </data>
+  <data name="{0} people" xml:space="preserve">
+    <value>{0} Personen</value>
+  </data>
+  <data name="{0} permission(s)" xml:space="preserve">
+    <value>{0} Berechtigung(en)</value>
+  </data>
+  <data name="{0} person" xml:space="preserve">
+    <value>{0} Person</value>
+  </data>
+  <data name="{0} Profile" xml:space="preserve">
+    <value>{0} Profil</value>
+  </data>
+  <data name="{0} Profile Saved" xml:space="preserve">
+    <value>{0} Profil gespeichert</value>
+  </data>
+  <data name="{0} Reaction" xml:space="preserve">
+    <value>{0} Reaktion</value>
+  </data>
+  <data name="{0} results found" xml:space="preserve">
+    <value>{0} Ergebnisse gefunden</value>
+  </data>
+  <data name="{0} Settings" xml:space="preserve">
+    <value>{0} Einstellungen</value>
+  </data>
+  <data name="{0} updated" xml:space="preserve">
+    <value>{0} aktualisiert</value>
+  </data>
+  <data name="{0} years, {1} months" xml:space="preserve">
+    <value>{0} Jahre, {1} Monate</value>
+  </data>
+  <data name="{0}, {1}, and {2} are typing..." xml:space="preserve">
+    <value>{0}, {1}und {2} tippen...</value>
+  </data>
+  <data name="{0}d" xml:space="preserve">
+    <value>{0}d</value>
+  </data>
+  <data name="{0}d {1}h" xml:space="preserve">
+    <value>{0}d {1}h</value>
+  </data>
+  <data name="{0}h" xml:space="preserve">
+    <value>{0}h</value>
+  </data>
+  <data name="{0}h {1}m" xml:space="preserve">
+    <value>{0}h {1}m</value>
+  </data>
+  <data name="{0}h {1}m free" xml:space="preserve">
+    <value>{0}h {1}m kostenlos</value>
+  </data>
+  <data name="{0}h free" xml:space="preserve">
+    <value>{0}h frei</value>
+  </data>
+  <data name="{0}m" xml:space="preserve">
+    <value>{0}m</value>
+  </data>
+  <data name="{0}m free" xml:space="preserve">
+    <value>{0}m frei</value>
+  </data>
+  <data name="&lt;strong&gt;Administrator Action:&lt;/strong&gt; You are modifying an event created by &lt;strong&gt;{0}&lt;/strong&gt;. Changes will affect all participants." xml:space="preserve">
+    <value>&lt;strong&gt;Administrator-Aktion:&lt;/strong&gt; Sie ändern ein Ereignis, das von &lt;strong&gt;{0}&lt;/strong&gt;erstellt wurde. Änderungen betreffen alle Teilnehmer.</value>
+  </data>
+  <data name="0 mins" xml:space="preserve">
+    <value>0 Min</value>
+  </data>
+  <data name="1 event scheduled" xml:space="preserve">
+    <value>1 Ereignis geplant</value>
+  </data>
+  <data name="128 kbps (High)" xml:space="preserve">
+    <value>128 kbps (Höhe)</value>
+  </data>
+  <data name="24-hour format, e.g. 03:00" xml:space="preserve">
+    <value>24-Stunden-Format, z.B. 03:00</value>
+  </data>
+  <data name="256 kbps (Very High)" xml:space="preserve">
+    <value>256 kbps (sehr hoch)</value>
+  </data>
+  <data name="384 kbps (Extreme)" xml:space="preserve">
+    <value>384 kbps (Extrem)</value>
+  </data>
+  <data name="64 kbps (Low)" xml:space="preserve">
+    <value>64 kbps (Niedrig)</value>
+  </data>
+  <data name="96 kbps (Standard)" xml:space="preserve">
+    <value>96 kbps (Standard)</value>
+  </data>
+  <data name="A backup is already in progress" xml:space="preserve">
+    <value>Eine Sicherung ist bereits im Gange</value>
+  </data>
+  <data name="A new server update is available:" xml:space="preserve">
+    <value>Ein neues Server-Update ist verfügbar:</value>
+  </data>
+  <data name="Access" xml:space="preserve">
+    <value>Zugang</value>
+  </data>
+  <data name="Access Control" xml:space="preserve">
+    <value>Zugriffskontrolle</value>
+  </data>
+  <data name="Access Denied" xml:space="preserve">
+    <value>Zugriff verweigert</value>
+  </data>
+  <data name="Access Pending" xml:space="preserve">
+    <value>Zugang ausstehend</value>
+  </data>
+  <data name="Access Type" xml:space="preserve">
+    <value>Zugriffstyp</value>
+  </data>
+  <data name="Account Banned" xml:space="preserve">
+    <value>Konto gesperrt</value>
+  </data>
+  <data name="Account Deleted" xml:space="preserve">
+    <value>Konto gelöscht</value>
+  </data>
+  <data name="Action on Violation" xml:space="preserve">
+    <value>Aktion gegen Verstöße</value>
+  </data>
+  <data name="Action:" xml:space="preserve">
+    <value>Aktion:</value>
+  </data>
+  <data name="Actions" xml:space="preserve">
+    <value>Aktionen</value>
+  </data>
+  <data name="Active" xml:space="preserve">
+    <value>Aktiv</value>
+  </data>
+  <data name="Active Account" xml:space="preserve">
+    <value>Aktives Konto</value>
+  </data>
+  <data name="Active Edition" xml:space="preserve">
+    <value>Aktive Edition</value>
+  </data>
+  <data name="Active via Apple Neural Engine. Background noise is filtered automatically." xml:space="preserve">
+    <value>Aktiv über Apple Neuronale Engine. Hintergrundgeräusche werden automatisch gefiltert.</value>
+  </data>
+  <data name="Add {0}" xml:space="preserve">
+    <value>{0} hinzufügen</value>
+  </data>
+  <data name="Add {0} to Post" xml:space="preserve">
+    <value>{0} zum Beitrag hinzufügen</value>
+  </data>
+  <data name="Add {0}..." xml:space="preserve">
+    <value>Füge {0} hinzu...</value>
+  </data>
+  <data name="Add Attendee" xml:space="preserve">
+    <value>Teilnehmer hinzufügen</value>
+  </data>
+  <data name="Add Category" xml:space="preserve">
+    <value>Neue Kategorie</value>
+  </data>
+  <data name="Add Event" xml:space="preserve">
+    <value>Neuer Termin</value>
+  </data>
+  <data name="Add Group" xml:space="preserve">
+    <value>Neue Gruppe</value>
+  </data>
+  <data name="Add meeting notes, agenda, or dial-in info..." xml:space="preserve">
+    <value>Meetingnotizen, Tagesordnungen oder Einwahlinformationen hinzufügen...</value>
+  </data>
+  <data name="Add Member" xml:space="preserve">
+    <value>Mitglied hinzufügen</value>
+  </data>
+  <data name="Add member..." xml:space="preserve">
+    <value>Mitglied hinzufügen...</value>
+  </data>
+  <data name="Add people..." xml:space="preserve">
+    <value>Personen hinzufügen...</value>
+  </data>
+  <data name="Add Personal" xml:space="preserve">
+    <value>Persönlich hinzufügen</value>
+  </data>
+  <data name="Add personal reminder" xml:space="preserve">
+    <value>Persönliche Erinnerung hinzufügen</value>
+  </data>
+  <data name="Add Reaction" xml:space="preserve">
+    <value>Reaktion hinzufügen</value>
+  </data>
+  <data name="Add reminder" xml:space="preserve">
+    <value>Erinnerung hinzufügen</value>
+  </data>
+  <data name="Add Shared" xml:space="preserve">
+    <value>Freigabe hinzufügen</value>
+  </data>
+  <data name="Add shared reminder" xml:space="preserve">
+    <value>Geteilte Erinnerung hinzufügen</value>
+  </data>
+  <data name="Add User" xml:space="preserve">
+    <value>Neuer Benutzer</value>
+  </data>
+  <data name="Add User to Post" xml:space="preserve">
+    <value>Benutzer zum Beitrag hinzufügen</value>
+  </data>
+  <data name="Add user..." xml:space="preserve">
+    <value>Benutzer hinzufügen...</value>
+  </data>
+  <data name="Added {0}" xml:space="preserve">
+    <value>{0} hinzugefügt</value>
+  </data>
+  <data name="Added {0} items to album" xml:space="preserve">
+    <value>{0} Elemente zum Album hinzugefügt</value>
+  </data>
+  <data name="Added {0} to the channel" xml:space="preserve">
+    <value>{0} zum Kanal hinzugefügt</value>
+  </data>
+  <data name="Adjusts background noise rejection. Lower values filter out quiet background noise, while higher values capture softer speech." xml:space="preserve">
+    <value>Stellt die Rauschunterdrückung im Hintergrund ein. Niedrigere Werte filtern leises Hintergrundgeräusch, während höhere Werte eine weichere Sprache erfassen.</value>
+  </data>
+  <data name="Adjusts the incoming volume for all voice participants (0% to 200%)." xml:space="preserve">
+    <value>Passt die eingehende Lautstärke für alle Sprachteilnehmer an (0% bis 200%).</value>
+  </data>
+  <data name="Admin" xml:space="preserve">
+    <value>Admin</value>
+  </data>
+  <data name="ADMIN" xml:space="preserve">
+    <value>ADMIN</value>
+  </data>
+  <data name="Admin Password" xml:space="preserve">
+    <value>Admin-Passwort</value>
+  </data>
+  <data name="Admin Username" xml:space="preserve">
+    <value>Admin-Benutzername</value>
+  </data>
+  <data name="Album created successfully" xml:space="preserve">
+    <value>Album erfolgreich erstellt</value>
+  </data>
+  <data name="Album deleted" xml:space="preserve">
+    <value>Album gelöscht</value>
+  </data>
+  <data name="Album Shared With" xml:space="preserve">
+    <value>Album geteilt mit</value>
+  </data>
+  <data name="Albums shared with you by other members will appear here." xml:space="preserve">
+    <value>Alben, die von anderen Mitgliedern mit dir geteilt werden, werden hier erscheinen.</value>
+  </data>
+  <data name="All" xml:space="preserve">
+    <value>Alle</value>
+  </data>
+  <data name="All Clear!" xml:space="preserve">
+    <value>Alles klar!</value>
+  </data>
+  <data name="All current data will be overwritten and lost. This action cannot be undone." xml:space="preserve">
+    <value>Alle aktuellen Daten werden überschrieben und verloren gehen. Diese Aktion kann nicht rückgängig gemacht werden.</value>
+  </data>
+  <data name="All current users will lose access until their new provider identities are manually re-linked to their {0} profiles." xml:space="preserve">
+    <value>Alle aktuellen Benutzer verlieren den Zugriff, bis ihre neue Provider-Identität manuell mit ihren {0} Profilen erneut verknüpft wird.</value>
+  </data>
+  <data name="All Day" xml:space="preserve">
+    <value>Ganzer Tag</value>
+  </data>
+  <data name="All day" xml:space="preserve">
+    <value>Ganztägig</value>
+  </data>
+  <data name="All Day Event" xml:space="preserve">
+    <value>Ganztägige Veranstaltung</value>
+  </data>
+  <data name="All Messages" xml:space="preserve">
+    <value>Alle Nachrichten</value>
+  </data>
+  <data name="All Muted" xml:space="preserve">
+    <value>Alle stumm</value>
+  </data>
+  <data name="All OpenID Accounts" xml:space="preserve">
+    <value>Alle OpenID-Konten</value>
+  </data>
+  <data name="All reminders muted for this event" xml:space="preserve">
+    <value>Alle Erinnerungen für dieses Ereignis stumm</value>
+  </data>
+  <data name="All-Day ({0})" xml:space="preserve">
+    <value>Ganztägig ({0})</value>
+  </data>
+  <data name="Allowed" xml:space="preserve">
+    <value>Zulässig</value>
+  </data>
+  <data name="ALLOWED" xml:space="preserve">
+    <value>ERLAUBT</value>
+  </data>
+  <data name="ALLOWED MEMBERS" xml:space="preserve">
+    <value>ERLAUBTE MITGLIEDER</value>
+  </data>
+  <data name="Allowed Users" xml:space="preserve">
+    <value>Erlaubte Benutzer</value>
+  </data>
+  <data name="ALLOWED USERS" xml:space="preserve">
+    <value>BENUTZER ERLAUBEN</value>
+  </data>
+  <data name="Announcement Channel" xml:space="preserve">
+    <value>Ankündigungskanal</value>
+  </data>
+  <data name="Anonymous usage statistics disabled." xml:space="preserve">
+    <value>Anonyme Nutzungsstatistiken deaktiviert.</value>
+  </data>
+  <data name="Anonymous usage statistics enabled." xml:space="preserve">
+    <value>Anonyme Nutzungsstatistiken aktiviert.</value>
+  </data>
+  <data name="another user" xml:space="preserve">
+    <value>anderer Benutzer</value>
+  </data>
+  <data name="API Key" xml:space="preserve">
+    <value>API-Schlüssel</value>
+  </data>
+  <data name="Apple Voice Isolation" xml:space="preserve">
+    <value>Apple Sprach-Isolation</value>
+  </data>
+  <data name="Apply Crop" xml:space="preserve">
+    <value>Zubereitung anwenden</value>
+  </data>
+  <data name="Archive" xml:space="preserve">
+    <value>Archivieren</value>
+  </data>
+  <data name="Archive Channel" xml:space="preserve">
+    <value>Kanal archivieren</value>
+  </data>
+  <data name="ARCHIVED" xml:space="preserve">
+    <value>ARCHIVIERT</value>
+  </data>
+  <data name="Are you absolutely sure you want to proceed?" xml:space="preserve">
+    <value>Bist du dir sicher, dass du fortfahren möchtest?</value>
+  </data>
+  <data name="Are you absolutely sure? This will permanently delete your account and all associated data from this server. This action cannot be undone." xml:space="preserve">
+    <value>Sind Sie absolut sicher? Dies wird Ihr Konto und alle damit verbundenen Daten von diesem Server dauerhaft löschen. Diese Aktion kann nicht rückgängig gemacht werden.</value>
+  </data>
+  <data name="Are you sure you want to archive this channel? It will be hidden from the sidebar." xml:space="preserve">
+    <value>Sind Sie sicher, dass Sie diesen Kanal archivieren möchten? Er wird in der Seitenleiste ausgeblendet.</value>
+  </data>
+  <data name="Are you sure you want to delete '{0}' created by {1}? This will permanently remove it from all participants' calendars." xml:space="preserve">
+    <value>Sind Sie sicher, dass Sie '{0}' von {1}' löschen möchten? Dies wird es dauerhaft aus den Kalendern aller Teilnehmer entfernen.</value>
+  </data>
+  <data name="Are you sure you want to delete {0} items? This action cannot be undone." xml:space="preserve">
+    <value>Sind Sie sicher, dass Sie {0} Elemente löschen möchten? Diese Aktion kann nicht rückgängig gemacht werden.</value>
+  </data>
+  <data name="Are you sure you want to delete {0}?" xml:space="preserve">
+    <value>Sind Sie sicher, dass Sie {0} löschen möchten?</value>
+  </data>
+  <data name="Are you sure you want to delete '{0}'?" xml:space="preserve">
+    <value>Bist du sicher, dass du '{0} ' löschen möchtest?</value>
+  </data>
+  <data name="Are you sure you want to delete {0}? Members will need to be reassigned." xml:space="preserve">
+    <value>Sind Sie sicher, dass Sie {0}löschen möchten? Mitglieder müssen neu zugewiesen werden.</value>
+  </data>
+  <data name="Are you sure you want to delete '{0}'? This action cannot be undone." xml:space="preserve">
+    <value>Sind Sie sicher, dass Sie '{0}' löschen möchten? Diese Aktion kann nicht rückgängig gemacht werden.</value>
+  </data>
+  <data name="Are you sure you want to delete {0}? This category will be removed from your personal categories." xml:space="preserve">
+    <value>Sind Sie sicher, dass Sie {0}löschen möchten? Diese Kategorie wird aus Ihren persönlichen Kategorien entfernt.</value>
+  </data>
+  <data name="Are you sure you want to delete {0}? Users currently having these permissions will not lose them, but this group will no longer be available for new users." xml:space="preserve">
+    <value>Sind Sie sicher, dass Sie {0}löschen möchten? Benutzer, die derzeit diese Berechtigungen haben, werden sie nicht verlieren, aber diese Gruppe wird für neue Benutzer nicht mehr verfügbar sein.</value>
+  </data>
+  <data name="Are you sure you want to encrypt this public channel? This action cannot be reversed." xml:space="preserve">
+    <value>Sind Sie sicher, dass Sie diesen öffentlichen Kanal verschlüsseln möchten? Diese Aktion kann nicht rückgängig gemacht werden.</value>
+  </data>
+  <data name="Are you sure you want to permanently delete this channel and ALL of its messages?" xml:space="preserve">
+    <value>Sind Sie sicher, dass Sie diesen Kanal und ALLE seiner Nachrichten dauerhaft löschen möchten?</value>
+  </data>
+  <data name="Are you sure you want to restore {0}?\n\nWARNING: All data created since this backup will be PERMANENTLY LOST." xml:space="preserve">
+    <value>Sind Sie sicher, dass Sie {0}wiederherstellen möchten?\n\nWARNUNG: Alle Daten, die seit dieser Sicherung erstellt wurden, werden PERMANENTLICH VERLUST sein.</value>
+  </data>
+  <data name="Are you sure you want to restore from &lt;b&gt;{0}&lt;/b&gt;?" xml:space="preserve">
+    <value>Sind Sie sicher, dass Sie von &lt;b&gt;{0}&lt;/b&gt; wiederherstellen möchten?</value>
+  </data>
+  <data name="Are you sure you want to update Spokes to v{0}?\n\nThe server will be temporarily unavailable for a few minutes while the update is applied." xml:space="preserve">
+    <value>Sind Sie sicher, dass Sie Spokes auf v{0}aktualisieren möchten?\n\nDer Server wird vorübergehend für einige Minuten nicht verfügbar sein, während das Update angewendet wird.</value>
+  </data>
+  <data name="Are you sure?" xml:space="preserve">
+    <value>Bist du sicher?</value>
+  </data>
+  <data name="As an administrator, you may also be locked out and require database access or alternative methods to restore your own privileges." xml:space="preserve">
+    <value>Als Administrator können Sie ebenfalls gesperrt werden und benötigen Datenbankzugriff oder alternative Methoden, um Ihre eigenen Privilegien wiederherzustellen.</value>
+  </data>
+  <data name="Assigned Roles / Permission Groups" xml:space="preserve">
+    <value>Zugewiesene Rollen / Berechtigungsgruppen</value>
+  </data>
+  <data name="Attach files" xml:space="preserve">
+    <value>Dateien anhängen</value>
+  </data>
+  <data name="Attendance cancelled." xml:space="preserve">
+    <value>Teilnahme abgebrochen.</value>
+  </data>
+  <data name="Attendees ({0})" xml:space="preserve">
+    <value>Teilnehmer ({0})</value>
+  </data>
+  <data name="Attending" xml:space="preserve">
+    <value>Teilnahme</value>
+  </data>
+  <data name="AUDIO BITRATE" xml:space="preserve">
+    <value>AUDIO BITRATTE</value>
+  </data>
+  <data name="Audio Bitrate" xml:space="preserve">
+    <value>Audio-Bitrate</value>
+  </data>
+  <data name="Audio Bitrate (Voice Call Quality)" xml:space="preserve">
+    <value>Audio-Bitrate (Sprachaufruf-Qualität)</value>
+  </data>
+  <data name="Audio bitrate set to {0} kbps" xml:space="preserve">
+    <value>Audio-Bitrate auf {0} kbps gesetzt</value>
+  </data>
+  <data name="Audio Devices &amp; Noise Filters" xml:space="preserve">
+    <value>Audiogeräte &amp; Rauschfilter</value>
+  </data>
+  <data name="Audio seek" xml:space="preserve">
+    <value>Audio-Suche</value>
+  </data>
+  <data name="Authentication failed. Please check your system configuration." xml:space="preserve">
+    <value>Authentifizierung fehlgeschlagen. Bitte überprüfen Sie Ihre Systemkonfiguration.</value>
+  </data>
+  <data name="Auto" xml:space="preserve">
+    <value>Auto</value>
+  </data>
+  <data name="Automated Backups" xml:space="preserve">
+    <value>Automatisierte Sicherungen</value>
+  </data>
+  <data name="Automated Management Integrations" xml:space="preserve">
+    <value>Automatisierte Management-Integrationen</value>
+  </data>
+  <data name="Away" xml:space="preserve">
+    <value>Abwesend</value>
+  </data>
+  <data name="Back to Albums" xml:space="preserve">
+    <value>Zurück zu Alben</value>
+  </data>
+  <data name="Back to Dashboard" xml:space="preserve">
+    <value>Zurück zum Dashboard</value>
+  </data>
+  <data name="Backup created successfully" xml:space="preserve">
+    <value>Sicherung erfolgreich erstellt</value>
+  </data>
+  <data name="Backup deleted" xml:space="preserve">
+    <value>Sicherung gelöscht</value>
+  </data>
+  <data name="Backup failed: {0}" xml:space="preserve">
+    <value>Sicherung fehlgeschlagen: {0}</value>
+  </data>
+  <data name="Backup Now" xml:space="preserve">
+    <value>Jetzt sichern</value>
+  </data>
+  <data name="Backups &amp; Restore" xml:space="preserve">
+    <value>Sicherungen &amp; Wiederherstellen</value>
+  </data>
+  <data name="Backups to Keep" xml:space="preserve">
+    <value>Zu haltende Sicherungen</value>
+  </data>
+  <data name="Ban User" xml:space="preserve">
+    <value>Benutzer bannen</value>
+  </data>
+  <data name="Basic" xml:space="preserve">
+    <value>Einfache</value>
+  </data>
+  <data name="Basic (Standard WebRTC)" xml:space="preserve">
+    <value>Basis (Standard WebRTC)</value>
+  </data>
+  <data name="Be the first to say hello!" xml:space="preserve">
+    <value>Sei der Erste, der Hallo sagt!</value>
+  </data>
+  <data name="Block Message" xml:space="preserve">
+    <value>Nachricht sperren</value>
+  </data>
+  <data name="Block User" xml:space="preserve">
+    <value>Benutzer sperren</value>
+  </data>
+  <data name="Blocked Words" xml:space="preserve">
+    <value>Gesperrte Wörter</value>
+  </data>
+  <data name="Bold" xml:space="preserve">
+    <value>Bold</value>
+  </data>
+  <data name="Built-in Casdoor" xml:space="preserve">
+    <value>Integrierte Casdoor</value>
+  </data>
+  <data name="Builtin Casdoor instance restarted." xml:space="preserve">
+    <value>Integrierte Casdoor Instanz neu gestartet.</value>
+  </data>
+  <data name="Built-in Identity" xml:space="preserve">
+    <value>Integrierte Identität</value>
+  </data>
+  <data name="Bulleted list" xml:space="preserve">
+    <value>Aufzählung</value>
+  </data>
+  <data name="By {0}" xml:space="preserve">
+    <value>Von {0}</value>
+  </data>
+  <data name="by {0}" xml:space="preserve">
+    <value>von {0}</value>
+  </data>
+  <data name="By continuing with the installation, you agree to the terms outlined in the Spokes End User License Agreement." xml:space="preserve">
+    <value>Wenn Sie mit der Installation fortfahren, erklären Sie sich mit den Bedingungen des Spokes Endbenutzer-Lizenzvertrags einverstanden.</value>
+  </data>
+  <data name="By:" xml:space="preserve">
+    <value>Von:</value>
+  </data>
+  <data name="Calendar categories updated successfully." xml:space="preserve">
+    <value>Kalenderkategorien erfolgreich aktualisiert.</value>
+  </data>
+  <data name="Call ended." xml:space="preserve">
+    <value>Anruf beendet.</value>
+  </data>
+  <data name="Call joined." xml:space="preserve">
+    <value>Anruf beigetreten.</value>
+  </data>
+  <data name="Call was declined." xml:space="preserve">
+    <value>Anruf wurde abgelehnt.</value>
+  </data>
+  <data name="CAMERA" xml:space="preserve">
+    <value>KAMERA</value>
+  </data>
+  <data name="Cannot ban another moderator or admin." xml:space="preserve">
+    <value>Ein anderer Moderator oder Administrator kann nicht gebannt werden.</value>
+  </data>
+  <data name="Cannot delete '{0}' because it is assigned to {1} active {2}. Please reassign them before deleting this group." xml:space="preserve">
+    <value>'{0}' kann nicht gelöscht werden, da es {1} aktive {2}zugeordnet ist. Bitte verweisen Sie sie vor dem Löschen dieser Gruppe.</value>
+  </data>
+  <data name="Cannot Delete Group" xml:space="preserve">
+    <value>Kann Gruppe nicht löschen</value>
+  </data>
+  <data name="Cannot suspend another moderator or admin." xml:space="preserve">
+    <value>Ein anderer Moderator oder Administrator kann nicht unterbrochen werden.</value>
+  </data>
+  <data name="Categories" xml:space="preserve">
+    <value>Kategorien</value>
+  </data>
+  <data name="Category" xml:space="preserve">
+    <value>Kategorie</value>
+  </data>
+  <data name="CATEGORY" xml:space="preserve">
+    <value>KATEGORIE</value>
+  </data>
+  <data name="Category (Optional)" xml:space="preserve">
+    <value>Kategorie (Optional)</value>
+  </data>
+  <data name="Category Name" xml:space="preserve">
+    <value>Kategoriename</value>
+  </data>
+  <data name="Change Icon" xml:space="preserve">
+    <value>Icon ändern</value>
+  </data>
+  <data name="Change Identity Provider?" xml:space="preserve">
+    <value>Identitätsanbieter ändern?</value>
+  </data>
+  <data name="Change Provider" xml:space="preserve">
+    <value>Anbieter wechseln</value>
+  </data>
+  <data name="Channel" xml:space="preserve">
+    <value>Kanal</value>
+  </data>
+  <data name="Channel access removed." xml:space="preserve">
+    <value>Kanalzugriff entfernt.</value>
+  </data>
+  <data name="Channel archived" xml:space="preserve">
+    <value>Kanal archiviert</value>
+  </data>
+  <data name="Channel converted to Encrypted successfully." xml:space="preserve">
+    <value>Kanal erfolgreich in verschlüsselt konvertiert.</value>
+  </data>
+  <data name="Channel description (optional)" xml:space="preserve">
+    <value>Kanalbeschreibung (optional)</value>
+  </data>
+  <data name="Channel description updated" xml:space="preserve">
+    <value>Kanalbeschreibung aktualisiert</value>
+  </data>
+  <data name="Channel Encrypted" xml:space="preserve">
+    <value>Kanal verschlüsselt</value>
+  </data>
+  <data name="Channel Encryption" xml:space="preserve">
+    <value>Kanalverschlüsselung</value>
+  </data>
+  <data name="Channel Info" xml:space="preserve">
+    <value>Kanal-Info</value>
+  </data>
+  <data name="Channel info" xml:space="preserve">
+    <value>Kanal-Info</value>
+  </data>
+  <data name="Channel is now public to all members" xml:space="preserve">
+    <value>Kanal ist nun für alle Mitglieder öffentlich</value>
+  </data>
+  <data name="Channel is now restricted. You can add specific teams and members." xml:space="preserve">
+    <value>Der Kanal ist jetzt eingeschränkt. Sie können bestimmte Teams und Mitglieder hinzufügen.</value>
+  </data>
+  <data name="Channel name" xml:space="preserve">
+    <value>Kanalname</value>
+  </data>
+  <data name="Channel Name" xml:space="preserve">
+    <value>Kanalname</value>
+  </data>
+  <data name="Channel name updated" xml:space="preserve">
+    <value>Kanalname aktualisiert</value>
+  </data>
+  <data name="Channel Not Found" xml:space="preserve">
+    <value>Kanal nicht gefunden</value>
+  </data>
+  <data name="Channel permanently deleted" xml:space="preserve">
+    <value>Kanal dauerhaft gelöscht</value>
+  </data>
+  <data name="Chat Configurations" xml:space="preserve">
+    <value>Chat-Konfigurationen</value>
+  </data>
+  <data name="Chat Reactions" xml:space="preserve">
+    <value>Chat-Reaktionen</value>
+  </data>
+  <data name="Chat Settings" xml:space="preserve">
+    <value>Chat-Einstellungen</value>
+  </data>
+  <data name="Checking for locally stored credentials" xml:space="preserve">
+    <value>Überprüfe lokal gespeicherte Anmeldeinformationen</value>
+  </data>
+  <data name="Choose a channel from the sidebar to start chatting." xml:space="preserve">
+    <value>Wählen Sie einen Kanal aus der Seitenleiste, um mit dem Chatten zu beginnen.</value>
+  </data>
+  <data name="Clear Logs" xml:space="preserve">
+    <value>Logs löschen</value>
+  </data>
+  <data name="Click the button below to generate VAPID keys." xml:space="preserve">
+    <value>Klicken Sie auf die Schaltfläche unten, um VAPID-Schlüssel zu generieren.</value>
+  </data>
+  <data name="Click to view all attendees" xml:space="preserve">
+    <value>Klicken, um alle Teilnehmer anzuzeigen</value>
+  </data>
+  <data name="Click to view event details" xml:space="preserve">
+    <value>Klicken um Ereignisdetails anzuzeigen</value>
+  </data>
+  <data name="Client ID" xml:space="preserve">
+    <value>Kunden-ID</value>
+  </data>
+  <data name="Client Secret" xml:space="preserve">
+    <value>Kundengeheimnis</value>
+  </data>
+  <data name="Code (Type [ for more languages)" xml:space="preserve">
+    <value>Code (Typ [ für weitere Sprachen)</value>
+  </data>
+  <data name="Color" xml:space="preserve">
+    <value>Farbe</value>
+  </data>
+  <data name="Complete list of all OpenID accounts in the system." xml:space="preserve">
+    <value>Komplette Liste aller OpenID-Konten im System.</value>
+  </data>
+  <data name="Configure" xml:space="preserve">
+    <value>Konfigurieren</value>
+  </data>
+  <data name="Configure automatic backups of your Spokes data. Backups are stored as ZIP files in your data directory." xml:space="preserve">
+    <value>Konfigurieren Sie automatische Sicherungen Ihrer Spokes-Daten. Sicherungen werden als ZIP-Dateien in Ihrem Datenverzeichnis gespeichert.</value>
+  </data>
+  <data name="Configure Built-in Global Identity" xml:space="preserve">
+    <value>Konfigurieren Sie eingebaute globale Identität</value>
+  </data>
+  <data name="Configure core system settings such as public URLs, routing ports, and identity providers." xml:space="preserve">
+    <value>Konfigurieren Sie grundlegende Systemeinstellungen wie öffentliche URLs, Routing Ports und Identity Provider.</value>
+  </data>
+  <data name="Configure External Provider" xml:space="preserve">
+    <value>Externer Anbieter konfigurieren</value>
+  </data>
+  <data name="Configure Mic Mode" xml:space="preserve">
+    <value>Mikrofon-Modus konfigurieren</value>
+  </data>
+  <data name="Configure Spokes Organization Identity" xml:space="preserve">
+    <value>Konfigurieren der Spokes-Organisationsidentität</value>
+  </data>
+  <data name="Configure the default calendar categories assigned to new users upon account creation. Each user has full control to customize their own personal categories independently." xml:space="preserve">
+    <value>Konfigurieren Sie die Standard-Kalenderkategorien, die neuen Benutzern bei der Erstellung eines Kontos zugewiesen werden. Jeder Benutzer hat die volle Kontrolle um seine persönlichen Kategorien unabhängig voneinander anzupassen.</value>
+  </data>
+  <data name="Configuring the system's global identity provider." xml:space="preserve">
+    <value>Konfiguration des globalen Identitätsanbieters des Systems.</value>
+  </data>
+  <data name="Confirm Delete" xml:space="preserve">
+    <value>Löschen bestätigen</value>
+  </data>
+  <data name="Connect to Voice" xml:space="preserve">
+    <value>Mit Voice verbinden</value>
+  </data>
+  <data name="Connect with SSO" xml:space="preserve">
+    <value>Mit SSO verbinden</value>
+  </data>
+  <data name="Connect your own Authentik, Keycloak or other OpenID Connect server." xml:space="preserve">
+    <value>Verbinden Sie Ihren eigenen Authentik, Keycloak oder einen anderen OpenID Connect Server.</value>
+  </data>
+  <data name="Connecting to voice..." xml:space="preserve">
+    <value>Verbinde mit Stimme...</value>
+  </data>
+  <data name="Connecting..." xml:space="preserve">
+    <value>Verbinden...</value>
+  </data>
+  <data name="Contact Email" xml:space="preserve">
+    <value>Kontakt-E-Mail</value>
+  </data>
+  <data name="Contact Information" xml:space="preserve">
+    <value>Kontaktinformationen</value>
+  </data>
+  <data name="content deleted" xml:space="preserve">
+    <value>gelöschter Inhalt</value>
+  </data>
+  <data name="Content Moderation" xml:space="preserve">
+    <value>Moderation der Inhalte</value>
+  </data>
+  <data name="Continue" xml:space="preserve">
+    <value>Weiter</value>
+  </data>
+  <data name="Contributors" xml:space="preserve">
+    <value>Mitwirkende</value>
+  </data>
+  <data name="Contributors updated" xml:space="preserve">
+    <value>Beitragende aktualisiert</value>
+  </data>
+  <data name="Control how {0} can discover and contact one another on this {1}." xml:space="preserve">
+    <value>Bestimme wie {0} einander auf dieser {1} entdecken und kontaktieren kann.</value>
+  </data>
+  <data name="Copied to clipboard" xml:space="preserve">
+    <value>In Zwischenablage kopiert</value>
+  </data>
+  <data name="Copy Logs" xml:space="preserve">
+    <value>Protokolle kopieren</value>
+  </data>
+  <data name="Copy Text" xml:space="preserve">
+    <value>Text kopieren</value>
+  </data>
+  <data name="Could not access microphone for testing." xml:space="preserve">
+    <value>Kein Zugriff auf das Mikrofon zur Prüfung.</value>
+  </data>
+  <data name="Could not access microphone." xml:space="preserve">
+    <value>Konnte nicht auf das Mikrofon zugreifen.</value>
+  </data>
+  <data name="Create {0}" xml:space="preserve">
+    <value>{0} erstellen</value>
+  </data>
+  <data name="Create a global administrator account for managing the identity system globally. &lt;b&gt;This is Casdoor GlobalAdmin account&lt;/b&gt;" xml:space="preserve">
+    <value>Erstellen Sie ein globales Administratorkonto für die Verwaltung des Identitätssystems weltweit. &lt;b&gt;Dies ist Casdoor GlobalAdmin-Konto&lt;/b&gt;</value>
+  </data>
+  <data name="Create Album" xml:space="preserve">
+    <value>Album erstellen</value>
+  </data>
+  <data name="Create an administrator account for managing users and groups within your Spokes organization. &lt;b&gt;This is your day to day admin account&lt;/b&gt;" xml:space="preserve">
+    <value>Erstellen Sie ein Administrator-Konto zur Verwaltung von Benutzern und Gruppen innerhalb Ihrer Spokes-Organisation. &lt;b&gt;Dies ist Ihr täglicher Admin-Account&lt;/b&gt;</value>
+  </data>
+  <data name="Create Channel" xml:space="preserve">
+    <value>Kanal erstellen</value>
+  </data>
+  <data name="Create Event" xml:space="preserve">
+    <value>Ereignis erstellen</value>
+  </data>
+  <data name="Create New {0}" xml:space="preserve">
+    <value>Neues {0} erstellen</value>
+  </data>
+  <data name="Create New Channel" xml:space="preserve">
+    <value>Neuen Kanal erstellen</value>
+  </data>
+  <data name="Create Permission Group" xml:space="preserve">
+    <value>Berechtigungsgruppe erstellen</value>
+  </data>
+  <data name="Create roles and permission groups for your users. Select a default group for new users." xml:space="preserve">
+    <value>Erstellen Sie Rollen und Berechtigungsgruppen für Ihre Benutzer. Wählen Sie eine Standardgruppe für neue Benutzer.</value>
+  </data>
+  <data name="Create your first album to start organizing photos and videos." xml:space="preserve">
+    <value>Erstellen Sie Ihr erstes Album, um Fotos und Videos zu organisieren.</value>
+  </data>
+  <data name="CREATED" xml:space="preserve">
+    <value>ERSTELLT</value>
+  </data>
+  <data name="Created" xml:space="preserve">
+    <value>Erstellt</value>
+  </data>
+  <data name="Created {0}" xml:space="preserve">
+    <value>Erstellt {0}</value>
+  </data>
+  <data name="Created by {0}" xml:space="preserve">
+    <value>Erstellt von {0}</value>
+  </data>
+  <data name="Creating Backup..." xml:space="preserve">
+    <value>Sicherung wird erstellt...</value>
+  </data>
+  <data name="CriticalStorageFull" xml:space="preserve">
+    <value>Kritisch-Storagevoll</value>
+  </data>
+  <data name="Crop Avatar" xml:space="preserve">
+    <value>Crop-Avatar</value>
+  </data>
+  <data name="Custom" xml:space="preserve">
+    <value>Eigene</value>
+  </data>
+  <data name="Customize notification sounds for chats, calls, and calendar alerts." xml:space="preserve">
+    <value>Benachrichtigungstöne für Chats, Anrufe und Kalenderbenachrichtigungen anpassen.</value>
+  </data>
+  <data name="Customize sounds played for each notification category on this device and for push notifications." xml:space="preserve">
+    <value>Passen Sie die Töne an, die für jede Benachrichtigungskategorie auf diesem Gerät und für Push-Benachrichtigungen gespielt wurden.</value>
+  </data>
+  <data name="Danger Zone" xml:space="preserve">
+    <value>Gefahrenzone</value>
+  </data>
+  <data name="Date" xml:space="preserve">
+    <value>Datum</value>
+  </data>
+  <data name="Dates with a colored ring have log entries." xml:space="preserve">
+    <value>Daten mit einem farbigen Ring haben Logeinträge.</value>
+  </data>
+  <data name="Day before" xml:space="preserve">
+    <value>Tag vor</value>
+  </data>
+  <data name="Days before" xml:space="preserve">
+    <value>Tage vor</value>
+  </data>
+  <data name="Debug Logs" xml:space="preserve">
+    <value>Debug-Protokolle</value>
+  </data>
+  <data name="Decline" xml:space="preserve">
+    <value>Ablehnen</value>
+  </data>
+  <data name="DeepFilterNet (High Quality AI)" xml:space="preserve">
+    <value>DeepFilterNet (Hochqualitäts-KI)</value>
+  </data>
+  <data name="Default" xml:space="preserve">
+    <value>Standard</value>
+  </data>
+  <data name="Default Calendar Categories" xml:space="preserve">
+    <value>Standard-Kalenderkategorien</value>
+  </data>
+  <data name="Default New User Role" xml:space="preserve">
+    <value>Standard neue Benutzerrolle</value>
+  </data>
+  <data name="Default Public Channel Notifications (for new users)" xml:space="preserve">
+    <value>Standard öffentliche Kanalbenachrichtigungen (für neue Benutzer)</value>
+  </data>
+  <data name="Delete (Admin)" xml:space="preserve">
+    <value>Löschen (Admin)</value>
+  </data>
+  <data name="Delete {0}?" xml:space="preserve">
+    <value>{0} löschen?</value>
+  </data>
+  <data name="Delete Account" xml:space="preserve">
+    <value>Konto löschen</value>
+  </data>
+  <data name="Delete Album" xml:space="preserve">
+    <value>Album löschen</value>
+  </data>
+  <data name="Delete Backup" xml:space="preserve">
+    <value>Backup löschen</value>
+  </data>
+  <data name="Delete Category" xml:space="preserve">
+    <value>Kategorie löschen</value>
+  </data>
+  <data name="Delete Category?" xml:space="preserve">
+    <value>Kategorie löschen?</value>
+  </data>
+  <data name="Delete Channel" xml:space="preserve">
+    <value>Kanal löschen</value>
+  </data>
+  <data name="Delete Event" xml:space="preserve">
+    <value>Ereignis löschen</value>
+  </data>
+  <data name="Delete Event (Admin Override)?" xml:space="preserve">
+    <value>Ereignis löschen (Admin-Überschreibung)?</value>
+  </data>
+  <data name="Delete Event?" xml:space="preserve">
+    <value>Ereignis löschen?</value>
+  </data>
+  <data name="Delete media" xml:space="preserve">
+    <value>Medien löschen</value>
+  </data>
+  <data name="Delete Message" xml:space="preserve">
+    <value>Nachricht löschen</value>
+  </data>
+  <data name="Delete My Account" xml:space="preserve">
+    <value>Mein Konto löschen</value>
+  </data>
+  <data name="Delete Permission Group" xml:space="preserve">
+    <value>Berechtigungsgruppe löschen</value>
+  </data>
+  <data name="Delete Selected ({0})" xml:space="preserve">
+    <value>Ausgewählte löschen ({0})</value>
+  </data>
+  <data name="Delete Selected Media" xml:space="preserve">
+    <value>Ausgewählte Medien löschen</value>
+  </data>
+  <data name="Deleted {0} items" xml:space="preserve">
+    <value>Gelöscht {0} Elemente</value>
+  </data>
+  <data name="Deleted Message" xml:space="preserve">
+    <value>Gelöschte Nachricht</value>
+  </data>
+  <data name="Deleted User" xml:space="preserve">
+    <value>Gelöschter Benutzer</value>
+  </data>
+  <data name="DESCRIPTION" xml:space="preserve">
+    <value>BESCHREIBUNG</value>
+  </data>
+  <data name="Description" xml:space="preserve">
+    <value>Beschreibung</value>
+  </data>
+  <data name="Description (Optional)" xml:space="preserve">
+    <value>Beschreibung (Optional)</value>
+  </data>
+  <data name="Desktop" xml:space="preserve">
+    <value>Desktop</value>
+  </data>
+  <data name="DEVICE" xml:space="preserve">
+    <value>GERÄT</value>
+  </data>
+  <data name="Device Name (optional)" xml:space="preserve">
+    <value>Gerätename (optional)</value>
+  </data>
+  <data name="Device Type" xml:space="preserve">
+    <value>Gerätetyp</value>
+  </data>
+  <data name="DIRECT MESSAGES" xml:space="preserve">
+    <value>DIREKTE NACHRICHT</value>
+  </data>
+  <data name="Disable" xml:space="preserve">
+    <value>Deaktivieren</value>
+  </data>
+  <data name="Disconnect" xml:space="preserve">
+    <value>Verbindung trennen</value>
+  </data>
+  <data name="Dismiss" xml:space="preserve">
+    <value>Verwerfen</value>
+  </data>
+  <data name="Dismissed" xml:space="preserve">
+    <value>Entlassen</value>
+  </data>
+  <data name="Done" xml:space="preserve">
+    <value>Fertig</value>
+  </data>
+  <data name="Drop files to upload" xml:space="preserve">
+    <value>Dateien zum Hochladen ablegen</value>
+  </data>
+  <data name="e.g. badword, awfulword" xml:space="preserve">
+    <value>z.B. schlechtes Wort, furchtbares Wort</value>
+  </data>
+  <data name="e.g., Deep Work" xml:space="preserve">
+    <value>z. B. Tiefe Arbeit</value>
+  </data>
+  <data name="e.g., https://accounts.google.com , https://auth.yourdomain.ca/application/o/spokes/" xml:space="preserve">
+    <value>z.B.: https://accounts.google.com , https://auth.yourdomain.ca/application/o/spokes/</value>
+  </data>
+  <data name="e.g., Room 102 or Zoom" xml:space="preserve">
+    <value>z. B. Raum 102 oder Zoom</value>
+  </data>
+  <data name="e.g., Work Laptop" xml:space="preserve">
+    <value>z. B. Arbeitsplatz Laptop</value>
+  </data>
+  <data name="Edit {0}" xml:space="preserve">
+    <value>Bearbeite {0}</value>
+  </data>
+  <data name="Edit as Admin" xml:space="preserve">
+    <value>Als Admin bearbeiten</value>
+  </data>
+  <data name="Edit Channel" xml:space="preserve">
+    <value>Kanal bearbeiten</value>
+  </data>
+  <data name="Edit Event" xml:space="preserve">
+    <value>Ereignis bearbeiten</value>
+  </data>
+  <data name="Edit Message" xml:space="preserve">
+    <value>Nachricht bearbeiten</value>
+  </data>
+  <data name="Edit message..." xml:space="preserve">
+    <value>Nachricht bearbeiten...</value>
+  </data>
+  <data name="Edit Permission Group" xml:space="preserve">
+    <value>Berechtigungsgruppe bearbeiten</value>
+  </data>
+  <data name="Edit Personal" xml:space="preserve">
+    <value>Persönlich bearbeiten</value>
+  </data>
+  <data name="Edit Shared" xml:space="preserve">
+    <value>Geteilte bearbeiten</value>
+  </data>
+  <data name="Email address for push service operators to contact you (e.g., mailto:admin@company.com)" xml:space="preserve">
+    <value>E-Mail-Adresse für Push-Service-Operatoren, die Sie kontaktieren können (z. B. mailto:admin@company.com)</value>
+  </data>
+  <data name="Email is hidden by user" xml:space="preserve">
+    <value>E-Mail ist vom Benutzer ausgeblendet</value>
+  </data>
+  <data name="Email:" xml:space="preserve">
+    <value>Email:</value>
+  </data>
+  <data name="Emoji" xml:space="preserve">
+    <value>Emoji</value>
+  </data>
+  <data name="Emojis" xml:space="preserve">
+    <value>Emojis</value>
+  </data>
+  <data name="Enable Automatic Backups" xml:space="preserve">
+    <value>Automatische Sicherungen aktivieren</value>
+  </data>
+  <data name="Enable Automatic DigitalOcean Updates" xml:space="preserve">
+    <value>Automatische DigitalOcean Updates aktivieren</value>
+  </data>
+  <data name="Enable Automatic Server Updates" xml:space="preserve">
+    <value>Automatische Server-Updates aktivieren</value>
+  </data>
+  <data name="Enable Encryption" xml:space="preserve">
+    <value>Verschlüsselung aktivieren</value>
+  </data>
+  <data name="Enable Notifications" xml:space="preserve">
+    <value>Benachrichtigungen aktivieren</value>
+  </data>
+  <data name="Enable push notifications to receive alerts when the browser is minimized." xml:space="preserve">
+    <value>Aktivieren Sie Push-Benachrichtigungen, um Benachrichtigungen zu erhalten, wenn der Browser minimiert ist.</value>
+  </data>
+  <data name="Enable Quiet Hours" xml:space="preserve">
+    <value>Ruhige Stunden aktivieren</value>
+  </data>
+  <data name="Enable Text Moderation Filter" xml:space="preserve">
+    <value>Text-Moderationsfilter aktivieren</value>
+  </data>
+  <data name="Encrypt" xml:space="preserve">
+    <value>Verschlüsseln</value>
+  </data>
+  <data name="Encrypt Public Channel" xml:space="preserve">
+    <value>Öffentlichen Kanal verschlüsseln</value>
+  </data>
+  <data name="Encrypted channel." xml:space="preserve">
+    <value>Verschlüsselter Kanal.</value>
+  </data>
+  <data name="Encrypted message" xml:space="preserve">
+    <value>Verschlüsselte Nachricht</value>
+  </data>
+  <data name="End Date" xml:space="preserve">
+    <value>Enddatum</value>
+  </data>
+  <data name="End Time" xml:space="preserve">
+    <value>Endzeit</value>
+  </data>
+  <data name="Enter a name" xml:space="preserve">
+    <value>Namen eingeben</value>
+  </data>
+  <data name="Enter to send • Shift+Enter for new line • @ to mention • # for events and Albums" xml:space="preserve">
+    <value>Geben Sie ein, um zu senden • Umschalt+Enter für neue Zeile • @ zu erwähnen • # für Events und Alben</value>
+  </data>
+  <data name="Enter words to block, separated by commas." xml:space="preserve">
+    <value>Geben Sie Wörter ein, die durch Kommata getrennt werden sollen.</value>
+  </data>
+  <data name="Error deleting device: {0}" xml:space="preserve">
+    <value>Fehler beim Löschen des Geräts: {0}</value>
+  </data>
+  <data name="Error enabling notifications." xml:space="preserve">
+    <value>Fehler beim Aktivieren der Benachrichtigungen.</value>
+  </data>
+  <data name="Error fetching GIFs. Please check your connection." xml:space="preserve">
+    <value>Fehler beim Abrufen der GIFs. Bitte überprüfen Sie Ihre Verbindung.</value>
+  </data>
+  <data name="Error joining voice" xml:space="preserve">
+    <value>Fehler beim Verbinden der Stimme</value>
+  </data>
+  <data name="Error processing icon: {0}" xml:space="preserve">
+    <value>Fehler beim Verarbeiten des Symbols: {0}</value>
+  </data>
+  <data name="Error processing image: {0}" xml:space="preserve">
+    <value>Fehler beim Verarbeiten des Bilds: {0}</value>
+  </data>
+  <data name="Error processing logo: {0}" xml:space="preserve">
+    <value>Fehler beim Verarbeiten des Logos: {0}</value>
+  </data>
+  <data name="Error renaming device: {0}" xml:space="preserve">
+    <value>Fehler beim Umbenennen des Geräts: {0}</value>
+  </data>
+  <data name="Error saving avatar: {0}" xml:space="preserve">
+    <value>Fehler beim Speichern des Avatars: {0}</value>
+  </data>
+  <data name="Error sending message" xml:space="preserve">
+    <value>Fehler beim Senden der Nachricht</value>
+  </data>
+  <data name="Error sending voice message" xml:space="preserve">
+    <value>Fehler beim Senden der Sprachnachricht</value>
+  </data>
+  <data name="Error updating device idle tracking: {0}" xml:space="preserve">
+    <value>Fehler beim Aktualisieren des Geräte-Leerlauf-Tracking: {0}</value>
+  </data>
+  <data name="Error updating device: {0}" xml:space="preserve">
+    <value>Fehler beim Aktualisieren des Geräts: {0}</value>
+  </data>
+  <data name="Error: {0}" xml:space="preserve">
+    <value>Fehler: {0}</value>
+  </data>
+  <data name="Event Attendees" xml:space="preserve">
+    <value>Teilnehmer des Events</value>
+  </data>
+  <data name="Event deleted" xml:space="preserve">
+    <value>Ereignis gelöscht</value>
+  </data>
+  <data name="Event Details" xml:space="preserve">
+    <value>Ereignisdetails</value>
+  </data>
+  <data name="Event Duration" xml:space="preserve">
+    <value>Event-Dauer</value>
+  </data>
+  <data name="Event Reminders" xml:space="preserve">
+    <value>Ereignis Erinnerungen</value>
+  </data>
+  <data name="Event saved" xml:space="preserve">
+    <value>Ereignis gespeichert</value>
+  </data>
+  <data name="Event Title" xml:space="preserve">
+    <value>Ereignis-Titel</value>
+  </data>
+  <data name="Existing Backups" xml:space="preserve">
+    <value>Bestehende Sicherungen</value>
+  </data>
+  <data name="Expired {0} days ago" xml:space="preserve">
+    <value>Abgelaufen vor {0} Tagen</value>
+  </data>
+  <data name="Expired License Saved: {0}" xml:space="preserve">
+    <value>Abgelaufene Lizenz gespeichert: {0}</value>
+  </data>
+  <data name="External Participant(s)" xml:space="preserve">
+    <value>Externer Teilnehmer(e)</value>
+  </data>
+  <data name="External Provider" xml:space="preserve">
+    <value>Externer Anbieter</value>
+  </data>
+  <data name="External Provider (OIDC)" xml:space="preserve">
+    <value>Externer Anbieter (OIDC)</value>
+  </data>
+  <data name="External Provider Configuration" xml:space="preserve">
+    <value>Konfiguration des externen Anbieters</value>
+  </data>
+  <data name="Failed to add media to album" xml:space="preserve">
+    <value>Fehler beim Hinzufügen des Mediums zum Album</value>
+  </data>
+  <data name="Failed to cancel RSVP." xml:space="preserve">
+    <value>Fehler beim Abbrechen des RSVP.</value>
+  </data>
+  <data name="Failed to copy" xml:space="preserve">
+    <value>Fehler beim Kopieren</value>
+  </data>
+  <data name="Failed to copy logs" xml:space="preserve">
+    <value>Fehler beim Kopieren der Logs</value>
+  </data>
+  <data name="Failed to create album" xml:space="preserve">
+    <value>Fehler beim Erstellen des Albums</value>
+  </data>
+  <data name="Failed to delete album" xml:space="preserve">
+    <value>Fehler beim Löschen des Albums</value>
+  </data>
+  <data name="Failed to delete album: {0}" xml:space="preserve">
+    <value>Fehler beim Löschen des Albums: {0}</value>
+  </data>
+  <data name="Failed to delete media" xml:space="preserve">
+    <value>Fehler beim Löschen der Medien</value>
+  </data>
+  <data name="Failed to delete media items." xml:space="preserve">
+    <value>Medienelemente konnten nicht gelöscht werden.</value>
+  </data>
+  <data name="Failed to delete media: {0}" xml:space="preserve">
+    <value>Fehler beim Löschen der Medien: {0}</value>
+  </data>
+  <data name="Failed to delete message." xml:space="preserve">
+    <value>Nachricht konnte nicht gelöscht werden.</value>
+  </data>
+  <data name="Failed to disable notifications." xml:space="preserve">
+    <value>Fehler beim Deaktivieren der Benachrichtigungen.</value>
+  </data>
+  <data name="Failed to download media." xml:space="preserve">
+    <value>Download der Medien fehlgeschlagen.</value>
+  </data>
+  <data name="Failed to edit message." xml:space="preserve">
+    <value>Fehler beim Bearbeiten der Nachricht.</value>
+  </data>
+  <data name="Failed to enable encryption: {0}" xml:space="preserve">
+    <value>Fehler beim Aktivieren der Verschlüsselung: {0}</value>
+  </data>
+  <data name="Failed to open chat: {0}" xml:space="preserve">
+    <value>Chat konnte nicht geöffnet werden: {0}</value>
+  </data>
+  <data name="Failed to process deletion: {0}" xml:space="preserve">
+    <value>Löschen fehlgeschlagen: {0}</value>
+  </data>
+  <data name="Failed to register service worker." xml:space="preserve">
+    <value>Fehler beim Registrieren von Dienstleister.</value>
+  </data>
+  <data name="Failed to restore backup." xml:space="preserve">
+    <value>Sicherung konnte nicht wiederhergestellt werden.</value>
+  </data>
+  <data name="Failed to RSVP to event." xml:space="preserve">
+    <value>RSVP konnte nicht durchgeführt werden.</value>
+  </data>
+  <data name="Failed to save subscription." xml:space="preserve">
+    <value>Fehler beim Speichern des Abonnements.</value>
+  </data>
+  <data name="Failed to send message." xml:space="preserve">
+    <value>Senden der Nachricht fehlgeschlagen.</value>
+  </data>
+  <data name="Failed to send test notification: {0}" xml:space="preserve">
+    <value>Fehler beim Senden der Testbenachrichtigung: {0}</value>
+  </data>
+  <data name="Failed to share media." xml:space="preserve">
+    <value>Medienfreigabe fehlgeschlagen.</value>
+  </data>
+  <data name="Failed to subscribe to push notifications." xml:space="preserve">
+    <value>Push-Benachrichtigungen konnten nicht abonniert werden.</value>
+  </data>
+  <data name="Failed to unshare channel." xml:space="preserve">
+    <value>Konnte Kanal nicht freigeben.</value>
+  </data>
+  <data name="Failed to update calendar categories." xml:space="preserve">
+    <value>Fehler beim Aktualisieren der Kalenderkategorien.</value>
+  </data>
+  <data name="Failed to update contributors." xml:space="preserve">
+    <value>Fehler beim Aktualisieren der Mitwirkenden.</value>
+  </data>
+  <data name="Failed to update reaction." xml:space="preserve">
+    <value>Fehler beim Aktualisieren der Reaktion.</value>
+  </data>
+  <data name="File" xml:space="preserve">
+    <value>Datei</value>
+  </data>
+  <data name="File Uploads" xml:space="preserve">
+    <value>Datei-Upload</value>
+  </data>
+  <data name="First Name" xml:space="preserve">
+    <value>Vorname</value>
+  </data>
+  <data name="First Seen" xml:space="preserve">
+    <value>Erster Blick</value>
+  </data>
+  <data name="Flushing configuration and restarting server..." xml:space="preserve">
+    <value>Konfiguration wird geleert und Server wird neu gestartet...</value>
+  </data>
+  <data name="FPS" xml:space="preserve">
+    <value>FPS</value>
+  </data>
+  <data name="Free Trial:" xml:space="preserve">
+    <value>Kostenlose Testversion:</value>
+  </data>
+  <data name="Fri" xml:space="preserve">
+    <value>Fr</value>
+  </data>
+  <data name="Fri_Short" xml:space="preserve">
+    <value>Frit_Kurze</value>
+  </data>
+  <data name="From" xml:space="preserve">
+    <value>Von</value>
+  </data>
+  <data name="General" xml:space="preserve">
+    <value>Allgemein</value>
+  </data>
+  <data name="General Info" xml:space="preserve">
+    <value>Allgemeine Info</value>
+  </data>
+  <data name="Generate VAPID Keys" xml:space="preserve">
+    <value>VAPID Schlüssel generieren</value>
+  </data>
+  <data name="Get notified for every new message" xml:space="preserve">
+    <value>Für jede neue Nachricht benachrichtigen</value>
+  </data>
+  <data name="Get started by creating your first album." xml:space="preserve">
+    <value>Beginnen Sie mit der Erstellung Ihres ersten Albums.</value>
+  </data>
+  <data name="GIF Integration" xml:space="preserve">
+    <value>GIF-Integration</value>
+  </data>
+  <data name="GIF Provider" xml:space="preserve">
+    <value>GIF-Anbieter</value>
+  </data>
+  <data name="GIFs" xml:space="preserve">
+    <value>GIFs</value>
+  </data>
+  <data name="Global Admin Password" xml:space="preserve">
+    <value>Globales Admin-Passwort</value>
+  </data>
+  <data name="Global Admin Username" xml:space="preserve">
+    <value>Globaler Admin Benutzername</value>
+  </data>
+  <data name="Global Administrator (Super User)" xml:space="preserve">
+    <value>Globaler Administrator (Super Benutzer)</value>
+  </data>
+  <data name="Global Built-in Administrator" xml:space="preserve">
+    <value>Globaler Integrierter Administrator</value>
+  </data>
+  <data name="Global settings for the Chat and Communication features." xml:space="preserve">
+    <value>Globale Einstellungen für Chat- und Kommunikationsfunktionen.</value>
+  </data>
+  <data name="Go to album" xml:space="preserve">
+    <value>Gehe zum Album</value>
+  </data>
+  <data name="Granular Permissions" xml:space="preserve">
+    <value>Granuläre Berechtigungen</value>
+  </data>
+  <data name="Group chat · {0} members" xml:space="preserve">
+    <value>Gruppenchat · {0} Mitglieder</value>
+  </data>
+  <data name="GROUP CHATS" xml:space="preserve">
+    <value>GRUPPENCHATS</value>
+  </data>
+  <data name="Group Name" xml:space="preserve">
+    <value>Gruppenname</value>
+  </data>
+  <data name="Group Owner" xml:space="preserve">
+    <value>Gruppeneigentümer</value>
+  </data>
+  <data name="Harassment or Bullying" xml:space="preserve">
+    <value>Belästigung oder Mobbing</value>
+  </data>
+  <data name="Hate Speech" xml:space="preserve">
+    <value>Hassrede</value>
+  </data>
+  <data name="Hour before" xml:space="preserve">
+    <value>Stunde vor</value>
+  </data>
+  <data name="Hours before" xml:space="preserve">
+    <value>Stunden vor</value>
+  </data>
+  <data name="I have copied the admin credentials somewhere safe." xml:space="preserve">
+    <value>Ich habe die Administrator-Anmeldedaten irgendwo sicher kopiert.</value>
+  </data>
+  <data name="I have read and agree to the End User License Agreement" xml:space="preserve">
+    <value>Ich habe die Endbenutzer-Lizenzvereinbarung gelesen und stimme ihr zu</value>
+  </data>
+  <data name="I Understand, Restore" xml:space="preserve">
+    <value>Ich verstehe, Wiederherstellen</value>
+  </data>
+  <data name="Identity" xml:space="preserve">
+    <value>Identität</value>
+  </data>
+  <data name="Identity Provider" xml:space="preserve">
+    <value>Identitätsanbieter</value>
+  </data>
+  <data name="Identity Provider settings saved. A server restart is required for changes to take effect." xml:space="preserve">
+    <value>Einstellungen des Identity Providers gespeichert. Ein Neustart des Servers ist erforderlich, damit die Änderungen wirksam werden.</value>
+  </data>
+  <data name="Identity Provider settings were saved. The server must restart to apply these changes. Restart now?" xml:space="preserve">
+    <value>Einstellungen des Identity Providers wurden gespeichert. Der Server muss neu gestartet werden, um diese Änderungen zu übernehmen. Jetzt neu starten?</value>
+  </data>
+  <data name="Identity Provider Type" xml:space="preserve">
+    <value>Identitätsanbietertyp</value>
+  </data>
+  <data name="Identity Provider Update" xml:space="preserve">
+    <value>Identitätsanbieter Update</value>
+  </data>
+  <data name="Idle Tracking" xml:space="preserve">
+    <value>Leerlauf-Tracking</value>
+  </data>
+  <data name="If unchecked, your email will be hidden on your public profile card." xml:space="preserve">
+    <value>Wenn nicht markiert, wird Ihre E-Mail auf Ihrer öffentlichen Profilkarte ausgeblendet.</value>
+  </data>
+  <data name="If you modify these ports, you MUST ensure your &lt;b&gt;docker-compose.yml&lt;/b&gt; and router are updated to match precisely. These must be mapped 1-to-1-to-1 across your network." xml:space="preserve">
+    <value>Wenn Sie diese Ports ändern, MÜSSEN Sie sicherstellen, dass Ihr &lt;b&gt;Docker-Compose. ml&lt;/b&gt; und der Router werden aktualisiert, um genau übereinstimmen zu können. Diese müssen 1-zu-1 in Ihrem Netzwerk zugeordnet werden.</value>
+  </data>
+  <data name="I'm in!" xml:space="preserve">
+    <value>Ich bin drin.</value>
+  </data>
+  <data name="Inactive" xml:space="preserve">
+    <value>Inaktiv</value>
+  </data>
+  <data name="Inappropriate Content" xml:space="preserve">
+    <value>Unangemessener Inhalt</value>
+  </data>
+  <data name="Incorrect vault password." xml:space="preserve">
+    <value>Falsches Tresor Passwort.</value>
+  </data>
+  <data name="INPUT" xml:space="preserve">
+    <value>INPUT</value>
+  </data>
+  <data name="Input Device (Microphone)" xml:space="preserve">
+    <value>Eingabegerät (Mikrofon)</value>
+  </data>
+  <data name="Insecure Legacy Master Password Found:" xml:space="preserve">
+    <value>Unsicheres Legacy Master Passwort gefunden:</value>
+  </data>
+  <data name="Insert a code block" xml:space="preserve">
+    <value>Insert a code block</value>
+  </data>
+  <data name="Invalid License: {0}" xml:space="preserve">
+    <value>Ungültige Lizenz: {0}</value>
+  </data>
+  <data name="Issuer / Authority URL" xml:space="preserve">
+    <value>Aussteller / Behörden-URL</value>
+  </data>
+  <data name="Italic" xml:space="preserve">
+    <value>Italic</value>
+  </data>
+  <data name="Join a voice call to adjust individual participant volumes. Custom settings are remembered automatically across calls." xml:space="preserve">
+    <value>Schließen Sie sich einem Sprachanruf an, um individuelle Teilnehmerlautstärke anzupassen. Benutzerdefinierte Einstellungen werden automatisch über Anrufe hinweg gespeichert.</value>
+  </data>
+  <data name="Join Call" xml:space="preserve">
+    <value>Anruf beitreten</value>
+  </data>
+  <data name="Join the conversation!" xml:space="preserve">
+    <value>Trete der Unterhaltung bei!</value>
+  </data>
+  <data name="kbps" xml:space="preserve">
+    <value>kbps</value>
+  </data>
+  <data name="Keys regenerated. All existing subscriptions have been cleared." xml:space="preserve">
+    <value>Schlüssel regeneriert. Alle bestehenden Abonnements wurden gelöscht.</value>
+  </data>
+  <data name="Last backup:" xml:space="preserve">
+    <value>Letzte Sicherung:</value>
+  </data>
+  <data name="Last Login" xml:space="preserve">
+    <value>Letzter Login</value>
+  </data>
+  <data name="Last Name" xml:space="preserve">
+    <value>Nachname</value>
+  </data>
+  <data name="Last seen:" xml:space="preserve">
+    <value>Zuletzt gesehen:</value>
+  </data>
+  <data name="Later" xml:space="preserve">
+    <value>Später</value>
+  </data>
+  <data name="Leadership" xml:space="preserve">
+    <value>Führung</value>
+  </data>
+  <data name="Leave Group" xml:space="preserve">
+    <value>Gruppe verlassen</value>
+  </data>
+  <data name="Legal" xml:space="preserve">
+    <value>Rechtlich</value>
+  </data>
+  <data name="License Active:" xml:space="preserve">
+    <value>Lizenzaktiv:</value>
+  </data>
+  <data name="License Details" xml:space="preserve">
+    <value>Lizenzdetails</value>
+  </data>
+  <data name="License Expired:" xml:space="preserve">
+    <value>Lizenz abgelaufen:</value>
+  </data>
+  <data name="License Invalid:" xml:space="preserve">
+    <value>Lizenz ungültig:</value>
+  </data>
+  <data name="License is valid but could not be parsed." xml:space="preserve">
+    <value>Die Lizenz ist gültig, konnte aber nicht analysiert werden.</value>
+  </data>
+  <data name="License Validated &amp; Saved Successfully!" xml:space="preserve">
+    <value>Lizenz erfolgreich überprüft &amp; gespeichert!</value>
+  </data>
+  <data name="License Validated Successfully!" xml:space="preserve">
+    <value>Lizenz erfolgreich überprüft!</value>
+  </data>
+  <data name="Licensing &amp; Telemetry" xml:space="preserve">
+    <value>Lizenzierung &amp; Telemetrie</value>
+  </data>
+  <data name="Limit Notification Sounds" xml:space="preserve">
+    <value>Benachrichtigungstöne begrenzen</value>
+  </data>
+  <data name="Limits the amount of RAM the server will allocate for caching chat messages globally. At least 500MB is recommended." xml:space="preserve">
+    <value>Begrenzt die Menge an RAM, den der Server für das Caching von Chat-Nachrichten weltweit zuweisen wird. Mindestens 500MB werden empfohlen.</value>
+  </data>
+  <data name="Link" xml:space="preserve">
+    <value>Link</value>
+  </data>
+  <data name="Link New OpenID Account" xml:space="preserve">
+    <value>Neues OpenID-Konto verknüpfen</value>
+  </data>
+  <data name="Linked OpenID Accounts" xml:space="preserve">
+    <value>Verknüpfte OpenID-Konten</value>
+  </data>
+  <data name="Linked To" xml:space="preserve">
+    <value>Verlinkt mit</value>
+  </data>
+  <data name="Live" xml:space="preserve">
+    <value>Live</value>
+  </data>
+  <data name="LiveKit Ports" xml:space="preserve">
+    <value>LiveKit-Ports</value>
+  </data>
+  <data name="Load" xml:space="preserve">
+    <value>Laden</value>
+  </data>
+  <data name="Load Defaults" xml:space="preserve">
+    <value>Load-Standard</value>
+  </data>
+  <data name="Location" xml:space="preserve">
+    <value>Standort</value>
+  </data>
+  <data name="Log Date" xml:space="preserve">
+    <value>Log-Datum</value>
+  </data>
+  <data name="Log In" xml:space="preserve">
+    <value>Anmelden</value>
+  </data>
+  <data name="Log Out" xml:space="preserve">
+    <value>Abmelden</value>
+  </data>
+  <data name="Login Successful" xml:space="preserve">
+    <value>Anmeldung erfolgreich</value>
+  </data>
+  <data name="Logs copied to clipboard" xml:space="preserve">
+    <value>Protokolle in Zwischenablage kopiert</value>
+  </data>
+  <data name="Logs copied to clipboard." xml:space="preserve">
+    <value>Protokolle in die Zwischenablage kopiert.</value>
+  </data>
+  <data name="Make Channel Public" xml:space="preserve">
+    <value>Kanal öffentlich machen</value>
+  </data>
+  <data name="Make Public" xml:space="preserve">
+    <value>Öffentlich machen</value>
+  </data>
+  <data name="Makes this an auto-joining Voice and Video channel. Text chat acts as secondary." xml:space="preserve">
+    <value>Macht dies zu einem automatisch beitretenden Sprach- und Videokanal. Text-Chat wirkt als sekundär.</value>
+  </data>
+  <data name="Manage Categories" xml:space="preserve">
+    <value>Kategorien verwalten</value>
+  </data>
+  <data name="Manage Contributors" xml:space="preserve">
+    <value>Mitwirkende verwalten</value>
+  </data>
+  <data name="Manage contributors" xml:space="preserve">
+    <value>Mitwirkende verwalten</value>
+  </data>
+  <data name="Manage Spokes Pass" xml:space="preserve">
+    <value>Spokes Pass verwalten</value>
+  </data>
+  <data name="Manage your local chat encryption password." xml:space="preserve">
+    <value>Verwalten Sie Ihr Passwort für lokale Chat-Verschlüsselung.</value>
+  </data>
+  <data name="Manage your Spokes license and usage statistics preferences." xml:space="preserve">
+    <value>Verwalten Sie Ihre Spokes-Lizenz- und Nutzungsstatistikeinstellungen.</value>
+  </data>
+  <data name="Manual" xml:space="preserve">
+    <value>Manuell</value>
+  </data>
+  <data name="Master Password Configured via Environment:" xml:space="preserve">
+    <value>Master-Passwort konfiguriert via Umgebung:</value>
+  </data>
+  <data name="Master Password Missing:" xml:space="preserve">
+    <value>Master-Passwort fehlt:</value>
+  </data>
+  <data name="Master Volume" xml:space="preserve">
+    <value>Hauptlautstärke</value>
+  </data>
+  <data name="Max Global Chat Cache Size (MB)" xml:space="preserve">
+    <value>Maximale globale Chat-Cache-Größe (MB)</value>
+  </data>
+  <data name="Max Upload Size (MB)" xml:space="preserve">
+    <value>Maximale Upload-Größe (MB)</value>
+  </data>
+  <data name="Maximum allowed size per file (requires server restart to fully apply to Kestrel)" xml:space="preserve">
+    <value>Maximal zulässige Größe pro Datei (erfordert einen Neustart des Servers, um sich vollständig auf Kestrel anzuwenden)</value>
+  </data>
+  <data name="Media Lightbox" xml:space="preserve">
+    <value>Medienbeleuchtung</value>
+  </data>
+  <data name="Media removed" xml:space="preserve">
+    <value>Medien entfernt</value>
+  </data>
+  <data name="member" xml:space="preserve">
+    <value>Mitglied</value>
+  </data>
+  <data name="MEMBERS" xml:space="preserve">
+    <value>MITGLIED</value>
+  </data>
+  <data name="Members with Access" xml:space="preserve">
+    <value>Mitglieder mit Zugang</value>
+  </data>
+  <data name="Memo" xml:space="preserve">
+    <value>Notiz</value>
+  </data>
+  <data name="Mentions Only" xml:space="preserve">
+    <value>Nur Erwähnungen</value>
+  </data>
+  <data name="Message" xml:space="preserve">
+    <value>Nachricht</value>
+  </data>
+  <data name="Message deleted globally." xml:space="preserve">
+    <value>Nachricht gelöscht.</value>
+  </data>
+  <data name="Message Reactions" xml:space="preserve">
+    <value>Nachrichtenreaktionen</value>
+  </data>
+  <data name="Message reported successfully." xml:space="preserve">
+    <value>Nachricht erfolgreich gemeldet.</value>
+  </data>
+  <data name="Message Snapshot" xml:space="preserve">
+    <value>Nachricht Schnappschuss</value>
+  </data>
+  <data name="Message text copied to clipboard" xml:space="preserve">
+    <value>Nachrichtentext in Zwischenablage kopiert</value>
+  </data>
+  <data name="Message..." xml:space="preserve">
+    <value>Nachricht...</value>
+  </data>
+  <data name="Microphone Diagnostic" xml:space="preserve">
+    <value>Mikrofon-Diagnose</value>
+  </data>
+  <data name="Minute before" xml:space="preserve">
+    <value>Minute vor</value>
+  </data>
+  <data name="Minutes before" xml:space="preserve">
+    <value>Minuten vor</value>
+  </data>
+  <data name="Mobile" xml:space="preserve">
+    <value>Mobil</value>
+  </data>
+  <data name="Mobile Login" xml:space="preserve">
+    <value>Mobile Anmeldung</value>
+  </data>
+  <data name="Mobile Notifications Paused" xml:space="preserve">
+    <value>Mobile Benachrichtigungen pausiert</value>
+  </data>
+  <data name="Mobile Notifications Unavailable" xml:space="preserve">
+    <value>Mobile Benachrichtigungen nicht verfügbar</value>
+  </data>
+  <data name="MobilePushDisabledNotice" xml:space="preserve">
+    <value>MobilePushDisabledNotice</value>
+  </data>
+  <data name="Moderation Actions" xml:space="preserve">
+    <value>Moderationsaktionen</value>
+  </data>
+  <data name="Moderation Alerts" xml:space="preserve">
+    <value>Moderationswarnungen</value>
+  </data>
+  <data name="Moderation Dashboard" xml:space="preserve">
+    <value>Moderations-Dashboard</value>
+  </data>
+  <data name="Moderator" xml:space="preserve">
+    <value>Moderator</value>
+  </data>
+  <data name="Modify Default Order" xml:space="preserve">
+    <value>Standardreihenfolge ändern</value>
+  </data>
+  <data name="Mon" xml:space="preserve">
+    <value>Mon</value>
+  </data>
+  <data name="Mon_Short" xml:space="preserve">
+    <value>Mon_Short</value>
+  </data>
+  <data name="Multi-day" xml:space="preserve">
+    <value>Mehrtägig</value>
+  </data>
+  <data name="Mute" xml:space="preserve">
+    <value>Stumm</value>
+  </data>
+  <data name="Mute All My Notifications" xml:space="preserve">
+    <value>Alle meine Benachrichtigungen stumm</value>
+  </data>
+  <data name="Mute for me" xml:space="preserve">
+    <value>Für mich stumm</value>
+  </data>
+  <data name="Muted" xml:space="preserve">
+    <value>Stumm</value>
+  </data>
+  <data name="My Albums" xml:space="preserve">
+    <value>Meine Alben</value>
+  </data>
+  <data name="My Calendar" xml:space="preserve">
+    <value>Mein Kalender</value>
+  </data>
+  <data name="My Calendar Categories" xml:space="preserve">
+    <value>Meine Kalenderkategorien</value>
+  </data>
+  <data name="My Reminders" xml:space="preserve">
+    <value>Meine Erinnerungen</value>
+  </data>
+  <data name="Name" xml:space="preserve">
+    <value>Name</value>
+  </data>
+  <data name="Name:" xml:space="preserve">
+    <value>Name:</value>
+  </data>
+  <data name="Native mobile push notifications are disabled until renewed." xml:space="preserve">
+    <value>Native mobile Push-Benachrichtigungen sind deaktiviert, bis sie erneuert werden.</value>
+  </data>
+  <data name="Native mobile push notifications will be disabled until renewed." xml:space="preserve">
+    <value>Native mobile Push-Benachrichtigungen werden deaktiviert, bis sie erneuert werden.</value>
+  </data>
+  <data name="Native Push Notifications Disabled:" xml:space="preserve">
+    <value>Native Push-Benachrichtigungen deaktiviert:</value>
+  </data>
+  <data name="NeverShowAgain" xml:space="preserve">
+    <value>Nie wieder zeigen</value>
+  </data>
+  <data name="New {0}" xml:space="preserve">
+    <value>Neu {0}</value>
+  </data>
+  <data name="New {0} Channel" xml:space="preserve">
+    <value>Neuer {0} Kanal</value>
+  </data>
+  <data name="New Album" xml:space="preserve">
+    <value>Neues Album</value>
+  </data>
+  <data name="New Category" xml:space="preserve">
+    <value>Neue Kategorie</value>
+  </data>
+  <data name="New Category Name" xml:space="preserve">
+    <value>Neuer Kategoriename</value>
+  </data>
+  <data name="New Direct Message" xml:space="preserve">
+    <value>Neue Direktnachricht</value>
+  </data>
+  <data name="New Event" xml:space="preserve">
+    <value>Neues Ereignis</value>
+  </data>
+  <data name="New Group" xml:space="preserve">
+    <value>Neue Gruppe</value>
+  </data>
+  <data name="Next, configure how users will log into your server." xml:space="preserve">
+    <value>Als nächstes konfigurieren Sie, wie Benutzer sich auf Ihrem Server anmelden.</value>
+  </data>
+  <data name="Next, let's configure your {0} profile. Leave empty to do later" xml:space="preserve">
+    <value>Als nächstes konfigurieren wir Ihr {0} Profil. Leer lassen um es später zu tun</value>
+  </data>
+  <data name="Next, let's configure your server's network settings." xml:space="preserve">
+    <value>Als nächstes konfigurieren wir die Netzwerkeinstellungen Ihres Servers.</value>
+  </data>
+  <data name="No albums available" xml:space="preserve">
+    <value>Keine Alben verfügbar</value>
+  </data>
+  <data name="No attendees found." xml:space="preserve">
+    <value>Keine Teilnehmer gefunden.</value>
+  </data>
+  <data name="No backups found." xml:space="preserve">
+    <value>Keine Sicherungen gefunden.</value>
+  </data>
+  <data name="No description provided. Click to add one." xml:space="preserve">
+    <value>Keine Beschreibung vorhanden. Klicken um eine hinzuzufügen.</value>
+  </data>
+  <data name="No emojis found" xml:space="preserve">
+    <value>Keine Emojis gefunden</value>
+  </data>
+  <data name="No events for this day." xml:space="preserve">
+    <value>Keine Ereignisse für diesen Tag.</value>
+  </data>
+  <data name="No events scheduled" xml:space="preserve">
+    <value>Keine Termine geplant</value>
+  </data>
+  <data name="No events scheduled for this day." xml:space="preserve">
+    <value>Keine Ereignisse für diesen Tag geplant.</value>
+  </data>
+  <data name="No GIFs found" xml:space="preserve">
+    <value>Keine GIFs gefunden</value>
+  </data>
+  <data name="No Icon" xml:space="preserve">
+    <value>Kein Symbol</value>
+  </data>
+  <data name="No Logo" xml:space="preserve">
+    <value>Kein Logo</value>
+  </data>
+  <data name="No logs found for this date." xml:space="preserve">
+    <value>Keine Logs für dieses Datum gefunden.</value>
+  </data>
+  <data name="No matching albums found" xml:space="preserve">
+    <value>Keine passenden Alben gefunden</value>
+  </data>
+  <data name="No members currently assigned." xml:space="preserve">
+    <value>Derzeit sind keine Mitglieder zugewiesen.</value>
+  </data>
+  <data name="No messages found" xml:space="preserve">
+    <value>Keine Nachrichten gefunden</value>
+  </data>
+  <data name="No messages yet" xml:space="preserve">
+    <value>Noch keine Nachrichten</value>
+  </data>
+  <data name="No notifications from this channel" xml:space="preserve">
+    <value>Keine Benachrichtigungen von diesem Kanal</value>
+  </data>
+  <data name="No other participants currently in voice channel. Any volume adjustments you make will be remembered automatically across calls." xml:space="preserve">
+    <value>Keine anderen Teilnehmer im Sprachkanal. Alle Lautstärke-Anpassungen, die Sie vornehmen, werden automatisch über Anrufe hinweg gespeichert.</value>
+  </data>
+  <data name="No personal alerts set." xml:space="preserve">
+    <value>Keine persönlichen Warnungen gesetzt.</value>
+  </data>
+  <data name="No personal reminders set for you." xml:space="preserve">
+    <value>Keine persönlichen Erinnerungen für Sie.</value>
+  </data>
+  <data name="No reactions found." xml:space="preserve">
+    <value>Keine Reaktionen gefunden.</value>
+  </data>
+  <data name="No read receipts found." xml:space="preserve">
+    <value>Keine Lesebestätigungen gefunden.</value>
+  </data>
+  <data name="No results found" xml:space="preserve">
+    <value>Keine Ergebnisse gefunden</value>
+  </data>
+  <data name="No shared albums yet" xml:space="preserve">
+    <value>Noch keine freigegebenen Alben</value>
+  </data>
+  <data name="No shared reminders set for this event." xml:space="preserve">
+    <value>Keine geteilten Erinnerungen für dieses Ereignis gesetzt.</value>
+  </data>
+  <data name="No shared reminders set." xml:space="preserve">
+    <value>Keine geteilten Erinnerungen gesetzt.</value>
+  </data>
+  <data name="No unlinked OpenID accounts available. New accounts appear here when users log in." xml:space="preserve">
+    <value>Keine nicht verknüpften OpenID-Konten verfügbar. Neue Konten erscheinen hier, wenn Benutzer sich anmelden.</value>
+  </data>
+  <data name="No users found." xml:space="preserve">
+    <value>Keine Benutzer gefunden.</value>
+  </data>
+  <data name="Noise Filter" xml:space="preserve">
+    <value>Rauschfilter</value>
+  </data>
+  <data name="NOISE FILTER" xml:space="preserve">
+    <value>NOISE FILTER</value>
+  </data>
+  <data name="None" xml:space="preserve">
+    <value>Keine</value>
+  </data>
+  <data name="None (Custom)" xml:space="preserve">
+    <value>Keine (stom)</value>
+  </data>
+  <data name="None (Disabled)" xml:space="preserve">
+    <value>Keine (deaktiviert)</value>
+  </data>
+  <data name="None (Public)" xml:space="preserve">
+    <value>Keine (öffentlich)</value>
+  </data>
+  <data name="None (Raw, high-fidelity)" xml:space="preserve">
+    <value>Keine (roh, hoch)</value>
+  </data>
+  <data name="NoResultsFound" xml:space="preserve">
+    <value>Keine Ergebnisse gefunden</value>
+  </data>
+  <data name="Not E2E encryption. Protects against db leaks." xml:space="preserve">
+    <value>Nicht E2E-Verschlüsselung. Schützt vor Undichtigkeiten von Datenbanken.</value>
+  </data>
+  <data name="Not Now" xml:space="preserve">
+    <value>Nicht jetzt</value>
+  </data>
+  <data name="Not provided" xml:space="preserve">
+    <value>Nicht bereitgestellt</value>
+  </data>
+  <data name="Notification limit per channel" xml:space="preserve">
+    <value>Benachrichtigungslimit pro Kanal</value>
+  </data>
+  <data name="Notification permission was denied. Enable in browser settings." xml:space="preserve">
+    <value>Benachrichtigungsrechte wurden verweigert. Aktivieren Sie in den Browsereinstellungen.</value>
+  </data>
+  <data name="Notification Preferences" xml:space="preserve">
+    <value>Benachrichtigungseinstellungen</value>
+  </data>
+  <data name="Notification settings" xml:space="preserve">
+    <value>Benachrichtigungseinstellungen</value>
+  </data>
+  <data name="Notification Sounds" xml:space="preserve">
+    <value>Benachrichtigungstöne</value>
+  </data>
+  <data name="Notification sounds are currently disabled for Spokes in your iPhone Settings." xml:space="preserve">
+    <value>Benachrichtigungstöne sind derzeit für Spokes in Ihren iPhone-Einstellungen deaktiviert.</value>
+  </data>
+  <data name="Notification sounds are disabled for Spokes in your iPhone Settings." xml:space="preserve">
+    <value>Benachrichtigungstöne sind für Spokes in Ihren iPhone-Einstellungen deaktiviert.</value>
+  </data>
+  <data name="Notifications are enabled on this device." xml:space="preserve">
+    <value>Benachrichtigungen sind auf diesem Gerät aktiviert.</value>
+  </data>
+  <data name="Notifications outside these hours will be queued and delivered when your day starts." xml:space="preserve">
+    <value>Benachrichtigungen außerhalb dieser Stunden werden eingereiht und geliefert, wenn der Tag beginnt.</value>
+  </data>
+  <data name="Offline" xml:space="preserve">
+    <value>Offline</value>
+  </data>
+  <data name="OK" xml:space="preserve">
+    <value>Ok</value>
+  </data>
+  <data name="Older backups are automatically deleted" xml:space="preserve">
+    <value>Ältere Sicherungen werden automatisch gelöscht</value>
+  </data>
+  <data name="On mobile devices, incoming call volume is controlled directly using your device's physical volume buttons for optimal audio quality. Individual participant muting remains available." xml:space="preserve">
+    <value>Auf mobilen Geräten wird die eingehende Anruflautstärke direkt über die physikalischen Lautstärketasten Ihres Geräts gesteuert und somit eine optimale Audioqualität gewährleistet.</value>
+  </data>
+  <data name="Once an administrator links your OpenID account to your {0} profile, you will have full access to Spokes." xml:space="preserve">
+    <value>Sobald ein Administrator Ihr OpenID-Konto mit Ihrem {0} -Profil verknüpft, haben Sie vollen Zugriff auf Spokes.</value>
+  </data>
+  <data name="Online" xml:space="preserve">
+    <value>Online</value>
+  </data>
+  <data name="Only applicable if not Admin." xml:space="preserve">
+    <value>Nur anwendbar, wenn nicht Admin.</value>
+  </data>
+  <data name="Only authorized users can post." xml:space="preserve">
+    <value>Nur autorisierte Benutzer können posten.</value>
+  </data>
+  <data name="Only for you" xml:space="preserve">
+    <value>Nur für dich</value>
+  </data>
+  <data name="Only play a sound for the first few unread messages in a channel." xml:space="preserve">
+    <value>Abspielen eines Klangs für die ersten ungelesenen Nachrichten in einem Kanal.</value>
+  </data>
+  <data name="Only specific users or {0} will be allowed to post messages in this channel." xml:space="preserve">
+    <value>Nur bestimmte Benutzer oder {0} dürfen Nachrichten in diesem Kanal posten.</value>
+  </data>
+  <data name="Only specific users/{0} can post." xml:space="preserve">
+    <value>Nur bestimmte Nutzer/{0} können Beiträge verfassen.</value>
+  </data>
+  <data name="Only when you're @mentioned" xml:space="preserve">
+    <value>Nur wenn du @erwähnt bist</value>
+  </data>
+  <data name="Only you will see this event unless shared with {0} or other people." xml:space="preserve">
+    <value>Nur du wirst dieses Ereignis sehen, es sei denn, es wird mit {0} oder anderen Personen geteilt.</value>
+  </data>
+  <data name="Open" xml:space="preserve">
+    <value>Öffnen</value>
+  </data>
+  <data name="Open Casdoor" xml:space="preserve">
+    <value>Casdoor öffnen</value>
+  </data>
+  <data name="Open iPhone Settings" xml:space="preserve">
+    <value>iPhone Einstellungen öffnen</value>
+  </data>
+  <data name="Open Settings" xml:space="preserve">
+    <value>Einstellungen öffnen</value>
+  </data>
+  <data name="OpenID Configuration Issuer / Authority URL" xml:space="preserve">
+    <value>OpenID Configuration Issuer / Authority-URL</value>
+  </data>
+  <data name="Opted out of shared event alerts" xml:space="preserve">
+    <value>Keine Freigabe von Ereignis-Benachrichtigungen möglich</value>
+  </data>
+  <data name="Or" xml:space="preserve">
+    <value>Oder</value>
+  </data>
+  <data name="Other" xml:space="preserve">
+    <value>Andere</value>
+  </data>
+  <data name="OUTPUT" xml:space="preserve">
+    <value>AUTPUT</value>
+  </data>
+  <data name="Output Device (Speaker)" xml:space="preserve">
+    <value>Ausgabegerät (Lautsprecher)</value>
+  </data>
+  <data name="Participant Volumes" xml:space="preserve">
+    <value>Teilnehmerlautstärke</value>
+  </data>
+  <data name="Participants &amp; Visibility" xml:space="preserve">
+    <value>Teilnehmer &amp; Sichtbarkeit</value>
+  </data>
+  <data name="Pass Required" xml:space="preserve">
+    <value>Pass erforderlich</value>
+  </data>
+  <data name="Password is encrypted before storage" xml:space="preserve">
+    <value>Passwort wird vor dem Speichern verschlüsselt</value>
+  </data>
+  <data name="Pause" xml:space="preserve">
+    <value>Pause</value>
+  </data>
+  <data name="people" xml:space="preserve">
+    <value>Leute</value>
+  </data>
+  <data name="Permanently delete your account and wipe your data from the server." xml:space="preserve">
+    <value>Lösche dein Konto dauerhaft und lösche deine Daten vom Server.</value>
+  </data>
+  <data name="Permission Groups" xml:space="preserve">
+    <value>Berechtigungsgruppen</value>
+  </data>
+  <data name="Permission Groups Config" xml:space="preserve">
+    <value>Konfiguration der Berechtigungsgruppen</value>
+  </data>
+  <data name="Permissions" xml:space="preserve">
+    <value>Berechtigungen</value>
+  </data>
+  <data name="Permissions Count" xml:space="preserve">
+    <value>Berechtigungsanzahl</value>
+  </data>
+  <data name="person" xml:space="preserve">
+    <value>Person</value>
+  </data>
+  <data name="Personal alerts. Other participants will not see or receive these." xml:space="preserve">
+    <value>Persönliche Benachrichtigungen. Andere Teilnehmer werden diese nicht sehen oder erhalten.</value>
+  </data>
+  <data name="Personal Information" xml:space="preserve">
+    <value>Persönliche Informationen</value>
+  </data>
+  <data name="Personal reminders saved" xml:space="preserve">
+    <value>Persönliche Erinnerungen gespeichert</value>
+  </data>
+  <data name="Personalize your calendar categories and colors. These categories are unique to your account and do not affect other users." xml:space="preserve">
+    <value>Personalisieren Sie Ihre Kalenderkategorien und Farben. Diese Kategorien sind einzigartig für Ihr Konto und betreffen keine anderen Benutzer.</value>
+  </data>
+  <data name="Photo" xml:space="preserve">
+    <value>Foto</value>
+  </data>
+  <data name="Pinned Messages" xml:space="preserve">
+    <value>Angeheftete Nachrichten</value>
+  </data>
+  <data name="Play" xml:space="preserve">
+    <value>Abspielen</value>
+  </data>
+  <data name="Please copy this password and add it to your docker-compose.yml as `SPOKES_MASTER_PASSWORD` to secure your server. Restart the server after setting the variable." xml:space="preserve">
+    <value>Bitte kopieren Sie dieses Passwort und fügen Sie es zu Ihrer Docker-compose.yml als `SPOKES_MASTER_PASSWORD` hinzu, um Ihren Server zu sichern. Starten Sie den Server nach dem Setzen der Variable neu.</value>
+  </data>
+  <data name="Please enter a valid URL." xml:space="preserve">
+    <value>Bitte geben Sie eine gültige URL ein.</value>
+  </data>
+  <data name="Please save these credentials securely. &lt;b&gt;THEY WILL NOT BE DISPLAYED AGAIN.&lt;/b&gt;" xml:space="preserve">
+    <value>Bitte speichern Sie diese Zugangsdaten sicher. &lt;b&gt;DIES WERDEN NICHT DEAKTIVIERT WERDEN.&lt;/b&gt;</value>
+  </data>
+  <data name="Please select a reason for reporting this message." xml:space="preserve">
+    <value>Bitte wählen Sie einen Grund für die Meldung dieser Nachricht.</value>
+  </data>
+  <data name="Please sign in to access the management portal." xml:space="preserve">
+    <value>Bitte melden Sie sich an, um auf das Management-Portal zuzugreifen.</value>
+  </data>
+  <data name="Please wait, applying backup..." xml:space="preserve">
+    <value>Bitte warten, Sicherung wird angewendet...</value>
+  </data>
+  <data name="Preview" xml:space="preserve">
+    <value>Vorschau</value>
+  </data>
+  <data name="Preview Sound" xml:space="preserve">
+    <value>Sound Vorschau</value>
+  </data>
+  <data name="Primary {0}" xml:space="preserve">
+    <value>Primäre {0}</value>
+  </data>
+  <data name="Privacy Policy" xml:space="preserve">
+    <value>Datenschutzerklärung</value>
+  </data>
+  <data name="Privacy Policy URL" xml:space="preserve">
+    <value>Datenschutz-URL</value>
+  </data>
+  <data name="Private event &amp;ndash; only you have access." xml:space="preserve">
+    <value>Private Veranstaltung &amp;ndash; nur Sie haben Zugriff.</value>
+  </data>
+  <data name="Private Key (Hidden)" xml:space="preserve">
+    <value>Privater Schlüssel (versteckt)</value>
+  </data>
+  <data name="Private key is stored securely and hidden for security" xml:space="preserve">
+    <value>Privater Schlüssel ist sicher gespeichert und aus Sicherheitsgründen versteckt</value>
+  </data>
+  <data name="Provision Server" xml:space="preserve">
+    <value>Bereitstellungsserver</value>
+  </data>
+  <data name="Provisioning Identity Server..." xml:space="preserve">
+    <value>Bereitstellen von Identitätsserver...</value>
+  </data>
+  <data name="PUBLIC" xml:space="preserve">
+    <value>PUBLIK</value>
+  </data>
+  <data name="Public — Default organization channel (access cannot be restricted)." xml:space="preserve">
+    <value>Öffentlich — Standard-Organisationskanal (Zugriff kann nicht eingeschränkt werden).</value>
+  </data>
+  <data name="Public (Everyone)" xml:space="preserve">
+    <value>Öffentlich (sonstig)</value>
+  </data>
+  <data name="Public channel messages are securely escrowed." xml:space="preserve">
+    <value>Öffentliche Kanalnachrichten sind sicher verbunden.</value>
+  </data>
+  <data name="Public Key" xml:space="preserve">
+    <value>Öffentlicher Schlüssel</value>
+  </data>
+  <data name="Push Notifications" xml:space="preserve">
+    <value>Push-Benachrichtigungen</value>
+  </data>
+  <data name="Push notifications are configured and ready to use." xml:space="preserve">
+    <value>Push-Benachrichtigungen sind konfiguriert und einsatzbereit.</value>
+  </data>
+  <data name="Push notifications are not configured by an administrator." xml:space="preserve">
+    <value>Push-Benachrichtigungen werden nicht von einem Administrator konfiguriert.</value>
+  </data>
+  <data name="Push notifications are not configured." xml:space="preserve">
+    <value>Push-Benachrichtigungen sind nicht konfiguriert.</value>
+  </data>
+  <data name="Push notifications are not supported on this browser:" xml:space="preserve">
+    <value>Push-Benachrichtigungen werden in diesem Browser nicht unterstützt:</value>
+  </data>
+  <data name="Push notifications disabled on this device." xml:space="preserve">
+    <value>Push-Benachrichtigungen auf diesem Gerät deaktiviert.</value>
+  </data>
+  <data name="Push notifications enabled!" xml:space="preserve">
+    <value>Push-Benachrichtigungen aktiviert!</value>
+  </data>
+  <data name="Push Notifications Expiry Date" xml:space="preserve">
+    <value>Push-Benachrichtigungen Ablaufdatum</value>
+  </data>
+  <data name="Push notifications not configured." xml:space="preserve">
+    <value>Push-Benachrichtigungen nicht konfiguriert.</value>
+  </data>
+  <data name="QUALITY" xml:space="preserve">
+    <value>Qualität</value>
+  </data>
+  <data name="Quiet Hours" xml:space="preserve">
+    <value>Ruhige Stunden</value>
+  </data>
+  <data name="Quote" xml:space="preserve">
+    <value>Zitat</value>
+  </data>
+  <data name="Reacted by {0}" xml:space="preserve">
+    <value>Reagiert von {0}</value>
+  </data>
+  <data name="Reacted by {0} and {1} others" xml:space="preserve">
+    <value>Reagiert von {0} und {1} anderen</value>
+  </data>
+  <data name="reaction" xml:space="preserve">
+    <value>reaktion</value>
+  </data>
+  <data name="Reactions" xml:space="preserve">
+    <value>Reaktionen</value>
+  </data>
+  <data name="reactions" xml:space="preserve">
+    <value>reaktionen</value>
+  </data>
+  <data name="Read how your data is handled by this server." xml:space="preserve">
+    <value>Lesen Sie, wie Ihre Daten von diesem Server behandelt werden.</value>
+  </data>
+  <data name="Read More" xml:space="preserve">
+    <value>Lesen Sie mehr</value>
+  </data>
+  <data name="Read Receipts" xml:space="preserve">
+    <value>Quittungen lesen</value>
+  </data>
+  <data name="Read the Full EULA Here" xml:space="preserve">
+    <value>Lies die volle EULA hier</value>
+  </data>
+  <data name="Reason" xml:space="preserve">
+    <value>Grund</value>
+  </data>
+  <data name="Reason: {0}" xml:space="preserve">
+    <value>Grund: {0}</value>
+  </data>
+  <data name="Reattach to Default" xml:space="preserve">
+    <value>An Standard anhängen</value>
+  </data>
+  <data name="Receive notifications when a user reports a message." xml:space="preserve">
+    <value>Erhalte Benachrichtigungen, wenn ein Benutzer eine Nachricht meldet.</value>
+  </data>
+  <data name="Receive notifications when another user reacts to your messages." xml:space="preserve">
+    <value>Erhalte Benachrichtigungen, wenn ein anderer Benutzer auf deine Nachrichten reagiert.</value>
+  </data>
+  <data name="Receive notifications when someone replies directly to your message." xml:space="preserve">
+    <value>Erhalte Benachrichtigungen, wenn jemand direkt auf deine Nachricht antwortet.</value>
+  </data>
+  <data name="Receive reminders for events shared with you by default. Turn off to opt out by default and enable alerts per event." xml:space="preserve">
+    <value>Erhalten Sie Erinnerungen für Ereignisse, die standardmäßig mit Ihnen geteilt werden. Deaktivieren Sie das Opt-out standardmäßig und aktivieren Sie Benachrichtigungen pro Event.</value>
+  </data>
+  <data name="Receiving shared event alerts" xml:space="preserve">
+    <value>Empfange gemeinsame Ereignisbenachrichtigungen</value>
+  </data>
+  <data name="Recent" xml:space="preserve">
+    <value>Neueste</value>
+  </data>
+  <data name="Record Voice Memo" xml:space="preserve">
+    <value>Sprach-Memo aufnehmen</value>
+  </data>
+  <data name="Recording ready! Play below to hear yourself." xml:space="preserve">
+    <value>Aufnahme bereit! Spiele unten, um dich selbst zu hören.</value>
+  </data>
+  <data name="Regenerate" xml:space="preserve">
+    <value>Regenerieren</value>
+  </data>
+  <data name="Regenerate Keys" xml:space="preserve">
+    <value>Schlüssel neu generieren</value>
+  </data>
+  <data name="Regenerate VAPID Keys?" xml:space="preserve">
+    <value>VAPID-Schlüssel neu generieren?</value>
+  </data>
+  <data name="Registered Devices" xml:space="preserve">
+    <value>Registrierte Geräte</value>
+  </data>
+  <data name="Registered Email" xml:space="preserve">
+    <value>Registrierte E-Mail</value>
+  </data>
+  <data name="Reload" xml:space="preserve">
+    <value>Reload</value>
+  </data>
+  <data name="Reminder amount" xml:space="preserve">
+    <value>Erinnerungsbetrag</value>
+  </data>
+  <data name="Reminder timing" xml:space="preserve">
+    <value>Erinnerung Timing</value>
+  </data>
+  <data name="Reminders &amp; Alerts" xml:space="preserve">
+    <value>Erinnerungen &amp; Warnungen</value>
+  </data>
+  <data name="Reminders unmuted" xml:space="preserve">
+    <value>Erinnerungen lautlos</value>
+  </data>
+  <data name="RemindMeLater" xml:space="preserve">
+    <value>Erinnerung MeSpäter</value>
+  </data>
+  <data name="Remove Contributors" xml:space="preserve">
+    <value>Mitwirkende entfernen</value>
+  </data>
+  <data name="Remove Push" xml:space="preserve">
+    <value>Push entfernen</value>
+  </data>
+  <data name="Remove reminder" xml:space="preserve">
+    <value>Erinnerung entfernen</value>
+  </data>
+  <data name="Removed {0} from the channel" xml:space="preserve">
+    <value>{0} aus dem Kanal entfernt</value>
+  </data>
+  <data name="Removing contributors will permanently delete all photos they have uploaded to this album. Are you sure you want to proceed?" xml:space="preserve">
+    <value>Das Entfernen von Beitragenden wird alle Fotos, die sie hochgeladen haben, dauerhaft löschen. Sind Sie sicher, dass Sie fortfahren möchten?</value>
+  </data>
+  <data name="Rename" xml:space="preserve">
+    <value>Umbenennen</value>
+  </data>
+  <data name="Reorder Channels" xml:space="preserve">
+    <value>Kanäle neu sortieren</value>
+  </data>
+  <data name="Reply" xml:space="preserve">
+    <value>Antwort</value>
+  </data>
+  <data name="Replying to {0}" xml:space="preserve">
+    <value>Antworten auf {0}</value>
+  </data>
+  <data name="Report" xml:space="preserve">
+    <value>Bericht</value>
+  </data>
+  <data name="Report dismissed." xml:space="preserve">
+    <value>Bericht verworfen.</value>
+  </data>
+  <data name="Report Message" xml:space="preserve">
+    <value>Meldung melden</value>
+  </data>
+  <data name="Reported By:" xml:space="preserve">
+    <value>Gemeldet von:</value>
+  </data>
+  <data name="Reported User:" xml:space="preserve">
+    <value>Gemeldeter Benutzer:</value>
+  </data>
+  <data name="Reset" xml:space="preserve">
+    <value>Reset</value>
+  </data>
+  <data name="Reset Categories?" xml:space="preserve">
+    <value>Kategorien zurücksetzen?</value>
+  </data>
+  <data name="Reset Defaults" xml:space="preserve">
+    <value>Standard zurücksetzen</value>
+  </data>
+  <data name="Reset to 100%" xml:space="preserve">
+    <value>Auf 100% zurücksetzen</value>
+  </data>
+  <data name="Reset to default" xml:space="preserve">
+    <value>Auf Standard zurücksetzen</value>
+  </data>
+  <data name="Reset to Server Defaults" xml:space="preserve">
+    <value>Auf Server zurücksetzen</value>
+  </data>
+  <data name="RESOLUTION" xml:space="preserve">
+    <value>RESOLUTION</value>
+  </data>
+  <data name="Resolve" xml:space="preserve">
+    <value>Lösen</value>
+  </data>
+  <data name="Resolve in Server Settings" xml:space="preserve">
+    <value>In den Servereinstellungen auflösen</value>
+  </data>
+  <data name="Resolved" xml:space="preserve">
+    <value>Gelöst</value>
+  </data>
+  <data name="Restart Server" xml:space="preserve">
+    <value>Server neu starten</value>
+  </data>
+  <data name="Restart Server Now" xml:space="preserve">
+    <value>Server jetzt neu starten</value>
+  </data>
+  <data name="Restore" xml:space="preserve">
+    <value>Wiederherstellen</value>
+  </data>
+  <data name="RESTORE" xml:space="preserve">
+    <value>ZURÜCK</value>
+  </data>
+  <data name="Restore Backup" xml:space="preserve">
+    <value>Backup wiederherstellen</value>
+  </data>
+  <data name="Restore Backup?" xml:space="preserve">
+    <value>Sicherung wiederherstellen?</value>
+  </data>
+  <data name="Restore Complete" xml:space="preserve">
+    <value>Restore Complete</value>
+  </data>
+  <data name="Restore Failed" xml:space="preserve">
+    <value>Wiederherstellung fehlgeschlagen</value>
+  </data>
+  <data name="Restore failed: {0}" xml:space="preserve">
+    <value>Wiederherstellung fehlgeschlagen: {0}</value>
+  </data>
+  <data name="Restoring a backup will overwrite all current data." xml:space="preserve">
+    <value>Das Wiederherstellen eines Backups überschreibt alle aktuellen Daten.</value>
+  </data>
+  <data name="Restoring Database" xml:space="preserve">
+    <value>Datenbank wiederherstellen</value>
+  </data>
+  <data name="Restricted" xml:space="preserve">
+    <value>Eingeschränkt</value>
+  </data>
+  <data name="Restricted ({0} {1}, {2} members)" xml:space="preserve">
+    <value>Eingeschränkt ({0} {1}, {2} Mitglieder)</value>
+  </data>
+  <data name="Restricted (Specific {0}/People)" xml:space="preserve">
+    <value>Eingeschränkt (Spezifisch {0}/Personen)</value>
+  </data>
+  <data name="Return to Login" xml:space="preserve">
+    <value>Zurück zur Anmeldung</value>
+  </data>
+  <data name="Return to Spokes" xml:space="preserve">
+    <value>Zurück zu Spokes</value>
+  </data>
+  <data name="RNNoise (Lightweight AI)" xml:space="preserve">
+    <value>RNNoise (Nachtgewicht AI)</value>
+  </data>
+  <data name="Sanitize Message (replace with random letters)" xml:space="preserve">
+    <value>Nachricht säubern (durch zufällige Buchstaben ersetzen)</value>
+  </data>
+  <data name="Sat" xml:space="preserve">
+    <value>Sa</value>
+  </data>
+  <data name="Sat_Short" xml:space="preserve">
+    <value>Kurze</value>
+  </data>
+  <data name="Save (Admin)" xml:space="preserve">
+    <value>Speichern (Admin)</value>
+  </data>
+  <data name="Save Changes" xml:space="preserve">
+    <value>Änderungen speichern</value>
+  </data>
+  <data name="Save Configuration" xml:space="preserve">
+    <value>Konfiguration speichern</value>
+  </data>
+  <data name="Save Order" xml:space="preserve">
+    <value>Reihenfolge speichern</value>
+  </data>
+  <data name="Save Profile" xml:space="preserve">
+    <value>Profil speichern</value>
+  </data>
+  <data name="Save Settings" xml:space="preserve">
+    <value>Einstellungen speichern</value>
+  </data>
+  <data name="Saved Volume Overrides ({0})" xml:space="preserve">
+    <value>Gespeicherte Lautstärke-Überschreibungen ({0})</value>
+  </data>
+  <data name="Schedule" xml:space="preserve">
+    <value>Zeitplan</value>
+  </data>
+  <data name="Schedule an event" xml:space="preserve">
+    <value>Ereignis planen</value>
+  </data>
+  <data name="Scheduled Time (Local)" xml:space="preserve">
+    <value>Geplante Zeit (Lokal)</value>
+  </data>
+  <data name="SCREEN" xml:space="preserve">
+    <value>SCREEN</value>
+  </data>
+  <data name="Search {0}" xml:space="preserve">
+    <value>Suche {0}</value>
+  </data>
+  <data name="Search albums..." xml:space="preserve">
+    <value>Alben suchen...</value>
+  </data>
+  <data name="Search channels..." xml:space="preserve">
+    <value>Kanäle suchen...</value>
+  </data>
+  <data name="Search Directory..." xml:space="preserve">
+    <value>Verzeichnis suchen...</value>
+  </data>
+  <data name="Search emoji..." xml:space="preserve">
+    <value>Suche Emoji...</value>
+  </data>
+  <data name="Search GIFs..." xml:space="preserve">
+    <value>GIFs suchen...</value>
+  </data>
+  <data name="Search icons..." xml:space="preserve">
+    <value>Icons suchen...</value>
+  </data>
+  <data name="Search KLIPY" xml:space="preserve">
+    <value>Suche KLIPY</value>
+  </data>
+  <data name="Search messages" xml:space="preserve">
+    <value>Nachrichten durchsuchen</value>
+  </data>
+  <data name="Search messages..." xml:space="preserve">
+    <value>Nachrichten suchen...</value>
+  </data>
+  <data name="Search Reports..." xml:space="preserve">
+    <value>Berichte suchen...</value>
+  </data>
+  <data name="Search..." xml:space="preserve">
+    <value>Suche...</value>
+  </data>
+  <data name="Search... (Ctrl+K)" xml:space="preserve">
+    <value>Suche... (Strg+K)</value>
+  </data>
+  <data name="SearchPlaceholder" xml:space="preserve">
+    <value>SuchPlaceholder</value>
+  </data>
+  <data name="Secure Channel" xml:space="preserve">
+    <value>Sicherer Kanal</value>
+  </data>
+  <data name="Secure Chat" xml:space="preserve">
+    <value>Sicher Chat</value>
+  </data>
+  <data name="Secure Chat Settings" xml:space="preserve">
+    <value>Sichere Chat-Einstellungen</value>
+  </data>
+  <data name="Seen By" xml:space="preserve">
+    <value>Gesehen von</value>
+  </data>
+  <data name="Select" xml:space="preserve">
+    <value>Auswählen</value>
+  </data>
+  <data name="Select a Channel" xml:space="preserve">
+    <value>Kanal auswählen</value>
+  </data>
+  <data name="Select Color" xml:space="preserve">
+    <value>Farbe auswählen</value>
+  </data>
+  <data name="Select Icon" xml:space="preserve">
+    <value>Symbol auswählen</value>
+  </data>
+  <data name="Select one or more roles to dynamically inherit permissions, or customize granular permissions below." xml:space="preserve">
+    <value>Wählen Sie eine oder mehrere Rollen aus, um Berechtigungen dynamisch zu erben, oder passen Sie unten die granularen Berechtigungen an.</value>
+  </data>
+  <data name="Select Participants" xml:space="preserve">
+    <value>Teilnehmer auswählen</value>
+  </data>
+  <data name="Select people" xml:space="preserve">
+    <value>Personen auswählen</value>
+  </data>
+  <data name="Send" xml:space="preserve">
+    <value>Senden</value>
+  </data>
+  <data name="Send (Enter)" xml:space="preserve">
+    <value>Senden (Enter)</value>
+  </data>
+  <data name="Send Anonymous Usage Statistics (Soft Ping)" xml:space="preserve">
+    <value>Anonyme Nutzungsstatistiken (Soft Ping) senden</value>
+  </data>
+  <data name="Sent a GIF" xml:space="preserve">
+    <value>GIF-Datei gesendet</value>
+  </data>
+  <data name="Server Logs" xml:space="preserve">
+    <value>Serverprotokolle</value>
+  </data>
+  <data name="Server Public URL" xml:space="preserve">
+    <value>Öffentliche Server-URL</value>
+  </data>
+  <data name="Server Public URL is required." xml:space="preserve">
+    <value>Öffentliche Server-URL ist erforderlich.</value>
+  </data>
+  <data name="Session Expired" xml:space="preserve">
+    <value>Sitzung abgelaufen</value>
+  </data>
+  <data name="Session revoked." xml:space="preserve">
+    <value>Sitzung widerrufen.</value>
+  </data>
+  <data name="Set the `SPOKES_MASTER_PASSWORD` environment variable to enable Server-assisted message recovery for public channels." xml:space="preserve">
+    <value>Legen Sie die Umgebungsvariable `SPOKES_MASTER_PASSWORD` fest, um die Server-unterstützte Nachrichtenwiederherstellung für öffentliche Kanäle zu aktivieren.</value>
+  </data>
+  <data name="Set Up Vault Password" xml:space="preserve">
+    <value>Tresor Passwort einrichten</value>
+  </data>
+  <data name="Settings saved successfully." xml:space="preserve">
+    <value>Einstellungen erfolgreich gespeichert.</value>
+  </data>
+  <data name="Settings saved. Voice server reloaded." xml:space="preserve">
+    <value>Einstellungen gespeichert. Sprachserver neu geladen.</value>
+  </data>
+  <data name="Setup Complete" xml:space="preserve">
+    <value>Setup abgeschlossen</value>
+  </data>
+  <data name="Several people are typing..." xml:space="preserve">
+    <value>Mehrere Personen tippen...</value>
+  </data>
+  <data name="Share" xml:space="preserve">
+    <value>Teilen</value>
+  </data>
+  <data name="Share Album" xml:space="preserve">
+    <value>Album teilen</value>
+  </data>
+  <data name="Share Screen" xml:space="preserve">
+    <value>Bildschirm teilen</value>
+  </data>
+  <data name="Share to Chat" xml:space="preserve">
+    <value>Im Chat teilen</value>
+  </data>
+  <data name="Share with {0}" xml:space="preserve">
+    <value>Mit {0} teilen</value>
+  </data>
+  <data name="Share your photos and videos with other users of the server." xml:space="preserve">
+    <value>Teilen Sie Ihre Fotos und Videos mit anderen Benutzern des Servers.</value>
+  </data>
+  <data name="Shared" xml:space="preserve">
+    <value>Geteilt</value>
+  </data>
+  <data name="Shared Alerts Off" xml:space="preserve">
+    <value>Freigegebene Alarme aus</value>
+  </data>
+  <data name="Shared Calendar Alerts" xml:space="preserve">
+    <value>Alarme für freigegebene Kalender</value>
+  </data>
+  <data name="Shared Channels" xml:space="preserve">
+    <value>Gemeinsame Kanäle</value>
+  </data>
+  <data name="Shared event reminders updated" xml:space="preserve">
+    <value>Gemeinsame Ereignis-Erinnerungen aktualisiert</value>
+  </data>
+  <data name="Shared With" xml:space="preserve">
+    <value>Freigegeben mit</value>
+  </data>
+  <data name="Shared with" xml:space="preserve">
+    <value>Freigegeben mit</value>
+  </data>
+  <data name="Shared with others" xml:space="preserve">
+    <value>Mit anderen geteilt</value>
+  </data>
+  <data name="Shared with you" xml:space="preserve">
+    <value>Mit dir geteilt</value>
+  </data>
+  <data name="Show Inactive" xml:space="preserve">
+    <value>Inaktiv anzeigen</value>
+  </data>
+  <data name="Show Less" xml:space="preserve">
+    <value>Weniger anzeigen</value>
+  </data>
+  <data name="Show/hide password" xml:space="preserve">
+    <value>Passwort ein-/ausblenden</value>
+  </data>
+  <data name="Sign In Again" xml:space="preserve">
+    <value>Erneut anmelden</value>
+  </data>
+  <data name="Sign Out" xml:space="preserve">
+    <value>Abmelden</value>
+  </data>
+  <data name="Size" xml:space="preserve">
+    <value>Größe</value>
+  </data>
+  <data name="Skip" xml:space="preserve">
+    <value>Überspringen</value>
+  </data>
+  <data name="Spam or Scams" xml:space="preserve">
+    <value>Spam oder Scams</value>
+  </data>
+  <data name="speaking" xml:space="preserve">
+    <value>sprechend</value>
+  </data>
+  <data name="Spokes Admin Password" xml:space="preserve">
+    <value>Spokes Admin Passwort</value>
+  </data>
+  <data name="Spokes Admin Username" xml:space="preserve">
+    <value>Spokes Admin Benutzername</value>
+  </data>
+  <data name="Spokes Default Provider" xml:space="preserve">
+    <value>Spokes Standard-Anbieter</value>
+  </data>
+  <data name="Spokes Initial Setup" xml:space="preserve">
+    <value>Spokes anfängliches Setup</value>
+  </data>
+  <data name="Spokes Organization Administrator" xml:space="preserve">
+    <value>Spokes-Organisationsadministrator</value>
+  </data>
+  <data name="Spokes Pass Active:" xml:space="preserve">
+    <value>Spokes Pass aktiv:</value>
+  </data>
+  <data name="Spokes Pass Expired:" xml:space="preserve">
+    <value>Spokes Pass abgelaufen:</value>
+  </data>
+  <data name="Spokes Pass Invalid:" xml:space="preserve">
+    <value>Spokes Pass ungültig:</value>
+  </data>
+  <data name="Spokes Pass is required for mobile notifications to work. Only 1 pass per server is required. Talk to your server owner, I'm sure they would love to split the cost :)" xml:space="preserve">
+    <value>Der Spokes-Pass wird benötigt, damit mobile Benachrichtigungen funktionieren. Es ist nur 1 Pass pro Server erforderlich. Sprich mit deinem Serverbesitzer, ich bin sicher, dass er gerne die Kosten teilen würde :)</value>
+  </data>
+  <data name="Spokes Setup" xml:space="preserve">
+    <value>Spokes Setup</value>
+  </data>
+  <data name="Spokes supports Apple Voice Isolation to filter out background noise, machinery, and room echoes on your microphone using the on-device Neural Engine." xml:space="preserve">
+    <value>Spokes unterstützt die Apple Voice Isolation, um Hintergrundgeräusche, Maschinen und Raum-Echos auf Ihrem Mikrofon mithilfe der Neuronalen Engine auf Ihrem Gerät auszufiltern.</value>
+  </data>
+  <data name="SpokesPassExpired" xml:space="preserve">
+    <value>Sprachausgang abgelaufen</value>
+  </data>
+  <data name="SpokesPassInvalid" xml:space="preserve">
+    <value>Sprachpasswort ungültig</value>
+  </data>
+  <data name="SpokesPassOutdated" xml:space="preserve">
+    <value>SpokesPassVeraltet</value>
+  </data>
+  <data name="Standard" xml:space="preserve">
+    <value>Standard</value>
+  </data>
+  <data name="Start a Direct Message" xml:space="preserve">
+    <value>Direkte Nachricht starten</value>
+  </data>
+  <data name="Start Chat" xml:space="preserve">
+    <value>Chat starten</value>
+  </data>
+  <data name="Start Date" xml:space="preserve">
+    <value>Startdatum</value>
+  </data>
+  <data name="Start Time" xml:space="preserve">
+    <value>Startzeit</value>
+  </data>
+  <data name="Start Voice Call" xml:space="preserve">
+    <value>Sprachanruf starten</value>
+  </data>
+  <data name="Stop Preview" xml:space="preserve">
+    <value>Vorschau stoppen</value>
+  </data>
+  <data name="Stop Sharing" xml:space="preserve">
+    <value>Freigabe beenden</value>
+  </data>
+  <data name="Stop Testing" xml:space="preserve">
+    <value>Test stoppen</value>
+  </data>
+  <data name="StorageFullDescription" xml:space="preserve">
+    <value>StorageFullDescription</value>
+  </data>
+  <data name="StorageWarning" xml:space="preserve">
+    <value>Speicherwarnung</value>
+  </data>
+  <data name="StorageWarningDescription" xml:space="preserve">
+    <value>Speicher-Warnung-Beschreibung</value>
+  </data>
+  <data name="Strikethrough" xml:space="preserve">
+    <value>Durchstreichen</value>
+  </data>
+  <data name="Sun" xml:space="preserve">
+    <value>Sonne</value>
+  </data>
+  <data name="Sun_Short" xml:space="preserve">
+    <value>Sonne_kurz</value>
+  </data>
+  <data name="Suspend User" xml:space="preserve">
+    <value>Benutzer sperren</value>
+  </data>
+  <data name="Suspended accounts cannot enable notifications for new devices." xml:space="preserve">
+    <value>gesperrte Konten können Benachrichtigungen für neue Geräte nicht aktivieren.</value>
+  </data>
+  <data name="Switching the Identity Provider will change the underlying user identifiers (OIDC Subject) for all users." xml:space="preserve">
+    <value>Das Wechseln des Identity Providers ändert die zugrunde liegenden Benutzer-Identifikatoren (OIDC Betreff) für alle Benutzer.</value>
+  </data>
+  <data name="System" xml:space="preserve">
+    <value>System</value>
+  </data>
+  <data name="System default has no desktop preview" xml:space="preserve">
+    <value>Systemstandard hat keine Desktop-Vorschau</value>
+  </data>
+  <data name="System Default uses your operating system's native ringtone on mobile devices and stays silent on desktop." xml:space="preserve">
+    <value>System Default verwendet den nativen Klingelton Ihres Betriebssystems auf mobilen Geräten und bleibt auf dem Desktop still.</value>
+  </data>
+  <data name="System Native" xml:space="preserve">
+    <value>System Nativ</value>
+  </data>
+  <data name="System restored successfully!" xml:space="preserve">
+    <value>System erfolgreich wiederhergestellt!</value>
+  </data>
+  <data name="System Setup" xml:space="preserve">
+    <value>System-Setup</value>
+  </data>
+  <data name="Tap &lt;b&gt;Turn On&lt;/b&gt;, then select &lt;b&gt;Voice Isolation&lt;/b&gt; in the iOS menu that appears. iOS will remember this choice for future calls." xml:space="preserve">
+    <value>Tippen Sie &lt;b&gt;Einschalten&lt;/b&gt;und wählen Sie dann &lt;b&gt;Sprachisolierung&lt;/b&gt; im iOS-Menü. iOS wird sich diese Entscheidung für zukünftige Anrufe merken.</value>
+  </data>
+  <data name="Tap Configure and select Voice Isolation for advanced noise filtering." xml:space="preserve">
+    <value>Tippen Sie auf Sprach-Isolation einrichten und wählen Sie Sprach-Isolation für erweiterte Rauschfilterung.</value>
+  </data>
+  <data name="TCP Fallback Port" xml:space="preserve">
+    <value>TCP Fallback-Port</value>
+  </data>
+  <data name="Team Leader" xml:space="preserve">
+    <value>Teamleiter</value>
+  </data>
+  <data name="Test" xml:space="preserve">
+    <value>Testen</value>
+  </data>
+  <data name="Test Microphone" xml:space="preserve">
+    <value>Mikrofon testen</value>
+  </data>
+  <data name="Test Notification" xml:space="preserve">
+    <value>Testbenachrichtigung</value>
+  </data>
+  <data name="Test notification sent successfully!" xml:space="preserve">
+    <value>Testbenachrichtigung erfolgreich gesendet!</value>
+  </data>
+  <data name="Test your microphone and sound wave responsiveness before talking to others. Speak to verify input levels." xml:space="preserve">
+    <value>Teste deine Mikrofon- und Schallwellenreaktionsfähigkeit, bevor du mit anderen sprichst. Sprich um die Eingangsstufen zu überprüfen.</value>
+  </data>
+  <data name="Text Chat" xml:space="preserve">
+    <value>Text Chat</value>
+  </data>
+  <data name="The base URL where this server is accessible (e.g. https://spokes.example.com)" xml:space="preserve">
+    <value>Die Basis-URL, auf die dieser Server erreichbar ist (z.B. https://spokes.example.com)</value>
+  </data>
+  <data name="The Spokes server continues to function normally, but native mobile push notifications for iOS and Android require an active Spokes license." xml:space="preserve">
+    <value>Der Spokes-Server funktioniert weiterhin normal, aber native mobile Push-Benachrichtigungen für iOS und Android benötigen eine aktive Spokes-Lizenz.</value>
+  </data>
+  <data name="The system has been restored successfully." xml:space="preserve">
+    <value>Das System wurde erfolgreich wiederhergestellt.</value>
+  </data>
+  <data name="The URL users will use to access Spokes (e.g., https://spokes.mydomain.com)" xml:space="preserve">
+    <value>Die URL-Benutzer verwenden um auf Spokes zuzugreifen (z.B. https://spokes.mydomain.com)</value>
+  </data>
+  <data name="There are {0} channel(s) in this category. They will be returned to their default categories." xml:space="preserve">
+    <value>Es gibt {0} Kanäle(n) in dieser Kategorie. Sie werden in ihre Standard-Kategorien zurückgeschickt.</value>
+  </data>
+  <data name="There are no reported messages to review." xml:space="preserve">
+    <value>Es gibt keine zu überprüfenden Nachrichten.</value>
+  </data>
+  <data name="These reminders will also ping anyone with whom this event is shared." xml:space="preserve">
+    <value>Diese Erinnerungen pingen auch jeden, mit dem dieses Ereignis geteilt wird.</value>
+  </data>
+  <data name="This album is empty" xml:space="preserve">
+    <value>Dieses Album ist leer</value>
+  </data>
+  <data name="This album is no longer available." xml:space="preserve">
+    <value>Dieses Album ist nicht mehr verfügbar.</value>
+  </data>
+  <data name="This album is not shared with any channels." xml:space="preserve">
+    <value>Dieses Album wird mit keinem Kanal geteilt.</value>
+  </data>
+  <data name="this category" xml:space="preserve">
+    <value>diese Kategorie</value>
+  </data>
+  <data name="This channel does not exist or you do not have permission to view it." xml:space="preserve">
+    <value>Dieser Kanal existiert nicht oder du hast keine Berechtigung, ihn anzusehen.</value>
+  </data>
+  <data name="This channel is archived and read-only." xml:space="preserve">
+    <value>Dieser Kanal ist archiviert und schreibgeschützt.</value>
+  </data>
+  <data name="This channel is encrypted and you are not on the access list to view its contents." xml:space="preserve">
+    <value>Dieser Kanal ist verschlüsselt und Sie sind nicht auf der Zugriffsliste, um dessen Inhalt anzuzeigen.</value>
+  </data>
+  <data name="This channel is encrypted. You must set up your secure Chat Vault password before you can view these messages." xml:space="preserve">
+    <value>Dieser Kanal ist verschlüsselt. Sie müssen Ihr sicheres Chat-Tresort-Passwort einrichten, bevor Sie diese Nachrichten sehen können.</value>
+  </data>
+  <data name="This channel uses channel Encryption. Enter your vault password to unlock your vault and read messages." xml:space="preserve">
+    <value>Dieser Kanal verwendet Kanal-Verschlüsselung. Geben Sie Ihr Tresor Passwort ein, um Ihren Tresor zu entsperren und Nachrichten zu lesen.</value>
+  </data>
+  <data name="This Device" xml:space="preserve">
+    <value>Dieses Gerät</value>
+  </data>
+  <data name="This device" xml:space="preserve">
+    <value>Dieses Gerät</value>
+  </data>
+  <data name="This device is registered, but notifications cannot be delivered because this server's Spokes Pass has expired. Subscriptions are retained and will resume automatically once renewed." xml:space="preserve">
+    <value>Dieses Gerät ist registriert, aber Benachrichtigungen können nicht gesendet werden, da der Spokes-Pass dieses Servers abgelaufen ist. Abonnements werden beibehalten und werden automatisch fortgesetzt, sobald sie erneuert wurden.</value>
+  </data>
+  <data name="This event is no longer available." xml:space="preserve">
+    <value>Dieses Ereignis ist nicht mehr verfügbar.</value>
+  </data>
+  <data name="This is an announcement channel. Only authorized users can post." xml:space="preserve">
+    <value>Dies ist ein Ankündigungskanal. Nur autorisierte Benutzer können Beiträge posten.</value>
+  </data>
+  <data name="This is just a UI demo, voice chat is inactive in the Demo Server." xml:space="preserve">
+    <value>Dies ist nur eine UI-Demo, Sprachchat ist inaktiv im Demo-Server.</value>
+  </data>
+  <data name="This is not End-To-End encryption. When enabled, messages are encrypted before being saved to disk. However, a motivated malicious server owner could intercept data in the server's RAM. This encryption will protect chat data in case of database leak." xml:space="preserve">
+    <value>Dies ist keine Ende-Ende-Verschlüsselung. Wenn aktiviert, werden Nachrichten verschlüsselt, bevor sie auf die Festplatte gespeichert werden. Allerdings könnte ein motivierter böswilliger Serverbesitzer Daten im RAM des Servers abfangen. Diese Verschlüsselung schützt Chatdaten im Falle von Datenbankleckern.</value>
+  </data>
+  <data name="This server's Spokes Pass couldn't be verified, so mobile notifications are disabled. Ask your server owner to check the Spokes Pass in the admin settings." xml:space="preserve">
+    <value>Der Spokes-Pass dieses Servers konnte nicht verifiziert werden, daher sind mobile Benachrichtigungen deaktiviert. Bitten Sie Ihren Serverbesitzer, den Spokes-Pass in den Admin-Einstellungen zu überprüfen.</value>
+  </data>
+  <data name="This URL will be shown to users in their Settings to comply with App Store guidelines." xml:space="preserve">
+    <value>Diese URL wird Benutzern in ihren Einstellungen angezeigt, um den App Store-Richtlinien zu entsprechen.</value>
+  </data>
+  <data name="This will append the default permission groups to your list. Proceed?" xml:space="preserve">
+    <value>Damit werden die Standard-Berechtigungsgruppen an Ihre Liste angehängt. Fortfahren?</value>
+  </data>
+  <data name="This will encrypt your messages on the server's disk. Your vault password will be required to read messages." xml:space="preserve">
+    <value>Dies verschlüsselt Ihre Nachrichten auf der Festplatte des Servers. Ihr Tresorpasswort wird benötigt, um Nachrichten zu lesen.</value>
+  </data>
+  <data name="This will invalidate all existing push subscriptions. Users will need to re-enable notifications in their browser." xml:space="preserve">
+    <value>Dadurch werden alle bestehenden Push-Abonnements ungültig. Benutzer müssen Benachrichtigungen in ihrem Browser erneut aktivieren.</value>
+  </data>
+  <data name="This will only take a moment." xml:space="preserve">
+    <value>Das wird nur einen Moment dauern.</value>
+  </data>
+  <data name="This will reset your categories to the server default template. Your current category customizations will be overwritten. Continue?" xml:space="preserve">
+    <value>Dies wird Ihre Kategorien auf die Server-Standardvorlage zurücksetzen. Ihre aktuellen Kategorie-Anpassungen werden überschrieben. Fortfahren?</value>
+  </data>
+  <data name="Thu" xml:space="preserve">
+    <value>Thu</value>
+  </data>
+  <data name="Thu_Short" xml:space="preserve">
+    <value>Thu_Kurz</value>
+  </data>
+  <data name="Time Until Expiry" xml:space="preserve">
+    <value>Zeit bis Ablauf</value>
+  </data>
+  <data name="To" xml:space="preserve">
+    <value>An</value>
+  </data>
+  <data name="To apply these changes, the server must be restarted." xml:space="preserve">
+    <value>Um diese Änderungen anzuwenden, muss der Server neu gestartet werden.</value>
+  </data>
+  <data name="Today" xml:space="preserve">
+    <value>Heute</value>
+  </data>
+  <data name="Treat Replies as Mentions" xml:space="preserve">
+    <value>Antworten als Erwähnung behandeln</value>
+  </data>
+  <data name="Try adjusting your search query or clear filters." xml:space="preserve">
+    <value>Versuchen Sie, Ihre Suchabfrage anzupassen oder Filter zu löschen.</value>
+  </data>
+  <data name="Tue" xml:space="preserve">
+    <value>Di</value>
+  </data>
+  <data name="Tue_Short" xml:space="preserve">
+    <value>Di_Kurz</value>
+  </data>
+  <data name="Turn off Video" xml:space="preserve">
+    <value>Video ausschalten</value>
+  </data>
+  <data name="Turn On" xml:space="preserve">
+    <value>Einschalten</value>
+  </data>
+  <data name="Turn on Video" xml:space="preserve">
+    <value>Video einschalten</value>
+  </data>
+  <data name="Type" xml:space="preserve">
+    <value>Typ</value>
+  </data>
+  <data name="Type a message..." xml:space="preserve">
+    <value>Nachricht eingeben...</value>
+  </data>
+  <data name="Type to search GIFs" xml:space="preserve">
+    <value>Geben Sie ein, um GIFs zu suchen</value>
+  </data>
+  <data name="TypeToSearchPrompt" xml:space="preserve">
+    <value>TypeToSearchPrompt</value>
+  </data>
+  <data name="UDP End Port" xml:space="preserve">
+    <value>UDP Endport</value>
+  </data>
+  <data name="UDP Start Port" xml:space="preserve">
+    <value>UDP Startport</value>
+  </data>
+  <data name="Unarchive" xml:space="preserve">
+    <value>Archivieren</value>
+  </data>
+  <data name="Unban User" xml:space="preserve">
+    <value>Benutzer entbannen</value>
+  </data>
+  <data name="Unblock User" xml:space="preserve">
+    <value>Benutzer entsperren</value>
+  </data>
+  <data name="UnhandledErrorOccurred" xml:space="preserve">
+    <value>UnhandledError aufgetreten</value>
+  </data>
+  <data name="Unknown" xml:space="preserve">
+    <value>Unbekannt</value>
+  </data>
+  <data name="Unknown Participant" xml:space="preserve">
+    <value>Unbekannter Teilnehmer</value>
+  </data>
+  <data name="Unknown User" xml:space="preserve">
+    <value>Unbekannter Benutzer</value>
+  </data>
+  <data name="Unlink this account" xml:space="preserve">
+    <value>Dieses Konto aufheben</value>
+  </data>
+  <data name="Unlinked" xml:space="preserve">
+    <value>Unverbunden</value>
+  </data>
+  <data name="Unlock Channel" xml:space="preserve">
+    <value>Kanal entsperren</value>
+  </data>
+  <data name="Unlocking Secure Channel..." xml:space="preserve">
+    <value>Sicheren Kanal entsperren...</value>
+  </data>
+  <data name="Unmute" xml:space="preserve">
+    <value>Entstumm</value>
+  </data>
+  <data name="Unmute My Notifications" xml:space="preserve">
+    <value>Meine Benachrichtigungen einschalten</value>
+  </data>
+  <data name="Unshare from channel" xml:space="preserve">
+    <value>Vom Kanal entfernen</value>
+  </data>
+  <data name="Unsuspend User" xml:space="preserve">
+    <value>Benutzer entsperren</value>
+  </data>
+  <data name="Update Now" xml:space="preserve">
+    <value>Jetzt aktualisieren</value>
+  </data>
+  <data name="Update Server?" xml:space="preserve">
+    <value>Server aktualisieren?</value>
+  </data>
+  <data name="Update triggered. The server will restart shortly." xml:space="preserve">
+    <value>Update ausgelöst. Der Server wird in Kürze neu gestartet.</value>
+  </data>
+  <data name="Updated {0} sound to {1}." xml:space="preserve">
+    <value>{0} Ton auf {1} aktualisiert.</value>
+  </data>
+  <data name="Upload &amp; Restore" xml:space="preserve">
+    <value>Hochladen &amp; Wiederherstellen</value>
+  </data>
+  <data name="Upload a backup file (.zip) to restore the system state." xml:space="preserve">
+    <value>Laden Sie eine Backup-Datei (.zip) hoch, um den Systemzustand wiederherzustellen.</value>
+  </data>
+  <data name="Upload failed" xml:space="preserve">
+    <value>Upload fehlgeschlagen</value>
+  </data>
+  <data name="Upload failed: {0}" xml:space="preserve">
+    <value>Upload fehlgeschlagen: {0}</value>
+  </data>
+  <data name="Upload Failed: {0}" xml:space="preserve">
+    <value>Upload fehlgeschlagen: {0}</value>
+  </data>
+  <data name="Upload Icon" xml:space="preserve">
+    <value>Icon hochladen</value>
+  </data>
+  <data name="Upload Logo" xml:space="preserve">
+    <value>Logo hochladen</value>
+  </data>
+  <data name="Upload photos and videos to start building your collection." xml:space="preserve">
+    <value>Fotos und Videos hochladen, um mit dem Aufbau deiner Sammlung zu beginnen.</value>
+  </data>
+  <data name="Upload Spokes Pass" xml:space="preserve">
+    <value>Spokes Pass hochladen</value>
+  </data>
+  <data name="Upload Spokes Pass (.spokes-license)" xml:space="preserve">
+    <value>Spokes Pass hochladen (.spokes-license)</value>
+  </data>
+  <data name="Upload your Spokes Pass (.spokes-license) to enable native mobile push notifications, or skip to use the 2-month free trial." xml:space="preserve">
+    <value>Laden Sie Ihren Spokes Pass (.spokes-license) hoch, um native mobile Push-Benachrichtigungen zu aktivieren, oder überspringen Sie die 2-monatige kostenlose Testversion.</value>
+  </data>
+  <data name="Uploading {0} file..." xml:space="preserve">
+    <value>Lade {0} Datei...</value>
+  </data>
+  <data name="Uploading {0} files..." xml:space="preserve">
+    <value>Lade {0} Dateien hoch...</value>
+  </data>
+  <data name="Uploading Backup" xml:space="preserve">
+    <value>Sicherung wird hochgeladen</value>
+  </data>
+  <data name="Uploading files..." xml:space="preserve">
+    <value>Dateien werden hochgeladen...</value>
+  </data>
+  <data name="URL must start with http:// or https://" xml:space="preserve">
+    <value>URL muss mit http:// oder https:// beginnen</value>
+  </data>
+  <data name="Usage Statistics" xml:space="preserve">
+    <value>Nutzungsstatistik</value>
+  </data>
+  <data name="User" xml:space="preserve">
+    <value>Benutzer</value>
+  </data>
+  <data name="User Actions" xml:space="preserve">
+    <value>Benutzeraktionen</value>
+  </data>
+  <data name="User banned." xml:space="preserve">
+    <value>Benutzer gesperrt.</value>
+  </data>
+  <data name="User blocked. Their messages have been hidden." xml:space="preserve">
+    <value>Benutzer gesperrt. Ihre Nachrichten wurden ausgeblendet.</value>
+  </data>
+  <data name="User Privacy &amp; Discovery" xml:space="preserve">
+    <value>Benutzer Privatsphäre &amp; Entdeckungen</value>
+  </data>
+  <data name="User suspended." xml:space="preserve">
+    <value>Benutzer gesperrt.</value>
+  </data>
+  <data name="User unbanned." xml:space="preserve">
+    <value>Benutzer entsperrt.</value>
+  </data>
+  <data name="User unsuspended." xml:space="preserve">
+    <value>Benutzer entsperrt.</value>
+  </data>
+  <data name="Validating..." xml:space="preserve">
+    <value>Validieren...</value>
+  </data>
+  <data name="Validation failed: {0}" xml:space="preserve">
+    <value>Validierung fehlgeschlagen: {0}</value>
+  </data>
+  <data name="Validation failed: Could not reach provider (HTTP {0}). Check the URL." xml:space="preserve">
+    <value>Validierung fehlgeschlagen: Anbieter konnte nicht erreicht werden (HTTP {0}). Überprüfen Sie die URL.</value>
+  </data>
+  <data name="Validation failed: Endpoint reached, but it did not return a valid OpenID configuration." xml:space="preserve">
+    <value>Validierung fehlgeschlagen: Endpunkt erreicht, aber keine gültige OpenID-Konfiguration.</value>
+  </data>
+  <data name="VAPID (Voluntary Application Server Identification) keys authenticate your server with push notification services. Generate keys once per Spokes instance. These keys are stored securely and used to sign push requests." xml:space="preserve">
+    <value>VAPID (freiwillige Application Server Identification) Schlüssel authentifizieren Ihren Server über Push-Benachrichtigungsdienste. Generiere Schlüssel einmal pro Spokes-Instanz. Diese Schlüssel werden sicher gespeichert und werden verwendet, um Push-Anfragen zu signieren.</value>
+  </data>
+  <data name="VAPID Keys" xml:space="preserve">
+    <value>VAPID Schlüssel</value>
+  </data>
+  <data name="VAPID keys generated! Push notifications are now enabled." xml:space="preserve">
+    <value>VAPID-Schlüssel generiert! Push-Benachrichtigungen sind jetzt aktiviert.</value>
+  </data>
+  <data name="Vault Password" xml:space="preserve">
+    <value>Tresor Passwort</value>
+  </data>
+  <data name="VIDEO" xml:space="preserve">
+    <value>VIDEO</value>
+  </data>
+  <data name="View {0}" xml:space="preserve">
+    <value>{0} ansehen</value>
+  </data>
+  <data name="View {0}, {1}, and organizational structure." xml:space="preserve">
+    <value>Siehe {0}, {1}und Organisationsstruktur.</value>
+  </data>
+  <data name="View in Calendar" xml:space="preserve">
+    <value>Im Kalender anzeigen</value>
+  </data>
+  <data name="View internal server errors and events. Logs are stored as JSON Lines and displayed here as raw text for easy copying." xml:space="preserve">
+    <value>Interne Serverfehler und Ereignisse anzeigen. Protokolle werden als JSON-Linien gespeichert und hier als Rohtext für einfaches Kopieren angezeigt.</value>
+  </data>
+  <data name="View Policy" xml:space="preserve">
+    <value>Richtlinien anzeigen</value>
+  </data>
+  <data name="View Profile" xml:space="preserve">
+    <value>Profil anzeigen</value>
+  </data>
+  <data name="View Reactions" xml:space="preserve">
+    <value>Reaktionen anzeigen</value>
+  </data>
+  <data name="View Read Receipts" xml:space="preserve">
+    <value>Lesebestätigungen anzeigen</value>
+  </data>
+  <data name="View shared users" xml:space="preserve">
+    <value>Geteilte Benutzer anzeigen</value>
+  </data>
+  <data name="Visible to everyone in {0}" xml:space="preserve">
+    <value>Sichtbar für alle in {0}</value>
+  </data>
+  <data name="Voice Call Started" xml:space="preserve">
+    <value>Sprachanruf gestartet</value>
+  </data>
+  <data name="VOICE CALLS" xml:space="preserve">
+    <value>VOICE-KALLS</value>
+  </data>
+  <data name="Voice channel" xml:space="preserve">
+    <value>Sprachkanal</value>
+  </data>
+  <data name="Voice Channel" xml:space="preserve">
+    <value>Sprachkanal</value>
+  </data>
+  <data name="VOICE CHANNELS" xml:space="preserve">
+    <value>WICHTIGE ÄNDERN</value>
+  </data>
+  <data name="Voice Configuration Error" xml:space="preserve">
+    <value>Sprachkonfigurationsfehler</value>
+  </data>
+  <data name="Voice Detection Sensitivity" xml:space="preserve">
+    <value>Empfindlichkeit der Spracherkennung</value>
+  </data>
+  <data name="Voice Isolation (Active)" xml:space="preserve">
+    <value>Sprach-Isolation (aktiv)</value>
+  </data>
+  <data name="Voice Settings" xml:space="preserve">
+    <value>Spracheinstellungen</value>
+  </data>
+  <data name="Voice upload not initialized yet." xml:space="preserve">
+    <value>Sprach-Upload noch nicht initialisiert.</value>
+  </data>
+  <data name="Volume Controls" xml:space="preserve">
+    <value>Lautstärkeregler</value>
+  </data>
+  <data name="WARNING:" xml:space="preserve">
+    <value>WARNUNG:</value>
+  </data>
+  <data name="Warning: Regenerating keys will invalidate all existing push subscriptions." xml:space="preserve">
+    <value>Warnung: Das Regenerieren von Schlüsseln wird alle bestehenden Push-Abonnements ungültig machen.</value>
+  </data>
+  <data name="We collect a secure hash of your license key along with basic system stats to ensure fair usage and help us improve Spokes. You may disable this at any time." xml:space="preserve">
+    <value>Wir sammeln einen sicheren Hash Ihres Lizenzschlüssels zusammen mit grundlegenden Systemstatistiken, um eine faire Nutzung zu gewährleisten und uns dabei zu helfen, Spokes zu verbessern. Sie können dies jederzeit deaktivieren.</value>
+  </data>
+  <data name="We will automatically configure a secure, embedded Casdoor identity server. Recommended for most users." xml:space="preserve">
+    <value>Wir werden automatisch einen sicheren, eingebetteten Casdoor Identity Server konfigurieren. Empfohlen für die meisten Benutzer.</value>
+  </data>
+  <data name="Wed" xml:space="preserve">
+    <value>Mi</value>
+  </data>
+  <data name="Wed_Short" xml:space="preserve">
+    <value>Braut_kurz</value>
+  </data>
+  <data name="Week before" xml:space="preserve">
+    <value>Woche vor</value>
+  </data>
+  <data name="Weeks before" xml:space="preserve">
+    <value>Wochen vor</value>
+  </data>
+  <data name="Welcome back. Please log in to continue." xml:space="preserve">
+    <value>Willkommen zurück. Bitte melden Sie sich an, um fortzufahren.</value>
+  </data>
+  <data name="Welcome to Spokes! Before we begin, please review and accept our End User License Agreement." xml:space="preserve">
+    <value>Willkommen bei Spokes! Bevor wir beginnen, überprüfen und akzeptieren Sie bitte unsere Endbenutzer-Lizenzvereinbarung.</value>
+  </data>
+  <data name="When enabled, Spokes will securely update itself when new versions are released." xml:space="preserve">
+    <value>Wenn aktiviert, aktualisiert sich Spokes sicher, wenn neue Versionen freigegeben werden.</value>
+  </data>
+  <data name="When enabled, the server will automatically pull and apply updates via Watchtower when a new version is released." xml:space="preserve">
+    <value>Wenn aktiviert, wird der Server automatisch Updates über Watchtower ziehen und anwenden, wenn eine neue Version freigegeben wird.</value>
+  </data>
+  <data name="With: {0}" xml:space="preserve">
+    <value>mit: {0}</value>
+  </data>
+  <data name="You" xml:space="preserve">
+    <value>Du</value>
+  </data>
+  <data name="You are editing an event created by {0} using administrator privileges." xml:space="preserve">
+    <value>Sie bearbeiten gerade ein Ereignis, das von {0} unter Verwendung von Administratorrechten erstellt wurde.</value>
+  </data>
+  <data name="You are signed in, but you do not have the required permissions to access this page. If you believe this is an error, please contact your administrator." xml:space="preserve">
+    <value>Sie sind angemeldet, aber Sie haben nicht die erforderlichen Berechtigungen, um auf diese Seite zuzugreifen. Wenn Sie glauben, dass dies ein Fehler ist, wenden Sie sich bitte an Ihren Administrator.</value>
+  </data>
+  <data name="You can access the identity admin panel at:" xml:space="preserve">
+    <value>Sie können auf das Identitätsadministrator-Panel zugreifen:</value>
+  </data>
+  <data name="You can only delete your own media." xml:space="preserve">
+    <value>Sie können nur Ihre eigenen Medien löschen.</value>
+  </data>
+  <data name="You can use the suggested secure password or enter your own." xml:space="preserve">
+    <value>Sie können das vorgeschlagene sichere Passwort verwenden oder Ihr eigenes eingeben.</value>
+  </data>
+  <data name="You don't have permission to view this album, or it doesn't exist." xml:space="preserve">
+    <value>Sie haben keine Berechtigung, dieses Album anzusehen, oder es existiert nicht.</value>
+  </data>
+  <data name="You have been banned from this server. Please contact a moderator if you believe this is an error." xml:space="preserve">
+    <value>Du wurdest von diesem Server gebannt. Bitte kontaktiere einen Moderator, wenn du glaubst, dass dies ein Fehler ist.</value>
+  </data>
+  <data name="You haven't created any albums yet" xml:space="preserve">
+    <value>Du hast noch keine Alben erstellt</value>
+  </data>
+  <data name="You left the group" xml:space="preserve">
+    <value>Du hast die Gruppe verlassen</value>
+  </data>
+  <data name="You will receive shared event alerts" xml:space="preserve">
+    <value>Sie erhalten Benachrichtigungen für geteilte Ereignisse</value>
+  </data>
+  <data name="Your account and all associated personal data have been successfully wiped from our servers." xml:space="preserve">
+    <value>Ihr Konto und alle damit verbundenen persönlichen Daten wurden erfolgreich von unseren Servern gelöscht.</value>
+  </data>
+  <data name="Your account deletion was successfully simulated (Demo Mode). You will now be logged out." xml:space="preserve">
+    <value>Ihr Account wurde erfolgreich simuliert (Demo-Modus). Sie werden nun abgemeldet.</value>
+  </data>
+  <data name="Your Account Details" xml:space="preserve">
+    <value>Ihre Kontodaten</value>
+  </data>
+  <data name="Your account has been authenticated but is not yet linked to a {0} profile. Please contact your administrator to complete your account setup." xml:space="preserve">
+    <value>Ihr Konto wurde authentifiziert, ist aber noch nicht mit einem {0} Profil verknüpft. Bitte kontaktieren Sie Ihren Administrator, um die Einrichtung Ihres Kontos abzuschließen.</value>
+  </data>
+  <data name="Your account is suspended. You cannot edit your profile." xml:space="preserve">
+    <value>Ihr Konto ist gesperrt. Sie können Ihr Profil nicht bearbeiten.</value>
+  </data>
+  <data name="Your browser does not support video playback." xml:space="preserve">
+    <value>Ihr Browser unterstützt keine Videowiedergabe.</value>
+  </data>
+  <data name="Your current version is" xml:space="preserve">
+    <value>Ihre aktuelle Version ist</value>
+  </data>
+  <data name="Your free trial for native push notifications has expired, or you do not have a license installed." xml:space="preserve">
+    <value>Ihre kostenlose Testversion für native Push-Benachrichtigungen ist abgelaufen oder Sie haben keine Lizenz installiert.</value>
+  </data>
+  <data name="Your login session has expired or could not automatically resume. Please click the button below to sign in again." xml:space="preserve">
+    <value>Ihre Login-Sitzung ist abgelaufen oder konnte nicht automatisch fortgesetzt werden. Bitte klicken Sie auf die Schaltfläche unten, um sich erneut anzumelden.</value>
+  </data>
+  <data name="Your server is not currently licensed for native mobile push notifications. A single Spokes Pass covers all mobile devices on this server." xml:space="preserve">
+    <value>Ihr Server ist derzeit nicht lizenziert für native mobile Push-Benachrichtigungen. Ein einziger Spokes-Pass deckt alle mobilen Geräte auf diesem Server ab.</value>
+  </data>
+  <data name="Your Spokes instance is enabled for Native Mobile Push Notifications." xml:space="preserve">
+    <value>Ihre Spokes-Instanz ist für Native Mobile Push Benachrichtigungen aktiviert.</value>
+  </data>
+  <data name="Your Spokes instance is licensed for Native Mobile Push Notifications." xml:space="preserve">
+    <value>Ihre Spokes-Instanz ist lizenziert für Native Mobile Push Benachrichtigungen.</value>
+  </data>
+  <data name="Your user profile could not be loaded. Please contact an administrator." xml:space="preserve">
+    <value>Ihr Benutzerprofil konnte nicht geladen werden. Bitte kontaktieren Sie einen Administrator.</value>
+  </data>
+  <data name="Your vault must be unlocked to disable encryption." xml:space="preserve">
+    <value>Ihr Tresor muss entsperrt werden, um die Verschlüsselung zu deaktivieren.</value>
+  </data>
+  <data name="You're in! Event added to your calendar." xml:space="preserve">
+    <value>Du bist jetzt! Event wurde zu deinem Kalender hinzugefügt.</value>
+  </data>
+  <data name="BrowserDoesNotSupportVideo" xml:space="preserve">
+    <value>BrowserDoesNotSupportVideo</value>
+  </data>
+  <data name="Copied" xml:space="preserve">
+    <value>Kopiert</value>
+  </data>
+  <data name="Copy" xml:space="preserve">
+    <value>Kopieren</value>
+  </data>
+  <data name="Edited" xml:space="preserve">
+    <value>Bearbeitet</value>
+  </data>
+  <data name="MoveDown" xml:space="preserve">
+    <value>Nach unten</value>
+  </data>
+  <data name="MoveUp" xml:space="preserve">
+    <value>Nach oben</value>
+  </data>
+  <data name="Yesterday" xml:space="preserve">
+    <value>Gestern</value>
+  </data>
+  <data name="{0}-Wide" xml:space="preserve">
+    <value>{0}-weit</value>
+  </data>
+  <data name="{0}-wide events are restricted to administrators by server privacy policy." xml:space="preserve">
+    <value>{0}-weite Events sind durch die Datenschutzrichtlinie auf Administratoren beschränkt.</value>
+  </data>
+  <data name="A restricted channel must have at least one {0} or {1}. Switch access type to Public if you want everyone to access." xml:space="preserve">
+    <value>Ein eingeschränkter Kanal muss mindestens einen {0} oder {1}haben. Wechseln Sie den Zugriffstyp auf Öffentlichkeit, wenn Sie möchten, dass jeder Zugriff hat.</value>
+  </data>
+  <data name="Add by email or username..." xml:space="preserve">
+    <value>Per E-Mail oder Benutzernamen hinzufügen...</value>
+  </data>
+  <data name="Add by full email address..." xml:space="preserve">
+    <value>Mit vollständiger E-Mail-Adresse hinzufügen...</value>
+  </data>
+  <data name="Add Contact" xml:space="preserve">
+    <value>Neuer Kontakt</value>
+  </data>
+  <data name="Admin Visibility" xml:space="preserve">
+    <value>Admin Sichtbarkeit</value>
+  </data>
+  <data name="All (Everyone visible)" xml:space="preserve">
+    <value>Alle (sichtbar)</value>
+  </data>
+  <data name="All Admins Discoverable" xml:space="preserve">
+    <value>Alle Admins entdeckbar</value>
+  </data>
+  <data name="Allow Organization Directory Browsing" xml:space="preserve">
+    <value>Organisationsverzeichnis-Browsing erlauben</value>
+  </data>
+  <data name="Allow Regular Users to Create Company-Wide Calendar Events" xml:space="preserve">
+    <value>Regelmäßigen Benutzern erlauben, unternehmensweite Kalenderereignisse zu erstellen</value>
+  </data>
+  <data name="Are you sure you want to delete the {0} '{1}'? This action cannot be undone. Any OpenID accounts linked to this {0} will be unlinked." xml:space="preserve">
+    <value>Sind Sie sicher, dass Sie die {0} '{1}' löschen möchten? Diese Aktion kann nicht rückgängig gemacht werden. Alle OpenID-Konten, die mit dieser {0} verknüpft sind, werden entfernt.</value>
+  </data>
+  <data name="Are you sure you want to make this channel public? All {0} in the {1} will be able to view and participate." xml:space="preserve">
+    <value>Bist du sicher, dass du diesen Kanal öffentlich machen möchtest? Alle {0} in der {1} werden in der Lage sein zu sehen und teilzunehmen.</value>
+  </data>
+  <data name="Are you sure you want to remove {0} from your contacts? You will no longer be able to message or see each other unless re-added." xml:space="preserve">
+    <value>Sind Sie sicher, dass Sie {0} von Ihren Kontakten entfernen möchten? Sie werden sich nicht mehr melden oder sehen können, wenn Sie nicht erneut hinzugefügt wurden.</value>
+  </data>
+  <data name="Base Network Scope" xml:space="preserve">
+    <value>Basisnetzwerkbereich</value>
+  </data>
+  <data name="Contact added successfully!" xml:space="preserve">
+    <value>Kontakt erfolgreich hinzugefügt!</value>
+  </data>
+  <data name="Contact added!" xml:space="preserve">
+    <value>Kontakt hinzugefügt!</value>
+  </data>
+  <data name="Contacts Only" xml:space="preserve">
+    <value>Nur Kontakte</value>
+  </data>
+  <data name="Custom Configuration" xml:space="preserve">
+    <value>Eigene Konfiguration</value>
+  </data>
+  <data name="Designated Admins Only" xml:space="preserve">
+    <value>Nur Administratoren</value>
+  </data>
+  <data name="Designated Support Admins" xml:space="preserve">
+    <value>Angegebene Support-Administratoren</value>
+  </data>
+  <data name="Disabled" xml:space="preserve">
+    <value>Deaktiviert</value>
+  </data>
+  <data name="e.g., guest@example.com" xml:space="preserve">
+    <value>z. B. guest@example.com</value>
+  </data>
+  <data name="e.g., Weekly {0} Sync" xml:space="preserve">
+    <value>z. B. wöchentlich {0} Sync</value>
+  </data>
+  <data name="Email Address or Username" xml:space="preserve">
+    <value>E-Mail-Adresse oder Benutzername</value>
+  </data>
+  <data name="Enter the full email address or exact username of the person you wish to connect with:" xml:space="preserve">
+    <value>Geben Sie die vollständige E-Mail-Adresse oder den genauen Benutzernamen der Person ein, mit der Sie sich verbinden möchten:</value>
+  </data>
+  <data name="Exact Email Only" xml:space="preserve">
+    <value>Nur exakte E-Mail</value>
+  </data>
+  <data name="Exact Email or Username" xml:space="preserve">
+    <value>Genaue E-Mail oder Benutzername</value>
+  </data>
+  <data name="Hidden (Follows base scope)" xml:space="preserve">
+    <value>Versteckt (Folgt Basisumfang)</value>
+  </data>
+  <data name="Link to this {0}" xml:space="preserve">
+    <value>Link zu diesem {0}</value>
+  </data>
+  <data name="Multiple OpenID accounts can be linked to this {0} for authentication." xml:space="preserve">
+    <value>Mehrere OpenID-Konten können zur Authentifizierung mit diesem {0} verknüpft werden.</value>
+  </data>
+  <data name="My Contacts" xml:space="preserve">
+    <value>Meine Kontakte</value>
+  </data>
+  <data name="No Connected Contacts" xml:space="preserve">
+    <value>Keine verbundenen Kontakte</value>
+  </data>
+  <data name="No contacts match your search." xml:space="preserve">
+    <value>Keine Kontakte entsprechen Ihrer Suche.</value>
+  </data>
+  <data name="No leader assigned to this {0}." xml:space="preserve">
+    <value>Kein diesem {0} zugewiesener Anführer zugewiesen.</value>
+  </data>
+  <data name="No OpenID accounts are linked to this {0}." xml:space="preserve">
+    <value>Keine OpenID-Konten sind mit diesem {0} verknüpft.</value>
+  </data>
+  <data name="None (Isolated)" xml:space="preserve">
+    <value>Keine (verlostet)</value>
+  </data>
+  <data name="Open (Standard company directory and search)" xml:space="preserve">
+    <value>Öffnen (Standardverzeichnis und Suche)</value>
+  </data>
+  <data name="Open Partial Search" xml:space="preserve">
+    <value>Teilsuche öffnen</value>
+  </data>
+  <data name="Out-of-Band Discovery Method" xml:space="preserve">
+    <value>Out-of-Band Discovery Methode</value>
+  </data>
+  <data name="Phone Number" xml:space="preserve">
+    <value>Telefonnummer</value>
+  </data>
+  <data name="Privacy Preset" xml:space="preserve">
+    <value>Datenschutzvorlage</value>
+  </data>
+  <data name="Private Contacts Only (No directory; connect via exact credentials)" xml:space="preserve">
+    <value>Nur private Kontakte (kein Verzeichnis; über exakte Zugangsdaten verbinden)</value>
+  </data>
+  <data name="Remove Contact" xml:space="preserve">
+    <value>Kontakt entfernen</value>
+  </data>
+  <data name="Removed {0} from contacts." xml:space="preserve">
+    <value>{0} wurde von Kontakten entfernt.</value>
+  </data>
+  <data name="Same {0} Only" xml:space="preserve">
+    <value>Nur {0} gleich</value>
+  </data>
+  <data name="Search Contacts..." xml:space="preserve">
+    <value>Kontakte suchen...</value>
+  </data>
+  <data name="Stealth / Support Only (Users can only see and reach staff)" xml:space="preserve">
+    <value>Tarnung / Nur Support (Benutzer können nur Personal sehen und erreichen)</value>
+  </data>
+  <data name="Team + Exact Discovery ({0} silo with exact email/username lookup)" xml:space="preserve">
+    <value>Team + Exact Discovery ({0} Silo mit exakter E-Mail/Benutzernamenssuche)</value>
+  </data>
+  <data name="Team Silo (Isolated to members within shared {0})" xml:space="preserve">
+    <value>Team Silo (verlötet an Mitglieder innerhalb der geteilten {0})</value>
+  </data>
+  <data name="This event is marked &lt;strong&gt;{0}-Wide&lt;/strong&gt; and will appear on all {0} calendars. You can still tag specific attendees or {1} below." xml:space="preserve">
+    <value>Dieser Termin ist mit &lt;strong&gt;{0}-Wide&lt;/strong&gt; markiert und wird auf allen {0} Kalendern erscheinen. Sie können weiterhin bestimmte Teilnehmer oder {1} unten markieren.</value>
+  </data>
+  <data name="User is already in your contacts." xml:space="preserve">
+    <value>Benutzer ist bereits in Ihren Kontakten.</value>
+  </data>
+  <data name="User not found." xml:space="preserve">
+    <value>Benutzer nicht gefunden.</value>
+  </data>
+  <data name="You don't have any external contacts connected yet. Use the 'Add Contact' button above to connect by entering an email address or username." xml:space="preserve">
+    <value>Sie haben noch keine externen Kontakte verbunden. Benutzen Sie die Schaltfläche 'Kontakt hinzufügen', um sich zu verbinden, indem Sie eine E-Mail-Adresse oder einen Benutzernamen eingeben.</value>
+  </data>
+  <data name="You don't have any external contacts connected. Contact discovery is currently disabled by server policy." xml:space="preserve">
+    <value>Sie haben keine externen Kontakte verbunden. Kontakterkennung ist derzeit durch Server-Richtlinien deaktiviert.</value>
+  </data>
+  <data name="BusinessEmail" xml:space="preserve">
+    <value>Geschäfts-E-Mail</value>
+  </data>
+  <data name="Company" xml:space="preserve">
+    <value>Firma</value>
+  </data>
+  <data name="Employee" xml:space="preserve">
+    <value>Mitarbeiter</value>
+  </data>
+  <data name="Employees" xml:space="preserve">
+    <value>Mitarbeiter</value>
+  </data>
+  <data name="Favorites" xml:space="preserve">
+    <value>Favoriten</value>
+  </data>
+  <data name="Group" xml:space="preserve">
+    <value>Gruppe</value>
+  </data>
+  <data name="Groups" xml:space="preserve">
+    <value>Gruppen</value>
+  </data>
+  <data name="Member" xml:space="preserve">
+    <value>Mitglied</value>
+  </data>
+  <data name="Menu" xml:space="preserve">
+    <value>Menü</value>
+  </data>
+  <data name="SelectLanguage" xml:space="preserve">
+    <value>Sprache auswählen</value>
+  </data>
+  <data name="Server" xml:space="preserve">
+    <value>Server</value>
+  </data>
+  <data name="Team" xml:space="preserve">
+    <value>Team</value>
+  </data>
+  <data name="Teams" xml:space="preserve">
+    <value>Teams</value>
+  </data>
+</root>

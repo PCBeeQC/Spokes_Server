@@ -1,0 +1,206 @@
+@using Spokes_Server.Core.Data
+@using Spokes_Server.Core.Constants
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Components.Shared
+@inject Database Db
+@inject IDialogService DialogService
+@inject ISnackbar Snackbar
+@inject IStringLocalizer<BusinessResources> BizLoc
+@inject IStringLocalizer<AppResources> Loc
+
+<MudDialog>
+    <DialogContent>
+        <MudGrid>
+            <!-- Left Side: Bill Info & Payments -->
+            <MudItem xs="12" md="@(string.IsNullOrEmpty(Record.AttachmentPath) ? 12 : 6)">
+                <!-- Header card -->
+                <MudPaper Elevation="0" Outlined="true" Class="pa-4 mb-3">
+                    <div class="d-flex align-center justify-space-between flex-wrap gap-2">
+                        <div>
+                            <MudText Typo="Typo.h6">@Expense.Name</MudText>
+                            <MudText Typo="Typo.body2" Color="Color.Secondary">
+                                @(!string.IsNullOrWhiteSpace(Expense.Supplier) ? Expense.Supplier : BizLoc["No Supplier"].Value)
+                            </MudText>
+                        </div>
+                        <div class="d-flex align-center gap-1">
+                            <MudChip T="string" Size="Size.Small" Color="Color.Tertiary">@Expense.Frequency</MudChip>
+                            <MudChip T="string" Size="Size.Small" Color="@(Record.IsPaid ? Color.Success : Color.Warning)">
+                                @(Record.IsPaid ? BizLoc["Paid"].Value : BizLoc["Pending"].Value)
+                            </MudChip>
+                        </div>
+                    </div>
+                </MudPaper>
+
+                <!-- Billing & Payment Details -->
+                <MudGrid Spacing="2" Class="mb-3">
+                    <MudItem xs="6">
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">@BizLoc["Billing Date / Date Received"]</MudText>
+                        <MudText Typo="Typo.body1"><b>@Record.Date.ToShortDateString()</b></MudText>
+                    </MudItem>
+                    <MudItem xs="6">
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">@BizLoc["Due Date"]</MudText>
+                        <MudText Typo="Typo.body1"><b>@(Record.DueDate?.ToShortDateString() ?? "-")</b></MudText>
+                    </MudItem>
+                    <MudItem xs="6">
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">@BizLoc["Total Amount"]</MudText>
+                        <MudText Typo="Typo.body1" Color="Color.Primary"><b>@Record.Amount.ToString("C2")</b></MudText>
+                    </MudItem>
+                    <MudItem xs="6">
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">@BizLoc["Date Paid"]</MudText>
+                        <MudText Typo="Typo.body1"><b>@(Record.DatePaid?.ToShortDateString() ?? "-")</b></MudText>
+                    </MudItem>
+                </MudGrid>
+
+                <!-- Payments Recorded -->
+                <MudDivider Class="my-3" />
+                <div class="d-flex align-center justify-space-between mb-2">
+                    <MudText Typo="Typo.subtitle2">@BizLoc["Payments Recorded"] (@Record.AmountPaid.ToString("C2"))</MudText>
+                    @if (Record.BalanceDue > 0)
+                    {
+                        <MudText Typo="Typo.caption" Color="Color.Warning">
+                            <b>@BizLoc["Balance Due"]: @Record.BalanceDue.ToString("C2")</b>
+                        </MudText>
+                    }
+                </div>
+
+                @if (Record.Payments.Any())
+                {
+                    <MudTable Items="@Record.Payments" Dense="true" Elevation="0" Outlined="true" Class="mb-3">
+                        <HeaderContent>
+                            <MudTh>@BizLoc["Date"]</MudTh>
+                            <MudTh>@BizLoc["Amount"]</MudTh>
+                            <MudTh>@BizLoc["Method"]</MudTh>
+                            <MudTh>@BizLoc["Reference"]</MudTh>
+                        </HeaderContent>
+                        <RowTemplate Context="p">
+                            <MudTd>@p.Date.ToShortDateString()</MudTd>
+                            <MudTd>@p.Amount.ToString("C2")</MudTd>
+                            <MudTd>@(!string.IsNullOrEmpty(p.Method) ? p.Method : "-")</MudTd>
+                            <MudTd>@(!string.IsNullOrEmpty(p.Reference) ? p.Reference : "-")</MudTd>
+                        </RowTemplate>
+                    </MudTable>
+                }
+                else if (Record.DatePaid.HasValue)
+                {
+                    <MudText Typo="Typo.body2" Class="text-muted mb-3">
+                        @string.Format(BizLoc["Marked as paid on {0} for {1}."].Value, Record.DatePaid.Value.ToShortDateString(), Record.Amount.ToString("C2"))
+                    </MudText>
+                }
+                else
+                {
+                    <MudText Typo="Typo.caption" Class="text-muted mb-3 d-block">
+                        @BizLoc["No payments recorded."]
+                    </MudText>
+                }
+
+                <!-- Attachment Details -->
+                <MudDivider Class="my-3" />
+                <MudText Typo="Typo.subtitle2" Class="mb-2">@BizLoc["Attached Invoice / Receipt"]</MudText>
+                @if (!string.IsNullOrEmpty(Record.AttachmentPath))
+                {
+                    <div class="d-flex align-center gap-2 flex-wrap">
+                        <MudIcon Icon="@Icons.Material.Filled.AttachFile" Color="Color.Primary" />
+                        <MudText Typo="Typo.body2">
+                            @(!string.IsNullOrEmpty(Record.AttachmentName) ? Record.AttachmentName : BizLoc["Attached Invoice"].Value)
+                        </MudText>
+                        <MudButton Variant="Variant.Outlined" Size="Size.Small" StartIcon="@Icons.Material.Filled.OpenInNew"
+                                   Href="@Record.AttachmentPath" Target="_blank">
+                            @BizLoc["Open in New Tab"]
+                        </MudButton>
+                    </div>
+                }
+                else
+                {
+                    <div class="d-flex align-center gap-2 flex-wrap">
+                        <MudText Typo="Typo.caption" Class="text-muted">@BizLoc["No attachment uploaded."]</MudText>
+                        <ApiFileUpload Category="recurringcosts" ContextId="@Expense.Id" MaximumFileCount="1"
+                                       OnUploadCompleted="HandleUploadCompleted"
+                                       OnUploadError='(e) => Snackbar.Add($"Upload failed: {e}", Severity.Error)'>
+                            <CustomContent>
+                                <MudButton Variant="Variant.Outlined" Color="Color.Info" Size="Size.Small"
+                                           StartIcon="@Icons.Material.Filled.CloudUpload">
+                                    @BizLoc["Upload Attachment"]
+                                </MudButton>
+                            </CustomContent>
+                        </ApiFileUpload>
+                    </div>
+                }
+
+                <!-- Profile Notes -->
+                @if (!string.IsNullOrWhiteSpace(Expense.Description))
+                {
+                    <MudDivider Class="my-3" />
+                    <MudText Typo="Typo.subtitle2">@BizLoc["Profile Notes"]</MudText>
+                    <MudText Typo="Typo.body2" Class="text-muted">@Expense.Description</MudText>
+                }
+            </MudItem>
+
+            <!-- Right Side: PDF Preview -->
+            @if (!string.IsNullOrEmpty(Record.AttachmentPath))
+            {
+                <MudItem xs="12" md="6">
+                    <MudPaper Elevation="0" Outlined="true" Class="pa-2" Style="height: 100%; min-height: 500px;">
+                        <iframe src="@Record.AttachmentPath" style="width:100%; height:100%; min-height: 500px; border:none;"></iframe>
+                    </MudPaper>
+                </MudItem>
+            }
+        </MudGrid>
+    </DialogContent>
+    <DialogActions>
+        <MudButton Variant="Variant.Outlined" Color="Color.Default" StartIcon="@Icons.Material.Filled.Settings"
+                   OnClick="OpenProfileEditor">
+            @BizLoc["Manage Recurring Profile"]
+        </MudButton>
+        <MudSpacer />
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="Close">@Loc["Close"]</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
+    [Parameter] public RecurringExpense Expense { get; set; } = default!;
+    [Parameter] public RecurringBillRecord Record { get; set; } = default!;
+
+    private void Close() => MudDialog.Close(DialogResult.Ok(Expense));
+
+    private async Task OpenProfileEditor()
+    {
+        var parameters = new DialogParameters<RecurringExpenseDialog>
+        {
+            { x => x.Expense, Expense },
+            { x => x.IsNew, false },
+            { x => x.ActiveTabIndex, 0 }
+        };
+        var dialog = await DialogService.ShowAsync<RecurringExpenseDialog>(
+            $"{Expense.Name}", parameters, new DialogOptions
+            {
+                MaxWidth = MaxWidth.Medium,
+                FullWidth = true,
+                CloseButton = true
+            });
+        var result = await dialog.Result;
+        if (result != null && !result.Canceled && result.Data is RecurringExpense updated)
+        {
+            Db.RecurringExpenses.Save(updated);
+            Expense = updated;
+            var refreshedRecord = Expense.History.FirstOrDefault(h => h.Id == Record.Id);
+            if (refreshedRecord != null)
+            {
+                Record = refreshedRecord;
+            }
+            StateHasChanged();
+        }
+    }
+
+    private void HandleUploadCompleted(List<ApiFileUpload.UploadResult> results)
+    {
+        var res = results.FirstOrDefault();
+        if (res == null) return;
+        var filePath = res.FilePath.StartsWith("/spokesapi/files/") ? res.FilePath : $"/spokesapi/files/download/{res.FilePath}";
+        Record.AttachmentPath = filePath;
+        Record.AttachmentName = res.FileName;
+        Db.RecurringExpenses.Save(Expense);
+        Snackbar.Add(BizLoc["Attachment uploaded successfully"], Severity.Success);
+        StateHasChanged();
+    }
+}

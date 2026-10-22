@@ -1,6 +1,7 @@
 using System;
 using System.Diagnostics;
 using System.IO;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Spokes_Server.Core.Models.Core;
 
@@ -9,11 +10,16 @@ namespace Spokes_Server.Core.Services.Communication.Voice;
 public class LiveKitService
 {
     private readonly ILogger<LiveKitService> _logger;
+    private readonly IConfiguration? _configuration;
 
-    public LiveKitService(ILogger<LiveKitService> logger)
+    public LiveKitService(ILogger<LiveKitService> logger, IConfiguration? configuration = null)
     {
         _logger = logger;
+        _configuration = configuration;
     }
+
+    private string? GetSetting(string key) =>
+        _configuration?[key] ?? Environment.GetEnvironmentVariable(key);
 
     /// <summary>
     /// Generates livekit.yaml and restarts the LiveKit daemon via supervisorctl.
@@ -23,11 +29,11 @@ public class LiveKitService
     {
         try
         {
-            var voicePort = Environment.GetEnvironmentVariable("Spokes_Voice_Port") ?? "7880";
+            var voicePort = GetSetting("Spokes_Voice_Port") ?? "7880";
 
-            var envFallback = Environment.GetEnvironmentVariable("Spokes_Voice_Fallback_Port");
-            var envUdpStart = Environment.GetEnvironmentVariable("Spokes_Voice_UDP_Start_Port");
-            var envUdpCount = Environment.GetEnvironmentVariable("Spokes_VOICE_UDP_PORT_COUNT");
+            var envFallback = GetSetting("Spokes_Voice_Fallback_Port");
+            var envUdpStart = GetSetting("Spokes_Voice_UDP_Start_Port");
+            var envUdpCount = GetSetting("Spokes_VOICE_UDP_PORT_COUNT");
 
             var fallbackPort = !systemConfig.IsSetupComplete && !string.IsNullOrWhiteSpace(envFallback) ? int.Parse(envFallback) : systemConfig.LiveKitFallbackPort;
             var udpStartPort = !systemConfig.IsSetupComplete && !string.IsNullOrWhiteSpace(envUdpStart) ? int.Parse(envUdpStart) : systemConfig.LiveKitUdpStartPort;
@@ -38,7 +44,7 @@ public class LiveKitService
                 udpEndPort = udpStartPort + int.Parse(envUdpCount) - 1;
             }
 
-            var envLogLevel = Environment.GetEnvironmentVariable("Spokes_LiveKit_Log_Level");
+            var envLogLevel = GetSetting("Spokes_LiveKit_Log_Level");
             var logLevel = !string.IsNullOrWhiteSpace(envLogLevel) ? envLogLevel : "info";
 
             var livekitYaml = $@"
@@ -83,6 +89,29 @@ audio:
         catch (Exception ex)
         {
             _logger.LogError(ex, "[LiveKit] Failed to generate configuration or reload LiveKit daemon.");
+        }
+    }
+
+    /// <summary>
+    /// Evicts a participant from a LiveKit room to prevent WebRTC lingering after leaving a voice channel.
+    /// </summary>
+    public virtual async Task RemoveParticipantAsync(string channelId, string userId, string apiKey, string apiSecret, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var voicePort = GetSetting("Spokes_Voice_Port") ?? "7880";
+            var liveKitUrl = $"http://127.0.0.1:{voicePort}";
+            var roomServiceClient = new Livekit.Server.Sdk.Dotnet.RoomServiceClient(liveKitUrl, apiKey, apiSecret);
+            var roomName = $"channel-{channelId}";
+            await roomServiceClient.RemoveParticipant(new Livekit.Server.Sdk.Dotnet.RoomParticipantIdentity
+            {
+                Room = roomName,
+                Identity = userId
+            });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "[LiveKit] Failed to evict user {UserId} from LiveKit room channel-{ChannelId}: {Message}", userId, channelId, ex.Message);
         }
     }
 }

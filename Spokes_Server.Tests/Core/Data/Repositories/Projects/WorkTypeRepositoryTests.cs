@@ -1,42 +1,14 @@
 using System.Text.Json;
-using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.Logging;
-using Moq;
-using Spokes_Server.Core.Data;
 using Spokes_Server.Core.Data.Repositories.Projects;
 using Spokes_Server.Core.Models.Projects;
+using Spokes_Server.Core.Services.Migrations;
+using Spokes_Server.Tests.Helpers;
+using Xunit;
 
 namespace Spokes_Server.Tests.Core.Data.Repositories.Projects;
 
-public class WorkTypeRepositoryTests : IDisposable
+public class WorkTypeRepositoryTests : RepositoryTestFixture<WorkTypeRepository>
 {
-    private readonly string _testDataDir;
-    private readonly IConfiguration _config;
-    private readonly DiskPersistenceService _persistence;
-    private readonly WorkTypeRepository _repository;
-
-    public WorkTypeRepositoryTests()
-    {
-        _testDataDir = Path.Combine(Path.GetTempPath(), $"Spokes_Test_WorkTypeRepo_{Guid.NewGuid()}");
-        Directory.CreateDirectory(_testDataDir);
-
-        var configDict = new Dictionary<string, string?> { ["DataPath"] = _testDataDir };
-        _config = new ConfigurationBuilder().AddInMemoryCollection(configDict).Build();
-
-        _persistence = new DiskPersistenceService(new Mock<ILogger<DiskPersistenceService>>().Object);
-        _repository = new WorkTypeRepository(_persistence, _config);
-    }
-
-    public void Dispose()
-    {
-        _persistence.Dispose();
-        if (Directory.Exists(_testDataDir))
-        {
-            try { Directory.Delete(_testDataDir, true); }
-            catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"Cleanup error: {ex.Message}"); }
-        }
-    }
-
     [Fact]
     public void LoadFromDisk_NoWorkTypes_DoesNothing()
     {
@@ -44,14 +16,14 @@ public class WorkTypeRepositoryTests : IDisposable
         // Disk is empty
 
         // Act
-        _repository.LoadFromDisk();
+        _repo.LoadFromDisk();
 
         // Assert
-        Assert.Empty(_repository.GetAll());
+        Assert.Empty(_repo.GetAll());
     }
 
     [Fact]
-    public void LoadFromDisk_WorkTypeWithNoSubTasks_AddsGeneralSubTaskAndSaves()
+    public void LoadFromDisk_WorkTypeWithNoSubTasks_LoadsWithoutModifying()
     {
         // Arrange
         var workType = new WorkType { Id = Guid.NewGuid().ToString(), Name = "Test WorkType" };
@@ -64,13 +36,12 @@ public class WorkTypeRepositoryTests : IDisposable
         File.WriteAllText(filePath, JsonSerializer.Serialize(workType));
 
         // Act
-        _repository.LoadFromDisk();
+        _repo.LoadFromDisk();
 
         // Assert
-        var loaded = _repository.GetById(workType.Id);
+        var loaded = _repo.GetById(workType.Id);
         Assert.NotNull(loaded);
-        Assert.Single(loaded.SubTasks);
-        Assert.Equal("General", loaded.SubTasks[0].Name);
+        Assert.Empty(loaded.SubTasks);
     }
 
     [Fact]
@@ -87,12 +58,34 @@ public class WorkTypeRepositoryTests : IDisposable
         File.WriteAllText(filePath, JsonSerializer.Serialize(workType));
 
         // Act
-        _repository.LoadFromDisk();
+        _repo.LoadFromDisk();
 
         // Assert
-        var loaded = _repository.GetById(workType.Id);
+        var loaded = _repo.GetById(workType.Id);
         Assert.NotNull(loaded);
         Assert.Single(loaded.SubTasks);
         Assert.Equal("Custom Task", loaded.SubTasks[0].Name);
+    }
+
+    [Fact]
+    public async Task WorkTypeSubTaskMigrationStep_WorkTypeWithNoSubTasks_AddsGeneralSubTask()
+    {
+        // Arrange
+        var workType = new WorkType { Id = Guid.NewGuid().ToString(), Name = "Migrated WorkType" };
+        workType.SubTasks.Clear();
+        _repo.Save(workType);
+
+        var step = new WorkTypeSubTaskMigrationStep(_repo);
+        Assert.Equal("20260106_WorkTypeDefaultSubTask", step.MigrationKey);
+        Assert.Equal(60, step.Order);
+
+        // Act
+        await step.ExecuteAsync();
+
+        // Assert
+        var updated = _repo.GetById(workType.Id);
+        Assert.NotNull(updated);
+        Assert.Single(updated.SubTasks);
+        Assert.Equal("General", updated.SubTasks[0].Name);
     }
 }

@@ -1,0 +1,246 @@
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Services.Accounting
+@using Spokes_Server.Core.Services.Storage
+@inject Database Db
+@inject ISnackbar Snackbar
+@inject UserService UserService
+@inject IFileService FileService
+
+<MudDialog>
+    <DialogContent>
+        <MudForm>
+            <MudGrid Spacing="2" Class="mt-0">
+                <MudItem xs="12" sm="6">
+                    <MudDatePicker @bind-Date="date" Label="Date" ReadOnly="ReadOnly" Variant="Variant.Outlined" Margin="Margin.Dense" ShrinkLabel="true" />
+                </MudItem>
+                <MudItem xs="12" sm="6">
+                    <MudSelect T="string" @bind-Value="Item.ProjectId" Label="Project"
+                        AnchorOrigin="Origin.BottomCenter" ReadOnly="ReadOnly" Variant="Variant.Outlined" Margin="Margin.Dense" ShrinkLabel="true">
+                        @foreach (var p in Projects)
+                        {
+                            <MudSelectItem Value="@p.Id">@p.DisplayName</MudSelectItem>
+                        }
+                    </MudSelect>
+                </MudItem>
+
+                <MudItem xs="12">
+                    <MudTextField @bind-Value="Item.Description" Label="Description" Lines="2" ReadOnly="ReadOnly" Variant="Variant.Outlined" Margin="Margin.Dense" ShrinkLabel="true" />
+                </MudItem>
+
+                <MudItem xs="6">
+                    <MudSwitch T="bool" Value="Item.IsKilometrage" ValueChanged="@OnKilometrageChanged" Label="Kilometrage?" Color="Color.Primary"
+                        ReadOnly="ReadOnly" />
+                </MudItem>
+                <MudItem xs="6">
+                    <MudCheckBox T="bool" Value="Item.IsTaxExempt" ValueChanged="@OnTaxExemptChanged" Label="Tax Exempt (0% TPS/TVQ)" Color="Color.Primary"
+                        Disabled="ReadOnly" Dense="true" />
+                </MudItem>
+
+                @if (Item.IsKilometrage)
+                {
+                    <MudItem xs="12" sm="6">
+                        <MudNumericField T="decimal" Value="Item.Kilometers" ValueChanged="@OnKilometersChanged" Label="Distance (km)" Adornment="Adornment.End"
+                            AdornmentText="km" ReadOnly="ReadOnly" Variant="Variant.Outlined" Margin="Margin.Dense" ShrinkLabel="true" />
+                    </MudItem>
+                    <MudItem xs="12" sm="6">
+                        <MudNumericField Value="Item.KilometrageRate" Label="Rate ($/km)" ReadOnly="true"
+                            Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.AttachMoney" Variant="Variant.Outlined" Margin="Margin.Dense" ShrinkLabel="true" />
+                    </MudItem>
+                    <MudItem xs="12" sm="6">
+                        <MudText Typo="Typo.h6">Total: @Item.Total.ToString("C")</MudText>
+                    </MudItem>
+                    <MudItem xs="12" sm="6">
+                        <MudTextField @bind-Value="Item.GlAccountCode" Label="GL Account (Sage 50)" Placeholder="e.g. 5755" ReadOnly="ReadOnly" Variant="Variant.Outlined" Margin="Margin.Dense" ShrinkLabel="true" />
+                    </MudItem>
+                }
+                else
+                {
+                    <MudItem xs="12" sm="6">
+                        <MudNumericField T="decimal" Value="Item.Amount" ValueChanged="@OnAmountChanged" Label="Total Receipt Amount" Adornment="Adornment.Start"
+                            AdornmentIcon="@Icons.Material.Filled.AttachMoney" ReadOnly="ReadOnly" Variant="Variant.Outlined" Margin="Margin.Dense" ShrinkLabel="true" />
+                    </MudItem>
+                    <MudItem xs="12" sm="6">
+                        <MudTextField @bind-Value="Item.GlAccountCode" Label="GL Account (Sage 50)" Placeholder="e.g. 5750" ReadOnly="ReadOnly" Variant="Variant.Outlined" Margin="Margin.Dense" ShrinkLabel="true" />
+                    </MudItem>
+
+                    <MudItem xs="12" sm="4">
+                        <MudNumericField T="decimal" @bind-Value="Item.SubTotal" Label="Subtotal (Before Tax)" Adornment="Adornment.Start"
+                            AdornmentIcon="@Icons.Material.Filled.AttachMoney" ReadOnly="ReadOnly" Variant="Variant.Outlined" Margin="Margin.Dense" ShrinkLabel="true" />
+                    </MudItem>
+                    <MudItem xs="6" sm="4">
+                        <MudNumericField T="decimal" @bind-Value="Item.TpsAmount" Label="TPS (5%)" Adornment="Adornment.Start"
+                            AdornmentIcon="@Icons.Material.Filled.AttachMoney" ReadOnly="@(ReadOnly || Item.IsTaxExempt)" Variant="Variant.Outlined" Margin="Margin.Dense" ShrinkLabel="true" />
+                    </MudItem>
+                    <MudItem xs="6" sm="4">
+                        <MudNumericField T="decimal" @bind-Value="Item.TvqAmount" Label="TVQ (9.975%)" Adornment="Adornment.Start"
+                            AdornmentIcon="@Icons.Material.Filled.AttachMoney" ReadOnly="@(ReadOnly || Item.IsTaxExempt)" Variant="Variant.Outlined" Margin="Margin.Dense" ShrinkLabel="true" />
+                    </MudItem>
+
+                    <MudItem xs="12">
+                        @if (!ReadOnly)
+                        {
+                            <ApiFileUpload Category="expenses" ContextId="@ReportId" MaximumFileCount="1"
+                                           OnUploadCompleted="HandleReceiptApiUploaded"
+                                           OnUploadError='(e) => Snackbar.Add($"Upload failed: {e}", Severity.Error)'>
+                                <CustomContent>
+                                    <MudButton Variant="Variant.Outlined" Color="Color.Primary"
+                                               StartIcon="@Icons.Material.Filled.CloudUpload">
+                                        @(string.IsNullOrEmpty(Item.ReceiptPath) ? "Upload Receipt" : "Change Receipt")
+                                    </MudButton>
+                                </CustomContent>
+                            </ApiFileUpload>
+                        }
+                        @if (!string.IsNullOrEmpty(Item.ReceiptPath))
+                        {
+                            <div class="d-flex align-center gap-2 mt-2">
+                                <FileAttachmentChip FileName="@System.IO.Path.GetFileName(Item.ReceiptPath)"
+                                                    FilePath="@Item.ReceiptPath"
+                                                    ReadOnly="@ReadOnly"
+                                                    OnRemove="@(async _ => await RemoveReceipt())" />
+                            </div>
+                        }
+                    </MudItem>
+                }
+            </MudGrid>
+        </MudForm>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">@(ReadOnly ? "Close" : "Cancel")</MudButton>
+            @if (!ReadOnly)
+        {
+            <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="Submit">Save</MudButton>
+        }
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+    [Parameter] public ExpenseItem Item { get; set; } = default!;
+    [Parameter] public string ReportId { get; set; } = "";
+    [Parameter] public bool ReadOnly { get; set; }
+
+    private DateTime? date { get => Item.Date; set => Item.Date = value ?? DateTime.Today; }
+
+    // Cache projects
+    private List<Project> Projects = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        var user = await UserService.GetEmployeeAsync();
+
+        if (user != null)
+        {
+            if (user.IsAdmin)
+            {
+                Projects = Db.Projects.GetAll().Where(p => p.IsActive).OrderBy(p => p.DisplayName).ToList();
+            }
+            else
+            {
+                var all = Db.Projects.GetAll().Where(p => p.IsActive);
+                List<Project> filtered = [];
+
+                foreach (var p in all)
+                {
+                    if (p.AccessPolicy == ProjectAccessPolicy.Public)
+                    {
+                        filtered.Add(p);
+                    }
+                    else
+                    {
+                        if (p.AllowedUserIds.Contains(user.Id) ||
+                        (!string.IsNullOrEmpty(user.TeamId) && p.AllowedTeamIds.Contains(user.TeamId)))
+                        {
+                            filtered.Add(p);
+                        }
+                    }
+                }
+                Projects = filtered.OrderBy(p => p.DisplayName).ToList();
+            }
+        }
+        else
+        {
+            Projects = Db.Projects.GetAll().Where(p => p.IsActive && p.AccessPolicy == ProjectAccessPolicy.Public).OrderBy(p =>
+            p.DisplayName).ToList();
+        }
+
+        if (Item.KilometrageRate == 0)
+        {
+            var profile = Db.CompanyProfile.Get();
+            Item.KilometrageRate = profile.KilometrageRate;
+        }
+
+        if (Item.Total > 0 && Item.SubTotal == 0 && Item.TpsAmount == 0 && Item.TvqAmount == 0)
+        {
+            RecalculateTaxes();
+        }
+    }
+
+    private void OnKilometrageChanged(bool isKm)
+    {
+        Item.IsKilometrage = isKm;
+        RecalculateTaxes();
+    }
+
+    private void OnKilometersChanged(decimal km)
+    {
+        Item.Kilometers = km;
+        RecalculateTaxes();
+    }
+
+    private void OnAmountChanged(decimal amount)
+    {
+        Item.Amount = amount;
+        RecalculateTaxes();
+    }
+
+    private void OnTaxExemptChanged(bool isExempt)
+    {
+        Item.IsTaxExempt = isExempt;
+        RecalculateTaxes();
+    }
+
+    private void RecalculateTaxes()
+    {
+        var breakdown = FinancialCalculationEngine.CalculateFromGrandTotal(Item.Total, Item.IsTaxExempt);
+        Item.SubTotal = breakdown.SubTotal;
+        Item.TpsAmount = breakdown.TpsAmount;
+        Item.TvqAmount = breakdown.TvqAmount;
+    }
+
+    private async Task RemoveReceipt()
+    {
+        if (!string.IsNullOrEmpty(Item.ReceiptPath))
+        {
+            await FileService.DeleteAsync(Item.ReceiptPath);
+        }
+        Item.ReceiptPath = "";
+        StateHasChanged();
+    }
+
+    private async Task HandleReceiptApiUploaded(List<ApiFileUpload.UploadResult> results)
+    {
+        var result = results.FirstOrDefault();
+        if (result != null)
+        {
+            if (!string.IsNullOrEmpty(Item.ReceiptPath) && Item.ReceiptPath != result.FilePath)
+            {
+                await FileService.DeleteAsync(Item.ReceiptPath);
+            }
+            Item.ReceiptPath = result.FilePath;
+            Snackbar.Add("Receipt uploaded", Severity.Success);
+            StateHasChanged();
+        }
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+    private void Submit()
+    {
+        if (Item.Total > 0 && Item.SubTotal == 0 && Item.TpsAmount == 0 && Item.TvqAmount == 0)
+        {
+            RecalculateTaxes();
+        }
+        MudDialog.Close(DialogResult.Ok(Item));
+    }
+}
+
+

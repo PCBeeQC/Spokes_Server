@@ -1,0 +1,405 @@
+@using Spokes_Server.Aggregate
+@using Spokes_Server.Core.Constants
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Services.Accounting
+@using Spokes_Server.Components.Shared
+@using Spokes_Server.Core.Services.Storage
+@inject Database Db
+@inject CompanyBillInboxService BillInboxService
+@inject ISnackbar Snackbar
+@inject AuthenticationStateProvider AuthStateProvider
+@inject UserService UserService
+@inject IFileService FileService
+@inject IStringLocalizer<BusinessResources> BizLoc
+@inject IStringLocalizer<AppResources> Loc
+
+<MudDialog>
+    <DialogContent>
+        <MudText Typo="Typo.body2" Class="mb-3 text-muted">
+            @BizLoc["Record this incoming bill notification into an existing recurring bill profile. The bill amount and dates will be added to the recurring profile's billing history."]
+        </MudText>
+
+        @if (Email != null)
+        {
+            <MudPaper Elevation="0" Outlined="true" Class="pa-3 mb-3" Style="background-color: var(--mud-palette-background-grey);">
+                <MudText Typo="Typo.caption" Color="Color.Secondary" Style="font-weight: 700; text-transform: uppercase;">
+                    @BizLoc["Incoming Email"]
+                </MudText>
+                <div class="d-flex align-center justify-space-between flex-wrap gap-2 mt-1">
+                    <div>
+                        <MudText Typo="Typo.body2"><b>@(!string.IsNullOrWhiteSpace(Email.FromName) ? Email.FromName : Email.FromAddress)</b></MudText>
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">@Email.Subject</MudText>
+                    </div>
+                    <div class="text-right">
+                        @if (Email.DetectedAmount.HasValue)
+                        {
+                            <MudChip T="string" Color="Color.Primary" Size="Size.Small" Variant="Variant.Outlined">
+                                @Email.DetectedAmount.Value.ToString("C2") @(!string.IsNullOrEmpty(Email.DetectedCurrency) ? Email.DetectedCurrency : "CAD")
+                            </MudChip>
+                        }
+                        <MudText Typo="Typo.caption" Color="Color.Secondary" Class="d-block">@Email.Date.LocalDateTime.ToShortDateString()</MudText>
+                    </div>
+                </div>
+            </MudPaper>
+        }
+
+        <MudGrid>
+            <!-- Select Recurring Expense Profile -->
+            <MudItem xs="12">
+                <MudSelect T="RecurringExpense" Label="@BizLoc["Select Recurring Bill Profile"]"
+                           Value="_selectedExpense" ValueChanged="OnSelectedExpenseChanged"
+                           Variant="Variant.Outlined" Required="true" Dense="true"
+                           ToStringFunc="@(e => e == null ? "" : $"{e.Name} ({(!string.IsNullOrWhiteSpace(e.Supplier) ? e.Supplier + " • " : "")}{e.Frequency} • {e.Amount:C2})")">
+                    @foreach (var exp in _recurringExpenses)
+                    {
+                        <MudSelectItem Value="@exp">
+                            <div class="d-flex align-center justify-space-between w-100">
+                                <div>
+                                    <b>@exp.Name</b>
+                                    @if (!string.IsNullOrWhiteSpace(exp.Supplier))
+                                    {
+                                        <span class="text-muted ml-1">• @exp.Supplier</span>
+                                    }
+                                </div>
+                                <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Info" Class="ml-2">
+                                    @exp.Frequency — @exp.Amount.ToString("C2")
+                                </MudChip>
+                            </div>
+                        </MudSelectItem>
+                    }
+                </MudSelect>
+            </MudItem>
+
+            @if (_selectedExpense != null)
+            {
+                <!-- Billing Period Status / Notice -->
+                @if (!string.IsNullOrEmpty(_periodNotice))
+                {
+                    <MudItem xs="12">
+                        <MudAlert Severity="@(_periodHasExistingRecord ? Severity.Warning : Severity.Info)" Dense="true" Elevation="0">
+                            @_periodNotice
+                        </MudAlert>
+                    </MudItem>
+                }
+
+                <!-- Date Received & Due Date -->
+                <MudItem xs="12" sm="6">
+                    <MudDatePicker @bind-Date="_dateReceived" Label="@BizLoc["Date Received / Billing Date"]"
+                                   Variant="Variant.Outlined" Margin="Margin.Dense" />
+                </MudItem>
+                <MudItem xs="12" sm="6">
+                    <MudDatePicker @bind-Date="_dueDate" Label="@BizLoc["Due Date"]"
+                                   Variant="Variant.Outlined" Margin="Margin.Dense" />
+                </MudItem>
+
+                <!-- Amount -->
+                <MudItem xs="12" sm="6">
+                    <MudNumericField @bind-Value="_amount" Label="@BizLoc["Bill Amount"]"
+                                     Format="N2" Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.AttachMoney"
+                                     Variant="Variant.Outlined" Margin="Margin.Dense" Min="0" />
+                </MudItem>
+
+                <!-- Immediate Paid Checkbox -->
+                <MudItem xs="12" sm="6" Class="d-flex align-center">
+                    <MudCheckBox @bind-Value="_isPaid" Color="Color.Success" Dense="true"
+                                 Label="@BizLoc["Mark as Paid immediately"]" />
+                </MudItem>
+
+                @if (_isPaid)
+                {
+                    <MudItem xs="12" sm="6">
+                        <MudDatePicker @bind-Date="_datePaid" Label="@BizLoc["Date Paid"]"
+                                       Variant="Variant.Outlined" Margin="Margin.Dense" />
+                    </MudItem>
+                }
+
+                <!-- Attachment Details -->
+                <MudItem xs="12">
+                    <MudDivider Class="my-1" />
+                    @if (Email != null && Email.Attachments.Any())
+                    {
+                        var firstAtt = Email.Attachments.First();
+                        <div class="d-flex align-center gap-2 mt-1">
+                            <MudCheckBox @bind-Value="_attachEmailAttachment" Color="Color.Primary" Dense="true"
+                                         Label="@string.Format(BizLoc["Attach file from email: {0}"].Value, firstAtt.FileName)" />
+                            <MudIcon Icon="@Icons.Material.Filled.AttachFile" Size="Size.Small" Color="Color.Secondary" />
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="d-flex align-center justify-space-between flex-wrap gap-2 mt-1">
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                <MudIcon Icon="@Icons.Material.Filled.Info" Size="Size.Small" Class="mr-1" Style="vertical-align: middle;" />
+                                @BizLoc["No attachment in email (Portal Notification). You can record the bill with the amount due or upload an invoice PDF below."]
+                            </MudText>
+                            @if (!string.IsNullOrEmpty(_uploadedFilePath))
+                            {
+                                <FileAttachmentChip FileName="@_uploadedFileName"
+                                                    FilePath="@_uploadedFilePath"
+                                                    OnRemove="@(async _ => await RemoveUploadedInvoice())" />
+                            }
+                            else
+                            {
+                                <ApiFileUpload Category="recurringcosts" ContextId="@_selectedExpense.Id" MaximumFileCount="1"
+                                               OnUploadCompleted="HandleApiUploaded"
+                                               OnUploadError='(e) => Snackbar.Add($"Upload failed: {e}", Severity.Error)'>
+                                    <CustomContent>
+                                        <MudButton Variant="Variant.Outlined" Size="Size.Small" StartIcon="@Icons.Material.Filled.CloudUpload">
+                                            @BizLoc["Upload Invoice PDF"]
+                                        </MudButton>
+                                    </CustomContent>
+                                </ApiFileUpload>
+                            }
+                        </div>
+                    }
+                </MudItem>
+            }
+            else
+            {
+                <MudItem xs="12">
+                    <MudAlert Severity="Severity.Normal" Dense="true" Elevation="0">
+                        @BizLoc["Select a recurring bill profile above to configure the bill record details."]
+                    </MudAlert>
+                </MudItem>
+            }
+        </MudGrid>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">@Loc["Cancel"]</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled"
+                   StartIcon="@Icons.Material.Filled.AddCard"
+                   OnClick="Submit" Disabled="@(_selectedExpense == null || _amount <= 0 || _isSubmitting)">
+            @if (_isSubmitting)
+            {
+                <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-1" />
+                <span>@BizLoc["Saving..."]</span>
+            }
+            else
+            {
+                <span>@BizLoc["Add to Recurring Bill"]</span>
+            }
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
+
+    [Parameter] public EmailMessage? Email { get; set; }
+
+    private List<RecurringExpense> _recurringExpenses = [];
+    private RecurringExpense? _selectedExpense;
+    private DateTime? _dateReceived;
+    private DateTime? _dueDate;
+    private decimal _amount;
+    private bool _isPaid;
+    private DateTime? _datePaid;
+    private bool _attachEmailAttachment = true;
+    private string? _uploadedFilePath;
+    private string? _uploadedFileName;
+    private string _periodNotice = "";
+    private bool _periodHasExistingRecord = false;
+    private bool _isSubmitting = false;
+
+    protected override void OnInitialized()
+    {
+        _recurringExpenses = Db.RecurringExpenses.GetAll()
+            .Where(e => !e.IsEstimate)
+            .OrderBy(e => e.Name)
+            .ToList();
+
+        _dateReceived = Email?.Date.LocalDateTime.Date ?? DateTime.Today;
+        _dueDate = _dateReceived.Value.AddDays(30);
+
+        // Pre-fill amount from detected email amount if available
+        if (Email?.DetectedAmount.HasValue == true && Email.DetectedAmount.Value > 0)
+        {
+            _amount = Email.DetectedAmount.Value;
+        }
+
+        // Auto-match recurring profile from sender or subject
+        if (Email != null)
+        {
+            var sender = !string.IsNullOrWhiteSpace(Email.FromName) ? Email.FromName.Trim() : Email.FromAddress;
+            _selectedExpense = _recurringExpenses.FirstOrDefault(e =>
+                (!string.IsNullOrEmpty(e.Supplier) && (e.Supplier.Contains(sender, StringComparison.OrdinalIgnoreCase) || sender.Contains(e.Supplier, StringComparison.OrdinalIgnoreCase))) ||
+                (!string.IsNullOrEmpty(e.Name) && (e.Name.Contains(sender, StringComparison.OrdinalIgnoreCase) || sender.Contains(e.Name, StringComparison.OrdinalIgnoreCase))));
+
+            if (_selectedExpense == null && !string.IsNullOrWhiteSpace(Email.Subject))
+            {
+                _selectedExpense = _recurringExpenses.FirstOrDefault(e =>
+                    (!string.IsNullOrEmpty(e.Supplier) && Email.Subject.Contains(e.Supplier, StringComparison.OrdinalIgnoreCase)) ||
+                    (!string.IsNullOrEmpty(e.Name) && Email.Subject.Contains(e.Name, StringComparison.OrdinalIgnoreCase)));
+            }
+
+            if (_selectedExpense != null)
+            {
+                OnSelectedExpenseChanged(_selectedExpense);
+            }
+        }
+    }
+
+    private void OnSelectedExpenseChanged(RecurringExpense? expense)
+    {
+        _selectedExpense = expense;
+        if (expense == null)
+        {
+            _periodNotice = "";
+            _periodHasExistingRecord = false;
+            return;
+        }
+
+        // If amount was not detected from email, use profile default
+        if (_amount <= 0 && expense.Amount > 0)
+        {
+            _amount = expense.Amount;
+        }
+
+        UpdatePeriodNotice();
+    }
+
+    private void UpdatePeriodNotice()
+    {
+        if (_selectedExpense == null || !_dateReceived.HasValue)
+        {
+            _periodNotice = "";
+            _periodHasExistingRecord = false;
+            return;
+        }
+
+        if (_selectedExpense.Frequency == RecurringExpenseFrequency.OneTime ||
+            _selectedExpense.Frequency == RecurringExpenseFrequency.AsNeeded)
+        {
+            _periodNotice = "";
+            _periodHasExistingRecord = false;
+            return;
+        }
+
+        var label = GetPeriodLabel(_selectedExpense.Frequency, _dateReceived.Value);
+        var (periodStart, periodEnd) = GetPeriodRange(_selectedExpense.Frequency, _dateReceived.Value);
+
+        var existing = _selectedExpense.History.FirstOrDefault(h => h.Date >= periodStart && h.Date < periodEnd);
+        if (existing != null)
+        {
+            _periodHasExistingRecord = true;
+            _periodNotice = string.Format(
+                BizLoc["A bill of {0} is already recorded for period {1} (Status: {2}). Adding this will record an additional bill for the same period."].Value,
+                existing.Amount.ToString("C2"),
+                label,
+                existing.IsPaid ? BizLoc["Paid"].Value : BizLoc["Pending"].Value);
+        }
+        else
+        {
+            _periodHasExistingRecord = false;
+            _periodNotice = string.Format(BizLoc["This bill will be recorded for billing period: {0}."].Value, label);
+        }
+    }
+
+    private static string GetPeriodLabel(string frequency, DateTime date) => frequency switch
+    {
+        RecurringExpenseFrequency.Weekly => $"Week of {date:MMM dd, yyyy}",
+        RecurringExpenseFrequency.BiWeekly => $"Bi-Week of {date:MMM dd, yyyy}",
+        RecurringExpenseFrequency.Monthly => date.ToString("MMMM yyyy"),
+        RecurringExpenseFrequency.Yearly => date.ToString("yyyy"),
+        _ => date.ToString("MMM yyyy")
+    };
+
+    private static (DateTime start, DateTime end) GetPeriodRange(string frequency, DateTime date) => frequency switch
+    {
+        RecurringExpenseFrequency.Weekly => (date.Date.AddDays(-(int)date.DayOfWeek), date.Date.AddDays(7 - (int)date.DayOfWeek)),
+        RecurringExpenseFrequency.BiWeekly => (date.Date.AddDays(-(int)date.DayOfWeek), date.Date.AddDays(14 - (int)date.DayOfWeek)),
+        RecurringExpenseFrequency.Monthly => (new DateTime(date.Year, date.Month, 1), new DateTime(date.Year, date.Month, 1).AddMonths(1)),
+        RecurringExpenseFrequency.Yearly => (new DateTime(date.Year, 1, 1), new DateTime(date.Year + 1, 1, 1)),
+        _ => (new DateTime(date.Year, date.Month, 1), new DateTime(date.Year, date.Month, 1).AddMonths(1))
+    };
+
+    private async Task RemoveUploadedInvoice()
+    {
+        if (!string.IsNullOrEmpty(_uploadedFilePath))
+        {
+            await FileService.DeleteAsync(_uploadedFilePath);
+        }
+        _uploadedFilePath = null;
+        _uploadedFileName = null;
+        StateHasChanged();
+    }
+
+    private async Task HandleApiUploaded(List<ApiFileUpload.UploadResult> results)
+    {
+        var result = results.FirstOrDefault();
+        if (result != null)
+        {
+            if (!string.IsNullOrEmpty(_uploadedFilePath) && _uploadedFilePath != result.FilePath)
+            {
+                await FileService.DeleteAsync(_uploadedFilePath);
+            }
+            _uploadedFilePath = result.FilePath;
+            _uploadedFileName = result.FileName;
+            Snackbar.Add(BizLoc["Invoice uploaded successfully."], Severity.Success);
+            StateHasChanged();
+        }
+    }
+
+    private async Task Cancel()
+    {
+        if (!string.IsNullOrEmpty(_uploadedFilePath))
+        {
+            await FileService.DeleteAsync(_uploadedFilePath);
+        }
+        MudDialog.Cancel();
+    }
+
+    private async Task Submit()
+    {
+        if (_selectedExpense == null || _amount <= 0 || Email == null) return;
+
+        _isSubmitting = true;
+        try
+        {
+            var auth = await AuthStateProvider.GetAuthenticationStateAsync();
+            var currentUserId = auth.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value
+                ?? CompanyBillInboxConstants.SystemEmployeeId;
+
+            // Resolve attachment
+            string attachmentPath = "";
+            string attachmentName = "";
+
+            if (!string.IsNullOrEmpty(_uploadedFilePath))
+            {
+                attachmentPath = _uploadedFilePath;
+                attachmentName = _uploadedFileName ?? "Invoice.pdf";
+            }
+            else if (_attachEmailAttachment && Email.Attachments.Any())
+            {
+                var att = Email.Attachments.First();
+                attachmentPath = $"/spokesapi/files/emails/{Email.Id}/{att.FileName}";
+                attachmentName = att.FileName;
+            }
+
+            var record = new RecurringBillRecord
+            {
+                Id = Guid.NewGuid().ToString(),
+                Date = _dateReceived ?? DateTime.Today,
+                DueDate = _dueDate,
+                Amount = _amount,
+                IsPaid = _isPaid,
+                DatePaid = _isPaid ? (_datePaid ?? _dateReceived ?? DateTime.Today) : null,
+                AttachmentPath = attachmentPath,
+                AttachmentName = attachmentName,
+                SourceEmailId = Email.Id
+            };
+
+            _selectedExpense.History.Add(record);
+            Db.RecurringExpenses.Save(_selectedExpense);
+
+            BillInboxService.LinkEmailToRecurringExpense(Email.Id, _selectedExpense.Id, record.Id, currentUserId);
+
+            MudDialog.Close(DialogResult.Ok(record));
+        }
+        finally
+        {
+            _isSubmitting = false;
+        }
+    }
+}

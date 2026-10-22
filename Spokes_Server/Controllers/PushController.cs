@@ -4,12 +4,20 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.DependencyInjection;
 using Spokes_Server.Core.Data.Repositories.Core;
 using Spokes_Server.Core.Data.Repositories.HR;
+using Spokes_Server.Core.Exceptions;
+using Spokes_Server.Core.Helpers;
 using Spokes_Server.Core.Models.Core;
-using Spokes_Server.Core.Services.Core;
+using Spokes_Server.Core.Services.Communication.Notifications;
+using Spokes_Server.Core.Services.Communication.Notifications.Presentation;
+using Spokes_Server.Core.Services.Communication.Notifications.Routing;
+using Spokes_Server.Core.Services.Communication.Notifications.WebPush;
+using Spokes_Server.Core.Services.Identity;
 using Spokes_Server.Core.Services.Licensing;
 using Spokes_Server.Core.Services.Logging;
-using Spokes_Server.Core.Services.Communication.Chat;
-using WebPushException = WebPush.WebPushException;
+using Spokes_Server.Core.Services.Security;
+using Microsoft.Extensions.Logging;
+using Lib.Net.Http.WebPush;
+using System.Text.Json.Serialization;
 
 namespace Spokes_Server.Controllers;
 
@@ -26,28 +34,50 @@ public class PushController : SpokesControllerBase
     private readonly EmployeeRepository _employees;
     private readonly IWebPushService _webPush;
     private readonly UserService _userService;
+    private readonly ILogger<PushController>? _logger;
+    private readonly IPushLicenseEligibilityService _licenseEligibility;
+    private readonly PushTokenService? _pushTokenService;
+    private readonly ISystemLogService? _systemLog;
+    private readonly INotificationRoutingService? _routingService;
 
-    public PushController(DeviceSessionRepository sessions, EmployeeRepository employees, IWebPushService webPush, UserService userService)
+    [ActivatorUtilitiesConstructor]
+    public PushController(
+        DeviceSessionRepository sessions,
+        EmployeeRepository employees,
+        IWebPushService webPush,
+        UserService userService,
+        IPushLicenseEligibilityService licenseEligibility,
+        ILogger<PushController>? logger = null,
+        IDataProtectionProvider? dataProtection = null,
+        ISystemLogService? systemLog = null,
+        INotificationRoutingService? routingService = null,
+        PushTokenService? pushTokenService = null)
     {
         _sessions = sessions;
         _employees = employees;
         _webPush = webPush;
         _userService = userService;
+        _licenseEligibility = licenseEligibility ?? throw new System.ArgumentNullException(nameof(licenseEligibility));
+        _logger = logger;
+        _pushTokenService = pushTokenService ?? (dataProtection != null ? new PushTokenService(dataProtection) : null);
+        _systemLog = systemLog;
+        _routingService = routingService;
     }
+
+
 
     /// <summary>
     /// Get the VAPID public key for client-side subscription.
     /// </summary>
     [HttpGet("vapid-public-key")]
-    public async Task<IActionResult> GetVapidPublicKey()
+    public IActionResult GetVapidPublicKey()
     {
-        await Task.CompletedTask;
         var publicKey = _webPush.GetVapidPublicKey();
         if (string.IsNullOrEmpty(publicKey))
         {
-            return BadRequest(new { error = "Push notifications not configured" });
+            return BadRequestError("Push notifications not configured");
         }
-        return Ok(new { publicKey });
+        return Ok(new VapidPublicKeyResponse(publicKey));
     }
 
     /// <summary>
@@ -55,25 +85,21 @@ public class PushController : SpokesControllerBase
     /// Stamps push fields directly onto the caller's DeviceSession.
     /// </summary>
     [HttpPost("subscribe")]
-    public async Task<IActionResult> Subscribe(
-        [FromBody] SubscribeRequest request,
-        [FromServices] CompanyProfileRepository? companyProfiles = null,
-        [FromServices] ServerConfigRepository? serverConfigs = null,
-        [FromServices] LicenseValidationService? licenseValidation = null)
+    public IActionResult Subscribe([FromBody] SubscribeRequest request)
     {
         // For NativeRelay, P256dh and Auth might be empty, so skip those checks if NativeRelay.
         if (string.IsNullOrEmpty(request.Endpoint) ||
-            (request.SubscriptionType != "NativeRelay" && (string.IsNullOrEmpty(request.P256dh) || string.IsNullOrEmpty(request.Auth))))
+            (request.SubscriptionType != PushSubscriptionType.NativeRelay && (string.IsNullOrEmpty(request.P256dh) || string.IsNullOrEmpty(request.Auth))))
         {
-            return BadRequest(new { error = "Invalid subscription data" });
+            return BadRequestError("Invalid subscription data");
         }
 
-        Console.WriteLine($"[Push/Subscribe] Received subscription for {request.DeviceType} ({request.SubscriptionType}). PublicKey length: {request.PublicKey?.Length ?? 0}");
+        _logger?.LogDebug("[Push/Subscribe] Received subscription for {DeviceType} ({SubscriptionType}). PublicKey length: {KeyLength}", request.DeviceType, request.SubscriptionType, request.PublicKey?.Length ?? 0);
 
         var userId = GetCurrentUserId();
         if (string.IsNullOrEmpty(userId))
         {
-            return Unauthorized();
+            return UnauthorizedError("Authentication required.", "UNAUTHORIZED");
         }
 
         var sessionId = User.FindFirst("SessionId")?.Value;
@@ -101,7 +127,7 @@ public class PushController : SpokesControllerBase
 
         if (session == null)
         {
-            return BadRequest(new { error = "No active session found. Please log in again." });
+            return BadRequestError("No active session found. Please log in again.");
         }
 
 
@@ -113,37 +139,70 @@ public class PushController : SpokesControllerBase
             _sessions.ClearPushFields(existingWithEndpoint);
         }
 
+        var subscriptionType = !string.IsNullOrEmpty(request.SubscriptionType) ? request.SubscriptionType : PushSubscriptionType.WebPush;
+
+        // Gate NativeRelay registrations: require an active Spokes Pass or valid trial ticket
+        if (subscriptionType == PushSubscriptionType.NativeRelay)
+        {
+            if (!_licenseEligibility.IsNativePushAllowed())
+            {
+                return ForbiddenError("Native push notifications require an active Spokes Pass.", "PASS_EXPIRED");
+            }
+        }
+
         // Stamp push fields onto the DeviceSession
         session.PushEndpoint = request.Endpoint;
         session.PushP256dh = request.P256dh;
         session.PushAuth = request.Auth;
-        session.PushSubscriptionType = !string.IsNullOrEmpty(request.SubscriptionType) ? request.SubscriptionType : "WebPush";
-        session.PushPublicKey = request.PublicKey ?? string.Empty;
+        session.PushSubscriptionType = subscriptionType;
+        if (!string.IsNullOrWhiteSpace(request.PublicKey))
+        {
+            session.PushPublicKey = request.PublicKey.Trim();
+        }
+        else
+        {
+            session.PushPublicKey ??= string.Empty;
+        }
         session.PushEnabled = true;
         session.PushSubscribedAt = DateTime.UtcNow;
         session.PushUserAgent = Request.Headers.UserAgent.ToString();
 
-        bool isCapacitor = request.IsCapacitor == true
-            || session.PushSubscriptionType == "NativeRelay"
-            || session.PushUserAgent.Contains("Capacitor", StringComparison.OrdinalIgnoreCase)
-            || session.IsCapacitorApp;
+        bool isExplicitDesktop = (!string.IsNullOrEmpty(request.DeviceType) && request.DeviceType.Equals(DeviceType.Desktop, StringComparison.OrdinalIgnoreCase))
+            || DeviceDetectionHelper.IsDesktopClient(session.PushUserAgent);
+
+        bool isCapacitor;
+        if (request.IsCapacitor == true)
+        {
+            isCapacitor = true;
+        }
+        else if (isExplicitDesktop)
+        {
+            isCapacitor = false;
+        }
+        else
+        {
+            isCapacitor = session.IsCapacitorApp
+                || session.PushUserAgent.Contains("Capacitor", StringComparison.OrdinalIgnoreCase)
+                || (subscriptionType == PushSubscriptionType.NativeRelay && request.IsCapacitor != false && string.Equals(session.DeviceType, DeviceType.Mobile, StringComparison.OrdinalIgnoreCase));
+        }
 
         if (isCapacitor)
         {
             session.IsCapacitor = true;
-            session.DeviceType = "Mobile";
+            session.DeviceType = DeviceType.Mobile;
             session.IsIdleDetectionEnabled = false;
         }
         else
         {
-            session.DeviceType = !string.IsNullOrEmpty(request.DeviceType) ? request.DeviceType : "Desktop";
-            session.IsIdleDetectionEnabled = request.IsIdleDetectionEnabled ?? (request.DeviceType == "Desktop");
+            session.IsCapacitor = false;
+            session.DeviceType = !string.IsNullOrEmpty(request.DeviceType) ? request.DeviceType : DeviceType.Desktop;
+            session.IsIdleDetectionEnabled = request.IsIdleDetectionEnabled ?? (request.DeviceType == DeviceType.Desktop);
         }
 
         if (!string.IsNullOrEmpty(request.DeviceName))
             session.DeviceName = request.DeviceName;
 
-        await _sessions.SaveAsync(session);
+        _sessions.Save(session);
 
         // Clean up stale push subscriptions from old sessions on the same device.
         // With stable device IDs (ANDROID_ID / iOS Keychain UUID), matching by deviceId
@@ -157,32 +216,12 @@ public class PushController : SpokesControllerBase
 
             foreach (var stale in staleSessions)
             {
-                Console.WriteLine($"[Push/Subscribe] Cleaning stale push on session {stale.Id} (same deviceId: {session.DeviceId})");
+                _logger?.LogDebug("[Push/Subscribe] Cleaning stale push on session {SessionId} (same deviceId: {DeviceId})", stale.Id, session.DeviceId);
                 _sessions.ClearPushFields(stale);
             }
         }
 
-        bool isNativePushLicensed = true;
-        if (session.PushSubscriptionType == "NativeRelay")
-        {
-            var profilesRepo = companyProfiles ?? HttpContext?.RequestServices?.GetService<CompanyProfileRepository>();
-            var configsRepo = serverConfigs ?? HttpContext?.RequestServices?.GetService<ServerConfigRepository>();
-            var licenseService = licenseValidation ?? HttpContext?.RequestServices?.GetService<LicenseValidationService>();
-
-            if (profilesRepo != null && configsRepo != null && licenseService != null)
-            {
-                var profile = profilesRepo.Get();
-                var serverConfig = configsRepo.GetOrCreateGlobalConfig();
-                var licenseResult = licenseService.ValidateLicense(profile?.LicensePayload, serverConfig);
-                isNativePushLicensed = licenseResult.Status != LicenseStatus.HardLock && licenseResult.Status != LicenseStatus.Expired;
-            }
-        }
-
-        return Ok(new { 
-            message = "Subscribed successfully", 
-            id = session.Id,
-            isNativePushLicensed = isNativePushLicensed
-        });
+        return Ok(new PushSubscribeResponse("Subscribed successfully", session.Id, true));
     }
 
     /// <summary>
@@ -190,17 +229,17 @@ public class PushController : SpokesControllerBase
     /// </summary>
     [HttpPost("unsubscribe")]
     [HttpDelete("unsubscribe")]
-    public async Task<IActionResult> Unsubscribe([FromBody] UnsubscribeRequest request)
+    public IActionResult Unsubscribe([FromBody] UnsubscribeRequest request)
     {
         if (string.IsNullOrEmpty(request.Endpoint))
         {
-            return BadRequest(new { error = "Endpoint is required" });
+            return BadRequestError("Endpoint is required");
         }
 
         var userId = GetCurrentUserId();
         if (string.IsNullOrEmpty(userId))
         {
-            return Unauthorized();
+            return UnauthorizedError("Authentication required.", "UNAUTHORIZED");
         }
 
         // Security: Only allow unsubscribing sessions owned by the current user
@@ -208,62 +247,35 @@ public class PushController : SpokesControllerBase
         if (session == null || session.EmployeeId != userId)
         {
             // Don't reveal whether the subscription exists or belongs to someone else
-            return Ok(new { message = "No subscription found" });
+            return Ok(new PushMessageResponse("No subscription found"));
         }
 
         _sessions.ClearPushFields(session);
-        await Task.CompletedTask;
-        return Ok(new { message = "Unsubscribed successfully" });
+        return Ok(new PushMessageResponse("Unsubscribed successfully"));
     }
 
     /// <summary>
     /// Get current user's subscription status.
     /// </summary>
     [HttpGet("status")]
-    public async Task<IActionResult> GetStatus(
-        [FromServices] CompanyProfileRepository? companyProfiles = null,
-        [FromServices] ServerConfigRepository? serverConfigs = null,
-        [FromServices] LicenseValidationService? licenseValidation = null)
+    public IActionResult GetStatus()
     {
         var userId = GetCurrentUserId();
         if (string.IsNullOrEmpty(userId))
         {
-            return Unauthorized();
+            return UnauthorizedError("Authentication required.", "UNAUTHORIZED");
         }
 
         var sessionsWithPush = _sessions.GetPushEnabledByEmployeeId(userId);
-        var employee = await _employees.GetByIdAsync(userId);
+        var employee = _employees.GetById(userId);
 
-        var profilesRepo = companyProfiles ?? HttpContext?.RequestServices?.GetService<CompanyProfileRepository>();
-        var configsRepo = serverConfigs ?? HttpContext?.RequestServices?.GetService<ServerConfigRepository>();
-        var licenseService = licenseValidation ?? HttpContext?.RequestServices?.GetService<LicenseValidationService>();
+        var nativeStatus = _licenseEligibility.GetNativePushStatus();
 
-        bool isNativeRelayAvailable = true;
-        string? status = null;
-        string? message = null;
-
-        if (profilesRepo != null && configsRepo != null && licenseService != null)
-        {
-            var profile = profilesRepo.Get();
-            var serverConfig = configsRepo.GetOrCreateGlobalConfig();
-            var licenseResult = licenseService.ValidateLicense(profile?.LicensePayload, serverConfig);
-            isNativeRelayAvailable = licenseResult.Status != LicenseStatus.HardLock && licenseResult.Status != LicenseStatus.Expired;
-            status = licenseResult.Status.ToString();
-            message = licenseResult.Message;
-        }
-
-        return Ok(new
-        {
-            isConfigured = _webPush.IsConfigured,
-            enabled = employee?.PushNotificationsEnabled ?? true,
-            subscriptionCount = sessionsWithPush.Count,
-            nativePush = new
-            {
-                isAvailable = isNativeRelayAvailable,
-                status = status,
-                message = message
-            }
-        });
+        return Ok(new PushStatusResponse(
+            _webPush.IsConfigured,
+            employee?.PushNotificationsEnabled ?? true,
+            sessionsWithPush.Count,
+            new NativePushStatusResponse(nativeStatus.IsAvailable, nativeStatus.Status ?? string.Empty, nativeStatus.Message ?? string.Empty)));
     }
 
     // --- Device Management ---
@@ -273,32 +285,30 @@ public class PushController : SpokesControllerBase
     /// Returns DeviceSession records directly — no join logic needed.
     /// </summary>
     [HttpGet("devices")]
-    public async Task<IActionResult> GetDevices()
+    public IActionResult GetDevices()
     {
         var userId = GetCurrentUserId();
         if (string.IsNullOrEmpty(userId))
         {
-            return Unauthorized();
+            return UnauthorizedError("Authentication required.", "UNAUTHORIZED");
         }
 
-        await Task.CompletedTask;
         var sessions = _sessions.GetActiveByEmployeeId(userId);
-        var devices = sessions.Select(s => new
-        {
+        var devices = sessions.Select(s => new DeviceListItemResponse(
             s.Id,
             s.DeviceType,
             s.DeviceName,
             s.DeviceInfo,
-            IsEnabled = s.HasPush && s.PushEnabled,
+            s.HasPush && s.PushEnabled,
             s.IsIdleDetectionEnabled,
             s.PushSubscriptionType,
             s.CreatedAt,
             s.LastSeenAt,
             s.HasPush,
-            Endpoint = s.PushEndpoint ?? string.Empty,
-            UserAgent = s.PushUserAgent,
+            s.PushEndpoint ?? string.Empty,
+            s.PushUserAgent,
             s.DeviceId
-        }).ToList();
+        )).ToList();
 
         return Ok(devices);
     }
@@ -307,18 +317,18 @@ public class PushController : SpokesControllerBase
     /// Update a notification device (rename, enable/disable).
     /// </summary>
     [HttpPut("devices/{id}")]
-    public async Task<IActionResult> UpdateDevice(string id, [FromBody] UpdateDeviceRequest request)
+    public IActionResult UpdateDevice(string id, [FromBody] UpdateDeviceRequest request)
     {
         var userId = GetCurrentUserId();
         if (string.IsNullOrEmpty(userId))
         {
-            return Unauthorized();
+            return UnauthorizedError("Authentication required.", "UNAUTHORIZED");
         }
 
-        var session = await _sessions.GetByIdAsync(id);
+        var session = _sessions.GetById(id);
         if (session == null || session.EmployeeId != userId)
         {
-            return NotFound(new { error = "Device not found" });
+            return NotFoundError("Device not found");
         }
 
         if (request.DeviceName != null)
@@ -335,75 +345,76 @@ public class PushController : SpokesControllerBase
             session.IsIdleDetectionEnabled = false;
         }
 
-        await _sessions.SaveAsync(session);
-        return Ok(new { message = "Device updated" });
+        _sessions.Save(session);
+        return Ok(new PushMessageResponse("Device updated"));
     }
 
     /// <summary>
     /// Delete a specific notification device (clears push data, does not revoke the session).
     /// </summary>
     [HttpDelete("devices/{id}")]
-    public async Task<IActionResult> DeleteDevice(string id)
+    public IActionResult DeleteDevice(string id)
     {
         var userId = GetCurrentUserId();
         if (string.IsNullOrEmpty(userId))
         {
-            return Unauthorized();
+            return UnauthorizedError("Authentication required.", "UNAUTHORIZED");
         }
 
-        var session = await _sessions.GetByIdAsync(id);
+        var session = _sessions.GetById(id);
         if (session == null || session.EmployeeId != userId)
         {
-            return NotFound(new { error = "Device not found" });
+            return NotFoundError("Device not found");
         }
 
         _sessions.ClearPushFields(session);
-        return Ok(new { message = "Device deleted" });
+        return Ok(new PushMessageResponse("Device deleted"));
     }
 
     /// <summary>
     /// Send a test notification to a specific device.
     /// </summary>
     [HttpPost("devices/{id}/test")]
-    public async Task<IActionResult> SendDeviceTestNotification(string id, 
-        [FromServices] IDataProtectionProvider dataProtection,
-        [FromServices] ISystemLogService systemLog,
-        [FromQuery] string category = "chat")
+    public async Task<IActionResult> SendDeviceTestNotification(string id, [FromQuery] string category = "chat")
     {
         var userId = GetCurrentUserId();
         if (string.IsNullOrEmpty(userId))
         {
-            return Unauthorized();
+            return UnauthorizedError("Authentication required.", "UNAUTHORIZED");
         }
 
-        var sender = await _employees.GetByIdAsync(userId);
-        if (sender == null) return Unauthorized();
+        var sender = _employees.GetById(userId);
+        if (sender == null) return UnauthorizedError("Authentication required.", "UNAUTHORIZED");
 
-        var protector = dataProtection.CreateProtector("AvatarPushToken");
-        var safeUserId = userId.Replace("|", "");
-        var token = protector.Protect($"{safeUserId}|{DateTime.UtcNow.AddHours(48).Ticks}");
-        var encodedToken = System.Net.WebUtility.UrlEncode(token);
-        var icon = $"/spokesapi/Media/Avatar/{userId}?t={encodedToken}";
+        var icon = _pushTokenService?.GetAvatarUrl(userId) ?? $"/spokesapi/Media/Avatar/{userId}";
 
         try
         {
-            bool wasEncrypted = await _webPush.SendDeviceTestNotificationAsync(id, userId, "Test Notification", $"Rich push notification test from {sender.FirstName}", icon, category);
-            return Ok(new { message = wasEncrypted ? "Test notification sent (Encrypted)" : "Test notification sent (Encrypted Text)" });
+            var testResult = await _webPush.SendDeviceTestNotificationAsync(new DeviceTestNotificationRequest
+            {
+                SubscriptionId = id,
+                UserId = userId,
+                Title = "Test Notification",
+                Body = $"Rich push notification test from {sender.FirstName}",
+                Icon = icon,
+                Category = category
+            });
+            return Ok(new PushMessageResponse(testResult.IsPayloadEncrypted ? "Test notification sent (Encrypted)" : "Test notification sent (Encrypted Text)"));
         }
-        catch (LicenseExpiredException lex)
+        catch (DomainException dex) when (!string.IsNullOrEmpty(dex.ErrorCode))
         {
-            systemLog.LogError("Notifications", $"Test push failed for device {id}", lex.Message);
-            return BadRequest(new { error = lex.Message, code = "LICENSE_EXPIRED" });
+            _systemLog?.LogError("Notifications", $"Test push failed for device {id}", $"{dex.ErrorCode}: {dex.Message}");
+            return BadRequestError(dex.Message, dex.ErrorCode);
         }
-        catch (WebPushException wpe)
+        catch (PushServiceClientException wpe)
         {
-            systemLog.LogError("Notifications", $"Test push failed for device {id}", $"WebPush Error: {wpe.Message} (Status: {wpe.StatusCode})");
-            return BadRequest(new { error = $"WebPush Error: {wpe.Message} (Status: {wpe.StatusCode})" });
+            _systemLog?.LogError("Notifications", $"Test push failed for device {id}", $"WebPush Error: {wpe.Message} (Status: {wpe.StatusCode})");
+            return BadRequestError($"WebPush Error: {wpe.Message} (Status: {wpe.StatusCode})");
         }
         catch (Exception ex)
         {
-            systemLog.LogError("Notifications", $"Test push failed for device {id}", ex.Message);
-            return BadRequest(new { error = ex.Message });
+            _systemLog?.LogError("Notifications", $"Test push failed for device {id}", ex.Message);
+            return BadRequestError(ex.Message);
         }
     }
 
@@ -416,30 +427,42 @@ public class PushController : SpokesControllerBase
         var userId = GetCurrentUserId();
         if (string.IsNullOrEmpty(userId))
         {
-            return Unauthorized();
+            return UnauthorizedError("Authentication required.", "UNAUTHORIZED");
         }
 
-        var sender = await _employees.GetByIdAsync(userId);
+        var sender = _employees.GetById(userId);
         var userSoundChoice = sender?.GetNotificationSound(category);
         var sound = NotificationSoundCatalog.GetEffectivePushSound(category, userSoundChoice);
 
-        await _webPush.SendNotificationAsync(userId, "Test Notification", "Push notifications are working!", category: category, sound: sound);
-        return Ok(new { message = "Test notification sent" });
+        await _webPush.SendNotificationAsync(new PushNotificationRequest
+        {
+            UserId = userId,
+            Title = "Test Notification",
+            Body = "Push notifications are working!",
+            Category = category,
+            Sound = sound
+        });
+        return Ok(new PushMessageResponse("Test notification sent"));
     }
 
     /// <summary>
     /// Get the total unread badge count for the current user.
     /// </summary>
     [HttpGet("unread-count")]
-    public async Task<IActionResult> GetUnreadCount([FromServices] NotificationRoutingService routingService)
+    public IActionResult GetUnreadCount()
     {
         var userId = GetCurrentUserId();
         if (string.IsNullOrEmpty(userId))
         {
-            return Unauthorized();
+            return UnauthorizedError("Authentication required.", "UNAUTHORIZED");
         }
 
-        var result = await routingService.GetBadgeBreakdownAsync(userId);
+        if (_routingService == null)
+        {
+            return StatusCodeError(StatusCodes.Status500InternalServerError, "Notification routing service not available.", "SERVICE_UNAVAILABLE");
+        }
+
+        var result = _routingService.GetBadgeBreakdown(userId);
         return Ok(result);
     }
 
@@ -449,48 +472,6 @@ public class PushController : SpokesControllerBase
         var employee = _userService.GetEmployee(User);
         if (employee == null || !employee.IsActive || employee.IsSuspended || employee.IsBanned) return null;
         return employee.Id;
-    }
-
-    /// <summary>
-    /// Instantly mark a connection offline. Used during pagehide/app termination to bypass TCP timeouts.
-    /// AllowAnonymous because during iOS teardown, cookies might not be reliably attached to the sendBeacon request.
-    /// The subscriptionId itself serves as a secure, ephemeral one-time token.
-    /// </summary>
-    [HttpPost("offline")]
-    [AllowAnonymous]
-    public async Task<IActionResult> MarkOffline([FromQuery] string subscriptionId, [FromServices] PresenceStateService presence)
-    {
-        await Task.CompletedTask;
-        if (!string.IsNullOrEmpty(subscriptionId))
-        {
-            presence.RemoveConnection(subscriptionId);
-        }
-        return Ok();
-    }
-
-    /// <summary>
-    /// Instantly mark a connection as unfocused. Used during app suspension to bypass SignalR TCP timeouts without terminating the circuit.
-    /// </summary>
-    [HttpPost("unfocus")]
-    [AllowAnonymous]
-    public async Task<IActionResult> Unfocus(
-        [FromQuery] string subscriptionId,
-        [FromServices] PresenceStateService presence,
-        [FromServices] UserClientStateService clientStateService)
-    {
-        Console.WriteLine($"[PushController] Unfocus endpoint hit for subscriptionId: {subscriptionId}");
-        await Task.CompletedTask;
-        if (!string.IsNullOrEmpty(subscriptionId))
-        {
-            var userId = presence.GetUserIdBySubscription(subscriptionId);
-            if (!string.IsNullOrEmpty(userId))
-            {
-                clientStateService.FlushToDiskIfUnsent(userId);
-            }
-            presence.SetConnectionFocusBySubscription(subscriptionId, false);
-            Console.WriteLine($"[PushController] SetConnectionFocusBySubscription called for {subscriptionId}");
-        }
-        return Ok();
     }
 }
 
@@ -520,3 +501,35 @@ public class UpdateDeviceRequest
     public bool? IsEnabled { get; set; }
     public bool? IsIdleDetectionEnabled { get; set; }
 }
+
+public record PushSubscribeResponse(string Message, string Id, bool isNativePushLicensed);
+
+public record PushMessageResponse(string Message);
+
+public record DeviceListItemResponse(
+    string Id,
+    string? DeviceType,
+    string? DeviceName,
+    string? DeviceInfo,
+    bool IsEnabled,
+    bool IsIdleDetectionEnabled,
+    string? PushSubscriptionType,
+    DateTime CreatedAt,
+    DateTime? LastSeenAt,
+    bool HasPush,
+    string Endpoint,
+    string? UserAgent,
+    string? DeviceId);
+
+public record VapidPublicKeyResponse([property: JsonPropertyName("publicKey")] string publicKey);
+
+public record NativePushStatusResponse(
+    [property: JsonPropertyName("isAvailable")] bool isAvailable,
+    [property: JsonPropertyName("status")] string status,
+    [property: JsonPropertyName("message")] string message);
+
+public record PushStatusResponse(
+    [property: JsonPropertyName("isConfigured")] bool isConfigured,
+    [property: JsonPropertyName("enabled")] bool enabled,
+    [property: JsonPropertyName("subscriptionCount")] int subscriptionCount,
+    [property: JsonPropertyName("nativePush")] NativePushStatusResponse nativePush);

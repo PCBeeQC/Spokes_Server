@@ -1,0 +1,222 @@
+@using Microsoft.Extensions.Configuration
+@using Spokes_Server.Core.Services.Communication.Chat
+@inject Database Db
+@inject ISnackbar Snackbar
+@inject ICryptoService Crypto
+@inject GlobalKeystoreService Keystore
+@inject ScopedKeystoreService ScopedKeystore
+@inject ChatSecurityService ChatSecurityService
+@inject IJSRuntime JS
+@inject IConfiguration Config
+
+<MudDialog>
+    <DialogContent>
+        @{
+            string vaultUsername = !string.IsNullOrWhiteSpace(Employee?.FullName) ? Employee.FullName : Employee?.Id ?? "";
+            bool IsDemo = Config.GetValue<bool>("Spokes_DemoMode");
+        }
+        
+        @if (IsDemo)
+        {
+            <MudAlert Severity="Severity.Warning" Class="mb-4">
+                <b>@Loc["Demo Mode:"]</b> @Loc["Setting a secure vault password is disabled in the demo."]
+            </MudAlert>
+        }
+
+        <MudText Typo="Typo.body2" Class="mb-2">
+            @Loc["This encryption protects your messages inside the database, keeping them safe if the server's backups ever leak. It's much more secure than unencrypted chat apps, but keep in mind:"]
+        </MudText>
+        <ul class="mb-3 pl-6">
+            <li>
+                <MudText Typo="Typo.body2">
+                    <b>@Loc["Not End-to-End Encrypted:"]</b> @Loc["A malicious server owner could theoretically intercept data as it passes through the server."]
+                </MudText>
+            </li>
+            <li class="mt-1">
+                <MudText Typo="Typo.body2" Color="Color.Error">
+                    <b>@Loc["No Password Recovery:"]</b> @Loc["If you forget your password, all your secure data is permanently lost."]
+                </MudText>
+            </li>
+        </ul>
+
+        @if (Employee?.HasVaultPassword == true)
+        {
+            <MudAlert Severity="Severity.Success" Class="mb-4">@Loc["Secure Chat Enabled!"]</MudAlert>
+
+            @if (!_isCheckingCookie)
+            {
+                @if (_hasDeviceCookie)
+                {
+                    <MudPaper Class="pa-4 mb-4" Elevation="0" Style="border: 1px solid var(--mud-palette-success); background: rgba(0, 200, 83, 0.05);">
+                        <div class="d-flex align-center gap-3">
+                            <MudIcon Icon="@Icons.Material.Filled.CheckCircle" Color="Color.Success" />
+                            <div style="flex: 1;">
+                                <MudText Typo="Typo.subtitle2" Color="Color.Success">@Loc["Password Saved on this Device"]</MudText>
+                                <MudText Typo="Typo.caption">@Loc["Your secure vault will auto-unlock on this browser."]</MudText>
+                            </div>
+                            <MudButton Variant="Variant.Outlined" Color="Color.Error" Size="Size.Small" OnClick="RemoveDeviceCookie" Disabled="@IsDemo">@Loc["Remove"]</MudButton>
+                        </div>
+                    </MudPaper>
+                }
+                else
+                {
+                    <MudPaper Class="pa-4 mb-4" Elevation="0" Style="border: 1px solid var(--mud-palette-divider);">
+                        <div class="d-flex align-center gap-3">
+                            <MudIcon Icon="@Icons.Material.Filled.LockPerson" Color="Color.Default" />
+                            <div style="flex: 1;">
+                                <MudText Typo="Typo.subtitle2">@Loc["Password Not Saved"]</MudText>
+                                <MudText Typo="Typo.caption" Color="Color.Default">@Loc["You will need to manually unlock your vault each session."]</MudText>
+                            </div>
+                        </div>
+                    </MudPaper>
+                }
+            }
+
+            @if (!_isCheckingCookie && !_hasDeviceCookie && !ScopedKeystore.IsUnlocked)
+            {
+                <MudText Typo="Typo.subtitle2" Class="mb-2 mt-4">@Loc["Login to Vault"]</MudText>
+                <MudText Typo="Typo.caption" Color="Color.Secondary" Class="d-block mb-4">
+                    @Loc["Your password is not saved on this device. Unlock your vault to enable secure chat and optionally save your password."]
+                </MudText>
+                <input type="text" autocomplete="username" value="@($"{vaultUsername} (Chat Vault)")" style="position: absolute; left: -9999px;" tabindex="-1" aria-hidden="true" />
+                <MudTextField @bind-Value="_oldPassword" Label="@Loc["Vault Password"]" InputType="@(_showOldPassword ? InputType.Text : InputType.Password)" Variant="Variant.Outlined" Margin="Margin.Dense" Class="mb-4" Adornment="Adornment.End" AdornmentIcon="@(_showOldPassword ? Icons.Material.Filled.Visibility : Icons.Material.Filled.VisibilityOff)" OnAdornmentClick="@(() => _showOldPassword = !_showOldPassword)" AdornmentAriaLabel="@Loc["Show/hide password"]" UserAttributes="@(new Dictionary<string,object>{{ "autocomplete", "current-password" }})" Disabled="@IsDemo" />
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="LoginToVault" FullWidth="true" Disabled="@IsDemo">@Loc["Unlock Vault"]</MudButton>
+            }
+            else
+            {
+                <MudText Typo="Typo.subtitle2" Class="mb-2 mt-4">@Loc["Change Password"]</MudText>
+                <input type="text" autocomplete="username" value="@($"{vaultUsername} (Chat Vault)")" style="position: absolute; left: -9999px;" tabindex="-1" aria-hidden="true" />
+                <MudTextField @bind-Value="_oldPassword" Label="@Loc["Current Password"]" InputType="@(_showOldPassword ? InputType.Text : InputType.Password)" Variant="Variant.Outlined" Margin="Margin.Dense" Class="mb-2" Adornment="Adornment.End" AdornmentIcon="@(_showOldPassword ? Icons.Material.Filled.Visibility : Icons.Material.Filled.VisibilityOff)" OnAdornmentClick="@(() => _showOldPassword = !_showOldPassword)" AdornmentAriaLabel="@Loc["Show/hide password"]" UserAttributes="@(new Dictionary<string,object>{{ "autocomplete", "current-password" }})" Disabled="@IsDemo" />
+                <MudTextField @bind-Value="_newPassword" Label="@Loc["New Password"]" InputType="@(_showNewPassword ? InputType.Text : InputType.Password)" Variant="Variant.Outlined" Margin="Margin.Dense" Class="mb-2" Adornment="Adornment.End" AdornmentIcon="@(_showNewPassword ? Icons.Material.Filled.Visibility : Icons.Material.Filled.VisibilityOff)" OnAdornmentClick="@(() => _showNewPassword = !_showNewPassword)" AdornmentAriaLabel="@Loc["Show/hide password"]" UserAttributes="@(new Dictionary<string,object>{{ "autocomplete", "new-password" }})" Disabled="@IsDemo" />
+                <MudTextField @bind-Value="_confirmPassword" Label="@Loc["Confirm New Password"]" InputType="@(_showConfirmPassword ? InputType.Text : InputType.Password)" Variant="Variant.Outlined" Margin="Margin.Dense" Class="mb-4" Adornment="Adornment.End" AdornmentIcon="@(_showConfirmPassword ? Icons.Material.Filled.Visibility : Icons.Material.Filled.VisibilityOff)" OnAdornmentClick="@(() => _showConfirmPassword = !_showConfirmPassword)" AdornmentAriaLabel="@Loc["Show/hide password"]" UserAttributes="@(new Dictionary<string,object>{{ "autocomplete", "new-password" }})" Disabled="@IsDemo" />
+                
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="ChangePassword" FullWidth="true" Disabled="@IsDemo">@Loc["Update Password"]</MudButton>
+            }
+        }
+        else
+        {
+             <MudAlert Severity="Severity.Warning" Class="mb-4">@Loc["Secure Chat Disabled. You must set a password to use secure channels."]</MudAlert>
+
+             <input type="text" autocomplete="username" value="@($"{vaultUsername} (Chat Vault)")" style="position: absolute; left: -9999px;" tabindex="-1" aria-hidden="true" />
+             <MudTextField @bind-Value="_newPassword" Label="@Loc["New Vault Password"]" InputType="@(_showNewPassword ? InputType.Text : InputType.Password)" Variant="Variant.Outlined" Margin="Margin.Dense" Class="mb-2" Adornment="Adornment.End" AdornmentIcon="@(_showNewPassword ? Icons.Material.Filled.Visibility : Icons.Material.Filled.VisibilityOff)" OnAdornmentClick="@(() => _showNewPassword = !_showNewPassword)" AdornmentAriaLabel="@Loc["Show/hide password"]" UserAttributes="@(new Dictionary<string,object>{{ "autocomplete", "new-password" }})" Disabled="@IsDemo" />
+             <MudTextField @bind-Value="_confirmPassword" Label="@Loc["Confirm Vault Password"]" InputType="@(_showConfirmPassword ? InputType.Text : InputType.Password)" Variant="Variant.Outlined" Margin="Margin.Dense" Class="mb-4" Adornment="Adornment.End" AdornmentIcon="@(_showConfirmPassword ? Icons.Material.Filled.Visibility : Icons.Material.Filled.VisibilityOff)" OnAdornmentClick="@(() => _showConfirmPassword = !_showConfirmPassword)" AdornmentAriaLabel="@Loc["Show/hide password"]" UserAttributes="@(new Dictionary<string,object>{{ "autocomplete", "new-password" }})" Disabled="@IsDemo" />
+             
+             <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="SetupInitialPassword" FullWidth="true" Disabled="@IsDemo">@Loc["Enable Secure Chat"]</MudButton>
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Close">@Loc["Close"]</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
+    [Parameter] public Employee Employee { get; set; } = default!;
+
+    private string _oldPassword = "";
+    private string _newPassword = "";
+    private string _confirmPassword = "";
+
+    private bool _showOldPassword = false;
+    private bool _showNewPassword = false;
+    private bool _showConfirmPassword = false;
+
+    private bool _isCheckingCookie = true;
+    private bool _hasDeviceCookie = false;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender && Employee.HasVaultPassword)
+        {
+            _hasDeviceCookie = await ScopedKeystore.HasDeviceCookieAsync(JS);
+            _isCheckingCookie = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task LoginToVault()
+    {
+        var unlocked = await ScopedKeystore.UnlockWithPasswordAsync(JS, Employee, _oldPassword, rememberDevice: true);
+        if (unlocked)
+        {
+            _hasDeviceCookie = true;
+            _oldPassword = "";
+            Snackbar.Add(Loc["Vault unlocked successfully!"].Value, Severity.Success);
+            StateHasChanged();
+        }
+        else
+        {
+            Snackbar.Add(Loc["Incorrect password"].Value, Severity.Error);
+        }
+    }
+
+    private async Task SetupInitialPassword()
+    {
+        if (string.IsNullOrEmpty(_newPassword)) { Snackbar.Add(Loc["Password required"].Value, Severity.Error); return; }
+        if (_newPassword != _confirmPassword) { Snackbar.Add(Loc["Passwords do not match"].Value, Severity.Error); return; }
+
+        var keys = Crypto.GenerateRsaKeyPair();
+        var kek = Crypto.DeriveKeyFromPassword(_newPassword, Employee.Id);
+        var encryptedPrivate = Crypto.EncryptAes(keys.PrivateKey, kek);
+
+        Employee.PublicKey = keys.PublicKey;
+        Employee.EncryptedPrivateKey = encryptedPrivate;
+        Db.Employees.Save(Employee);
+
+        // Auto-unlock the vault and drop the cookie
+        ScopedKeystore.Unlock(keys.PrivateKey, Employee.Id);
+        Keystore.UnlockVault(Employee.Id, Employee.EncryptedPrivateKey, _newPassword, Crypto);
+        await SetVaultCookie(_newPassword);
+
+        // Claim any escrowed public/team channel keys and albums specifically for this user
+        await ChatSecurityService.ClaimEscrowedKeysAsync(Employee.Id);
+
+        Snackbar.Add(Loc["Secure chat enabled successfully!"].Value, Severity.Success);
+        MudDialog.Close(DialogResult.Ok(true));
+    }
+
+    private async Task ChangePassword()
+    {
+        if (string.IsNullOrEmpty(_oldPassword)) { Snackbar.Add(Loc["Current password required"].Value, Severity.Error); return; }
+        if (string.IsNullOrEmpty(_newPassword)) { Snackbar.Add(Loc["New password required"].Value, Severity.Error); return; }
+        if (_newPassword != _confirmPassword) { Snackbar.Add(Loc["Passwords do not match"].Value, Severity.Error); return; }
+
+        try 
+        {
+            var oldKek = Crypto.DeriveKeyFromPassword(_oldPassword, Employee.Id);
+            var plainPrivateKey = Crypto.DecryptAes(Employee.EncryptedPrivateKey!, oldKek);
+
+            var newKek = Crypto.DeriveKeyFromPassword(_newPassword, Employee.Id);
+            var newEncryptedPrivate = Crypto.EncryptAes(plainPrivateKey, newKek);
+
+            Employee.EncryptedPrivateKey = newEncryptedPrivate;
+            Db.Employees.Save(Employee);
+
+            ScopedKeystore.Unlock(plainPrivateKey, Employee.Id);
+            Keystore.UnlockVault(Employee.Id, Employee.EncryptedPrivateKey, _newPassword, Crypto);
+            await SetVaultCookie(_newPassword);
+
+            Snackbar.Add(Loc["Vault password updated!"].Value, Severity.Success);
+            MudDialog.Close(DialogResult.Ok(true));
+        }
+        catch 
+        {
+            Snackbar.Add(Loc["Current password is incorrect."].Value, Severity.Error);
+        }
+    }
+
+    private async Task SetVaultCookie(string password)
+    {
+        await ScopedKeystore.SaveDeviceCookieAsync(JS, password);
+        _hasDeviceCookie = true;
+    }
+
+    private async Task RemoveDeviceCookie()
+    {
+        await ScopedKeystore.LogoutDeviceVaultAsync(JS, Employee.Id);
+        _hasDeviceCookie = false;
+        Snackbar.Add(Loc["Password removed from device and session locked."].Value, Severity.Success);
+    }
+
+    private void Close() => MudDialog.Cancel();
+}

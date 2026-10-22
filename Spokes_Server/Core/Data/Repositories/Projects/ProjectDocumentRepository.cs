@@ -6,25 +6,28 @@ namespace Spokes_Server.Core.Data.Repositories.Projects;
 
 public class ProjectDocumentRepository : JsonRepository<ProjectDocument>
 {
-    private readonly ILogger<ProjectDocumentRepository> _logger;
-
     public ProjectDocumentRepository(DiskPersistenceService writer, IConfiguration config, ILogger<ProjectDocumentRepository> logger)
-        : base(writer, config["DataPath"] ?? "")
+        : base(writer, config["DataPath"] ?? "", "*.json", logger)
     {
-        _logger = logger;
     }
 
-    public List<ProjectDocument> GetByProject(string projectId) =>
-        _cache.Values
+    public List<ProjectDocument> GetByProject(string projectId)
+    {
+        EnsureLoaded();
+        return _cache.Values
             .Where(d => d.ProjectId == projectId)
             .OrderByDescending(d => d.CreatedAt)
             .ToList();
+    }
 
-    public List<ProjectDocument> GetBusinessDocuments() =>
-        _cache.Values
+    public List<ProjectDocument> GetBusinessDocuments()
+    {
+        EnsureLoaded();
+        return _cache.Values
             .Where(d => string.IsNullOrEmpty(d.ProjectId))
             .OrderByDescending(d => d.CreatedAt)
             .ToList();
+    }
 
     protected override string GetFilePath(ProjectDocument item) =>
         string.IsNullOrEmpty(item.ProjectId)
@@ -33,23 +36,35 @@ public class ProjectDocumentRepository : JsonRepository<ProjectDocument>
 
     public override void LoadFromDisk()
     {
-        var projectsPath = Path.Combine(_basePath, "Projects");
-        if (Directory.Exists(projectsPath))
+        lock (_loadLock)
         {
-            var files = Directory.GetFiles(projectsPath, "*.json", SearchOption.AllDirectories)
-                                 .Where(f => f.Contains("Documents" + Path.DirectorySeparatorChar));
-            LoadFiles(files);
-        }
+            var tempDocs = new List<ProjectDocument>();
 
-        var businessDocsPath = Path.Combine(_basePath, "BusinessDocuments");
-        if (Directory.Exists(businessDocsPath))
-        {
-            var files = Directory.GetFiles(businessDocsPath, "*.json", SearchOption.TopDirectoryOnly);
-            LoadFiles(files);
+            var projectsPath = Path.Combine(_basePath, "Projects");
+            if (Directory.Exists(projectsPath))
+            {
+                var files = Directory.GetFiles(projectsPath, "*.json", SearchOption.AllDirectories)
+                                     .Where(f => f.Contains("Documents" + Path.DirectorySeparatorChar));
+                LoadFiles(files, tempDocs);
+            }
+
+            var businessDocsPath = Path.Combine(_basePath, "BusinessDocuments");
+            if (Directory.Exists(businessDocsPath))
+            {
+                var files = Directory.GetFiles(businessDocsPath, "*.json", SearchOption.TopDirectoryOnly);
+                LoadFiles(files, tempDocs);
+            }
+
+            RawCache.Clear();
+            foreach (var doc in tempDocs)
+            {
+                RawCache[doc.Id] = doc;
+            }
+            _isLoaded = true;
         }
     }
 
-    private void LoadFiles(IEnumerable<string> files)
+    private void LoadFiles(IEnumerable<string> files, List<ProjectDocument> destination)
     {
         foreach (var file in files)
         {
@@ -57,11 +72,11 @@ public class ProjectDocumentRepository : JsonRepository<ProjectDocument>
             {
                 var json = File.ReadAllText(file);
                 var item = JsonSerializer.Deserialize<ProjectDocument>(json);
-                if (item != null) _cache[item.Id] = item;
+                if (item != null) destination.Add(item);
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error loading project document {File}", file);
+                _logger?.LogError(ex, "Error loading project document {File}", file);
             }
         }
     }

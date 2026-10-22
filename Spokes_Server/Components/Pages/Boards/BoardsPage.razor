@@ -1,6 +1,7 @@
+@* Feature disabled: Boards are a non-working feature and are currently hidden and inaccessible.
 @page "/boards"
 @page "/boards/{BoardId}"
-@using Spokes_Server.Components.Boards
+*@
 @inject Database Db
 @inject BoardService BoardService
 @inject NavigationManager Nav
@@ -172,8 +173,8 @@
                 else
                 {
                     orderedQuery = sort.IsDescending
-                    ? orderedQuery.ThenByDescending(KeySelector)
-                    : orderedQuery.ThenBy(KeySelector);
+                    ? orderedQuery!.ThenByDescending(KeySelector)
+                    : orderedQuery!.ThenBy(KeySelector);
                 }
             }
             if (orderedQuery != null)

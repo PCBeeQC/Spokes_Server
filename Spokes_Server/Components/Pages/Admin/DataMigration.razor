@@ -1,7 +1,5 @@
 @page "/admin/data-migration"
 @using Spokes_Server.Core.Constants
-@using Spokes_Server.Core.Services.Core
-@using Spokes_Server.Core.Services.Integrations
 @using Microsoft.AspNetCore.Components.Forms
 @inject ClockifyMigrationService MigrationService
 @inject Spokes_Server.Aggregate.Database Db
@@ -32,11 +30,11 @@
             </MudAlert>
 
             <MudFileUpload T="IReadOnlyList<IBrowserFile>" Accept=".csv" FilesChanged="HandleFilesUploaded" MaximumFileCount="100">
-                <ActivatorContent>
+                <CustomContent>
                     <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.CloudUpload">
                         Upload Clockify CSV(s)
                     </MudButton>
-                </ActivatorContent>
+                </CustomContent>
             </MudFileUpload>
 
             @if (_parsedFiles.Any())

@@ -1,9 +1,7 @@
 # Specify explicit versions for external dependencies so they can be tested and updated manually
 ARG LIVEKIT_VERSION=v1.11.0
-ARG CASDOOR_VERSION=3.49.0
+ARG CASDOOR_VERSION=4.15.0
 ARG APP_VERSION=dev
-ARG SPOKES_HMAC_SALT=default-development-salt
-ARG SPOKES_KLIPY_KEY=
 ARG SPOKES_RELAY_KEY=
 
 FROM livekit/livekit-server:${LIVEKIT_VERSION} AS livekit
@@ -15,7 +13,7 @@ WORKDIR /src
 
 # Copy the project file and restore dependencies
 COPY ["Spokes_Server/Spokes_Server.csproj", "Spokes_Server/"]
-RUN dotnet restore "Spokes_Server/Spokes_Server.csproj"
+RUN dotnet restore "Spokes_Server/Spokes_Server.csproj" -r linux-x64
 
 # Copy the rest of the source code
 COPY . .
@@ -26,7 +24,7 @@ WORKDIR "/src/Spokes_Server"
 # Publish the application
 FROM build AS publish
 ARG APP_VERSION
-RUN dotnet publish "Spokes_Server.csproj" -c Release -o /app/publish /p:UseAppHost=false /p:InformationalVersion=${APP_VERSION}
+RUN dotnet publish "Spokes_Server.csproj" -c Release -r linux-x64 --no-self-contained -o /app/publish /p:UseAppHost=false /p:InformationalVersion=${APP_VERSION}
 
 # Install and run Obfuscar
 RUN dotnet tool install --global Obfuscar.GlobalTool
@@ -67,11 +65,7 @@ WORKDIR /app
 EXPOSE 8080
 ENV ASPNETCORE_URLS=http://+:8080
 ENV DataPath="/data"
-ARG SPOKES_HMAC_SALT
-ARG SPOKES_KLIPY_KEY
 ARG SPOKES_RELAY_KEY
-ENV SPOKES_HMAC_SALT=${SPOKES_HMAC_SALT}
-ENV SPOKES_KLIPY_KEY=${SPOKES_KLIPY_KEY}
 ENV SPOKES_RELAY_KEY=${SPOKES_RELAY_KEY}
 COPY --from=publish /app/publish .
 

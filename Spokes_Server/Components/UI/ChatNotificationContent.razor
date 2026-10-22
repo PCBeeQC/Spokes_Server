@@ -1,0 +1,56 @@
+@* Custom snackbar content for chat & reaction notifications *@
+<div class="d-flex align-center gap-3" style="cursor: pointer; min-width: 260px; max-width: 340px;">
+    <MudAvatar Size="Size.Medium" Color="Color.Primary">
+        @if (!string.IsNullOrEmpty(AvatarUrl))
+        {
+            <MudImage Src="@AvatarUrl" Alt="@SenderName" ObjectFit="ObjectFit.Cover" />
+        }
+        else
+        {
+            @Initials
+        }
+    </MudAvatar>
+
+    <div style="flex: 1; overflow: hidden;">
+        @* Server & Channel Header *@
+        <div class="d-flex align-center gap-1">
+            <MudIcon Icon="@(IsGroupChat ? Icons.Material.Filled.Tag : Icons.Material.Filled.Person)" 
+                     Size="Size.Small" 
+                     Style="font-size: 0.8rem; opacity: 0.7;" />
+            <MudText Typo="Typo.caption" Style="opacity: 0.8; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                @ChannelName
+            </MudText>
+            @if (!string.IsNullOrWhiteSpace(ServerName))
+            {
+                <MudText Typo="Typo.caption" Style="opacity: 0.4;">•</MudText>
+                <MudText Typo="Typo.caption" Style="opacity: 0.6; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                    @ServerName
+                </MudText>
+            }
+        </div>
+
+        @* Sender / Action Title (e.g. "Alice reacted 👍 to:" or "Alice") *@
+        <MudText Typo="Typo.subtitle2" Style="font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1.25;" Class="my-0.5">
+            @SenderName
+        </MudText>
+
+        @* Content / Quoted Snippet *@
+        <MudText Typo="Typo.body2" Style="@(IsReaction ? "opacity: 0.85; font-style: italic; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" : "opacity: 0.95; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;")">
+            @Content
+        </MudText>
+    </div>
+
+    <MudIcon Icon="@Icons.Material.Filled.Chat" Color="Color.Primary" Size="Size.Small" Style="opacity: 0.7;" />
+</div>
+
+@code {
+    [Parameter] public string SenderName { get; set; } = "";
+    [Parameter] public string Content { get; set; } = "";
+    [Parameter] public string Initials { get; set; } = "";
+    [Parameter] public string ChannelId { get; set; } = "";
+    [Parameter] public string ChannelName { get; set; } = "";
+    [Parameter] public string? AvatarUrl { get; set; }
+    [Parameter] public bool IsReaction { get; set; }
+    [Parameter] public bool IsGroupChat { get; set; }
+    [Parameter] public string? ServerName { get; set; }
+}

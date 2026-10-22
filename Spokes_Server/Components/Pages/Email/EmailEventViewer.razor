@@ -1,11 +1,12 @@
 @using Spokes_Server.Components.Dialogs
-@using Ical.Net
-@inject EmailService EmailService
+@using Spokes_Server.Core.Helpers
+@using Spokes_Server.Core.Services.Communication.Email
+@inject IEmailCacheMaintenanceService CacheMaintenance
 @inject IDialogService DialogService
 @inject Database Db
 @inject ISnackbar Snackbar
 
-<MudCard Variant="Variant.Outlined" Class="mt-4" Style="max-width: 600px; background-color: var(--mud-palette-background-grey);">
+<MudCard Outlined="true" Class="mt-4" Style="max-width: 600px; background-color: var(--mud-palette-background-grey);">
     @if (_event != null)
     {
         <MudCardHeader>
@@ -90,40 +91,16 @@
 
         try
         {
-            var path = EmailService.GetAttachmentPath(MessageId, Attachment.Id, EmployeeId);
+            var path = CacheMaintenance.GetAttachmentPath(EmployeeId, MessageId, Attachment.Id);
             if (File.Exists(path))
             {
                 var icsContent = await File.ReadAllTextAsync(path);
-                var calendar = Calendar.Load(icsContent);
-                var vEvent = calendar.Events.FirstOrDefault();
+                var eventData = IcsParser.ParseFirstEvent(icsContent);
 
-                if (vEvent != null)
+                if (eventData != null)
                 {
-                    _event = new CalendarEvent
-                    {
-                        Title = vEvent.Summary ?? "Untitled Event",
-                        Location = vEvent.Location ?? "",
-                        Description = vEvent.Description ?? "",
-                        Start = vEvent.DtStart?.Value ?? DateTime.Today,
-                        End = vEvent.DtEnd?.Value ?? DateTime.Today.AddHours(1),
-                        IsAllDay = vEvent.IsAllDay,
-                        EmployeeId = EmployeeId
-                    };
-                    
-                    if (vEvent.Organizer != null)
-                    {
-                        var org = vEvent.Organizer.CommonName;
-                        if (string.IsNullOrWhiteSpace(org)) org = vEvent.Organizer.Value?.UserInfo + "@" + vEvent.Organizer.Value?.Host;
-                        _organizer = org;
-                    }
-
-                    _event.ExternalParticipant = _organizer ?? "";
-
-                    // Convert to local time if it's UTC
-                    if (_event.Start.Kind == DateTimeKind.Utc)
-                        _event.Start = _event.Start.ToLocalTime();
-                    if (_event.End.Kind == DateTimeKind.Utc)
-                        _event.End = _event.End.ToLocalTime();
+                    _event = IcsParser.ToCalendarEvent(eventData, EmployeeId);
+                    _organizer = eventData.Organizer;
                 }
                 else
                 {

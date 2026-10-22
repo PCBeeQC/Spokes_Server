@@ -1,5 +1,6 @@
 namespace Spokes_Server.Core.Models.Projects;
 
+using System.Text.Json.Serialization;
 using Spokes_Server.Core.Data;
 
 public class Quote : IDataEntity
@@ -19,7 +20,7 @@ public class Quote : IDataEntity
     public string Title { get; set; } = "Main Estimate";
     public DateTime Date { get; set; } = DateTime.Today;
 
-    public string Status { get; set; } = "Draft";
+    public string Status { get; set; } = QuoteStatus.Draft;
     public string PdfPath { get; set; } = string.Empty;
 
     // NEW: Template Override
@@ -31,7 +32,40 @@ public class Quote : IDataEntity
 
     // Data
     public List<QuoteLaborItem> LaborItems { get; set; } = [];
-    public List<QuoteItemRow> ItemRows { get; set; } = [];
+    public List<QuoteItemRow> MaterialLineItems { get; set; } = [];
+
+    // Backward compatibility for legacy JSON files and existing call sites
+    [JsonPropertyName("ItemRows")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<QuoteItemRow>? LegacyItemRows
+    {
+        get => null;
+        set { if (value != null && MaterialLineItems.Count == 0) MaterialLineItems = value; }
+    }
+
+    [Obsolete("Prefer MaterialLineItems for consistency across models.")]
+    [JsonIgnore]
+    public List<QuoteItemRow> ItemRows
+    {
+        get => MaterialLineItems;
+        set => MaterialLineItems = value;
+    }
+
+    [Obsolete("Prefer MaterialLineItems for consistency across models.")]
+    [JsonIgnore]
+    public List<QuoteItemRow> LineItems
+    {
+        get => MaterialLineItems;
+        set => MaterialLineItems = value;
+    }
+
+    [JsonIgnore]
+    public List<QuoteLaborItem> LaborLineItems
+    {
+        get => LaborItems;
+        set => LaborItems = value;
+    }
+
     public List<PaymentTerm> PaymentTerms { get; set; } = [];
 
     // Monthly Payment Display
@@ -45,8 +79,8 @@ public class Quote : IDataEntity
     public bool ShowTax { get; set; } = true;
 
     public decimal TotalLabor => LaborItems.Sum(x => x.Total);
-    public decimal TotalItems => ItemRows.Where(x => !x.IsClientBought).Sum(x => x.Total);
-    public decimal TotalClientBought => ItemRows.Where(x => x.IsClientBought).Sum(x => x.Total);
+    public decimal TotalItems => MaterialLineItems.Where(x => !x.IsClientBought).Sum(x => x.Total);
+    public decimal TotalClientBought => MaterialLineItems.Where(x => x.IsClientBought).Sum(x => x.Total);
 
     // NEW: Calculation Logic
     public decimal SubTotal => TotalLabor + TotalItems;

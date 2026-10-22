@@ -1,42 +1,13 @@
-using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.Logging;
-using Moq;
-using Spokes_Server.Core.Data;
 using Spokes_Server.Core.Data.Repositories.Accounting;
 using Spokes_Server.Core.Models.Accounting;
-using Spokes_Server.Core.Models.Projects;
+using Spokes_Server.Core.Models.Core;
+using Spokes_Server.Tests.Helpers;
 using Xunit;
 
 namespace Spokes_Server.Tests.Core.Data.Repositories.Accounting;
 
-public class PurchaseOrderRepositoryTests : IDisposable
+public class PurchaseOrderRepositoryTests : RepositoryTestFixture<PurchaseOrderRepository>
 {
-    private readonly string _testDataDir;
-    private readonly DiskPersistenceService _writer;
-    private readonly PurchaseOrderRepository _repo;
-
-    public PurchaseOrderRepositoryTests()
-    {
-        _testDataDir = Path.Combine(Path.GetTempPath(), $"Spokes_Test_Purchases_{Guid.NewGuid()}");
-
-        var mockConfig = new Mock<IConfiguration>();
-        mockConfig.Setup(c => c["DataPath"]).Returns(_testDataDir);
-
-        var mockPersistenceLogger = new Mock<ILogger<DiskPersistenceService>>();
-        _writer = new DiskPersistenceService(mockPersistenceLogger.Object);
-
-        _repo = new PurchaseOrderRepository(_writer, mockConfig.Object);
-    }
-
-    public void Dispose()
-    {
-        if (Directory.Exists(_testDataDir))
-        {
-            try { Directory.Delete(_testDataDir, true); } catch (Exception ex) { Console.WriteLine($"Cleanup failed: {ex.Message}"); }
-        }
-        _writer.Dispose();
-    }
-
     [Fact]
     public void Save_GeneratesSequentialPoNumberIfMissing()
     {
@@ -67,17 +38,6 @@ public class PurchaseOrderRepositoryTests : IDisposable
         var storedItems = _repo.GetAll();
         Assert.Single(storedItems);
         Assert.Equal("CUSTOM-PO", storedItems.First().PoNumber);
-    }
-
-    [Fact]
-    public void Constructor_WithNullDataPath_UsesDefaultPath()
-    {
-        var mockConfig = new Mock<IConfiguration>();
-        mockConfig.Setup(c => c["DataPath"]).Returns((string?)null);
-
-        var repo = new PurchaseOrderRepository(_writer, mockConfig.Object);
-
-        Assert.NotNull(repo);
     }
 
     [Fact]
@@ -140,5 +100,23 @@ public class PurchaseOrderRepositoryTests : IDisposable
 
         Assert.Equal("PO2512-01", _repo.GetById("poDec")?.PoNumber);
         Assert.Equal("PO2601-01", _repo.GetById("poJan")?.PoNumber);
+    }
+
+    [Fact]
+    public void Save_WithExplicitSequenceService_PersistsAndIncrementsSequence()
+    {
+        var seqService = new Spokes_Server.Core.Data.SequenceService(_config);
+        var repo = new PurchaseOrderRepository(_writer, _config, seqService);
+
+        var date = new DateTime(2026, 4, 1);
+        var po1 = new PurchaseOrder { Id = "po-seq-1", Date = date };
+        var po2 = new PurchaseOrder { Id = "po-seq-2", Date = date };
+
+        repo.Save(po1);
+        repo.Save(po2);
+
+        Assert.Equal("PO2604-01", po1.PoNumber);
+        Assert.Equal("PO2604-02", po2.PoNumber);
+        Assert.True(File.Exists(seqService.FilePath));
     }
 }

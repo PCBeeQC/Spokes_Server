@@ -7,21 +7,22 @@ namespace Spokes_Server.Core.Data.Repositories.Projects;
 public class QuoteRepository : JsonRepository<Quote>
 {
     private readonly SequenceService _sequenceService;
-    private readonly ILogger<QuoteRepository> _logger;
 
     public QuoteRepository(DiskPersistenceService writer, IConfiguration config, SequenceService sequenceService, ILogger<QuoteRepository> logger)
         // Base path is generic here, we calculate specific path per item
-        : base(writer, config["DataPath"] ?? "")
+        : base(writer, config["DataPath"] ?? "", "*.json", logger)
     {
         _sequenceService = sequenceService;
-        _logger = logger;
     }
 
-    public List<Quote> GetByProject(string projectId) =>
-        _cache.Values
+    public List<Quote> GetByProject(string projectId)
+    {
+        EnsureLoaded();
+        return _cache.Values
             .Where(q => q.ProjectId == projectId)
             .OrderByDescending(q => q.Date)
             .ToList();
+    }
 
     public string GenerateQuoteNumber(string prefix) =>
         _sequenceService.GenerateNumber("Quote", prefix);
@@ -33,25 +34,40 @@ public class QuoteRepository : JsonRepository<Quote>
     // Custom loader to scan Project folders for quotes
     public override void LoadFromDisk()
     {
-        var projectsPath = Path.Combine(_basePath, "Projects");
-        if (!Directory.Exists(projectsPath)) return;
-
-        // Find all "Quotes" folders inside any project
-        var files = Directory.GetFiles(projectsPath, "*.json", SearchOption.AllDirectories)
-                             .Where(f => f.Contains("Quotes" + Path.DirectorySeparatorChar));
-
-        foreach (var file in files)
+        lock (_loadLock)
         {
-            try
+            var projectsPath = Path.Combine(_basePath, "Projects");
+            if (!Directory.Exists(projectsPath))
             {
-                var json = File.ReadAllText(file);
-                var item = JsonSerializer.Deserialize<Quote>(json);
-                if (item != null) _cache[item.Id] = item;
+                _isLoaded = true;
+                return;
             }
-            catch (Exception ex)
+
+            // Find all "Quotes" folders inside any project
+            var files = Directory.GetFiles(projectsPath, "*.json", SearchOption.AllDirectories)
+                                 .Where(f => f.Contains("Quotes" + Path.DirectorySeparatorChar));
+
+            var tempQuotes = new List<Quote>();
+            foreach (var file in files)
             {
-                _logger.LogError(ex, "Error loading quote {File}", file);
+                try
+                {
+                    var json = File.ReadAllText(file);
+                    var item = JsonSerializer.Deserialize<Quote>(json);
+                    if (item != null) tempQuotes.Add(item);
+                }
+                catch (Exception ex)
+                {
+                    _logger?.LogError(ex, "Error loading quote {File}", file);
+                }
             }
+
+            RawCache.Clear();
+            foreach (var item in tempQuotes)
+            {
+                RawCache[item.Id] = item;
+            }
+            _isLoaded = true;
         }
     }
 }

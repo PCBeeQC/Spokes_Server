@@ -15,7 +15,6 @@ public class HRServiceTests : IDisposable
         private readonly string _testDataDir;
         private readonly ServiceProvider _serviceProvider;
         private readonly Database _db;
-        private readonly OvertimeService _overtimeService;
         private readonly HRService _service;
 
         public HRServiceTests()
@@ -30,13 +29,12 @@ public class HRServiceTests : IDisposable
             services.AddSingleton<IConfiguration>(mockConfig.Object);
 
             services.AddLogging(builder => builder.AddConsole());
-            services.AddSingleton<Spokes_Server.Core.Services.Core.EncryptionService>();
+            services.AddSingleton<EncryptionService>();
             services.AddSpokesDatabase();
 
             _serviceProvider = services.BuildServiceProvider();
             _db = _serviceProvider.GetRequiredService<Database>();
-            _overtimeService = new OvertimeService(_db.Employees, _db.Timesheets, _db.HourBankAdjustments, _db.CompanyProfile);
-            _service = new HRService(_db, _overtimeService);
+            _service = new HRService(_db.HrContext);
         }
 
         public void Dispose()
@@ -44,7 +42,7 @@ public class HRServiceTests : IDisposable
             _serviceProvider.Dispose();
             if (Directory.Exists(_testDataDir))
             {
-                try { Directory.Delete(_testDataDir, true); } catch { }
+                try { Directory.Delete(_testDataDir, true); } catch (Exception ex) { System.Diagnostics.Debug.WriteLine(ex.Message); }
             }
         }
 
@@ -54,8 +52,8 @@ public class HRServiceTests : IDisposable
             var ts = new Timesheet { Id = "ts-1", EmployeeId = "emp-1", Status = "Draft", RejectionNote = "Old rejection" };
             _db.Timesheets.Save(ts);
 
-            var success = _service.SubmitTimesheet("ts-1");
-            Assert.True(success);
+            var result = _service.SubmitTimesheet("ts-1");
+            Assert.True(result.IsSuccess);
 
             var updated = _db.Timesheets.GetById("ts-1");
             Assert.Equal("Submitted", updated.Status);
@@ -79,8 +77,9 @@ public class HRServiceTests : IDisposable
             _db.Timesheets.Save(ts);
 
             var settings = new TimesheetSettings { RequireNote = true };
-            var success = _service.SubmitTimesheet("ts-note-check", settings);
-            Assert.False(success);
+            var result = _service.SubmitTimesheet("ts-note-check", settings);
+            Assert.False(result.IsSuccess);
+            Assert.Equal("NOTE_REQUIRED", result.Code);
 
             var unchanged = _db.Timesheets.GetById("ts-note-check");
             Assert.Equal("Draft", unchanged.Status);
@@ -89,15 +88,18 @@ public class HRServiceTests : IDisposable
         [Fact]
         public void ApproveTimesheet_TransitionsToApproved_AndSetsApprover()
         {
-            var emp = new Employee { Id = "emp-sub", FirstName = "Sub", LastName = "User" };
             var manager = new Employee { Id = "mgr-1", FirstName = "Manager", LastName = "User" };
+            var emp = new Employee { Id = "emp-sub", FirstName = "Sub", LastName = "User", TeamId = "team-mgr" };
+            var team = new Team { Id = "team-mgr", LeaderId = "mgr-1" };
+            _db.Teams.Save(team);
             _db.Employees.Save(emp);
             _db.Employees.Save(manager);
 
             var ts = new Timesheet { Id = "ts-appr", EmployeeId = "emp-sub", Status = "Submitted" };
             _db.Timesheets.Save(ts);
 
-            _service.ApproveTimesheet("ts-appr", "mgr-1");
+            var result = _service.ApproveTimesheet("ts-appr", "mgr-1");
+            Assert.True(result.IsSuccess);
 
             var approved = _db.Timesheets.GetById("ts-appr");
             Assert.Equal("Approved", approved.Status);
@@ -106,7 +108,23 @@ public class HRServiceTests : IDisposable
         }
 
         [Fact]
-        public void ApproveTimesheet_Throws_OnSelfApprovalByNonAdmin()
+        public void ApproveTimesheet_Fails_WhenApproverLacksManagerialAuthority()
+        {
+            var outsider = new Employee { Id = "mgr-outsider", FirstName = "Outsider", LastName = "User", IsAdmin = false };
+            var emp = new Employee { Id = "emp-sub-2", FirstName = "Sub", LastName = "User", TeamId = "team-other" };
+            _db.Employees.Save(emp);
+            _db.Employees.Save(outsider);
+
+            var ts = new Timesheet { Id = "ts-unauth-appr", EmployeeId = "emp-sub-2", Status = "Submitted" };
+            _db.Timesheets.Save(ts);
+
+            var result = _service.ApproveTimesheet("ts-unauth-appr", "mgr-outsider");
+            Assert.False(result.IsSuccess);
+            Assert.Equal("FORBIDDEN", result.Code);
+        }
+
+        [Fact]
+        public void ApproveTimesheet_Fails_OnSelfApprovalByNonAdmin()
         {
             var emp = new Employee { Id = "emp-self", FirstName = "Self", LastName = "User", IsAdmin = false };
             _db.Employees.Save(emp);
@@ -114,7 +132,9 @@ public class HRServiceTests : IDisposable
             var ts = new Timesheet { Id = "ts-self", EmployeeId = "emp-self", Status = "Submitted" };
             _db.Timesheets.Save(ts);
 
-            Assert.Throws<InvalidOperationException>(() => _service.ApproveTimesheet("ts-self", "emp-self"));
+            var result = _service.ApproveTimesheet("ts-self", "emp-self");
+            Assert.False(result.IsSuccess);
+            Assert.Equal("FORBIDDEN", result.Code);
         }
 
         [Fact]
@@ -126,7 +146,8 @@ public class HRServiceTests : IDisposable
             var ts = new Timesheet { Id = "ts-admin", EmployeeId = "emp-admin", Status = "Submitted" };
             _db.Timesheets.Save(ts);
 
-            _service.ApproveTimesheet("ts-admin", "emp-admin");
+            var result = _service.ApproveTimesheet("ts-admin", "emp-admin");
+            Assert.True(result.IsSuccess);
 
             var approved = _db.Timesheets.GetById("ts-admin");
             Assert.Equal("Approved", approved.Status);
@@ -136,10 +157,18 @@ public class HRServiceTests : IDisposable
         [Fact]
         public void RejectTimesheet_SetsStatusRejected_AndCapturesReason()
         {
+            var manager = new Employee { Id = "mgr-1", FirstName = "Manager", LastName = "User" };
+            var emp = new Employee { Id = "emp-1", FirstName = "Employee", LastName = "One", TeamId = "team-mgr" };
+            var team = new Team { Id = "team-mgr", LeaderId = "mgr-1" };
+            _db.Teams.Save(team);
+            _db.Employees.Save(emp);
+            _db.Employees.Save(manager);
+
             var ts = new Timesheet { Id = "ts-rej", EmployeeId = "emp-1", Status = "Submitted" };
             _db.Timesheets.Save(ts);
 
-            _service.RejectTimesheet("ts-rej", "Missing task description", "mgr-1");
+            var result = _service.RejectTimesheet("ts-rej", "mgr-1", "Missing task description");
+            Assert.True(result.IsSuccess);
 
             var rejected = _db.Timesheets.GetById("ts-rej");
             Assert.Equal("Rejected", rejected.Status);
@@ -147,6 +176,23 @@ public class HRServiceTests : IDisposable
             Assert.Equal("mgr-1", rejected.ApprovedBy);
             Assert.Null(rejected.ApprovedAt);
         }
+
+        [Fact]
+        public void RejectTimesheet_Fails_WhenRejectorLacksManagerialAuthority()
+        {
+            var outsider = new Employee { Id = "mgr-outsider", FirstName = "Outsider", LastName = "User", IsAdmin = false };
+            var emp = new Employee { Id = "emp-2", FirstName = "Employee", LastName = "Two", TeamId = "team-other" };
+            _db.Employees.Save(emp);
+            _db.Employees.Save(outsider);
+
+            var ts = new Timesheet { Id = "ts-unauth-rej", EmployeeId = "emp-2", Status = "Submitted" };
+            _db.Timesheets.Save(ts);
+
+            var result = _service.RejectTimesheet("ts-unauth-rej", "mgr-outsider", "note");
+            Assert.False(result.IsSuccess);
+            Assert.Equal("FORBIDDEN", result.Code);
+        }
+
 
         [Fact]
         public void IsTimesheetLocked_EvaluatesCutoffProperly()
@@ -204,112 +250,67 @@ public class HRServiceTests : IDisposable
             Assert.False(_service.CanManageEmployee(manager, "emp-out"));
         }
 
+
+
         [Fact]
-        public void CalculateHourBank_DelegatesToOvertimeService()
+        public void SubmitTimesheet_WhenTimesheetNotFound_ReturnsFailure()
         {
-            var emp = new Employee
-            {
-                Id = "emp-hb",
-                DateOfJoining = DateOnly.FromDateTime(DateTime.Today.AddDays(-21)),
-                WeeklyHours = 40m
-            };
-            _db.Employees.Save(emp);
-
-            var lastWeekDate = DateTime.Today.AddDays(-14);
-            var year = ISOWeek.GetYear(lastWeekDate);
-            var week = ISOWeek.GetWeekOfYear(lastWeekDate);
-            var ts = new Timesheet
-            {
-                Id = "ts-hb",
-                EmployeeId = "emp-hb",
-                Year = year,
-                WeekNumber = week,
-                Entries = [new() { Hours = 45m }]
-            };
-            _db.Timesheets.Save(ts);
-
-            var result = _service.CalculateHourBank("emp-hb");
-            Assert.NotNull(result);
-            Assert.Equal(emp.DateOfJoining, result.StartDate);
-            Assert.True(result.WeeksTracked > 0);
+            var result = _service.SubmitTimesheet("non-existent-ts");
+            Assert.False(result.IsSuccess);
+            Assert.Equal("NOT_FOUND", result.Code);
         }
 
         [Fact]
-        public void CalculateWeeklyOvertime_DelegatesToOvertimeService()
-        {
-            var emp = new Employee { Id = "emp-wo", WeeklyHours = 40m };
-            _db.Employees.Save(emp);
-
-            var ts = new Timesheet
-            {
-                Id = "ts-wo",
-                EmployeeId = "emp-wo",
-                Year = 2024,
-                WeekNumber = 10,
-                Entries = [new() { Hours = 45m }]
-            };
-            _db.Timesheets.Save(ts);
-
-            var result = _service.CalculateWeeklyOvertime("emp-wo", 2024, 10);
-            Assert.NotNull(result);
-            Assert.Equal(45m, result.WorkedHours);
-            Assert.Equal(40m, result.ExpectedHours);
-            Assert.Equal(5m, result.Difference);
-            Assert.True(result.IsOvertime);
-        }
-
-        [Fact]
-        public void SubmitTimesheet_WhenTimesheetNotFound_ReturnsFalse()
-        {
-            var success = _service.SubmitTimesheet("non-existent-ts");
-            Assert.False(success);
-        }
-
-        [Fact]
-        public void SubmitTimesheet_WhenStatusIsApproved_ReturnsFalse()
+        public void SubmitTimesheet_WhenStatusIsApproved_ReturnsFailure()
         {
             var ts = new Timesheet { Id = "ts-appr-sub", Status = "Approved" };
             _db.Timesheets.Save(ts);
 
             var result = _service.SubmitTimesheet("ts-appr-sub");
-            Assert.False(result);
+            Assert.False(result.IsSuccess);
+            Assert.Equal("INVALID_STATUS", result.Code);
         }
 
         [Fact]
-        public void SubmitTimesheet_WhenStatusIsSubmitted_ReturnsFalse()
+        public void SubmitTimesheet_WhenStatusIsSubmitted_ReturnsFailure()
         {
             var ts = new Timesheet { Id = "ts-subm-sub", Status = "Submitted" };
             _db.Timesheets.Save(ts);
 
             var result = _service.SubmitTimesheet("ts-subm-sub");
-            Assert.False(result);
+            Assert.False(result.IsSuccess);
+            Assert.Equal("INVALID_STATUS", result.Code);
         }
 
         [Fact]
-        public void SubmitTimesheet_WhenTimesheetLocked_ReturnsFalse()
+        public void SubmitTimesheet_WhenTimesheetLocked_ReturnsFailure()
         {
             var ts = new Timesheet { Id = "ts-locked", Status = "Draft", Year = 2020, WeekNumber = 1 };
             _db.Timesheets.Save(ts);
 
             var settings = new TimesheetSettings { EnableTimesheetLocking = true, LockTimesheetsOlderThanDays = 30 };
             var result = _service.SubmitTimesheet("ts-locked", settings);
-            Assert.False(result);
+            Assert.False(result.IsSuccess);
+            Assert.Equal("TIMESHEET_LOCKED", result.Code);
         }
 
         [Fact]
-        public void ApproveTimesheet_WhenTimesheetNotFound_DoesNotThrow()
+        public void ApproveTimesheet_WhenTimesheetNotFound_ReturnsFailure()
         {
-            var ex = Record.Exception(() => _service.ApproveTimesheet("non-existent-ts", "mgr-1"));
-            Assert.Null(ex);
+            var result = _service.ApproveTimesheet("non-existent-ts", "mgr-1");
+            Assert.False(result.IsSuccess);
+            Assert.Equal("NOT_FOUND", result.Code);
         }
 
         [Fact]
-        public void ApproveTimesheet_WhenStatusNotSubmitted_DoesNotChangeTimesheet()
+        public void ApproveTimesheet_WhenStatusNotSubmitted_ReturnsFailure()
         {
             var ts = new Timesheet { Id = "ts-draft-app", Status = "Draft" };
             _db.Timesheets.Save(ts);
 
-            _service.ApproveTimesheet("ts-draft-app", "mgr-1");
+            var result = _service.ApproveTimesheet("ts-draft-app", "mgr-1");
+            Assert.False(result.IsSuccess);
+            Assert.Equal("INVALID_STATUS", result.Code);
 
             var updated = _db.Timesheets.GetById("ts-draft-app");
             Assert.Equal("Draft", updated.Status);
@@ -318,24 +319,60 @@ public class HRServiceTests : IDisposable
         }
 
         [Fact]
-        public void RejectTimesheet_WhenTimesheetNotFound_DoesNotThrow()
+        public void RejectTimesheet_WhenTimesheetNotFound_ReturnsFailure()
         {
-            var ex = Record.Exception(() => _service.RejectTimesheet("non-existent-ts", "rejection note", "mgr-1"));
-            Assert.Null(ex);
+            var result = _service.RejectTimesheet("non-existent-ts", "mgr-1", "rejection note");
+            Assert.False(result.IsSuccess);
+            Assert.Equal("NOT_FOUND", result.Code);
         }
 
         [Fact]
-        public void RejectTimesheet_WhenStatusNotSubmitted_DoesNotChangeTimesheet()
+        public void RejectTimesheet_WhenStatusNotSubmitted_ReturnsFailure()
         {
             var ts = new Timesheet { Id = "ts-draft-rej", Status = "Draft" };
             _db.Timesheets.Save(ts);
 
-            _service.RejectTimesheet("ts-draft-rej", "rejection note", "mgr-1");
+            var result = _service.RejectTimesheet("ts-draft-rej", "mgr-1", "rejection note");
+            Assert.False(result.IsSuccess);
+            Assert.Equal("INVALID_STATUS", result.Code);
 
             var updated = _db.Timesheets.GetById("ts-draft-rej");
             Assert.Equal("Draft", updated.Status);
             Assert.Null(updated.RejectionNote);
             Assert.Null(updated.ApprovedBy);
+        }
+
+        [Fact]
+        public void RejectTimesheet_WhenRejectionNoteIsWhitespace_ReturnsFailure()
+        {
+            var manager = new Employee { Id = "mgr-note", FirstName = "Manager", LastName = "User" };
+            var emp = new Employee { Id = "emp-note", FirstName = "Sub", LastName = "User", TeamId = "team-note" };
+            var team = new Team { Id = "team-note", LeaderId = "mgr-note" };
+            _db.Teams.Save(team);
+            _db.Employees.Save(emp);
+            _db.Employees.Save(manager);
+
+            var ts = new Timesheet { Id = "ts-empty-note", EmployeeId = "emp-note", Status = "Submitted" };
+            _db.Timesheets.Save(ts);
+
+            var result = _service.RejectTimesheet("ts-empty-note", "mgr-note", "   ");
+            Assert.False(result.IsSuccess);
+            Assert.Equal("NOTE_REQUIRED", result.Code);
+        }
+
+        [Fact]
+        public void IsTimesheetLocked_WithInvalidYearOrWeek_ReturnsFalseWithoutThrowing()
+        {
+            var settings = new TimesheetSettings { EnableTimesheetLocking = true, LockTimesheetsOlderThanDays = 30 };
+
+            var invalidYear = new Timesheet { Year = -1, WeekNumber = 1 };
+            Assert.False(_service.IsTimesheetLocked(invalidYear, settings));
+
+            var invalidWeekLow = new Timesheet { Year = 2024, WeekNumber = 0 };
+            Assert.False(_service.IsTimesheetLocked(invalidWeekLow, settings));
+
+            var invalidWeekHigh = new Timesheet { Year = 2024, WeekNumber = 55 };
+            Assert.False(_service.IsTimesheetLocked(invalidWeekHigh, settings));
         }
 
         [Fact]

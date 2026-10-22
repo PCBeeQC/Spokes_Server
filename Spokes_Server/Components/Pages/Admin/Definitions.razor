@@ -1,9 +1,9 @@
 @page "/admin/definitions"
+@attribute [Authorize(Policy = AppPermissions.Admin.ManageSettings)]
 @implements IDisposable
 @using Spokes_Server.Components.Pages.Admin.Features
 @using Spokes_Server.Core.Constants
 @inject NavigationManager Nav
-@inject UserService UserService
 
 <PageTitle>Definitions</PageTitle>
 
@@ -69,17 +69,6 @@
         }
         catch (Microsoft.AspNetCore.Components.NavigationException)
         {
-        }
-    }
-
-    protected override async Task OnInitializedAsync()
-    {
-        var emp = await UserService.GetEmployeeAsync();
-        var hasAccess = emp != null && (emp.IsAdmin || emp.HasPermission(AppPermissions.Admin.ManageSettings));
-
-        if (!hasAccess)
-        {
-            Nav.NavigateTo("/", true);
         }
     }
 }

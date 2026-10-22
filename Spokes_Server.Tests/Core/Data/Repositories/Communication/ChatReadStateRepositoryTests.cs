@@ -1,40 +1,16 @@
-using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.Logging;
-using Moq;
-using Spokes_Server.Core.Data;
 using Spokes_Server.Core.Data.Repositories.Communication;
 using Spokes_Server.Core.Data.Repositories.Core;
 using Spokes_Server.Core.Models.Communication;
+using Spokes_Server.Tests.Helpers;
 using Xunit;
 
 namespace Spokes_Server.Tests.Core.Data.Repositories.Communication;
 
-public class ChatReadStateRepositoryTests : IDisposable
+public class ChatReadStateRepositoryTests : RepositoryTestFixture<ChatReadStateRepository>
 {
-    private readonly string _testDataDir;
-    private readonly DiskPersistenceService _writer;
-    private readonly ChatReadStateRepository _repo;
-
     public ChatReadStateRepositoryTests()
+        : base((writer, config) => new ChatReadStateRepository(writer, config, new CompanyProfileRepository(writer, config)), "ReadStates")
     {
-        _testDataDir = Path.Combine(Path.GetTempPath(), $"Spokes_Test_ReadStates_{Guid.NewGuid()}");
-
-        var mockConfig = new Mock<IConfiguration>();
-        mockConfig.Setup(c => c["DataPath"]).Returns(_testDataDir);
-
-        var mockLogger = new Mock<ILogger<DiskPersistenceService>>();
-        _writer = new DiskPersistenceService(mockLogger.Object);
-
-        _repo = new ChatReadStateRepository(_writer, mockConfig.Object, new CompanyProfileRepository(_writer, mockConfig.Object));
-    }
-
-    public void Dispose()
-    {
-        if (Directory.Exists(_testDataDir))
-        {
-            try { Directory.Delete(_testDataDir, true); } catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"Cleanup error: {ex.Message}"); }
-        }
-        _writer.Dispose();
     }
 
     [Fact]
@@ -128,17 +104,6 @@ public class ChatReadStateRepositoryTests : IDisposable
     }
 
     [Fact]
-    public void Constructor_WithNullDataPath_UsesDefaultPath()
-    {
-        var mockConfig = new Mock<IConfiguration>();
-        mockConfig.Setup(c => c["DataPath"]).Returns((string?)null);
-
-        var repo = new ChatReadStateRepository(_writer, mockConfig.Object, new CompanyProfileRepository(_writer, mockConfig.Object));
-
-        Assert.NotNull(repo);
-    }
-
-    [Fact]
     public void GetFilePath_SavesInReadstatesFolderWithIdJson()
     {
         var state = new ChatReadState
@@ -197,7 +162,3 @@ public class ChatReadStateRepositoryTests : IDisposable
         Assert.NotNull(state.NotificationLevel);
     }
 }
-
-
-
-

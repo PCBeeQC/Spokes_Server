@@ -22,7 +22,7 @@ public class ScopedKeystoreServiceTests
         _dataProtection = sp.GetRequiredService<IDataProtectionProvider>();
     }
 
-    private ScopedKeystoreService CreateService() => new(_dataProtection);
+    private ScopedKeystoreService CreateService(GlobalKeystoreService? globalKeystore = null) => new(_dataProtection, _crypto, globalKeystore);
 
     [Fact]
     public void InitialState_IsLocked_AndEventsFire()
@@ -69,8 +69,7 @@ public class ScopedKeystoreServiceTests
         var result = service.TryInitializeFromVaultCookie(
             httpContext: null,
             employeeId: "emp-1",
-            encryptedPrivateKey: "dummy-key",
-            crypto: _crypto);
+            encryptedPrivateKey: "dummy-key");
 
         // Assert
         Assert.True(result);
@@ -88,8 +87,7 @@ public class ScopedKeystoreServiceTests
         var result = service.TryInitializeFromVaultCookie(
             httpContext: null,
             employeeId: "emp-1",
-            encryptedPrivateKey: "dummy-key",
-            crypto: _crypto);
+            encryptedPrivateKey: "dummy-key");
 
         // Assert
         Assert.False(result);
@@ -108,8 +106,7 @@ public class ScopedKeystoreServiceTests
         var result = service.TryInitializeFromVaultCookie(
             httpContext,
             employeeId: "emp-1",
-            encryptedPrivateKey: "dummy-key",
-            crypto: _crypto);
+            encryptedPrivateKey: "dummy-key");
 
         // Assert
         Assert.False(result);
@@ -120,7 +117,6 @@ public class ScopedKeystoreServiceTests
     public void TryInitializeFromVaultCookie_WithValidCookie_UnlocksScopedAndGlobalKeystore()
     {
         // Arrange
-        var service = CreateService();
         const string password = "VaultPassword#2026";
         const string employeeId = "EMP-001";
         const string plainKey = "<RSAKeyValue><Modulus>scoped-test-modulus</Modulus></RSAKeyValue>";
@@ -135,14 +131,13 @@ public class ScopedKeystoreServiceTests
         httpContext.Request.Headers["Cookie"] = $"chat_vault_key={protectedPassword}";
 
         var globalKeystore = new GlobalKeystoreService();
+        var service = CreateService(globalKeystore);
 
         // Act
         var result = service.TryInitializeFromVaultCookie(
             httpContext,
             employeeId,
-            encryptedKey,
-            _crypto,
-            globalKeystore);
+            encryptedKey);
 
         // Assert
         Assert.True(result);
@@ -156,7 +151,6 @@ public class ScopedKeystoreServiceTests
     public void TryInitializeFromVaultCookie_WithValidHeader_UnlocksSuccessfully()
     {
         // Arrange
-        var service = CreateService();
         const string password = "VaultPasswordHeader#2026";
         const string employeeId = "EMP-002";
         const string plainKey = "<RSAKeyValue><Modulus>header-test-modulus</Modulus></RSAKeyValue>";
@@ -171,14 +165,13 @@ public class ScopedKeystoreServiceTests
         httpContext.Request.Headers["X-Chat-Vault-Key"] = protectedPassword;
 
         var globalKeystore = new GlobalKeystoreService();
+        var service = CreateService(globalKeystore);
 
         // Act
         var result = service.TryInitializeFromVaultCookie(
             httpContext,
             employeeId,
-            encryptedKey,
-            _crypto,
-            globalKeystore);
+            encryptedKey);
 
         // Assert
         Assert.True(result);
@@ -192,7 +185,6 @@ public class ScopedKeystoreServiceTests
     public void TryInitializeFromVaultCookie_WithTamperedCookie_ReturnsFalse()
     {
         // Arrange
-        var service = CreateService();
         const string employeeId = "EMP-003";
         const string encryptedKey = "some-encrypted-key";
 
@@ -200,14 +192,13 @@ public class ScopedKeystoreServiceTests
         httpContext.Request.Headers["Cookie"] = "chat_vault_key=tampered-or-corrupted-cookie-value";
 
         var globalKeystore = new GlobalKeystoreService();
+        var service = CreateService(globalKeystore);
 
         // Act
         var result = service.TryInitializeFromVaultCookie(
             httpContext,
             employeeId,
-            encryptedKey,
-            _crypto,
-            globalKeystore);
+            encryptedKey);
 
         // Assert
         Assert.False(result);
@@ -238,9 +229,7 @@ public class ScopedKeystoreServiceTests
         var result = service.TryInitializeFromVaultCookie(
             httpContext,
             employeeId,
-            encryptedKey,
-            _crypto,
-            globalKeystore: null);
+            encryptedKey);
 
         // Assert
         Assert.True(result);
@@ -252,7 +241,6 @@ public class ScopedKeystoreServiceTests
     public async Task InitializeFromDeviceCookieAsync_InvokesJsAndUnlocksKeystores()
     {
         // Arrange
-        var service = CreateService();
         const string password = "DevicePassword#2026";
         const string employeeId = "EMP-005";
         const string plainKey = "<RSAKeyValue><Modulus>device-test-modulus</Modulus></RSAKeyValue>";
@@ -272,14 +260,13 @@ public class ScopedKeystoreServiceTests
             .Returns(new ValueTask<JsonElement>(jsonElement));
 
         var globalKeystore = new GlobalKeystoreService();
+        var service = CreateService(globalKeystore);
 
         // Act
         await service.InitializeFromDeviceCookieAsync(
             mockJs.Object,
             employeeId,
-            encryptedKey,
-            _crypto,
-            globalKeystore);
+            encryptedKey);
 
         // Assert
         Assert.True(service.IsUnlocked);
@@ -305,9 +292,7 @@ public class ScopedKeystoreServiceTests
         await service.InitializeFromDeviceCookieAsync(
             mockJs.Object,
             "EMP-006",
-            "dummy-encrypted-key",
-            _crypto,
-            null);
+            "dummy-encrypted-key");
 
         // Assert
         Assert.True(service.IsUnlocked);
@@ -334,9 +319,7 @@ public class ScopedKeystoreServiceTests
         await service.InitializeFromDeviceCookieAsync(
             mockJs.Object,
             "EMP-007",
-            "dummy-encrypted-key",
-            _crypto,
-            null);
+            "dummy-encrypted-key");
 
         // Assert
         Assert.False(service.IsUnlocked);
@@ -357,9 +340,7 @@ public class ScopedKeystoreServiceTests
         var ex = await Record.ExceptionAsync(() => service.InitializeFromDeviceCookieAsync(
             mockJs.Object,
             "EMP-008",
-            "dummy-encrypted-key",
-            _crypto,
-            null));
+            "dummy-encrypted-key"));
 
         // Assert
         Assert.Null(ex);

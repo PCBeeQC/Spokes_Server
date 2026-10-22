@@ -16,9 +16,6 @@ public class ChatReadStateRepository : JsonRepository<ChatReadState>
     protected override string GetFilePath(ChatReadState item) =>
         Path.Combine(_basePath, $"{item.Id}.json");
 
-    /// <summary>
-    /// Get the read state for a specific user and channel.
-    /// </summary>
     public ChatReadState? GetReadState(string userId, string channelId) =>
         GetById(ChatReadState.CreateId(userId, channelId));
 
@@ -50,22 +47,18 @@ public class ChatReadStateRepository : JsonRepository<ChatReadState>
         Save(state);
     }
 
-    /// <summary>
-    /// Get all read states for a user.
-    /// </summary>
-    public List<ChatReadState> GetReadStatesForUser(string userId) =>
-        _cache.Values.Where(rs => rs.UserId == userId).ToList();
+    public List<ChatReadState> GetReadStatesForUser(string userId)
+    {
+        EnsureLoaded();
+        return _cache.Values.Where(rs => rs.UserId == userId).ToList();
+    }
 
     /// <summary>
-    /// Get the last read timestamp for a user on a channel.
-    /// Returns DateTime.MinValue if never read.
+    /// Returns the last read timestamp, or <see cref="DateTime.MinValue"/> if never read.
     /// </summary>
     public DateTime GetLastReadAt(string userId, string channelId) =>
         GetReadState(userId, channelId)?.LastReadAt ?? DateTime.MinValue;
 
-    /// <summary>
-    /// Set the notification level for a user on a channel.
-    /// </summary>
     public void SetNotificationLevel(string userId, string channelId, string level)
     {
         var id = ChatReadState.CreateId(userId, channelId);
@@ -90,8 +83,7 @@ public class ChatReadStateRepository : JsonRepository<ChatReadState>
     }
 
     /// <summary>
-    /// Get the notification level for a user on a channel.
-    /// Returns the stored value, or the default for the channel type if not set.
+    /// Returns the stored notification level, or the default for the channel type if not set.
     /// </summary>
     public string GetNotificationLevel(string userId, string channelId, string? channelType = null, bool isVoiceChannel = false)
     {

@@ -1,10 +1,25 @@
+@inject Database Db
+
 <Router AppAssembly="@typeof(Program).Assembly">
     <Found Context="routeData">
-        <AuthorizeRouteView RouteData="@routeData" DefaultLayout="@typeof(Layout.MainLayout)">
+        @{
+            RouteData effectiveRouteData = routeData;
+            if (routeData.PageType == typeof(Pages.Home) && Db.CompanyProfile.Get()?.Edition == "Family")
+            {
+                var values = new Dictionary<string, object?>(routeData.RouteValues)
+                {
+                    [nameof(Pages.Chat.Chat.ChannelId)] = null
+                };
+                effectiveRouteData = new RouteData(typeof(Pages.Chat.Chat), values);
+            }
+        }
+        <AuthorizeRouteView RouteData="@effectiveRouteData" DefaultLayout="@typeof(Layout.MainLayout)">
             <Authorizing>
-                <div class="d-flex justify-center align-center" style="height: 100vh;">
-                    <MudProgressCircular Color="Color.Primary" Indeterminate="true" />
-                </div>
+                <LayoutView Layout="@typeof(Layout.MainLayout)">
+                    <div class="d-flex justify-center align-center" style="height: 60vh;">
+                        <MudProgressCircular Color="Color.Primary" Indeterminate="true" />
+                    </div>
+                </LayoutView>
             </Authorizing>
             <NotAuthorized>
                 <RedirectToLogin />

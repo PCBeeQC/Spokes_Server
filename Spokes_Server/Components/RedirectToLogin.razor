@@ -60,11 +60,6 @@
                             if (refreshed) {
                                 console.log("[SSO] Silent refresh succeeded. Waiting for native cookie sync...");
                                 
-                                // Force a native sync if the plugin is available
-                                if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.CapacitorCookies) {
-                                    try { await window.Capacitor.Plugins.CapacitorCookies.getCookies(); } catch(e) {}
-                                }
-                                
                                 // Poll the current-session endpoint to guarantee the cookie is attached
                                 const synced = (window.spokesAuth && window.spokesAuth.waitForCookieSyncAsync)
                                     ? await window.spokesAuth.waitForCookieSyncAsync(20, 100)

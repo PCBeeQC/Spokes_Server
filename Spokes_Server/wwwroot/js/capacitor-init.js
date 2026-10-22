@@ -1,27 +1,35 @@
-// --- FAST-BOOT STATUS BAR POLLING ---
-// The status bar must be styled instantly to avoid a visual flash. We don't wait for DOMContentLoaded.
+// --- FAST-BOOT STATUS BAR ---
+// Native MainActivity.java / AppDelegate.swift style the status bar before WebView load.
+// Sync user theme preference once StatusBar plugin is available without 10ms timer spam during parse.
 (function fastBootStatusBar() {
     if (window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) {
-        let attempts = 0;
         const applyStatusBar = async () => {
             if (window.Capacitor.Plugins && window.Capacitor.Plugins.StatusBar) {
                 let isDarkMode = true;
-                if (window.Capacitor.Plugins.Preferences) {
+                let cached = null;
+                try { cached = localStorage.getItem('spokes_is_dark_mode'); } catch (e) {}
+                if (cached !== null && cached !== undefined) {
+                    isDarkMode = cached !== 'false';
+                } else if (window.Capacitor.Plugins.Preferences) {
                     try {
                         const res = await window.Capacitor.Plugins.Preferences.get({ key: 'spokes_is_dark_mode' });
                         if (res && res.value !== null && res.value !== undefined) {
                             isDarkMode = res.value !== 'false';
+                            try { localStorage.setItem('spokes_is_dark_mode', res.value); } catch (e) {}
                         }
                     } catch (e) {}
                 }
                 window.Capacitor.Plugins.StatusBar.setOverlaysWebView({ overlay: true }).catch(console.error);
                 window.Capacitor.Plugins.StatusBar.setStyle({ style: isDarkMode ? 'DARK' : 'LIGHT' }).catch(console.error);
-            } else if (attempts < 50) {
-                attempts++;
-                setTimeout(applyStatusBar, 10);
+                return true;
             }
+            return false;
         };
-        applyStatusBar();
+        applyStatusBar().then(applied => {
+            if (!applied && document.readyState === 'loading') {
+                document.addEventListener('DOMContentLoaded', () => { applyStatusBar(); }, { once: true });
+            }
+        });
     }
 })();
 
@@ -34,6 +42,8 @@ window.isCapacitorNative = function () {
 window.setCapacitorStatusBarStyle = async function (isDarkMode) {
     if (window.isCapacitorNative()) {
         try {
+            const valStr = isDarkMode ? 'true' : 'false';
+            try { localStorage.setItem('spokes_is_dark_mode', valStr); } catch (e) {}
             if (window.Capacitor?.Plugins?.StatusBar) {
                 // Style.DARK means light text for dark backgrounds. Style.LIGHT means dark text for light backgrounds.
                 const style = isDarkMode ? 'DARK' : 'LIGHT';
@@ -43,7 +53,7 @@ window.setCapacitorStatusBarStyle = async function (isDarkMode) {
             if (window.Capacitor?.Plugins?.Preferences) {
                 await window.Capacitor.Plugins.Preferences.set({
                     key: 'spokes_is_dark_mode',
-                    value: isDarkMode ? 'true' : 'false'
+                    value: valStr
                 });
             }
         } catch (err) {
@@ -56,10 +66,15 @@ window.reapplyCapacitorStatusBarStyle = async function () {
     if (window.isCapacitorNative()) {
         try {
             let isDarkMode = true;
-            if (window.Capacitor?.Plugins?.Preferences) {
+            let cached = null;
+            try { cached = localStorage.getItem('spokes_is_dark_mode'); } catch (e) {}
+            if (cached !== null && cached !== undefined) {
+                isDarkMode = cached !== 'false';
+            } else if (window.Capacitor?.Plugins?.Preferences) {
                 const res = await window.Capacitor.Plugins.Preferences.get({ key: 'spokes_is_dark_mode' });
                 if (res && res.value !== null && res.value !== undefined) {
                     isDarkMode = res.value !== 'false';
+                    try { localStorage.setItem('spokes_is_dark_mode', res.value); } catch (e) {}
                 }
             }
             if (window.Capacitor?.Plugins?.StatusBar) {
@@ -97,23 +112,7 @@ window.initCapacitorEnv = async function () {
     window._capacitorInitStartedAt = Date.now();
     if (window.isCapacitorNative()) {
         try {
-            // Check if we restarted the server specifically to open a notification
-            // Skip if runStartup() in App.razor already handled it (avoids redundant bridge call)
-            if (!window._pendingNotificationUrlChecked && Capacitor.Plugins.Preferences) {
-                try {
-                    const pending = await Capacitor.Plugins.Preferences.get({ key: 'pendingNotificationUrl' });
-                    if (pending && pending.value) {
-                        await Capacitor.Plugins.Preferences.remove({ key: 'pendingNotificationUrl' });
-                        // Navigate to the deep link and let Blazor handle it
-                        let urlObj = new URL(pending.value, window.location.origin);
-                        urlObj.searchParams.set('client', 'mobile');
-                        window.location.href = urlObj.toString();
-                        return;
-                    }
-                } catch(e) {}
-            }
-            
-            // StatusBar initialization has been moved to the fastBootStatusBar poller at the top of the file for instant execution.
+            // StatusBar initialization has been moved to the fastBootStatusBar helper at the top of the file for instant execution.
 
 
             // Intercept logout forms to append client=mobile so the backend knows to only clear local cookies
@@ -161,24 +160,49 @@ window.initCapacitorEnv = async function () {
 
             // Register deep link and back button listeners
             if (Capacitor.Plugins.App) {
-                // Clear any stale listeners from previous page loads BEFORE registering new ones
-                try {
-                    await Capacitor.Plugins.App.removeAllListeners();
-                } catch (e) {
-                    console.warn('[Capacitor-Init] Could not clear previous listeners.', e);
+                if (window._capacitorBackButtonListener && typeof window._capacitorBackButtonListener.remove === 'function') {
+                    try { await window._capacitorBackButtonListener.remove(); } catch (e) {}
+                    window._capacitorBackButtonListener = null;
+                }
+                if (window._capacitorStatusBarStateListener && typeof window._capacitorStatusBarStateListener.remove === 'function') {
+                    try { await window._capacitorStatusBarStateListener.remove(); } catch (e) {}
+                    window._capacitorStatusBarStateListener = null;
                 }
 
                 // The auth-callback deep link is now handled entirely natively via AuthTabIntent.
                 // We no longer manually intercept appUrlOpen for auth-callbacks.
 
                 // Register hardware back button listener for Android
-                Capacitor.Plugins.App.addListener('backButton', () => {
+                window._capacitorBackButtonListener = await Capacitor.Plugins.App.addListener('backButton', () => {
+                    // 1. Close open dialogs or overlays if present
+                    const openDialog = document.querySelector('.mud-dialog-container');
+                    if (openDialog) {
+                        const closeBtn = openDialog.querySelector('button[aria-label="close"], button.mud-button-close, .mud-dialog-header button');
+                        if (closeBtn) {
+                            closeBtn.click();
+                            return;
+                        }
+                    }
+
                     const pathSegments = window.location.pathname.split('/').filter(Boolean);
                     
                     // Level 1 pages have 0 or 1 path segment (e.g., /, /chat, /projects, /admin)
                     if (pathSegments.length <= 1) {
-                        Capacitor.Plugins.App.exitApp();
+                        if (typeof Capacitor.Plugins.App.minimizeApp === 'function') {
+                            Capacitor.Plugins.App.minimizeApp();
+                        } else {
+                            Capacitor.Plugins.App.exitApp();
+                        }
                     } else {
+                        // In chat channel: if there is no previous browser history entry (e.g. cold start from push), fallback to in-app back
+                        if (pathSegments[0] === 'chat' && window.history.length <= 1) {
+                            const inAppBack = document.getElementById('chat-mobile-back-btn');
+                            if (inAppBack) {
+                                inAppBack.click();
+                                return;
+                            }
+                        }
+                        try { window.spokesChatDiagnostics?.startTransition('NativeBack', 'Client: Native backButton'); } catch (e) {} // DIAG-TEMP
                         window.history.back();
                     }
                 });
@@ -248,22 +272,33 @@ window.initCapacitorEnv = async function () {
                                  const currentOrigin = window.location.origin.replace(/\/$/, '');
                                  
                                  if (targetOrigin !== currentOrigin && targetOrigin !== 'capacitor://localhost' && targetOrigin !== 'http://localhost') {
-                                     if (window.Capacitor.Plugins.Preferences) {
+                                     if (typeof window.spokesNotifyServerSwitchAway === 'function') {
+                                         try { window.spokesNotifyServerSwitchAway(); } catch (e) {}
+                                     }
+                                     const normalizedPath = targetUrl.startsWith('/') ? targetUrl : ('/' + targetUrl);
+                                     const fullTargetUrl = targetOrigin + normalizedPath;
+
+                                     if (window.SpokesNative && typeof window.SpokesNative.setServerUrl === 'function') {
+                                         window.SpokesNative.setServerUrl(targetOrigin);
+                                     } else if (window.Capacitor.Plugins.Preferences) {
                                          try {
                                              await window.Capacitor.Plugins.Preferences.set({ key: 'serverUrl', value: targetOrigin });
-                                             await window.Capacitor.Plugins.Preferences.set({ key: 'pendingNotificationUrl', value: targetUrl });
                                          } catch(e) {}
                                      }
 
+                                     if (window.SpokesNative && typeof window.SpokesNative.openServer === 'function') {
+                                         window.SpokesNative.openServer(fullTargetUrl);
+                                         return;
+                                     }
                                      if (window.Capacitor.Plugins.BridgeManager) {
                                          try {
-                                             await window.Capacitor.Plugins.BridgeManager.openServer({ url: targetOrigin });
+                                             await window.Capacitor.Plugins.BridgeManager.openServer({ url: fullTargetUrl });
                                              return;
                                          } catch(e) { }
                                      }
                                      
                                      await ensureCookies();
-                                     window.location.href = targetOrigin + targetUrl;
+                                     window.location.href = fullTargetUrl;
                                      return;
                                  }
                              }
@@ -291,14 +326,9 @@ window.initCapacitorEnv = async function () {
                     console.log('[Capacitor-Init] Registered native notificationActionPerformed listener successfully.');
                 }
                 
-                Capacitor.Plugins.App.addListener('appStateChange', (state) => {
+                window._capacitorStatusBarStateListener = await Capacitor.Plugins.App.addListener('appStateChange', (state) => {
                     console.log('[Capacitor-Init] App state changed. isActive:', state.isActive);
-                    if (!state.isActive) {
-                        if (window.__spokesPushSubscriptionId) {
-                            let url = `/spokesapi/push/unfocus?subscriptionId=${window.__spokesPushSubscriptionId}`;
-                            fetch(url, { method: 'POST', cache: 'no-store' }).catch(console.error);
-                        }
-                    } else {
+                    if (state.isActive) {
                         window.reapplyCapacitorStatusBarStyle();
                     }
                 });

@@ -4,11 +4,13 @@
 @using Microsoft.AspNetCore.Authorization
 @using Microsoft.Extensions.Hosting
 @using Spokes_Server.Components.Layout
-@using Spokes_Server.Core.Services.Core
 @using Spokes_Server.Core.Services.Licensing
 @using Spokes_Server.Core.Constants
+@using Spokes_Server.Core.Services.Content
 @using Spokes_Server.Aggregate
 @using Spokes_Server.Core.Models.Core
+@using Microsoft.Extensions.Localization
+@using Spokes_Server.Resources
 @inject CasdoorProvisioningService CasdoorService
 @inject Database Db
 @inject NavigationManager Nav
@@ -20,36 +22,154 @@
 @inject IHttpClientFactory HttpClientFactory
 @inject IDialogService DialogService
 @inject IHostApplicationLifetime AppLifetime
+@inject ICompanyBrandingService BrandingService
+@inject ILogger<SetupWizard> Logger
+@inject BackupService BackupSvc
+@inject IStringLocalizer<AppResources> Loc
 
-<PageTitle>Spokes Setup</PageTitle>
+<PageTitle>@Loc["Spokes Setup"]</PageTitle>
 
 <MudContainer MaxWidth="MaxWidth.Medium" Class="mt-16">
     <MudPaper Class="pa-8" Elevation="0" Outlined="true">
         <div class="d-flex align-center justify-center mb-4">
             <img src="/spokes-org-icon.png" alt="Spokes Logo" style="height: 48px;" class="mr-4" />
-            <MudText Typo="Typo.h4" Align="Align.Center" Class="mb-0">Spokes Initial Setup</MudText>
+            <MudText Typo="Typo.h4" Align="Align.Center" Class="mb-0">@Loc["Spokes Initial Setup"]</MudText>
         </div>
 
-        @if (_step == 1)
+        @if (_step == 0)
         {
-            <MudText Typo="Typo.body1" Class="mb-6">Welcome to Spokes! Before we begin, please review and accept our End User License Agreement.</MudText>
+            <MudText Typo="Typo.body1" Class="mb-6">@Loc["Welcome to Spokes! Choose how you would like to get started with this server:"]</MudText>
+
+            <MudGrid>
+                <MudItem xs="12" sm="6">
+                    <MudCard @onclick="() => _step = 1" Outlined="true" Class="cursor-pointer hover-effect pa-4" Style="height: 100%;">
+                        <MudCardContent Class="d-flex flex-column align-center text-center">
+                            <MudIcon Icon="@Icons.Material.Filled.AddCircleOutline" Color="Color.Primary" Size="Size.Large" Class="mb-3" />
+                            <MudText Typo="Typo.h6" Class="mb-1">@Loc["New Installation"]</MudText>
+                            <MudText Typo="Typo.body2" Color="Color.Secondary">
+                                @Loc["Configure a new Spokes instance from scratch with your organization profile, admin account, and settings."]
+                            </MudText>
+                        </MudCardContent>
+                    </MudCard>
+                </MudItem>
+
+                <MudItem xs="12" sm="6">
+                    <MudCard @onclick="() => _step = -1" Outlined="true" Class="cursor-pointer hover-effect pa-4" Style="height: 100%;">
+                        <MudCardContent Class="d-flex flex-column align-center text-center">
+                            <MudIcon Icon="@Icons.Material.Filled.RestorePage" Color="Color.Secondary" Size="Size.Large" Class="mb-3" />
+                            <MudText Typo="Typo.h6" Class="mb-1">@Loc["Restore from Backup"]</MudText>
+                            <MudText Typo="Typo.body2" Color="Color.Secondary">
+                                @Loc["Restore an existing Spokes backup (.zip or .spkbackup) to recover all data, accounts, and system configuration."]
+                            </MudText>
+                        </MudCardContent>
+                    </MudCard>
+                </MudItem>
+            </MudGrid>
+        }
+        else if (_step == -1)
+        {
+            <MudText Typo="Typo.h6" Class="mb-2">@Loc["Restore from Backup Archive"]</MudText>
+            <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-4">
+                @Loc["Upload your Spokes backup file (.zip or .spkbackup). If the backup was encrypted, it will be automatically decrypted using the SPOKES_MASTER_PASSWORD configured in your environment."]
+            </MudText>
+
+            @if (_isRestoringBackup)
+            {
+                <div class="d-flex flex-column align-center pa-8">
+                    @if (_backupUploadProgress < 100)
+                    {
+                        <MudProgressLinear Color="Color.Primary" Value="@_backupUploadProgress" Class="my-4 w-100" Size="Size.Large" />
+                        <MudText Typo="Typo.h6">@Loc["Uploading backup archive..."] (@Math.Round(_backupUploadProgress)%)</MudText>
+                    }
+                    else
+                    {
+                        <MudProgressCircular Color="Color.Primary" Indeterminate="true" Size="Size.Large" Class="mb-4" />
+                        <MudText Typo="Typo.h6">@Loc["Restoring system from backup..."]</MudText>
+                        <MudText Typo="Typo.body2" Color="Color.Secondary">@Loc["Verifying encryption, unpacking archives, and rebuilding databases."]</MudText>
+                    }
+                </div>
+            }
+            else if (_backupRestoreSuccess)
+            {
+                <MudAlert Severity="Severity.Success" Variant="Variant.Outlined" Class="mb-4">
+                    <b>@Loc["Restore Complete!"]</b> @Loc["All system records, configurations, and accounts have been successfully restored."]
+                </MudAlert>
+
+                <MudText Typo="Typo.body1" Class="mb-6">
+                    @Loc["To finish applying the restored data and start Spokes, the server must be restarted."]
+                </MudText>
+
+                @if (_isRestarting)
+                {
+                    <div class="d-flex flex-column align-center mt-4">
+                        <MudProgressCircular Color="Color.Primary" Indeterminate="true" Size="Size.Medium" Class="mb-2" />
+                        <MudText Typo="Typo.body2">@Loc["Flushing configuration and restarting server..."]</MudText>
+                    </div>
+                }
+                else
+                {
+                    <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="RestartServer" FullWidth="true" Size="Size.Large">
+                        @Loc["Restart Server Now"]
+                    </MudButton>
+                }
+            }
+
+            <div style="@((!_isRestoringBackup && !_backupRestoreSuccess) ? "" : "display: none;")">
+                @if (!string.IsNullOrEmpty(_backupRestoreError))
+                {
+                    <MudAlert Severity="Severity.Error" Class="mb-4" ShowCloseIcon="true" CloseIconClicked="() => _backupRestoreError = null">
+                        @_backupRestoreError
+                    </MudAlert>
+                }
+
+                <ApiFileUpload Category="setup"
+                               ContextId="restore"
+                               UploadUrl="/setup/api/restore-backup"
+                               Accept=".zip,.spkbackup"
+                               MaxAllowedSize="long.MaxValue"
+                               Class="w-100"
+                               Style="width: 100%; display: block;"
+                               OnUploadStarted="HandleBackupUploadStarted"
+                               OnProgressUpdate="HandleBackupUploadProgress"
+                               OnUploadCompleted="HandleBackupUploadCompleted"
+                               OnUploadError="HandleBackupUploadError">
+                    <CustomContent>
+                        <div class="cursor-pointer" style="width: 100%;">
+                            <MudPaper Outlined="true" Class="pa-8 d-flex flex-column align-center justify-center hover-effect" Style="border-style: dashed !important; border-width: 2px !important; width: 100%;">
+                                <MudIcon Icon="@Icons.Material.Filled.CloudUpload" Color="Color.Primary" Size="Size.Large" Class="mb-2" />
+                                <MudText Typo="Typo.subtitle1"><b>@Loc["Click to browse or drag and drop your backup archive"]</b></MudText>
+                                <MudText Typo="Typo.caption" Color="Color.Secondary">@Loc["Supports standard .zip and encrypted .spkbackup archives"]</MudText>
+                            </MudPaper>
+                        </div>
+                    </CustomContent>
+                </ApiFileUpload>
+
+                <MudButton Variant="Variant.Text" OnClick="() => { _step = 0; _backupRestoreError = null; }" FullWidth="true" Class="mt-6">
+                    @Loc["Back to Setup Options"]
+                </MudButton>
+            </div>
+        }
+        else if (_step == 1)
+        {
+            <MudText Typo="Typo.body1" Class="mb-6">@Loc["Welcome to Spokes! Before we begin, please review and accept our End User License Agreement."]</MudText>
             
             <MudPaper Class="pa-4 mb-6" Elevation="1" Outlined="true">
                 <MudText Typo="Typo.body2">
-                    By continuing with the installation, you agree to the terms outlined in the Spokes End User License Agreement.
+                    @Loc["By continuing with the installation, you agree to the terms outlined in the Spokes End User License Agreement."]
                 </MudText>
                 <MudButton Variant="Variant.Text" Color="Color.Primary" Href="https://spokes.sh/eula/" Target="_blank" Class="mt-2 pl-0">
-                    Read the Full EULA Here <MudIcon Icon="@Icons.Material.Filled.OpenInNew" Size="Size.Small" Class="ml-1" />
+                    @Loc["Read the Full EULA Here"] <MudIcon Icon="@Icons.Material.Filled.OpenInNew" Size="Size.Small" Class="ml-1" />
                 </MudButton>
             </MudPaper>
 
-            <MudCheckBox @bind-Value="_eulaAcceptedCheckbox" Label="I have read and agree to the End User License Agreement" Color="Color.Primary" />
+            <MudCheckBox @bind-Value="_eulaAcceptedCheckbox" Label="@Loc["I have read and agree to the End User License Agreement"]" Color="Color.Primary" />
 
-            <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="AcceptEula" Disabled="!_eulaAcceptedCheckbox" FullWidth="true" Class="mt-6">Continue</MudButton>
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="AcceptEula" Disabled="!_eulaAcceptedCheckbox" FullWidth="true" Class="mt-6">@Loc["Continue"]</MudButton>
+            <MudButton Variant="Variant.Text" OnClick="() => _step = 0" FullWidth="true" Class="mt-2">@Loc["Back to Setup Options"]</MudButton>
         }
         else if (_step == 2)
         {
-            <MudText Typo="Typo.body1" Class="mb-6">Next, let's configure your @AppLabels.Company profile. Leave empty to do later</MudText>
+            <MudText Typo="Typo.body1" Class="mb-6">@string.Format(Loc["Next, let's configure your {0} profile. Leave empty to do later"].Value, AppLabels.Company)</MudText>
 
             <MudGrid>
                 <MudItem xs="12" sm="4" Class="d-flex flex-column align-center">
@@ -60,14 +180,14 @@
                     else
                     {
                         <MudPaper Class="d-flex align-center justify-center mb-4" Width="150px" Height="150px" Outlined="true">
-                            <MudText>No Logo</MudText>
+                            <MudText>@Loc["No Logo"]</MudText>
                         </MudPaper>
                     }
 
                     <div class="d-inline-flex">
                         <MudFileUpload T="IBrowserFile" Accept=".png,.jpg,.jpeg" FilesChanged="HandleLogoUploaded">
                             <CustomContent>
-                                <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="@context.OpenFilePickerAsync" StartIcon="@Icons.Material.Filled.CloudUpload">Upload Logo</MudButton>
+                                <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="@context.OpenFilePickerAsync" StartIcon="@Icons.Material.Filled.CloudUpload">@Loc["Upload Logo"]</MudButton>
                             </CustomContent>
                             <SelectedTemplate></SelectedTemplate>
                         </MudFileUpload>
@@ -82,14 +202,14 @@
                     else
                     {
                         <MudPaper Class="d-flex align-center justify-center mb-4" Width="50px" Height="50px" Outlined="true">
-                            <MudText Typo="Typo.caption">No Icon</MudText>
+                            <MudText Typo="Typo.caption">@Loc["No Icon"]</MudText>
                         </MudPaper>
                     }
 
                     <div class="d-inline-flex">
                         <MudFileUpload T="IBrowserFile" Accept=".png,.jpg,.jpeg,.ico" FilesChanged="HandleIconUploaded">
                             <CustomContent>
-                                <MudButton Variant="Variant.Outlined" Color="Color.Secondary" OnClick="@context.OpenFilePickerAsync" StartIcon="@Icons.Material.Filled.CloudUpload">Upload Icon</MudButton>
+                                <MudButton Variant="Variant.Outlined" Color="Color.Secondary" OnClick="@context.OpenFilePickerAsync" StartIcon="@Icons.Material.Filled.CloudUpload">@Loc["Upload Icon"]</MudButton>
                             </CustomContent>
                             <SelectedTemplate></SelectedTemplate>
                         </MudFileUpload>
@@ -97,21 +217,21 @@
                 </MudItem>
 
                 <MudItem xs="12" sm="8">
-                    <MudTextField Variant="Variant.Outlined" Margin="Margin.Dense" @bind-Value="_companyName" Label="@($"{AppLabels.Company} Name")" Required="true" />
+                    <MudTextField Variant="Variant.Outlined" Margin="Margin.Dense" @bind-Value="_companyName" Label="@string.Format(Loc["{0} Name"].Value, AppLabels.Company)" Required="true" />
                 </MudItem>
             </MudGrid>
 
-            <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="SaveProfileConfig" FullWidth="true" Class="mt-6">Continue</MudButton>
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="SaveProfileConfig" FullWidth="true" Class="mt-6">@Loc["Continue"]</MudButton>
         }
         else if (_step == 3)
         {
-            <MudText Typo="Typo.body1" Class="mb-6">Upload your Spokes Pass (.spokes-license) to enable native mobile push notifications, or skip to use the 2-month free trial.</MudText>
+            <MudText Typo="Typo.body1" Class="mb-6">@Loc["Upload your Spokes Pass (.spokes-license) to enable native mobile and desktop push notifications, or skip to use the 2-month free trial."]</MudText>
             
             <MudItem xs="12">
                 <div class="d-inline-flex mt-2 mb-4">
                     <MudFileUpload T="IBrowserFile" Accept=".spokes-license" FilesChanged="HandleLicenseUploaded">
                         <CustomContent>
-                            <MudButton Variant="Variant.Outlined" Color="Color.Primary" OnClick="@context.OpenFilePickerAsync" StartIcon="@Icons.Material.Filled.UploadFile">Upload Spokes Pass (.spokes-license)</MudButton>
+                            <MudButton Variant="Variant.Outlined" Color="Color.Primary" OnClick="@context.OpenFilePickerAsync" StartIcon="@Icons.Material.Filled.UploadFile">@Loc["Upload Spokes Pass (.spokes-license)"]</MudButton>
                         </CustomContent>
                         <SelectedTemplate></SelectedTemplate>
                     </MudFileUpload>
@@ -124,19 +244,19 @@
                 @if (currentValidation.Status == LicenseStatus.Valid)
                 {
                     <MudAlert Severity="Severity.Success" Class="mb-4">
-                        <b>Spokes Pass Active:</b> Your Spokes instance is enabled for Native Mobile Push Notifications.
+                        <b>@Loc["Spokes Pass Active:"]</b> @Loc["Your Spokes instance is enabled for Native Mobile Push Notifications."]
                     </MudAlert>
                 }
                 else if (currentValidation.Status == LicenseStatus.Expired)
                 {
                     <MudAlert Severity="Severity.Warning" Class="mb-4">
-                        <b>Spokes Pass Expired:</b> @currentValidation.Message Native mobile push notifications will be disabled until renewed.
+                        <b>@Loc["Spokes Pass Expired:"]</b> @currentValidation.Message @Loc["Native mobile push notifications will be disabled until renewed."]
                     </MudAlert>
                 }
                 else
                 {
                     <MudAlert Severity="Severity.Error" Class="mb-4">
-                        <b>Spokes Pass Invalid:</b> @currentValidation.Message
+                        <b>@Loc["Spokes Pass Invalid:"]</b> @currentValidation.Message
                     </MudAlert>
                 }
 
@@ -151,18 +271,18 @@
                 if (license != null)
                 {
                     <MudPaper Class="pa-4 mb-4" Elevation="0" Outlined="true">
-                        <MudText Typo="Typo.subtitle2" Class="mb-2">License Details</MudText>
+                        <MudText Typo="Typo.subtitle2" Class="mb-2">@Loc["License Details"]</MudText>
                         <MudGrid>
                             <MudItem xs="12" sm="4">
-                                <MudText Typo="Typo.caption" Color="Color.Secondary">Registered Email</MudText>
+                                <MudText Typo="Typo.caption" Color="Color.Secondary">@Loc["Registered Email"]</MudText>
                                 <MudText Typo="Typo.body2">@license.Email</MudText>
                             </MudItem>
                             <MudItem xs="12" sm="4">
-                                <MudText Typo="Typo.caption" Color="Color.Secondary">Push Notifications Expiry Date</MudText>
+                                <MudText Typo="Typo.caption" Color="Color.Secondary">@Loc["Push Notifications Expiry Date"]</MudText>
                                 <MudText Typo="Typo.body2">@license.ValidForUpdatesUntil.ToString("yyyy-MM-dd")</MudText>
                             </MudItem>
                             <MudItem xs="12" sm="4">
-                                <MudText Typo="Typo.caption" Color="Color.Secondary">Time Until Expiry</MudText>
+                                <MudText Typo="Typo.caption" Color="Color.Secondary">@Loc["Time Until Expiry"]</MudText>
                                 <MudText Typo="Typo.body2" Color="@((license.ValidForUpdatesUntil - DateTime.UtcNow).TotalDays > 0 ? Color.Success : Color.Error)">
                                     @GetTimeUntilExpiry(license.ValidForUpdatesUntil)
                                 </MudText>
@@ -174,10 +294,10 @@
                 var availableEditions = GetAvailableEditions();
                 if (availableEditions.Count > 1)
                 {
-                    <MudSelect ShrinkLabel="true" @bind-Value="_selectedEdition" Label="Active Edition" Variant="Variant.Outlined" Margin="Margin.Dense" Class="mb-4">
+                    <MudSelect ShrinkLabel="true" @bind-Value="_selectedEdition" Label="@Loc["Active Edition"]" Variant="Variant.Outlined" Margin="Margin.Dense" Class="mb-4">
                         @foreach (var edition in availableEditions)
                         {
-                            <MudSelectItem Value="@edition">@edition Edition</MudSelectItem>
+                            <MudSelectItem Value="@edition">@string.Format(Loc["{0} Edition"].Value, edition)</MudSelectItem>
                         }
                     </MudSelect>
                 }
@@ -185,67 +305,67 @@
 
             <MudGrid>
                 <MudItem xs="4">
-                    <MudButton Variant="Variant.Text" OnClick="() => _step = 2" FullWidth="true" Class="mt-6">Back</MudButton>
+                    <MudButton Variant="Variant.Text" OnClick="() => _step = 2" FullWidth="true" Class="mt-6">@Loc["Back"]</MudButton>
                 </MudItem>
                 <MudItem xs="4">
-                    <MudButton Variant="Variant.Outlined" Color="Color.Default" OnClick="SkipLicenseConfig" FullWidth="true" Class="mt-6">Skip</MudButton>
+                    <MudButton Variant="Variant.Outlined" Color="Color.Default" OnClick="SkipLicenseConfig" FullWidth="true" Class="mt-6">@Loc["Skip"]</MudButton>
                 </MudItem>
                 <MudItem xs="4">
-                    <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="SaveLicenseConfig" FullWidth="true" Class="mt-6" Disabled="@(string.IsNullOrEmpty(_licensePayload))">Continue</MudButton>
+                    <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="SaveLicenseConfig" FullWidth="true" Class="mt-6" Disabled="@(string.IsNullOrEmpty(_licensePayload))">@Loc["Continue"]</MudButton>
                 </MudItem>
             </MudGrid>
         }
         else if (_step == 4)
         {
-            <MudText Typo="Typo.body1" Class="mb-6">Next, let's configure your server's network settings.</MudText>
+            <MudText Typo="Typo.body1" Class="mb-6">@Loc["Next, let's configure your server's network settings."]</MudText>
             
-            <MudTextField @bind-Value="_serverPublicUrl" Label="Server Public URL" HelperText="The URL users will use to access Spokes (e.g., https://spokes.mydomain.com)" Required="true" Class="mb-4" Validation="@(new Func<string, string>(ValidateServerUrl))" Immediate="true" />
+            <MudTextField @bind-Value="_serverPublicUrl" Label="@Loc["Server Public URL"]" HelperText="@Loc["The URL users will use to access Spokes (e.g., https://spokes.mydomain.com)"]" Required="true" Class="mb-4" Validation="@(new Func<string, string?>(ValidateServerUrl))" Immediate="true" />
             
             @if (Environment.GetEnvironmentVariable("SPOKES_HOSTING_PROVIDER") != "digitalocean")
             {
-                <MudText Typo="Typo.subtitle2" Class="mt-6 mb-2">LiveKit Ports</MudText>
-                <MudAlert Severity="Severity.Warning" Class="mb-4">If you modify these ports, you MUST ensure your <b>docker-compose.yml</b> and router are updated to match precisely. These must be mapped 1-to-1-to-1 across your network.</MudAlert>
+                <MudText Typo="Typo.subtitle2" Class="mt-6 mb-2">@Loc["LiveKit Ports"]</MudText>
+                <MudAlert Severity="Severity.Warning" Class="mb-4">@((MarkupString)Loc["If you modify these ports, you MUST ensure your <b>docker-compose.yml</b> and router are updated to match precisely. These must be mapped 1-to-1-to-1 across your network."].Value)</MudAlert>
                 
                 <MudGrid>
                     <MudItem xs="6">
-                        <MudTextField @bind-Value="_fallbackPort" Label="TCP Fallback Port" Variant="Variant.Outlined" Required="true" />
+                        <MudTextField @bind-Value="_fallbackPort" Label="@Loc["TCP Fallback Port"]" Variant="Variant.Outlined" Required="true" />
                     </MudItem>
                     <MudItem xs="3">
-                        <MudTextField @bind-Value="_udpStartPort" Label="UDP Start Port" Variant="Variant.Outlined" Required="true" />
+                        <MudTextField @bind-Value="_udpStartPort" Label="@Loc["UDP Start Port"]" Variant="Variant.Outlined" Required="true" />
                     </MudItem>
                     <MudItem xs="3">
-                        <MudTextField @bind-Value="_udpEndPort" Label="UDP End Port" Variant="Variant.Outlined" Required="true" />
+                        <MudTextField @bind-Value="_udpEndPort" Label="@Loc["UDP End Port"]" Variant="Variant.Outlined" Required="true" />
                     </MudItem>
                 </MudGrid>
             }
 
             @if (!string.IsNullOrEmpty(Environment.GetEnvironmentVariable("WATCHTOWER_HTTP_API_TOKEN")))
             {
-                <MudText Typo="Typo.subtitle2" Class="mt-6 mb-2">Automated Management Integrations</MudText>
-                <MudSwitch @bind-Value="_enableAutoUpdate" Color="Color.Primary" Label="Enable Automatic Server Updates" />
-                <MudText Typo="Typo.caption" Color="Color.Secondary" Style="display: block;">When enabled, Spokes will securely update itself when new versions are released.</MudText>
+                <MudText Typo="Typo.subtitle2" Class="mt-6 mb-2">@Loc["Automated Management Integrations"]</MudText>
+                <MudSwitch @bind-Value="_enableAutoUpdate" Color="Color.Primary" Label="@Loc["Enable Automatic Server Updates"]" />
+                <MudText Typo="Typo.caption" Color="Color.Secondary" Style="display: block;">@Loc["When enabled, Spokes will securely update itself when new versions are released."]</MudText>
             }
 
             <MudGrid>
                 <MudItem xs="6">
-                    <MudButton Variant="Variant.Text" OnClick="() => _step = 3" FullWidth="true" Class="mt-6">Back</MudButton>
+                    <MudButton Variant="Variant.Text" OnClick="() => _step = 3" FullWidth="true" Class="mt-6">@Loc["Back"]</MudButton>
                 </MudItem>
                 <MudItem xs="6">
-                    <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="SaveServerConfig" FullWidth="true" Class="mt-6" Disabled="@(ValidateServerUrl(_serverPublicUrl) != null)">Continue</MudButton>
+                    <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="SaveServerConfig" FullWidth="true" Class="mt-6" Disabled="@(ValidateServerUrl(_serverPublicUrl) != null)">@Loc["Continue"]</MudButton>
                 </MudItem>
             </MudGrid>
         }
         else if (_step == 5)
         {
-            <MudText Typo="Typo.body1" Class="mb-3">Next, configure how users will log into your server.</MudText>
+            <MudText Typo="Typo.body1" Class="mb-3">@Loc["Next, configure how users will log into your server."]</MudText>
             
             <MudGrid>
                 <MudItem xs="12" sm="6">
                     <MudCard @onclick="() => SelectIdp(IdpType.BuiltInCasdoor)" Outlined="true" Class="cursor-pointer hover-effect" Style="height: 100%;">
                         <MudCardContent>
                             <MudIcon Icon="@Icons.Material.Filled.Shield" Color="Color.Primary" Size="Size.Large" Class="mb-2" />
-                            <MudText Typo="Typo.h6">Built-in Identity</MudText>
-                            <MudText Typo="Typo.body2">We will automatically configure a secure, embedded Casdoor identity server. Recommended for most users.</MudText>
+                            <MudText Typo="Typo.h6">@Loc["Built-in Identity"]</MudText>
+                            <MudText Typo="Typo.body2">@Loc["We will automatically configure a secure, embedded Casdoor identity server. Recommended for most users."]</MudText>
                         </MudCardContent>
                     </MudCard>
                 </MudItem>
@@ -253,8 +373,8 @@
                     <MudCard @onclick="() => SelectIdp(IdpType.External)" Outlined="true" Class="cursor-pointer hover-effect" Style="height: 100%;">
                         <MudCardContent>
                             <MudIcon Icon="@Icons.Material.Filled.Public" Color="Color.Secondary" Size="Size.Large" Class="mb-2" />
-                            <MudText Typo="Typo.h6">External Provider</MudText>
-                            <MudText Typo="Typo.body2">Connect your own Authentik, Keycloak or other OpenID Connect server.</MudText>
+                            <MudText Typo="Typo.h6">@Loc["External Provider"]</MudText>
+                            <MudText Typo="Typo.body2">@Loc["Connect your own Authentik, Keycloak or other OpenID Connect server."]</MudText>
                         </MudCardContent>
                     </MudCard>
                 </MudItem>
@@ -262,34 +382,34 @@
         }
         else if (_step == 6 && _selectedType == IdpType.External)
         {
-            <MudText Typo="Typo.h6" Class="mb-4">Configure External Provider</MudText>
-            <MudTextField @bind-Value="_authority" Label="OpenID Configuration Issuer / Authority URL" HelperText="e.g., https://accounts.google.com , https://auth.yourdomain.ca/application/o/spokes/" Required="true" Class="mb-4" Disabled="@_isValidatingExternal" />
-            <MudTextField @bind-Value="_clientId" Label="Client ID" Required="true" Class="mb-4" Disabled="@_isValidatingExternal" />
-            <MudTextField @bind-Value="_clientSecret" Label="Client Secret" InputType="InputType.Password" Required="true" Class="mb-4" Disabled="@_isValidatingExternal" />
+            <MudText Typo="Typo.h6" Class="mb-4">@Loc["Configure External Provider"]</MudText>
+            <MudTextField @bind-Value="_authority" Label="@Loc["OpenID Configuration Issuer / Authority URL"]" HelperText="@Loc["e.g., https://accounts.google.com , https://auth.yourdomain.ca/application/o/spokes/"]" Required="true" Class="mb-4" Disabled="@_isValidatingExternal" />
+            <MudTextField @bind-Value="_clientId" Label="@Loc["Client ID"]" Required="true" Class="mb-4" Disabled="@_isValidatingExternal" />
+            <MudTextField @bind-Value="_clientSecret" Label="@Loc["Client Secret"]" InputType="InputType.Password" Required="true" Class="mb-4" Disabled="@_isValidatingExternal" />
             
             <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="SaveExternal" FullWidth="true" Disabled="@_isValidatingExternal">
                 @if (_isValidatingExternal)
                 {
                     <MudProgressCircular Class="ms-n1" Size="Size.Small" Indeterminate="true" />
-                    <MudText Class="ms-2">Validating...</MudText>
+                    <MudText Class="ms-2">@Loc["Validating..."]</MudText>
                 }
                 else
                 {
-                    <MudText>Save Configuration</MudText>
+                    <MudText>@Loc["Save Configuration"]</MudText>
                 }
             </MudButton>
-            <MudButton Variant="Variant.Text" OnClick="() => _step = 5" FullWidth="true" Class="mt-2" Disabled="@_isValidatingExternal">Back</MudButton>
+            <MudButton Variant="Variant.Text" OnClick="() => _step = 5" FullWidth="true" Class="mt-2" Disabled="@_isValidatingExternal">@Loc["Back"]</MudButton>
         }
         else if (_step == 6 && _selectedType == IdpType.BuiltInCasdoor)
         {
-            <MudText Typo="Typo.h6" Class="mb-4">Configure Built-in Global Identity</MudText>
-            <MudText Typo="Typo.body2" Class="mb-4">Create a global administrator account for managing the identity system globally. <b>This is Casdoor GlobalAdmin account</b></MudText>
+            <MudText Typo="Typo.h6" Class="mb-4">@Loc["Configure Built-in Global Identity"]</MudText>
+            <MudText Typo="Typo.body2" Class="mb-4">@((MarkupString)Loc["Create a global administrator account for managing the identity system globally. <b>This is Casdoor GlobalAdmin account</b>"].Value)</MudText>
             
-            <MudTextField @bind-Value="_casdoorUsername" Label="Global Admin Username" ReadOnly="true" Disabled="true" Required="true" Class="mb-4" Variant="Variant.Outlined" />
-            <MudTextField @bind-Value="_casdoorPassword" Label="Global Admin Password" Required="true" Class="mb-4" Variant="Variant.Outlined" HelperText="You can use the suggested secure password or enter your own." />
+            <MudTextField @bind-Value="_casdoorUsername" Label="@Loc["Global Admin Username"]" ReadOnly="true" Disabled="true" Required="true" Class="mb-4" Variant="Variant.Outlined" />
+            <MudTextField @bind-Value="_casdoorPassword" Label="@Loc["Global Admin Password"]" Required="true" Class="mb-4" Variant="Variant.Outlined" HelperText="@Loc["You can use the suggested secure password or enter your own."]" />
             
-            <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="() => _step = 7" FullWidth="true">Next</MudButton>
-            <MudButton Variant="Variant.Text" OnClick="() => _step = 5" FullWidth="true" Class="mt-2">Back</MudButton>
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="() => _step = 7" FullWidth="true">@Loc["Next"]</MudButton>
+            <MudButton Variant="Variant.Text" OnClick="() => _step = 5" FullWidth="true" Class="mt-2">@Loc["Back"]</MudButton>
         }
         else if (_step == 7 && _selectedType == IdpType.BuiltInCasdoor)
         {
@@ -297,76 +417,76 @@
             {
                 <div class="d-flex flex-column align-center">
                     <MudProgressCircular Color="Color.Primary" Indeterminate="true" Size="Size.Large" Class="mb-4" />
-                    <MudText Typo="Typo.h6">Provisioning Identity Server...</MudText>
-                    <MudText Typo="Typo.body2">This will only take a moment.</MudText>
+                    <MudText Typo="Typo.h6">@Loc["Provisioning Identity Server..."]</MudText>
+                    <MudText Typo="Typo.body2">@Loc["This will only take a moment."]</MudText>
                 </div>
             }
             else
             {
-                <MudText Typo="Typo.h6" Class="mb-4">Configure Spokes Organization Identity</MudText>
-                <MudText Typo="Typo.body2" Class="mb-4">Create an administrator account for managing users and groups within your Spokes organization. <b>This is your day to day admin account</b></MudText>
+                <MudText Typo="Typo.h6" Class="mb-4">@Loc["Configure Spokes Organization Identity"]</MudText>
+                <MudText Typo="Typo.body2" Class="mb-4">@((MarkupString)Loc["Create an administrator account for managing users and groups within your Spokes organization. <b>This is your day to day admin account</b>"].Value)</MudText>
                 
-                <MudTextField @bind-Value="_spokesAdminUsername" Label="Spokes Admin Username" Required="true" Class="mb-4" Variant="Variant.Outlined" />
-                <MudTextField @bind-Value="_spokesAdminPassword" Label="Spokes Admin Password" Required="true" Class="mb-4" Variant="Variant.Outlined" HelperText="You can use the suggested secure password or enter your own." />
+                <MudTextField @bind-Value="_spokesAdminUsername" Label="@Loc["Spokes Admin Username"]" Required="true" Class="mb-4" Variant="Variant.Outlined" />
+                <MudTextField @bind-Value="_spokesAdminPassword" Label="@Loc["Spokes Admin Password"]" Required="true" Class="mb-4" Variant="Variant.Outlined" HelperText="@Loc["You can use the suggested secure password or enter your own."]" />
                 
-                <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="ProvisionCasdoor" FullWidth="true">Provision Server</MudButton>
-                <MudButton Variant="Variant.Text" OnClick="() => _step = 6" FullWidth="true" Class="mt-2">Back</MudButton>
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="ProvisionCasdoor" FullWidth="true">@Loc["Provision Server"]</MudButton>
+                <MudButton Variant="Variant.Text" OnClick="() => _step = 6" FullWidth="true" Class="mt-2">@Loc["Back"]</MudButton>
             }
         }
         else if (_step == 8)
         {
-            <MudText Typo="Typo.h6" Color="Color.Success" Class="mb-4"><MudIcon Icon="@Icons.Material.Filled.CheckCircle" Class="mr-2"/>Setup Complete</MudText>
+            <MudText Typo="Typo.h6" Color="Color.Success" Class="mb-4"><MudIcon Icon="@Icons.Material.Filled.CheckCircle" Class="mr-2"/>@Loc["Setup Complete"]</MudText>
             
             @if (_selectedType == IdpType.BuiltInCasdoor)
             {
                 <MudAlert Severity="Severity.Error" Class="mb-4">
-                    Please save these credentials securely. <b>THEY WILL NOT BE DISPLAYED AGAIN.</b>
+                    @((MarkupString)Loc["Please save these credentials securely. <b>THEY WILL NOT BE DISPLAYED AGAIN.</b>"].Value)
                 </MudAlert>
 
-                <MudText Typo="Typo.subtitle1" Class="mt-4 mb-2"><b>Global Built-in Administrator</b></MudText>
-                <MudTextField Value="_casdoorUsername" Label="Admin Username" ReadOnly="true" Variant="Variant.Outlined" Class="mb-2" />
-                <MudTextField Value="_casdoorPassword" Label="Admin Password" ReadOnly="true" Variant="Variant.Outlined" Class="mb-4" Adornment="Adornment.End" AdornmentIcon="@Icons.Material.Filled.CopyAll" OnAdornmentClick="CopyCasdoorPassword" />
+                <MudText Typo="Typo.subtitle1" Class="mt-4 mb-2"><b>@Loc["Global Built-in Administrator"]</b></MudText>
+                <MudTextField Value="_casdoorUsername" Label="@Loc["Admin Username"]" ReadOnly="true" Variant="Variant.Outlined" Class="mb-2" />
+                <MudTextField Value="_casdoorPassword" Label="@Loc["Admin Password"]" ReadOnly="true" Variant="Variant.Outlined" Class="mb-4" Adornment="Adornment.End" AdornmentIcon="@Icons.Material.Filled.CopyAll" OnAdornmentClick="CopyCasdoorPassword" />
 
-                <MudText Typo="Typo.subtitle1" Class="mt-4 mb-2"><b>Spokes Organization Administrator</b></MudText>
-                <MudTextField Value="_spokesAdminUsername" Label="Admin Username" ReadOnly="true" Variant="Variant.Outlined" Class="mb-2" />
-                <MudTextField Value="_spokesAdminPassword" Label="Admin Password" ReadOnly="true" Variant="Variant.Outlined" Class="mb-4" Adornment="Adornment.End" AdornmentIcon="@Icons.Material.Filled.CopyAll" OnAdornmentClick="CopySpokesPassword" />
+                <MudText Typo="Typo.subtitle1" Class="mt-4 mb-2"><b>@Loc["Spokes Organization Administrator"]</b></MudText>
+                <MudTextField Value="_spokesAdminUsername" Label="@Loc["Admin Username"]" ReadOnly="true" Variant="Variant.Outlined" Class="mb-2" />
+                <MudTextField Value="_spokesAdminPassword" Label="@Loc["Admin Password"]" ReadOnly="true" Variant="Variant.Outlined" Class="mb-4" Adornment="Adornment.End" AdornmentIcon="@Icons.Material.Filled.CopyAll" OnAdornmentClick="CopySpokesPassword" />
 
                 
 
-                <MudText Typo="Typo.body2" >You can access the identity admin panel at: <b>@Nav.BaseUri</b>login</MudText>
-                <MudText Typo="Typo.body2" >Or</MudText>
-                <MudText Typo="Typo.body2" Class="mb-4">You can access the identity admin panel at: <b>@Db.SystemConfigs.Get().ServerPublicUrl</b>/login</MudText>
+                <MudText Typo="Typo.body2" >@Loc["You can access the identity admin panel at:"] <b>@Nav.BaseUri</b>login</MudText>
+                <MudText Typo="Typo.body2" >@Loc["Or"]</MudText>
+                <MudText Typo="Typo.body2" Class="mb-4">@Loc["You can access the identity admin panel at:"] <b>@Db.SystemConfigs.Get().ServerPublicUrl</b>/login</MudText>
 
-                <MudText Typo="Typo.body1" Class="mb-6">To apply these changes, the server must be restarted.</MudText>
+                <MudText Typo="Typo.body1" Class="mb-6">@Loc["To apply these changes, the server must be restarted."]</MudText>
                 @if (_isRestarting)
                 {
                     <div class="d-flex flex-column align-center mt-4">
                         <MudProgressCircular Color="Color.Primary" Indeterminate="true" Size="Size.Medium" Class="mb-2" />
-                        <MudText Typo="Typo.body2">Flushing configuration and restarting server...</MudText>
+                        <MudText Typo="Typo.body2">@Loc["Flushing configuration and restarting server..."]</MudText>
                     </div>
                 }
                 else
                 {
                     <div class="d-flex flex-column align-center">
-                        <MudSwitch @bind-Value="_hasSavedCrendentials" T="bool" Label="I have copied the admin credentials somewhere safe." LabelPlacement="Placement.Start" />
-                        <MudButton Variant="Variant.Filled" Color="Color.Primary" Disabled="!_hasSavedCrendentials" OnClick="RestartServer" FullWidth="true" Size="Size.Large">Restart Server Now</MudButton>
+                        <MudSwitch @bind-Value="_hasSavedCrendentials" T="bool" Label="@Loc["I have copied the admin credentials somewhere safe."]" LabelPlacement="Placement.Start" />
+                        <MudButton Variant="Variant.Filled" Color="Color.Primary" Disabled="!_hasSavedCrendentials" OnClick="RestartServer" FullWidth="true" Size="Size.Large">@Loc["Restart Server Now"]</MudButton>
                     </div>
                     
                 }
             }
             else
             {
-                <MudText Typo="Typo.body1" Class="mb-6">To apply these changes, the server must be restarted.</MudText>
+                <MudText Typo="Typo.body1" Class="mb-6">@Loc["To apply these changes, the server must be restarted."]</MudText>
                 @if (_isRestarting)
                 {
                     <div class="d-flex flex-column align-center mt-4">
                         <MudProgressCircular Color="Color.Primary" Indeterminate="true" Size="Size.Medium" Class="mb-2" />
-                        <MudText Typo="Typo.body2">Flushing configuration and restarting server...</MudText>
+                        <MudText Typo="Typo.body2">@Loc["Flushing configuration and restarting server..."]</MudText>
                     </div>
                 }
                 else
                 {
-                    <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="RestartServer" FullWidth="true" Size="Size.Large">Restart Server Now</MudButton>
+                    <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="RestartServer" FullWidth="true" Size="Size.Large">@Loc["Restart Server Now"]</MudButton>
                 
                 }
             }
@@ -389,7 +509,11 @@
 </style>
 
 @code {
-    private int _step = 1;
+    private int _step = 0;
+    private bool _isRestoringBackup;
+    private bool _backupRestoreSuccess;
+    private string? _backupRestoreError;
+    private double _backupUploadProgress;
     private IdpType _selectedType = IdpType.None;
     private bool _isProvisioning;
     private bool _isValidatingExternal;
@@ -422,17 +546,17 @@
 
     private bool IsFriendEdition => Db.CompanyProfile.Get()?.Edition == "Family";
 
-    private string ValidateServerUrl(string url)
+    private string? ValidateServerUrl(string url)
     {
         if (string.IsNullOrWhiteSpace(url))
-            return "Server Public URL is required.";
+            return Loc["Server Public URL is required."].Value;
             
         var trimmed = url.Trim();
         if (!trimmed.StartsWith("http://", StringComparison.OrdinalIgnoreCase) && !trimmed.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
-            return "URL must start with http:// or https://";
+            return Loc["URL must start with http:// or https://"].Value;
             
         if (!Uri.TryCreate(trimmed, UriKind.Absolute, out _))
-            return "Please enter a valid URL.";
+            return Loc["Please enter a valid URL."].Value;
             
         return null;
     }
@@ -473,6 +597,34 @@
         _spokesAdminPassword = Guid.NewGuid().ToString("N").Substring(0, 16);
     }
 
+    private void HandleBackupUploadStarted()
+    {
+        _isRestoringBackup = true;
+        _backupRestoreError = null;
+        _backupUploadProgress = 0;
+        StateHasChanged();
+    }
+
+    private void HandleBackupUploadProgress(double progress)
+    {
+        _backupUploadProgress = progress;
+        StateHasChanged();
+    }
+
+    private void HandleBackupUploadCompleted(List<ApiFileUpload.UploadResult> results)
+    {
+        _isRestoringBackup = false;
+        _backupRestoreSuccess = true;
+        StateHasChanged();
+    }
+
+    private void HandleBackupUploadError(string errorMessage)
+    {
+        _isRestoringBackup = false;
+        _backupRestoreError = errorMessage;
+        StateHasChanged();
+    }
+
     private void AcceptEula()
     {
         var config = Db.SystemConfigs.Get();
@@ -485,7 +637,7 @@
     {
         if (string.IsNullOrWhiteSpace(_companyName))
         {
-            Snackbar.Add($"{AppLabels.Company} name is required", Severity.Error);
+            Snackbar.Add(string.Format(Loc["{0} name is required"].Value, AppLabels.Company), Severity.Error);
             return;
         }
 
@@ -493,7 +645,7 @@
         profile.CompanyName = _companyName;
         profile.LogoBase64 = _logoBase64;
         profile.IconBase64 = _iconBase64;
-        Db.CompanyProfile.Save(profile);
+        BrandingService.SaveWithOptimizedBranding(profile);
 
         _step = 3;
     }
@@ -625,7 +777,7 @@
             var response = await client.GetAsync(checkUrl);
             if (!response.IsSuccessStatusCode)
             {
-                Snackbar.Add($"Validation failed: Could not reach provider (HTTP {(int)response.StatusCode}). Check the URL.", Severity.Error);
+                Snackbar.Add(string.Format(Loc["Validation failed: Could not reach provider (HTTP {0}). Check the URL."].Value, (int)response.StatusCode), Severity.Error);
                 return;
             }
             
@@ -633,7 +785,7 @@
             using var doc = System.Text.Json.JsonDocument.Parse(json);
             if (!doc.RootElement.TryGetProperty("issuer", out _) || !doc.RootElement.TryGetProperty("authorization_endpoint", out _))
             {
-                Snackbar.Add("Validation failed: Endpoint reached, but it did not return a valid OpenID configuration.", Severity.Error);
+                Snackbar.Add(Loc["Validation failed: Endpoint reached, but it did not return a valid OpenID configuration."].Value, Severity.Error);
                 return;
             }
 
@@ -652,7 +804,7 @@
         }
         catch (Exception ex)
         {
-            Snackbar.Add($"Validation failed: {ex.Message}", Severity.Error);
+            Snackbar.Add(string.Format(Loc["Validation failed: {0}"].Value, ex.Message), Severity.Error);
         }
         finally
         {
@@ -675,7 +827,7 @@
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[SetupWizard] Error during restart: {ex.Message}");
+            Logger.LogError(ex, "Error during server restart.");
             Environment.Exit(0);
         }
     }
@@ -707,7 +859,7 @@
         }
         catch (Exception ex)
         {
-            Snackbar.Add($"Error processing logo: {ex.Message}", Severity.Error);
+            Snackbar.Add(string.Format(Loc["Error processing logo: {0}"].Value, ex.Message), Severity.Error);
         }
     }
 
@@ -729,7 +881,7 @@
         }
         catch (Exception ex)
         {
-            Snackbar.Add($"Error processing icon: {ex.Message}", Severity.Error);
+            Snackbar.Add(string.Format(Loc["Error processing icon: {0}"].Value, ex.Message), Severity.Error);
         }
     }
 
@@ -768,44 +920,44 @@
                     
                     if (validationResult.Status == LicenseStatus.Expired)
                     {
-                        Snackbar.Add($"Expired License Saved: {validationResult.Message}", Severity.Warning);
+                        Snackbar.Add(string.Format(Loc["Expired License Saved: {0}"].Value, validationResult.Message), Severity.Warning);
                     }
                     else
                     {
-                        Snackbar.Add("License Validated Successfully!", Severity.Success);
+                        Snackbar.Add(Loc["License Validated Successfully!"].Value, Severity.Success);
                     }
                 }
                 else
                 {
-                    Snackbar.Add("License is valid but could not be parsed.", Severity.Warning);
+                    Snackbar.Add(Loc["License is valid but could not be parsed."].Value, Severity.Warning);
                 }
             }
             else
             {
-                Snackbar.Add($"Invalid License: {validationResult.Message}", Severity.Error);
+                Snackbar.Add(string.Format(Loc["Invalid License: {0}"].Value, validationResult.Message), Severity.Error);
             }
             
             StateHasChanged();
         }
         catch (Exception ex)
         {
-            Snackbar.Add($"Upload Failed: {ex.Message}", Severity.Error);
+            Snackbar.Add(string.Format(Loc["Upload Failed: {0}"].Value, ex.Message), Severity.Error);
         }
     }
 
     private string GetTimeUntilExpiry(DateTime expiry)
     {
         var span = expiry - DateTime.UtcNow;
-        if (span.TotalDays < 0) return $"Expired {(int)Math.Abs(span.TotalDays)} days ago";
+        if (span.TotalDays < 0) return string.Format(Loc["Expired {0} days ago"].Value, (int)Math.Abs(span.TotalDays));
         
         int totalDays = (int)span.TotalDays;
         int years = totalDays / 365;
         int months = (totalDays % 365) / 30;
         int days = (totalDays % 365) % 30;
         
-        if (years > 0) return $"{years} years, {months} months";
-        if (months > 0) return $"{months} months, {days} days";
-        return $"{days} days";
+        if (years > 0) return string.Format(Loc["{0} years, {1} months"].Value, years, months);
+        if (months > 0) return string.Format(Loc["{0} months, {1} days"].Value, months, days);
+        return string.Format(Loc["{0} days"].Value, days);
     }
 
     private List<string> GetAvailableEditions()

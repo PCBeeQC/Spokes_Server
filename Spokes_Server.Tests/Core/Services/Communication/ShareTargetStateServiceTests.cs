@@ -1,6 +1,9 @@
+using System.Collections.Generic;
 using System.Threading;
-using Spokes_Server.Components.Layout;
+using System.Threading.Tasks;
+using Spokes_Server.Core.Models.Communication;
 using Spokes_Server.Core.Services.Communication;
+using Xunit;
 
 namespace Spokes_Server.Tests.Core.Services.Communication;
 
@@ -22,7 +25,7 @@ public class ShareTargetStateServiceTests
     {
         // Arrange
         var service = new ShareTargetStateService();
-        var payload = new MainLayout.SharePayload
+        var payload = new SharePayload
         {
             Title = "Test Title",
             Text = "Test Body",
@@ -46,7 +49,7 @@ public class ShareTargetStateServiceTests
         var invocationCount = 0;
         service.OnPayloadReceived += () => invocationCount++;
 
-        var payload = new MainLayout.SharePayload { Title = "Share" };
+        var payload = new SharePayload { Title = "Share" };
 
         // Act
         service.SetPayload(payload, "chan-1");
@@ -67,7 +70,7 @@ public class ShareTargetStateServiceTests
         service.OnPayloadReceived += () => subscriber2Called = true;
 
         // Act
-        service.SetPayload(new MainLayout.SharePayload(), "chan-abc");
+        service.SetPayload(new SharePayload(), "chan-abc");
 
         // Assert
         Assert.True(subscriber1Called);
@@ -81,7 +84,7 @@ public class ShareTargetStateServiceTests
         var service = new ShareTargetStateService();
 
         // Act
-        var ex = Record.Exception(() => service.SetPayload(new MainLayout.SharePayload(), "chan-none"));
+        var ex = Record.Exception(() => service.SetPayload(new SharePayload(), "chan-none"));
 
         // Assert
         Assert.Null(ex);
@@ -92,8 +95,8 @@ public class ShareTargetStateServiceTests
     {
         // Arrange
         var service = new ShareTargetStateService();
-        var payload1 = new MainLayout.SharePayload { Title = "First" };
-        var payload2 = new MainLayout.SharePayload { Title = "Second" };
+        var payload1 = new SharePayload { Title = "First" };
+        var payload2 = new SharePayload { Title = "Second" };
 
         service.SetPayload(payload1, "chan-1");
 
@@ -110,7 +113,7 @@ public class ShareTargetStateServiceTests
     {
         // Arrange
         var service = new ShareTargetStateService();
-        service.SetPayload(new MainLayout.SharePayload { Title = "Shared" }, "chan-999");
+        service.SetPayload(new SharePayload { Title = "Shared" }, "chan-999");
         Assert.NotNull(service.PendingPayload);
         Assert.NotNull(service.TargetChannelId);
 
@@ -127,7 +130,7 @@ public class ShareTargetStateServiceTests
     {
         // Arrange
         var service = new ShareTargetStateService();
-        service.SetPayload(new MainLayout.SharePayload(), "chan-1");
+        service.SetPayload(new SharePayload(), "chan-1");
 
         var eventFired = false;
         service.OnPayloadReceived += () => eventFired = true;
@@ -176,7 +179,7 @@ public class ShareTargetStateServiceTests
                 {
                     if (j % 2 == 0)
                     {
-                        var payload = new MainLayout.SharePayload
+                        var payload = new SharePayload
                         {
                             Title = $"Task-{threadId}-Iter-{j}",
                             Text = $"Text-{j}"

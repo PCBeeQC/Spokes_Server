@@ -3,14 +3,28 @@
 
 @{
     bool showBadge = false;
+    bool isMobileBadge = false;
     Color badgeColor = Color.Default;
 
     if (ShowPresence && Employee != null)
     {
         var hasConn = PresenceState.HasActiveConnection(Employee.Id);
         var isAway = PresenceState.IsGloballyAway(Employee.Id);
+        var hasDesktopActive = PresenceState.HasActiveDesktopConnection(Employee.Id) && !PresenceState.IsUserAwayFromDesktop(Employee.Id);
+        var hasCapacitorMobile = PresenceState.IsOnlineOnCapacitorMobile(Employee.Id);
 
-        if (hasConn && !isAway)
+        if (hasDesktopActive)
+        {
+            showBadge = true;
+            badgeColor = Color.Success;
+        }
+        else if (hasCapacitorMobile)
+        {
+            showBadge = true;
+            isMobileBadge = true;
+            badgeColor = Color.Success;
+        }
+        else if (hasConn && !isAway)
         {
             showBadge = true;
             badgeColor = Color.Success;
@@ -47,29 +61,19 @@
     }
     @if (showBadge)
     {
-        var badgeHexColor = badgeColor == Color.Success ? "var(--mud-palette-success)" : "var(--mud-palette-warning)";
-        <div class="presence-dot" style="background-color: @badgeHexColor;"></div>
+        @if (isMobileBadge)
+        {
+            <div class="presence-mobile-badge" title="@Loc["Online on Mobile"]">
+                <MudIcon Icon="@Icons.Material.Filled.Smartphone" Class="presence-mobile-icon" />
+            </div>
+        }
+        else
+        {
+            var badgeHexColor = badgeColor == Color.Success ? "var(--mud-palette-success)" : "var(--mud-palette-warning)";
+            <div class="presence-dot" style="background-color: @badgeHexColor;"></div>
+        }
     }
 </MudAvatar>
-
-<style>
-    .presence-dot {
-        position: absolute;
-        top: 0;
-        right: 0;
-        /* Proportional scale: forces the badge to always equal ~30% of the avatar's actual dimensions */
-        width: 30%;
-        height: 30%;
-        min-width: 8px;
-        min-height: 8px;
-        border-radius: 50%;
-        /* Translate precisely slightly outwards so the dot rests on the circular rim (angle offset) */
-        transform: translate(25%, -25%);
-        border: 1px solid var(--mud-palette-surface);
-        z-index: 10;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.2);
-    }
-</style>
 
 @code {
     [Parameter] public Employee? Employee { get; set; }

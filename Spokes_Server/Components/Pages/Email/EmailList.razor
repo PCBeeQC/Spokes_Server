@@ -23,7 +23,7 @@
                 <MudText Typo="Typo.caption" Color="Color.Secondary">Search across:</MudText>
                 <MudToggleGroup T="bool" Value="@SearchAllFolders"
                     ValueChanged="@(async (v) => await OnSearchAllFoldersChanged.InvokeAsync(v))" Size="Size.Small"
-                    Outline="true" Color="Color.Primary" SelectionMode="SelectionMode.SingleSelection">
+                    Outlined="true" Color="Color.Primary" SelectionMode="SelectionMode.SingleSelection">
                     <MudToggleItem Value="false" Text="Current Folder" />
                     <MudToggleItem Value="true" Text="All Folders" />
                 </MudToggleGroup>
@@ -128,7 +128,7 @@
 </MudPaper>
 
 @code {
-    [Parameter] public List<EmailMessage> Messages { get; set; }
+    [Parameter] public List<EmailMessage> Messages { get; set; } = [];
     [Parameter] public string? SelectedMessageId { get; set; }
     [Parameter] public string SearchText { get; set; } = "";
     [Parameter] public bool HasMoreMessages { get; set; }

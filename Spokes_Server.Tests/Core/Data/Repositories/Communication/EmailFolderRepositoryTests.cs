@@ -1,42 +1,13 @@
 using System.Text.Json;
-using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.Logging;
-using Moq;
-using Spokes_Server.Core.Data;
 using Spokes_Server.Core.Data.Repositories.Communication;
 using Spokes_Server.Core.Models.Communication;
+using Spokes_Server.Tests.Helpers;
 using Xunit;
 
 namespace Spokes_Server.Tests.Core.Data.Repositories.Communication;
 
-public class EmailFolderRepositoryTests : IDisposable
+public class EmailFolderRepositoryTests : RepositoryTestFixture<EmailFolderRepository>
 {
-    private readonly string _testDataDir;
-    private readonly DiskPersistenceService _writer;
-    private readonly EmailFolderRepository _repo;
-
-    public EmailFolderRepositoryTests()
-    {
-        _testDataDir = Path.Combine(Path.GetTempPath(), $"Spokes_Test_EmailFolders_{Guid.NewGuid()}");
-
-        var mockConfig = new Mock<IConfiguration>();
-        mockConfig.Setup(c => c["DataPath"]).Returns(_testDataDir);
-
-        var mockLogger = new Mock<ILogger<DiskPersistenceService>>();
-        _writer = new DiskPersistenceService(mockLogger.Object);
-
-        _repo = new EmailFolderRepository(_writer, mockConfig.Object);
-    }
-
-    public void Dispose()
-    {
-        if (Directory.Exists(_testDataDir))
-        {
-            try { Directory.Delete(_testDataDir, true); } catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"Cleanup error: {ex.Message}"); }
-        }
-        _writer.Dispose();
-    }
-
     [Fact]
     public void Save_AddsToCache()
     {
@@ -86,17 +57,6 @@ public class EmailFolderRepositoryTests : IDisposable
     }
 
     [Fact]
-    public void Constructor_WithNullDataPath_UsesDefaultPath()
-    {
-        var mockConfig = new Mock<IConfiguration>();
-        mockConfig.Setup(c => c["DataPath"]).Returns((string?)null);
-
-        var repo = new EmailFolderRepository(_writer, mockConfig.Object);
-
-        Assert.NotNull(repo);
-    }
-
-    [Fact]
     public void GetFilePath_ResolvesUnderEmployeeEmailFolders()
     {
         var folder = new EmailFolder { Id = "f-disk", EmployeeId = "emp-path", Name = "Archive" };
@@ -132,7 +92,3 @@ public class EmailFolderRepositoryTests : IDisposable
         Assert.Empty(result);
     }
 }
-
-
-
-

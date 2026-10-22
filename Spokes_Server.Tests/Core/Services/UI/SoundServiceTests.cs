@@ -8,7 +8,7 @@ using Spokes_Server.Core.Data;
 using Spokes_Server.Core.Data.Repositories.Core;
 using Spokes_Server.Core.Data.Repositories.HR;
 using Spokes_Server.Core.Models.Communication.Notifications;
-using Spokes_Server.Core.Services.Core;
+using Spokes_Server.Core.Services.Communication.Notifications.Presentation;
 using Spokes_Server.Core.Services.UI;
 using Xunit;
 
@@ -49,8 +49,7 @@ public class SoundServiceTests : IDisposable
             {
                 Directory.Delete(_testDataDir, true);
             }
-        }
-        catch { }
+        } catch (Exception ex) { System.Diagnostics.Debug.WriteLine(ex.Message); }
     }
 
     [Fact]
@@ -58,6 +57,7 @@ public class SoundServiceTests : IDisposable
     {
         await _soundService.PlaySoundAsync(NotificationSoundIds.SystemDefault);
 
+        Assert.NotNull(_soundService);
         _mockJs.Verify(js => js.InvokeAsync<IJSVoidResult>(
             It.IsAny<string>(),
             It.IsAny<object[]>()), Times.Never);
@@ -68,6 +68,7 @@ public class SoundServiceTests : IDisposable
     {
         await _soundService.PlaySoundAsync("spokesnotif1.wav", isPreview: true);
 
+        Assert.NotNull(_soundService);
         _mockJs.Verify(js => js.InvokeAsync<IJSVoidResult>(
             "SoundManager.play",
             It.Is<object[]>(args => (string)args[0] == "spokesnotif1.wav" && (bool)args[1] == true)), Times.Once);
@@ -78,6 +79,7 @@ public class SoundServiceTests : IDisposable
     {
         await _soundService.PlayNotificationSoundAsync(NotificationCategories.Chat, NotificationSoundIds.SystemDefault);
 
+        Assert.NotNull(_soundService);
         _mockJs.Verify(js => js.InvokeAsync<IJSVoidResult>(
             It.IsAny<string>(),
             It.IsAny<object[]>()), Times.Never);
@@ -91,6 +93,7 @@ public class SoundServiceTests : IDisposable
             "mixkit_vintage_telephone_ringtone_1356",
             isPreview: true);
 
+        Assert.NotNull(_soundService);
         _mockJs.Verify(js => js.InvokeAsync<IJSVoidResult>(
             "SoundManager.play",
             It.Is<object[]>(args => (string)args[0] == "mixkit_vintage_telephone_ringtone_1356.wav" && (bool)args[1] == true)), Times.Once);
@@ -101,6 +104,7 @@ public class SoundServiceTests : IDisposable
     {
         await _soundService.StopPreviewAsync();
 
+        Assert.NotNull(_soundService);
         _mockJs.Verify(js => js.InvokeAsync<IJSVoidResult>(
             "SoundManager.stopPreview",
             It.IsAny<object[]>()), Times.Once);
@@ -111,8 +115,20 @@ public class SoundServiceTests : IDisposable
     {
         await _soundService.StopCallRingtoneAsync();
 
+        Assert.NotNull(_soundService);
         _mockJs.Verify(js => js.InvokeAsync<IJSVoidResult>(
             "SoundManager.stopCallRingtone",
             It.IsAny<object[]>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task PlayChannelLeaveAsync_InvokesJsSoundManager()
+    {
+        await _soundService.PlayChannelLeaveAsync();
+
+        Assert.NotNull(_soundService);
+        _mockJs.Verify(js => js.InvokeAsync<IJSVoidResult>(
+            "SoundManager.play",
+            It.Is<object[]>(args => (string)args[0] == "channel_leave" && (bool)args[1] == false)), Times.Once);
     }
 }

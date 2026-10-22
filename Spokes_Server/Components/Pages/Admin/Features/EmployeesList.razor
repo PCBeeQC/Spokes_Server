@@ -1,10 +1,12 @@
 @using Spokes_Server.Core.Models.Core
 @using Spokes_Server.Core.Models.HR
 @using Spokes_Server.Core.Data
-@using Spokes_Server.Components.Pages.Users
+@using Spokes_Server.Components.Pages.HR
 @using Spokes_Server.Components.Dialogs
 @using Spokes_Server.Components.Shared
 @using Spokes_Server.Core.Services
+@using Spokes_Server.Core.Services.Communication.Email
+@using Spokes_Server.Core.Services.Security
 @implements IDisposable
 
 @inject Database Db
@@ -13,16 +15,21 @@
 @inject ChatService ChatService
 @inject NavigationManager Nav
 @inject IServiceScopeFactory ScopeFactory
-@inject Spokes_Server.Core.Services.Core.AppLabelService AppLabels
+@inject AppLabelService AppLabels
 @inject PresenceStateService PresenceState
 @inject UserService UserService
+@inject IUserPrivacyService PrivacyService
 
 <div class="d-flex flex-wrap gap-4 align-center mb-6">
-    <MudTextField @bind-Value="searchString" Placeholder="Search Directory..." Variant="Variant.Outlined" Margin="Margin.Dense" Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search" IconSize="Size.Medium" Class="flex-grow-1" Style="max-width: 600px; background-color: var(--mud-palette-surface);" />
+    <MudTextField @bind-Value="searchString" Placeholder="@Loc["Search Directory..."]" Variant="Variant.Outlined" Margin="Margin.Dense" Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search" IconSize="Size.Medium" Class="flex-grow-1" Style="max-width: 600px; background-color: var(--mud-palette-surface);" />
+    @if (_isAdminOrManager)
+    {
+        <MudSwitch T="bool" Value="_showInactive" ValueChanged="OnShowInactiveChanged" Color="Color.Primary" Label="@Loc["Show Inactive"]" />
+    }
     <MudSpacer />
     @if (_isAdminOrManager && isDev)
     {
-        <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.PersonAdd" OnClick="CreateNewEmployee">New @AppLabels.Employee</MudButton>
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.PersonAdd" OnClick="CreateNewEmployee">@string.Format(Loc["New {0}"].Value, AppLabels.Employee)</MudButton>
     }
 </div>
 
@@ -30,100 +37,19 @@
     @foreach (var context in EmployeeList.Where(FilterFunc))
     {
         <MudItem xs="12" sm="6" md="4" lg="3">
-            <MudCard Elevation="0" Outlined="true" Class="h-100 d-flex flex-column directory-card" Style="border-radius: 16px;">
-                <MudCardContent Class="pa-4 flex-grow-1 cursor-pointer" @onclick="@(() => OpenProfileDialog(context))">
-                    <div class="d-flex gap-4">
-                        <MudAvatar Size="Size.Large" Style="@($"width: 56px; height: 56px; font-size: 1.5rem; background-color: {(context.ProfileColor ?? Colors.DeepPurple.Default)}; color: {Colors.Shades.White}; flex-shrink: 0;")">
-                            @if (context.HasCustomAvatar)
-                            {
-                                <MudImage Src="@($"/spokesapi/Media/Avatar/{context.Id}?v={context.AvatarVersion}")" ObjectFit="ObjectFit.Cover" />
-                            }
-                            else
-                            {
-                                @context.Initials
-                            }
-                        </MudAvatar>
-                        <div class="d-flex flex-column justify-center" style="min-width: 0; flex: 1;">
-                            <div class="d-flex align-center gap-1" style="width: 100%;">
-                                <MudText Typo="Typo.subtitle1" Style="font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block;" Class="flex-grow-1">@context.FullName</MudText>
-                                @if (context.IsAdmin)
-                                {
-                                    <MudIcon Icon="@Icons.Material.Filled.VerifiedUser" Color="Color.Info" Size="Size.Small" Style="font-size: 14px; flex-shrink: 0;" Title="Admin" />
-                                }
-                            </div>
-                            <MudText Typo="Typo.body2" Color="Color.Secondary" Style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block; width: 100%;">@context.DisplaySubtitle</MudText>
-                            
-                            @* Last Seen *@
-                            <div class="d-flex align-center mt-2">
-                                @{
-                                    var hasConnection = PresenceState.HasActiveConnection(context.Id);
-                                    var isAway = PresenceState.IsGloballyAway(context.Id);
-                                    var lastSeen = PresenceState.GetLastSeen(context.Id);
-                                    
-                                    string lastSeenText = "Offline";
-                                    string dotColor = "var(--mud-palette-action-disabled)"; // Offline Gray
-
-                                    if (hasConnection && !isAway)
-                                    {
-                                        lastSeenText = "Online";
-                                        dotColor = "var(--mud-palette-success)"; // Online Green
-                                    }
-                                    else if (isAway)
-                                    {
-                                        lastSeenText = "Away";
-                                        dotColor = "var(--mud-palette-warning)"; // Away Amber
-                                    }
-                                    else
-                                    {
-                                        lastSeenText = PresenceStateService.FormatLastSeen(lastSeen);
-                                    }
-                                }
-                                <div style="width: 8px; height: 8px; border-radius: 50%; background-color: @dotColor; margin-right: 6px;"></div>
-                                <MudText Typo="Typo.caption" Color="Color.Secondary" Style="font-weight: 500;">@lastSeenText</MudText>
-                            </div>
-                        </div>
-                        
-                        @if (_isAdminOrManager)
-                        {
-                            <div class="d-flex flex-column justify-start align-end ml-n2">
-                                <MudMenu Icon="@Icons.Material.Filled.MoreVert" Size="Size.Small" AnchorOrigin="Origin.BottomRight" TransformOrigin="Origin.TopRight" Dense="true" @onclick:stopPropagation="true">
-                                    <MudMenuItem Icon="@Icons.Material.Filled.Edit" OnClick="@(() => OpenEditDialog(context))">Edit</MudMenuItem>
-                                    @if (!context.IsAdmin)
-                                    {
-                                        <MudMenuItem Icon="@Icons.Material.Filled.Delete" IconColor="Color.Error" OnClick="@(() => ConfirmDeleteEmployee(context))">Delete</MudMenuItem>
-                                    }
-                                </MudMenu>
-                            </div>
-                        }
-                    </div>
-                </MudCardContent>
-                <MudCardActions Class="px-4 pb-4 pt-0 d-flex justify-space-between align-center">
-                    <MudButton Variant="Variant.Text" Color="Color.Primary" Size="Size.Small" OnClick="@(() => OpenProfileDialog(context))">View Profile</MudButton>
-                    @if (_currentUser?.Id != context.Id)
-                    {
-                        <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small" Class="rounded-pill px-4" Style="text-transform: none; font-weight: 600;" DisableElevation="true" OnClick="@(() => InitiateDirectMessage(context))" Disabled="@(_currentUser?.IsSuspended == true)">Message</MudButton>
-                    }
-                </MudCardActions>
-            </MudCard>
+            <UserDirectoryCard Employee="@context"
+                               CurrentUser="@_currentUser"
+                               ShowManageMenu="@_isAdminOrManager"
+                               OnEdit="@OpenEditDialog"
+                               OnDelete="@ConfirmDeleteEmployee" />
         </MudItem>
     }
 </MudGrid>
 
-<style>
-    .directory-card {
-        transition: transform 0.2s ease, box-shadow 0.2s ease;
-        border: 1px solid var(--mud-palette-lines-default);
-    }
-    .directory-card:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 4px 12px rgba(0,0,0,0.08) !important;
-        border-color: var(--mud-palette-primary-hover);
-    }
-</style>
-
     @code {
     private List<Employee> EmployeeList = new();
     private string searchString = "";
+    private bool _showInactive = false;
     private Employee? _currentUser;
     private bool _isAdminOrManager => _currentUser?.IsAdmin == true || _currentUser?.HasPermission(Spokes_Server.Core.Constants.AppPermissions.Admin.ManageUsers) == true;
     private bool isDev = false;
@@ -142,11 +68,14 @@
 
     private void HandlePresenceChanged(string userId)
     {
-        InvokeAsync(() =>
-        {
-            RefreshList();
-            StateHasChanged();
-        });
+        InvokeAsync(StateHasChanged);
+    }
+
+    private void OnShowInactiveChanged(bool val)
+    {
+        _showInactive = val;
+        RefreshList();
+        StateHasChanged();
     }
 
     public void Dispose()
@@ -159,42 +88,27 @@
 
     private void RefreshList()
     {
-        // Online users first, then Away users, then Offline users sorted by last seen
-        EmployeeList = Db.Employees.GetAll()
-            .Where(e => e.IsActive)
-            .OrderByDescending(e => PresenceState.HasActiveConnection(e.Id)) // Connection pushes up
+        var query = Db.Employees.GetAll().AsEnumerable();
+        if (!_showInactive || !_isAdminOrManager)
+        {
+            query = query.Where(e => e.IsActive);
+        }
+
+        // Active users sorted by presence snapshot, inactive users at the bottom
+        var rawList = query
+            .OrderByDescending(e => e.IsActive)
+            .ThenByDescending(e => PresenceState.HasActiveConnection(e.Id)) // Connection pushes up
             .ThenBy(e => PresenceState.IsGloballyAway(e.Id)) // But false (Active) goes above true (Away)
             .ThenByDescending(e => PresenceState.GetLastSeen(e.Id) ?? DateTime.MinValue)
-            .ThenBy(e => e.FullName)
-            .ToList();
-    }
+            .ThenBy(e => e.FullName);
 
-    private async Task OpenProfileDialog(Employee employee)
-    {
-        var parameters = new DialogParameters { ["Employee"] = employee };
-        var options = new DialogOptions { CloseButton = true, MaxWidth = MaxWidth.Small, FullWidth = true, CloseOnEscapeKey = true };
-        await DialogService.ShowAsync<MemberProfileDialog>(null, parameters, options);
-    }
-
-    private async Task InitiateDirectMessage(Employee employee)
-    {
-        if (_currentUser == null) return;
-        
-        try
-        {
-            var channel = await ChatService.CreateDirectMessageChannelAsync(_currentUser.Id, employee.Id, false);
-            Nav.NavigateTo($"/chat/{channel.Id}");
-        }
-        catch (Exception ex)
-        {
-            Snackbar.Add($"Failed to open chat: {ex.Message}", Severity.Error);
-        }
+        EmployeeList = PrivacyService.FilterDiscoverableEmployees(_currentUser, rawList);
     }
 
     private async Task CreateNewEmployee()
     {
         var newEmployee = new Employee { FirstName = "", LastName = "", IsActive = true };
-        var allOpenIdAccounts = Db.OpenIdAccounts.GetAll().ToList();
+        var allOpenIdAccounts = _currentUser?.IsAdmin == true ? Db.OpenIdAccounts.GetAll().ToList() : new List<OpenIdAccount>();
         var parameters = new DialogParameters
         {
             ["Employee"] = newEmployee,
@@ -204,24 +118,26 @@
         };
         
         var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Large };
-        var dialog = await DialogService.ShowAsync<EmployeeDialog>($"Create New {AppLabels.Employee}", parameters, options);
+        var dialog = await DialogService.ShowAsync<EmployeeDialog>(string.Format(Loc["Create New {0}"].Value, AppLabels.Employee), parameters, options);
         var result = await dialog.Result;
 
-        if (!result.Canceled)
+        if (result is { Canceled: false, Data: Employee createdEmp })
         {
-            var createdEmp = (Employee)result.Data;
             Db.Employees.Save(createdEmp);
             
-            foreach (var account in allOpenIdAccounts) Db.OpenIdAccounts.Save(account);
+            if (_currentUser?.IsAdmin == true)
+            {
+                foreach (var account in allOpenIdAccounts) Db.OpenIdAccounts.Save(account);
+            }
 
             _ = Task.Run(async () =>
             {
                 using var scope = ScopeFactory.CreateScope();
-                var emailService = scope.ServiceProvider.GetRequiredService<EmailService>();
-                await emailService.SyncEmployeeAsync(createdEmp.Id);
+                var syncService = scope.ServiceProvider.GetRequiredService<IEmailSyncService>();
+                await syncService.SyncEmployeeAsync(createdEmp.Id);
             });
 
-            Snackbar.Add($"{AppLabels.Employee} '{createdEmp.FullName}' created", Severity.Success);
+            Snackbar.Add(string.Format(Loc["{0} '{1}' created"].Value, AppLabels.Employee, createdEmp.FullName), Severity.Success);
             RefreshList();
         }
     }
@@ -229,7 +145,7 @@
     private async Task OpenEditDialog(Employee emp)
     {
         var clone = System.Text.Json.JsonSerializer.Deserialize<Employee>(System.Text.Json.JsonSerializer.Serialize(emp));
-        var allOpenIdAccounts = Db.OpenIdAccounts.GetAll().ToList();
+        var allOpenIdAccounts = _currentUser?.IsAdmin == true ? Db.OpenIdAccounts.GetAll().ToList() : new List<OpenIdAccount>();
         var parameters = new DialogParameters
         {
             ["Employee"] = clone,
@@ -239,23 +155,25 @@
         };
 
         var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Large };
-        var dialog = await DialogService.ShowAsync<EmployeeDialog>($"Edit {AppLabels.Employee}", parameters, options);
+        var dialog = await DialogService.ShowAsync<EmployeeDialog>(string.Format(Loc["Edit {0}"].Value, AppLabels.Employee), parameters, options);
         var result = await dialog.Result;
 
-        if (!result.Canceled)
+        if (result is { Canceled: false, Data: Employee updatedEmp })
         {
-            var updatedEmp = (Employee)result.Data;
             Db.Employees.Save(updatedEmp);
-            foreach (var account in allOpenIdAccounts) Db.OpenIdAccounts.Save(account);
+            if (_currentUser?.IsAdmin == true)
+            {
+                foreach (var account in allOpenIdAccounts) Db.OpenIdAccounts.Save(account);
+            }
 
             _ = Task.Run(async () =>
             {
                 using var scope = ScopeFactory.CreateScope();
-                var emailService = scope.ServiceProvider.GetRequiredService<EmailService>();
-                await emailService.SyncEmployeeAsync(updatedEmp.Id);
+                var syncService = scope.ServiceProvider.GetRequiredService<IEmailSyncService>();
+                await syncService.SyncEmployeeAsync(updatedEmp.Id);
             });
 
-            Snackbar.Add($"{AppLabels.Employee} updated", Severity.Success);
+            Snackbar.Add(string.Format(Loc["{0} updated"].Value, AppLabels.Employee), Severity.Success);
             RefreshList();
         }
     }
@@ -273,16 +191,16 @@
     {
         var parameters = new DialogParameters
         {
-            ["ContentText"] = $"Are you sure you want to delete the employee '{emp.FullName}'? This action cannot be undone. Any OpenID accounts linked to this employee will be unlinked.",
-            ["ButtonText"] = "Delete",
+            ["ContentText"] = string.Format(Loc["Are you sure you want to delete the {0} '{1}'? This action cannot be undone. Any OpenID accounts linked to this {0} will be unlinked."].Value, AppLabels.Employee.ToLowerInvariant(), emp.FullName),
+            ["ButtonText"] = Loc["Delete"].Value,
             ["Color"] = Color.Error
         };
 
         var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Small };
-        var dialog = await DialogService.ShowAsync<ConfirmDialog>("Confirm Delete", parameters, options);
+        var dialog = await DialogService.ShowAsync<ConfirmDialog>(Loc["Confirm Delete"].Value, parameters, options);
         var result = await dialog.Result;
 
-        if (!result.Canceled)
+        if (result is { Canceled: false })
         {
             var linkedAccounts = Db.OpenIdAccounts.GetByEmployeeId(emp.Id);
             foreach (var account in linkedAccounts)
@@ -292,7 +210,7 @@
             }
 
             Db.Employees.Delete(emp.Id);
-            Snackbar.Add($"{AppLabels.Employee} '{emp.FullName}' deleted", Severity.Warning);
+            Snackbar.Add(string.Format(Loc["{0} '{1}' deleted"].Value, AppLabels.Employee, emp.FullName), Severity.Warning);
             RefreshList();
         }
     }

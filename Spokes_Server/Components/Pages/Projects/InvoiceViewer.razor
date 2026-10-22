@@ -1,8 +1,13 @@
 @page "/projects/{ProjectId}/invoices/{InvoiceId}"
+@attribute [Authorize(Policy = AppPermissions.Projects.View)]
 @using Spokes_Server.Components.Dialogs
 @using Spokes_Server.Components.Pages.Email
 @using Spokes_Server.Core.Constants
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Services.Accounting
 @using Spokes_Server.Core.Services.Documents
+@using Spokes_Server.Core.Services.Content
+@using Spokes_Server.Components.Shared
 @inject Database Db
 @inject ISnackbar Snackbar
 @inject IDialogService DialogService
@@ -10,6 +15,9 @@
 @inject IJSRuntime JS
 @inject UserService UserService
 @inject DocumentPdfService PdfService
+@inject IAccountingService AccountingService
+@inject MarkdownSanitizerService MarkdownSanitizer
+@inject ILogger<InvoiceViewer> Logger
 @implements IAsyncDisposable
 
 @if (Invoice == null || Template == null || Profile == null)
@@ -19,52 +27,66 @@
 }
 else
 {
-    @if (Invoice != null && Project != null)
+    @if (Invoice != null)
     {
-                <PageTitle>@($"{Template?.Label_Invoice ?? "Invoice"} {Invoice.InvoiceNumber} - {Project.Client.BusinessName}")</PageTitle>
+        <PageTitle>@(Project?.Client?.BusinessName is { Length: > 0 } clientName ? $"{Template?.Label_Invoice ?? "Invoice"} {Invoice.InvoiceNumber} - {clientName}" : $"{Template?.Label_Invoice ?? "Invoice"} {Invoice.InvoiceNumber}")</PageTitle>
     }
-        <MudGrid Spacing="0" Class="py-2 d-print-none align-center" Style="position: sticky; top: 0; z-index: 99; background-color: var(--mud-palette-background);">
-            <MudItem xs="3">
+        <div class="d-print-none mb-1">
+            <SpokesBreadcrumbs Items="@(new (string, string?)[] { ("Projects", "projects"), (Project?.DisplayName ?? "Project", $"projects/{ProjectId}"), ("Invoices", $"business/accounting?tab=receivables"), (Invoice!.InvoiceNumber, null) })" />
+        </div>
+        <div class="d-flex justify-space-between align-center flex-wrap gap-2 py-2 d-print-none" Style="position: sticky; top: 0; z-index: 99; background-color: var(--mud-palette-background);">
+            <div>
             @if (!string.IsNullOrEmpty(Invoice?.ProjectGroupId))
             {
-                        <MudButton StartIcon="@Icons.Material.Filled.ArrowBack" OnClick="GoBack">Back to Project Group</MudButton>
+                <MudButton StartIcon="@Icons.Material.Filled.ArrowBack" OnClick="GoBack">Back to Project Group</MudButton>
             }
             else
             {
-                        <MudButton StartIcon="@Icons.Material.Filled.ArrowBack" OnClick="GoBack">Back to Project</MudButton>
+                <MudButton StartIcon="@Icons.Material.Filled.ArrowBack" OnClick="GoBack">Back to Project</MudButton>
             }
-            </MudItem>
-            <MudItem xs="9" Class="d-flex justify-end gap-2 align-center">
-                <MudSelect T="string" Value="@Invoice.Status" ValueChanged="UpdateStatus" Dense="true" Margin="Margin.Dense" Variant="Variant.Outlined" Style="width: 150px;">
-                    <MudSelectItem Value="@("Draft")">Draft</MudSelectItem>
-                    <MudSelectItem Value="@("Final")">Final</MudSelectItem>
-                    <MudSelectItem Value="@("Paid")">Paid</MudSelectItem>
+            </div>
+            <div class="d-flex align-center gap-2 flex-wrap">
+                <MudSelect T="string" Value="@Invoice.Status" ValueChanged="UpdateStatusAsync" Dense="true" Margin="Margin.Dense" Variant="Variant.Outlined" Style="width: 170px; min-width: 170px; flex-shrink: 0;">
+                    <MudSelectItem Value="@(InvoiceStatus.Draft)">Draft</MudSelectItem>
+                    <MudSelectItem Value="@(InvoiceStatus.Final)">Final</MudSelectItem>
+                    <MudSelectItem Value="@(InvoiceStatus.Paid)">Paid</MudSelectItem>
                 </MudSelect>
-            <MudButton Variant="Variant.Outlined" Color="Color.Success" StartIcon="@Icons.Material.Filled.PictureAsPdf" OnClick="PrintPdf">Print / PDF</MudButton>
-                @if (Invoice.Status != "Draft" && !string.IsNullOrEmpty(Invoice.PdfPath))
+                <MudDivider Vertical="true" FlexItem="true" Class="mx-1" />
+                <MudButton Variant="Variant.Outlined" Color="Color.Success" StartIcon="@Icons.Material.Filled.PictureAsPdf" OnClick="PrintPdf">Print / PDF</MudButton>
+                @if (Invoice.Status != InvoiceStatus.Draft)
                 {
-                <MudButton Variant="Variant.Outlined" Color="Color.Info" StartIcon="@Icons.Material.Filled.OpenInNew" OnClick="OpenPdf">Open PDF</MudButton>
+                    <MudButton Variant="Variant.Outlined" Color="Color.Info" StartIcon="@Icons.Material.Filled.OpenInNew" OnClick="OpenPdf">Open PDF</MudButton>
                     <MudButton Variant="Variant.Outlined" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Email" OnClick="SendByEmail">Send by Email</MudButton>
                 }
-            <MudButton Variant="Variant.Outlined" Color="Color.Secondary" StartIcon="@Icons.Material.Filled.ContentCopy" OnClick="DuplicateInvoice">Duplicate</MudButton>
+                <MudButton Variant="Variant.Outlined" Color="Color.Secondary" StartIcon="@Icons.Material.Filled.ContentCopy" OnClick="DuplicateInvoice">Duplicate</MudButton>
 
-            @if (CanManageAccounting)
-            {
-                @if (Invoice.BalanceDue > 0)
+                @if (CanManageAccounting)
                 {
-                    <MudButton Variant="Variant.Outlined" Color="Color.Primary" StartIcon="@Icons.Material.Filled.AttachMoney" OnClick="RegisterPayment">Add Payment</MudButton>
-                }
-                @if (Invoice.Status == "Draft")
-                {
-                                <MudButton Variant="Variant.Outlined" Color="Color.Warning" StartIcon="@Icons.Material.Filled.Edit" OnClick="EditInvoice">Edit</MudButton>
+                    @if (Invoice.BalanceDue > 0)
+                    {
+                        <MudButton Variant="Variant.Outlined" Color="Color.Primary" StartIcon="@Icons.Material.Filled.AttachMoney" OnClick="RegisterPayment">Add Payment</MudButton>
+                    }
+                    @if (Invoice.Status == InvoiceStatus.Draft)
+                    {
+                        <MudButton Variant="Variant.Outlined" Color="Color.Warning" StartIcon="@Icons.Material.Filled.Edit" OnClick="EditInvoice">Edit</MudButton>
 
-                                <MudTooltip Text="Delete Draft">
-                        <MudIconButton Variant="Variant.Outlined" Icon="@Icons.Material.Filled.Delete" Color="Color.Error" OnClick="DeleteInvoice" />
-                                </MudTooltip>
+                        <MudTooltip Text="Delete Draft">
+                            <MudIconButton Variant="Variant.Outlined" Icon="@Icons.Material.Filled.Delete" Color="Color.Error" OnClick="DeleteInvoice" />
+                        </MudTooltip>
+                    }
                 }
+            </div>
+        </div>
+
+        <style>
+            .markdown-content p {
+                margin-top: 0;
+                margin-bottom: 0.25rem;
             }
-            </MudItem>
-        </MudGrid>
+            .markdown-content p:last-child {
+                margin-bottom: 0;
+            }
+        </style>
 
         <MudPaper Class="mx-auto overflow-hidden" Style="max-width: 8.5in; width: 100%; min-height: 11in;" Elevation="3" id="printable-area">
 
@@ -76,75 +98,79 @@ else
 
             <div class="print-body">
 
-                <div class="d-flex justify-space-between align-start mb-6 keep-together">
+                <div class="d-flex justify-space-between align-start mb-4 keep-together">
                     <div style="max-width: 50%;">
-                    @if (Profile.HasCustomLogo)
-                    {
-                        <MudImage Src="@($"/spokesapi/Media/Logo?v={Profile.LogoVersion}")" Height="70" ObjectFit="ObjectFit.Contain" Class="mb-2" />
-                    }
-                    else
-                    {
-                                <MudAvatar Rounded="true" Style="@($"width: 60px; height: 60px; font-size: 2rem; color: white; background-color: {Profile.PrimaryColor}; -webkit-print-color-adjust: exact;")">
-                            @Profile.CompanyName.Substring(0, 1)
-                                </MudAvatar>
-                    }
-                        <MudText Typo="Typo.h6" Class="mt-2" Style="font-weight: 700;">@Profile.CompanyName</MudText>
+                        <div style="height: 70px; display: flex; align-items: center;" class="mb-2">
+                        @if (Profile.HasCustomLogo)
+                        {
+                            <MudImage Src="@($"/spokesapi/Media/Logo?v={Profile.LogoVersion}")" Height="70" ObjectFit="ObjectFit.Contain" />
+                        }
+                        else
+                        {
+                            <MudAvatar Rounded="true" Style="@($"width: 60px; height: 60px; font-size: 2rem; color: white; background-color: {Profile.PrimaryColor}; -webkit-print-color-adjust: exact;")">
+                                @Profile.CompanyName.Substring(0, 1)
+                            </MudAvatar>
+                        }
+                        </div>
+                        <MudText Typo="Typo.h6" Style="font-weight: 700;">@Profile.CompanyName</MudText>
                         <MudText Typo="Typo.body2">@Profile.AddressStreet</MudText>
                         <MudText Typo="Typo.body2">@Profile.AddressCity, @Profile.AddressState @Profile.AddressZip</MudText>
                         <MudText Typo="Typo.body2">@Profile.Website</MudText>
-
-                    @if (!string.IsNullOrEmpty(ProjectManagerName))
-                    {
-                                <div class="mt-4">
-                                    <MudText Typo="Typo.subtitle2" Style="@($"color: {Profile.SecondaryColor}; font-weight: bold;")">@Template.Label_ProjectManager</MudText>
-                                    <MudText Typo="Typo.body2">@ProjectManagerName</MudText>
-
-                            @if (!string.IsNullOrEmpty(ProjectManagerEmail))
-                            {
-                                            <MudText Typo="Typo.body2">@ProjectManagerEmail</MudText>
-                            }
-                                </div>
-                    }
                     </div>
 
                     <div class="d-flex flex-column align-end">
-                        <MudText Typo="Typo.h3" Style="@($"color: {Profile.PrimaryColor}; font-weight: 300;")" Class="mb-2">@Template.Label_Invoice</MudText>
+                        <div style="height: 70px; display: flex; align-items: center; justify-content: flex-end;" class="mb-2">
+                            <MudText Typo="Typo.h3" Style="@($"color: {Profile.PrimaryColor}; font-weight: 300;")">@Template.Label_Invoice</MudText>
+                        </div>
                         <MudText Typo="Typo.h6" Style="@($"color: {Profile.SecondaryColor};")">#@Invoice.InvoiceNumber</MudText>
-                        <MudText>@Template.Label_Date: @Invoice.Date.ToString(!string.IsNullOrEmpty(Template?.DateFormat) ? Template.DateFormat : "MM/dd/yyyy")</MudText>
-                        <MudText>@Template.Label_DueDate: @Invoice.DueDate.ToString(!string.IsNullOrEmpty(Template?.DateFormat) ? Template.DateFormat : "MM/dd/yyyy")</MudText>
-                    @if (!string.IsNullOrEmpty(Project.ProjectNumber))
+                        <MudText Typo="Typo.body2">@Template.Label_Date: @Invoice.Date.ToString(!string.IsNullOrEmpty(Template?.DateFormat) ? Template.DateFormat : "yyyy-MM-dd")</MudText>
+                        <MudText Typo="Typo.body2">@Template.Label_DueDate: @Invoice.DueDate.ToString(!string.IsNullOrEmpty(Template?.DateFormat) ? Template.DateFormat : "yyyy-MM-dd")</MudText>
+                    @if (!string.IsNullOrEmpty(Project?.ProjectNumber))
                     {
-                                <MudText>@Template.Label_ProjectNumber @Project.ProjectNumber</MudText>
+                        <MudText Typo="Typo.body2">@Template.Label_ProjectNumber @Project?.ProjectNumber</MudText>
                     }
 
-                    @if (Invoice.Status.ToUpper() == "PAID")
+                    @if (string.Equals(Invoice.Status, InvoiceStatus.Paid, StringComparison.OrdinalIgnoreCase))
                     {
-                                <div class="mt-2 px-3 py-1 rounded" style="@($"background-color: {GetStatusColor()}; color: white; font-size: 0.8rem; font-weight: bold; -webkit-print-color-adjust: exact;")">
+                        <div class="mt-2 px-3 py-1 rounded" style="@($"background-color: {GetStatusColor()}; color: white; font-size: 0.8rem; font-weight: bold; -webkit-print-color-adjust: exact;")">
                             @Invoice.Status.ToUpper()
-                                </div>
+                        </div>
                     }
 
                     </div>
                 </div>
 
-                <MudDivider Class="my-6" />
+                <MudDivider Class="my-4" />
 
-                <div class="d-flex justify-space-between mb-8 keep-together align-start">
-                    <div style="width: 48%;">
-                        <MudText Typo="Typo.subtitle2" Style="@($"color: {Profile.SecondaryColor}; text-transform: uppercase; letter-spacing: 1px;")">@Template.Label_BillTo</MudText>
+                <div class="d-flex justify-space-between align-start mb-4 keep-together">
+                    <div style="max-width: 50%;">
+                        <MudText Typo="Typo.subtitle2" Style="@($"color: {Profile.SecondaryColor}; text-transform: uppercase; letter-spacing: 1px; font-weight: bold;")">@Template.Label_BillTo</MudText>
                         <MudText Typo="Typo.h6">@Project?.Client.BusinessName</MudText>
-                        <MudText>@Project?.Client.ContactPersonPrefix @Project?.Client.ContactPersonName</MudText>
-                        <MudText>@Project?.Client.BusinessAdressNumber @Project?.Client.BusinessAdressStreet</MudText>
-                        <MudText>@Project?.Client.BusinessAdressCity, @Project?.Client.BusinessAdressZip</MudText>
+                        <MudText Typo="Typo.body2">@Project?.Client.ContactPersonPrefix @Project?.Client.ContactPersonName</MudText>
+                        <MudText Typo="Typo.body2">@Project?.Client.BusinessAddressNumber @Project?.Client.BusinessAddressStreet</MudText>
+                        <MudText Typo="Typo.body2">@Project?.Client.BusinessAddressCity, @Project?.Client.BusinessAddressZip</MudText>
                     </div>
+
+                @if (!string.IsNullOrEmpty(ProjectManagerName))
+                {
+                    <div class="d-flex flex-column align-end" style="max-width: 50%; text-align: right;">
+                        <MudText Typo="Typo.subtitle2" Style="@($"color: {Profile.SecondaryColor}; font-weight: bold;")">@Template.Label_ProjectManager</MudText>
+                        <MudText Typo="Typo.body2">@ProjectManagerName</MudText>
+
+                        @if (!string.IsNullOrEmpty(ProjectManagerEmail))
+                        {
+                            <MudText Typo="Typo.body2">@ProjectManagerEmail</MudText>
+                        }
+                    </div>
+                }
+                </div>
 
                 @if (!string.IsNullOrEmpty(Invoice.Note))
                 {
-                            <div style="width: 48%; background-color: #f8f9fa; border-left: 4px solid #ccc;" class="pa-4">
-                                <MudText Typo="Typo.body2" Style="white-space: pre-line;">@Invoice.Note</MudText>
-                            </div>
+                    <div class="mb-4 pa-3 keep-together" style="@($"background-color: #f8f9fa; border-left: 4px solid {(string.IsNullOrEmpty(Profile.PrimaryColor) ? "var(--mud-palette-primary)" : Profile.PrimaryColor)}; border-radius: 2px; -webkit-print-color-adjust: exact;")">
+                        <MudText Typo="Typo.body2" Style="white-space: pre-line;">@Invoice.Note</MudText>
+                    </div>
                 }
-                </div>
 
                 <div class="allow-break">
                     <table class="mud-table-root allow-break" style="width: 100%; border-collapse: collapse; table-layout: fixed;">
@@ -163,7 +189,7 @@ else
                         </thead>
                         <tbody class="allow-break">
                             @{ var rowIndex = 0; }
-                            @foreach (var line in Invoice.Lines)
+                            @foreach (var line in Invoice.LineItems)
                             {
                                 var rowClass = rowIndex % 2 == 1 ? "background-color: rgba(0,0,0,0.02);" : "";
                                 <tr class="mud-table-row keep-together" style="@rowClass">
@@ -190,9 +216,18 @@ else
                 <div class="print-row mt-8 d-flex keep-together" style="gap: 20px;">
 
                     <div class="print-col-6" style="flex: 1;">
+                    @if (!string.IsNullOrEmpty(Invoice.PaymentTerms))
+                    {
+                        <MudPaper Class="pa-3 mb-2" Style="background-color: #f8f9fa; -webkit-print-color-adjust: exact; print-color-adjust: exact;" Elevation="0">
+                            <MudText Typo="Typo.subtitle2" Class="mb-1" Style="@($"color: {Profile.PrimaryColor};")"><b>@Template.Label_PaymentTerms</b></MudText>
+                            <div class="markdown-content allow-break" style="font-size: 0.85rem; color: #444;">
+                                @RenderMarkdown(Invoice.PaymentTerms)
+                            </div>
+                        </MudPaper>
+                    }
                     @if (!string.IsNullOrEmpty(Template.PaymentInstructions) || !string.IsNullOrEmpty(Template.BankAccountNumber))
                     {
-                                <MudPaper Class="pa-3" Style="background-color: #f8f9fa;" Elevation="0">
+                                <MudPaper Class="pa-3" Style="background-color: #f8f9fa; -webkit-print-color-adjust: exact; print-color-adjust: exact;" Elevation="0">
                                     <MudText Typo="Typo.subtitle2" Class="mb-1" Style="@($"color: {Profile.PrimaryColor};")"><b>@Template.Label_PaymentInstructions</b></MudText>
                                     <MudText Typo="Typo.caption" Style="white-space: pre-line;">@Template.PaymentInstructions</MudText>
 
@@ -244,7 +279,7 @@ else
                         {
                                         <div class="d-flex justify-space-between mb-1" style="@($"color: {GetStatusColor()};")">
                                             <MudText>Date Received:</MudText>
-                                            <MudText>@Invoice.DatePaid.Value.ToString(!string.IsNullOrEmpty(Template?.DateFormat) ? Template.DateFormat : "MM/dd/yyyy")</MudText>
+                                            <MudText>@Invoice.DatePaid.Value.ToString(!string.IsNullOrEmpty(Template?.DateFormat) ? Template.DateFormat : "yyyy-MM-dd")</MudText>
                                         </div>
                         }
                                 <MudDivider Class="my-2" />
@@ -270,7 +305,7 @@ else
     private DocumentTemplate? Template;
     private string ProjectManagerName = "";
     private string ProjectManagerEmail = "";
-    private bool HasTransparency => Invoice.HideCostAndMarkup && Invoice.Lines.Any(l => l.MarkupPercentage > 0);
+    private bool HasTransparency => Invoice?.HideCostAndMarkup == true && Invoice.LineItems.Any(l => l.MarkupPercentage > 0);
     private bool CanManageAccounting;
 
     private const int PageHeight = 940;
@@ -324,7 +359,7 @@ else
         Invoice = Db.Invoices.GetById(InvoiceId);
         Profile = Db.CompanyProfile.Get();
 
-        if (!string.IsNullOrEmpty(Invoice.TemplateId))
+        if (Invoice != null && !string.IsNullOrEmpty(Invoice.TemplateId))
         {
             Template = Db.DocumentTemplates.GetById(Invoice.TemplateId);
         }
@@ -364,44 +399,41 @@ else
             Nav.NavigateTo($"/projects/{ProjectId}?tab=quote");
         }
     }
-    private string GetStatusColor() => Invoice?.Status switch { "Paid" => "#4caf50", "Partial" => "#ff9800", "Draft" => "#9e9e9e", _ => "#2196f3" };
 
-    private void UpdateStatus(string newStatus)
+    private MarkupString RenderMarkdown(string text)
     {
-        _ = UpdateStatusAsync(newStatus);
+        if (string.IsNullOrEmpty(text)) return default;
+        try
+        {
+            // Preserve multiple blank lines
+            text = text.Replace("\r\n", "\n").Replace("\r", "\n");
+            text = System.Text.RegularExpressions.Regex.Replace(text, @"\n{3,}", match => 
+                "\n\n" + string.Join("", System.Linq.Enumerable.Repeat("<div style=\"height: 1rem;\"></div>\n\n", match.Length - 2)));
+
+            var html = MarkdownSanitizer.RenderSanitizedHtml(text);
+            return new MarkupString(html);
+        }
+        catch (Exception)
+        {
+            return new MarkupString(System.Net.WebUtility.HtmlEncode(text)); // Fallback to encoded text
+        }
     }
+    private string GetStatusColor() => Invoice?.Status switch { InvoiceStatus.Paid => "#4caf50", InvoiceStatus.Partial => "#ff9800", InvoiceStatus.Draft => "#9e9e9e", _ => "#2196f3" };
 
     private string GetTranslatedDescription(InvoiceLine line)
     {
         if (Template != null && !string.IsNullOrEmpty(Template.TaskTranslationLanguage) && !string.IsNullOrEmpty(line.WorkTypeId))
         {
-            var lang = Template.TaskTranslationLanguage;
             var workType = Db.WorkTypes.GetById(line.WorkTypeId);
             if (workType != null)
             {
-                var taskName = workType.Name;
-                if (workType.NameTranslations != null && workType.NameTranslations.TryGetValue(lang, out var taskTrans) && !string.IsNullOrWhiteSpace(taskTrans))
-                {
-                    taskName = taskTrans;
-                }
-
-                var subTaskName = "General";
-                if (!string.IsNullOrEmpty(line.SubTaskId))
-                {
-                    var subTask = workType.SubTasks.FirstOrDefault(s => s.Id == line.SubTaskId);
-                    if (subTask != null)
-                    {
-                        subTaskName = subTask.Name;
-                        if (subTask.NameTranslations != null && subTask.NameTranslations.TryGetValue(lang, out var subTaskTrans) && !string.IsNullOrWhiteSpace(subTaskTrans))
-                        {
-                            subTaskName = subTaskTrans;
-                        }
-                    }
-                }
-
-                string taskLabel = (subTaskName == "General" || string.IsNullOrEmpty(subTaskName))
-                    ? taskName
-                    : $"{taskName}: {subTaskName}";
+                string taskLabel = TimesheetSearchHelper.FormatTranslatedTaskAndSubTask(
+                    workType.Name,
+                    null,
+                    line.SubTaskId,
+                    workType,
+                    Template.TaskTranslationLanguage,
+                    separator: ": ");
 
                 return $"{taskLabel} {Template.Label_ItemLaborTag}".Trim();
             }
@@ -412,8 +444,10 @@ else
 
     private async Task UpdateStatusAsync(string newStatus)
     {
+        if (Invoice == null) return;
+
         // Admin-only revert from Final to Draft
-        if (Invoice.Status == "Final" && newStatus == "Draft" && !CanManageAccounting)
+        if (Invoice.Status == InvoiceStatus.Final && newStatus == InvoiceStatus.Draft && !CanManageAccounting)
         {
             Snackbar.Add("Only administrators can revert a finalized document to draft.", Severity.Warning);
             return;
@@ -421,27 +455,30 @@ else
 
         var oldStatus = Invoice.Status;
         Invoice.Status = newStatus;
-        if (newStatus == "Paid" && Invoice.DatePaid == null)
+        if (newStatus == InvoiceStatus.Paid && Invoice.DatePaid == null)
         {
             Invoice.DatePaid = DateTime.Today;
         }
 
-        if (oldStatus != "Draft" && newStatus == "Draft")
+        if (oldStatus != InvoiceStatus.Draft && newStatus == InvoiceStatus.Draft)
         {
             if (!string.IsNullOrEmpty(Invoice.PdfPath) && System.IO.File.Exists(Invoice.PdfPath))
             {
                 try { System.IO.File.Delete(Invoice.PdfPath); } catch { }
             }
             Invoice.PdfPath = "";
+            Db.Invoices.Save(Invoice);
         }
-        else if (oldStatus == "Draft" && (newStatus == "Final" || newStatus == "Paid"))
+        else if (oldStatus == InvoiceStatus.Draft && (newStatus == InvoiceStatus.Final || newStatus == InvoiceStatus.Paid))
         {
-            Snackbar.Add("Generating PDF document...", Severity.Info);
-            Invoice.PdfPath = await PdfService.GenerateInvoicePdfAsync(Invoice, ProjectId, Nav.BaseUri);
+            Db.Invoices.Save(Invoice);
+            await EnsurePdfExistsAsync();
         }
-
-        Db.Invoices.Save(Invoice);
-        TimelineEventHelper.ProcessInvoiceStatusChange(Db, Invoice, oldStatus, newStatus, null);
+        else
+        {
+            Db.Invoices.Save(Invoice);
+        }
+        AccountingService.ProcessInvoiceStatusChange(Invoice, oldStatus, newStatus, null);
         Snackbar.Add($"Status updated to {newStatus}", Severity.Success);
         
         await RefreshViewer();
@@ -449,6 +486,7 @@ else
 
     private async Task DeleteInvoice()
     {
+        if (Invoice == null) return;
         var result = await DialogService.ShowMessageBoxAsync("Delete Invoice?", "Deleting this draft will release all linked time entries.", yesText: "Delete", cancelText: "Cancel");
         if (result == true) { Db.Invoices.Delete(Invoice.Id); Snackbar.Add("Invoice deleted", Severity.Success); GoBack(); }
     }
@@ -458,6 +496,7 @@ else
 
     private async Task RegisterPayment()
     {
+        if (Invoice == null) return;
         var parameters = new DialogParameters<RecordPaymentDialog> 
         { 
             { x => x.MaxAmount, Invoice.BalanceDue },
@@ -466,23 +505,9 @@ else
         };
         var dialog = await DialogService.ShowAsync<RecordPaymentDialog>("Register Payment", parameters);
         var result = await dialog.Result;
-        if (!result.Canceled && result.Data is PaymentRecord payment)
+        if (result is { Canceled: false, Data: PaymentRecord payment })
         {
-            Invoice.Payments.Add(payment);
-            var oldStatus = Invoice.Status;
-            
-            if (Invoice.BalanceDue <= 0)
-            {
-                Invoice.Status = "Paid";
-                Invoice.DatePaid = payment.Date;
-            }
-            else
-            {
-                Invoice.Status = "Partial";
-            }
-            
-            Db.Invoices.Save(Invoice);
-            TimelineEventHelper.ProcessInvoiceStatusChange(Db, Invoice, oldStatus, Invoice.Status, null);
+            AccountingService.RecordInvoicePayment(Invoice, payment);
             Snackbar.Add($"Payment of {payment.Amount:C} Registered", Severity.Success);
             await RefreshViewer();
         }
@@ -490,6 +515,7 @@ else
 
     private async Task EditInvoice()
     {
+        if (Invoice == null) return;
         var parameters = new DialogParameters { ["Invoice"] = Invoice };
         var options = new DialogOptions { MaxWidth = MaxWidth.ExtraExtraLarge, FullWidth = true };
 
@@ -497,7 +523,7 @@ else
         var dialog = await DialogService.ShowAsync<InvoiceMasterDialog>("Edit Invoice", parameters, options);
         var result = await dialog.Result;
 
-        if (!result.Canceled)
+        if (result is { Canceled: false })
         {
             // Reload to ensure UI reflects changes (Totals, Descriptions, etc.)
             Invoice = Db.Invoices.GetById(InvoiceId);
@@ -523,6 +549,7 @@ else
 
     private async Task DuplicateInvoice()
     {
+        if (Invoice == null) return;
         var result = await DialogService.ShowMessageBoxAsync("Duplicate Invoice", "Are you sure you want to create a copy of this invoice?", yesText: "Duplicate", cancelText: "Cancel");
         if (result != true) return;
 
@@ -531,17 +558,17 @@ else
             // 1. Clone
             var json = System.Text.Json.JsonSerializer.Serialize(Invoice);
             var newInv = System.Text.Json.JsonSerializer.Deserialize<Invoice>(json);
+            if (newInv == null) return;
 
             // 2. Update Metadata
             newInv.Id = Guid.NewGuid().ToString();
             newInv.InvoiceNumber = Db.Invoices.GenerateInvoiceNumber(Profile?.InvoicePrefix ?? "INV-");
             newInv.Date = DateTime.Today;
-            newInv.Status = "Draft";
+            newInv.Status = InvoiceStatus.Draft;
             newInv.Note = $"{Invoice.Note} (Copy)"; // Optional, user might want this?
 
             // 3. Reset Payments
             newInv.Payments.Clear();
-            newInv.LegacyAmountPaid = 0;
             newInv.DatePaid = null;
             // BalanceDue is calced property, so it will update automatically based on AmountPaid and GrandTotal.
 
@@ -552,17 +579,41 @@ else
             Snackbar.Add("Invoice Duplicated Successfully", Severity.Success);
             Nav.NavigateTo($"/projects/{ProjectId}/invoices/{newInv.Id}");
         }
-        catch (Exception ex)
+        catch (Exception)
         {
             Snackbar.Add("Failed to duplicate invoice", Severity.Error);
         }
     }
 
+    private async Task<bool> EnsurePdfExistsAsync()
+    {
+        if (Invoice == null) return false;
+        if (PdfService.IsValidCachedPdf(Invoice.PdfPath))
+        {
+            return true;
+        }
+
+        try
+        {
+            Snackbar.Add("Generating PDF document...", Severity.Info);
+            Invoice.PdfPath = await PdfService.GenerateInvoicePdfAsync(Invoice, ProjectId, Nav.BaseUri);
+            Db.Invoices.Save(Invoice);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to generate invoice PDF on demand");
+            Snackbar.Add("Failed to generate PDF document", Severity.Error);
+            return false;
+        }
+    }
+
     private async Task SendByEmail()
     {
-        if (string.IsNullOrEmpty(Invoice?.PdfPath) || !System.IO.File.Exists(Invoice.PdfPath))
+        if (Invoice == null) return;
+
+        if (!await EnsurePdfExistsAsync())
         {
-            Snackbar.Add("PDF file not found. Please try generating it again by setting status to Draft then Final.", Severity.Warning);
             return;
         }
 
@@ -584,9 +635,10 @@ else
 
     private async Task OpenPdf()
     {
-        if (string.IsNullOrEmpty(Invoice?.PdfPath) || !System.IO.File.Exists(Invoice.PdfPath))
+        if (Invoice == null) return;
+
+        if (!await EnsurePdfExistsAsync())
         {
-            Snackbar.Add("PDF file not found.", Severity.Warning);
             return;
         }
 
@@ -597,8 +649,9 @@ else
             var dataUrl = $"data:application/pdf;base64,{base64}";
             await JS.InvokeVoidAsync("window.openBase64InNewTab", dataUrl, $"Invoice_{Invoice.InvoiceNumber}.pdf");
         }
-        catch (Exception)
+        catch (Exception ex)
         {
+            Logger.LogError(ex, "Failed to open PDF view");
             Snackbar.Add("Failed to open PDF view", Severity.Error);
         }
     }

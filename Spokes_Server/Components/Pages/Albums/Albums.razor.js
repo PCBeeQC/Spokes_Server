@@ -1,6 +1,8 @@
-export function initFileHandlers(elementId, dotNetHelper) {
+export function initFileHandlers(elementId, dotNetHelper, maxAllowedSize = 268435456) {
     const container = document.getElementById(elementId);
     if (!container) return;
+
+    container._maxAllowedSize = maxAllowedSize;
 
     if (container._spokesFileHandlersInit) return;
     container._spokesFileHandlersInit = true;
@@ -33,27 +35,26 @@ export function initFileHandlers(elementId, dotNetHelper) {
 
         const files = e.dataTransfer.files;
         if (files && files.length > 0) {
-            handleFiles(files, dotNetHelper);
+            handleFiles(files, dotNetHelper, container._maxAllowedSize || maxAllowedSize);
         }
     });
 }
 
-async function handleFiles(fileList, dotNetHelper) {
+async function handleFiles(fileList, dotNetHelper, maxAllowedSize = 268435456) {
     const uploadUrl = await dotNetHelper.invokeMethodAsync('GetUploadUrl');
     if (!uploadUrl) return;
 
     if (fileList.length === 0) return;
 
-    let totalSize = 0;
-    const maxAllowedSize = 268435456; // 256MB
-
     for (const file of fileList) {
-        totalSize += file.size;
-    }
-
-    if (totalSize > maxAllowedSize) {
-        dotNetHelper.invokeMethodAsync('OnPasteUploadError', `Total file size exceeds the allowed limit of ${Math.round(maxAllowedSize/1024/1024)}MB`);
-        return;
+        if (file.size > maxAllowedSize) {
+            const limitMb = Math.round(maxAllowedSize / 1024 / 1024);
+            const errorMsg = fileList.length > 1
+                ? `File "${file.name}" exceeds the allowed limit of ${limitMb}MB`
+                : `Total file size exceeds the allowed limit of ${limitMb}MB`;
+            dotNetHelper.invokeMethodAsync('OnPasteUploadError', errorMsg);
+            return;
+        }
     }
 
     for (const file of fileList) {
@@ -64,6 +65,8 @@ async function handleFiles(fileList, dotNetHelper) {
                 invokeMethodAsync: async (methodName, ...args) => {
                     if (methodName === 'OnProgressUpdateCallback') {
                         return dotNetHelper.invokeMethodAsync('OnPasteProgressUpdate', ...args);
+                    } else if (methodName === 'OnProcessingCallback') {
+                        return dotNetHelper.invokeMethodAsync('OnPasteProcessingUpdate', ...args);
                     }
                 }
             };

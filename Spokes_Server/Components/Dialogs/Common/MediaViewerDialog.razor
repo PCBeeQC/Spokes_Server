@@ -1,0 +1,521 @@
+@using Spokes_Server.Components.UI
+@implements IAsyncDisposable
+@inject IJSRuntime JS
+@inject ISnackbar Snackbar
+@inject ILogger<MediaViewerDialog> Logger
+
+<style>
+    .album-media-dialog-container .mud-dialog-content {
+        padding: 0 !important;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+        flex-grow: 1;
+    }
+    .lightbox-img-base {
+        max-width: 100%;
+        max-height: 100%;
+        object-fit: contain;
+        border-radius: 8px;
+        box-shadow: 0 8px 32px rgba(0,0,0,0.6);
+        -webkit-touch-callout: none;
+        -webkit-user-select: none;
+        user-select: none;
+        -webkit-user-drag: none;
+        touch-action: none;
+    }
+    .lightbox-img-loading {
+        opacity: 0.5;
+    }
+    .lightbox-img-loaded {
+        opacity: 1;
+    }
+    .lightbox-controls-overlay {
+        position: absolute;
+        bottom: 16px;
+        left: 50%;
+        transform: translateX(-50%);
+        z-index: 20;
+        background: rgba(20, 20, 24, 0.85);
+        backdrop-filter: blur(8px);
+        -webkit-backdrop-filter: blur(8px);
+        border: 1px solid rgba(255, 255, 255, 0.15);
+        border-radius: 28px;
+        padding: 3px 10px;
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        box-shadow: 0 4px 20px rgba(0,0,0,0.6);
+        user-select: none;
+        transition: opacity 0.2s ease;
+    }
+    @@media (pointer: coarse) {
+        .lightbox-controls-overlay {
+            display: none !important;
+        }
+    }
+    @if (_isFullscreen)
+    {
+        <text>
+        .mud-dialog {
+            max-width: none !important;
+            margin: 0 !important;
+        }
+        .album-media-dialog-container .mud-dialog-actions {
+            display: none !important;
+        }
+        </text>
+    }
+</style>
+
+<MudDialog Class="album-media-dialog-container album-media-dialog" Style="@($"background-color: {(_isFullscreen ? "black" : "rgba(18, 18, 20, 0.95)")}; color: white; width: {(_isFullscreen ? "100vw" : "95vw")}; max-width: {(_isFullscreen ? "100vw" : "1800px")}; height: {(_isFullscreen ? "100vh" : "95vh")}; display: flex; flex-direction: column; border-radius: {(_isFullscreen ? "0px" : "16px")}; overflow: hidden; transition: all 0.2s ease;")" OnKeyDown="HandleKeyDown">
+    <DialogContent>
+        <div class="d-flex flex-grow-1 flex-column position-relative pa-2" style="outline: none; overflow: hidden; min-height: 0;" tabindex="0" @ref="DialogContainer">
+            @if (CurrentMedia != null)
+            {
+                <div id="lightbox-image-area" @key="@("lightbox-container")" class="d-flex flex-grow-1 justify-center align-center w-100" style="touch-action: none; min-height: 0; border-radius: 8px; position: relative;">
+                    @if (_isImageLoading && CurrentMedia.ContentType.StartsWith("image/"))
+                    {
+                        <div @key="@("spinner-" + CurrentMedia.FilePath)" style="position: absolute; z-index: 5; display: flex; justify-content: center; align-items: center;">
+                            <MudProgressCircular Color="Color.Primary" Indeterminate="true" Size="Size.Large" />
+                        </div>
+                    }
+                    @if (CurrentMedia.ContentType.StartsWith("image/"))
+                    {
+                        <img @key="@("img-" + CurrentMedia.FilePath)" id="lightbox-image" src="@CurrentMedia.FilePath" @onload="OnImageLoaded" @onerror="OnImageError" alt="@CurrentMedia.FileName" class="lightbox-img-base @(_isImageLoading ? "lightbox-img-loading" : "lightbox-img-loaded")" style="touch-action: none;" />
+                    }
+                    else if (CurrentMedia.ContentType.StartsWith("video/"))
+                    {
+                        <video id="lightbox-video" controls src="@CurrentMedia.FilePath" poster="@(CurrentMedia.HasServerThumbnail ? CurrentMedia.ThumbnailUrl : null)" style="max-width: 100%; max-height: 100%; border-radius: 8px;">
+                            @Loc["Your browser does not support video playback."]
+                        </video>
+                    }
+                </div>
+
+                @if (IsImage)
+                {
+                    <div class="lightbox-controls-overlay d-none d-md-flex">
+                        <MudTooltip Text="@Loc["Zoom out"]">
+                            <MudIconButton Icon="@Icons.Material.Filled.Remove" Size="Size.Small" Color="Color.Surface" Disabled="@(_currentZoomPercent <= 100)" OnClick="ZoomOut" Style="color: white;" />
+                        </MudTooltip>
+                        
+                        <MudTooltip Text="@Loc["Reset zoom"]">
+                            <MudButton Variant="Variant.Text" Size="Size.Small" OnClick="ToggleZoom" Style="color: white; font-weight: 600; min-width: 52px; font-size: 0.82rem; padding: 2px 6px;">
+                                @($"{_currentZoomPercent}%")
+                            </MudButton>
+                        </MudTooltip>
+
+                        <MudTooltip Text="@Loc["Zoom in"]">
+                            <MudIconButton Icon="@Icons.Material.Filled.Add" Size="Size.Small" Color="Color.Surface" Disabled="@(_currentZoomPercent >= 5000)" OnClick="ZoomIn" Style="color: white;" />
+                        </MudTooltip>
+
+                        <MudDivider Vertical="true" FlexItem="true" Class="mx-1" Style="height: 18px; align-self: center; border-color: rgba(255,255,255,0.2);" />
+
+                        <MudTooltip Text="@(_currentZoomPercent > 100 ? Loc["Reset zoom"] : Loc["Fit to screen"])">
+                            <MudIconButton Icon="@Icons.Material.Filled.RestartAlt" Size="Size.Small" Color="Color.Surface" Disabled="@(_currentZoomPercent == 100)" OnClick="ResetZoom" Style="color: white;" />
+                        </MudTooltip>
+
+                        <MudTooltip Text="@(_isFullscreen ? Loc["Exit fullscreen"] : Loc["Fullscreen"])">
+                            <MudIconButton Icon="@(_isFullscreen ? Icons.Material.Filled.FullscreenExit : Icons.Material.Filled.Fullscreen)" Size="Size.Small" Color="Color.Surface" OnClick="ToggleFullscreen" Style="color: white;" />
+                        </MudTooltip>
+
+                        @if (_isFullscreen)
+                        {
+                            <MudTooltip Text="@Loc["Close"]">
+                                <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small" Color="Color.Surface" OnClick="Close" Style="color: white;" />
+                            </MudTooltip>
+                        }
+                    </div>
+                }
+
+                @if (MediaList.Count > 1 && !_isFullscreen)
+                {
+                    <MudIconButton Icon="@Icons.Material.Filled.ChevronLeft" Color="Color.Surface" Size="Size.Large"
+                                   OnClick="OnPrevClick" Style="position: absolute; left: 8px; top: 50%; transform: translateY(-50%); background: rgba(0,0,0,0.5); color: white; z-index: 10;" />
+                    <MudIconButton Icon="@Icons.Material.Filled.ChevronRight" Color="Color.Surface" Size="Size.Large"
+                                   OnClick="OnNextClick" Style="position: absolute; right: 8px; top: 50%; transform: translateY(-50%); background: rgba(0,0,0,0.5); color: white; z-index: 10;" />
+                }
+            }
+        </div>
+    </DialogContent>
+    <DialogActions>
+        <div class="px-6 py-3 d-flex flex-column flex-sm-row justify-space-between align-start align-sm-center w-100 gap-4" style="border-top: 1px solid rgba(255,255,255,0.12);">
+            <div>
+                @if (CurrentMedia != null)
+                {
+                    <MudText Typo="Typo.subtitle1" Style="color: white; font-weight: 600;">@CurrentMedia.FileName</MudText>
+                    <MudText Typo="Typo.caption" Style="color: rgba(255,255,255,0.7);">
+                        @if (CurrentMedia.AddedAt.HasValue)
+                        {
+                            <span>@string.Format(Loc["Added {0}"].Value, CurrentMedia.AddedAt.Value.ToString("MMM dd, yyyy HH:mm"))</span>
+                        }
+                        @if (CurrentMedia.FileSizeBytes > 0)
+                        {
+                            <span> • @FormatFileSize(CurrentMedia.FileSizeBytes)</span>
+                        }
+                        @if (MediaList.Count > 1)
+                        {
+                            <span> • (@string.Format(Loc["{0} of {1}"].Value, CurrentIndex + 1, MediaList.Count))</span>
+                        }
+                    </MudText>
+                }
+            </div>
+            <div class="d-flex align-center flex-wrap gap-2">
+                @if (CurrentMedia != null)
+                {
+                    <MudButton Variant="Variant.Outlined" Size="Size.Small" Color="Color.Surface" StartIcon="@Icons.Material.Filled.Share" OnClick="ShareCurrent" Style="color: white; border-color: rgba(255,255,255,0.3);">@Loc["Share"]</MudButton>
+                    <MudButton Variant="Variant.Outlined" Size="Size.Small" Color="Color.Surface" StartIcon="@Icons.Material.Filled.Download" OnClick="DownloadCurrent" Style="color: white; border-color: rgba(255,255,255,0.3);">@Loc["Download"]</MudButton>
+                }
+                <MudButton Variant="Variant.Filled" Size="Size.Small" Color="Color.Primary" OnClick="Close">@Loc["Close"]</MudButton>
+            </div>
+        </div>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+    
+    [Parameter] public List<LightboxMediaItem> MediaList { get; set; } = new();
+    [Parameter] public int InitialIndex { get; set; } = 0;
+
+    private int CurrentIndex { get; set; }
+    private LightboxMediaItem? CurrentMedia => (MediaList.Count > 0 && CurrentIndex >= 0 && CurrentIndex < MediaList.Count) ? MediaList[CurrentIndex] : null;
+    private bool IsImage => CurrentMedia?.ContentType.StartsWith("image/") == true;
+
+    private bool _isFullscreen = false;
+    private bool _isImageLoading = true;
+    private int _currentZoomPercent = 100;
+    private int _lastRenderedIndex = -1;
+
+    private IJSObjectReference? _module;
+    private DotNetObjectReference<MediaViewerDialog>? _objRef;
+    private ElementReference DialogContainer;
+
+    protected override void OnInitialized()
+    {
+        CurrentIndex = (InitialIndex >= 0 && InitialIndex < MediaList.Count) ? InitialIndex : 0;
+        _isImageLoading = true;
+        _currentZoomPercent = 100;
+        _lastRenderedIndex = -1;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            try
+            {
+                _module = await JS.InvokeAsync<IJSObjectReference>("import", $"./{Assets.Bypassed("Components/Dialogs/Common/MediaViewerDialog.razor.js")}");
+                _objRef = DotNetObjectReference.Create(this);
+                
+                await _module.InvokeVoidAsync("initLightboxState", _objRef);
+                await _module.InvokeVoidAsync("initGestureHandler", "lightbox-image-area", _objRef, MediaList.Count > 1);
+                await DialogContainer.FocusAsync();
+            }
+            catch (Exception ex)
+            {
+                Logger.LogWarning(ex, "Failed to load MediaViewerDialog.razor.js");
+            }
+        }
+
+        if (_module != null && _lastRenderedIndex != CurrentIndex)
+        {
+            _lastRenderedIndex = CurrentIndex;
+            await _module.InvokeVoidAsync("updateImage", "lightbox-image", MediaList.Count > 1);
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        // Ensure status bar is restored when dialog is disposed
+        try { await JS.InvokeVoidAsync("eval", "if(window.Capacitor && window.Capacitor.Plugins.StatusBar) { window.Capacitor.Plugins.StatusBar.show(); }"); } catch { }
+        try { await JS.InvokeVoidAsync("eval", "if(document.fullscreenElement) { document.exitFullscreen().catch(()=>{}); }"); } catch { }
+
+        if (_module != null)
+        {
+            try
+            {
+                await _module.InvokeVoidAsync("cleanupLightboxState", false);
+                await _module.InvokeVoidAsync("destroyGestureHandler");
+            }
+            catch { /* ignore */ }
+        }
+        _objRef?.Dispose();
+        if (_module != null)
+        {
+            try { await _module.DisposeAsync(); }
+            catch (Microsoft.JSInterop.JSDisconnectedException) { /* Circuit already gone */ }
+        }
+    }
+
+    [JSInvokable]
+    public void HandleBack()
+    {
+        MudDialog.Cancel();
+        StateHasChanged();
+    }
+
+    [JSInvokable]
+    public void HandleLongPress()
+    {
+        // For now, no-op or we can implement share menu on long press
+    }
+
+    [JSInvokable]
+    public void OnZoomChanged(int zoomPercent)
+    {
+        if (_currentZoomPercent != zoomPercent)
+        {
+            _currentZoomPercent = zoomPercent;
+            StateHasChanged();
+        }
+    }
+
+    [JSInvokable]
+    public void ToggleFullscreen()
+    {
+        _isFullscreen = !_isFullscreen;
+        
+        if (_isFullscreen)
+        {
+            _ = JS.InvokeVoidAsync("eval", "if(window.Capacitor && window.Capacitor.Plugins.StatusBar) { window.Capacitor.Plugins.StatusBar.hide(); } else if(document.documentElement.requestFullscreen) { document.documentElement.requestFullscreen().catch(()=>{}); }");
+        }
+        else
+        {
+            _ = JS.InvokeVoidAsync("eval", "if(window.Capacitor && window.Capacitor.Plugins.StatusBar) { window.Capacitor.Plugins.StatusBar.show(); } else if(document.fullscreenElement) { document.exitFullscreen().catch(()=>{}); }");
+        }
+        
+        StateHasChanged();
+    }
+
+    [JSInvokable]
+    public void HandleSwipeDownClose()
+    {
+        Close();
+    }
+
+    [JSInvokable]
+    public void ChangeImage(string direction)
+    {
+        if (MediaList.Count <= 1) return;
+        
+        var nextIndex = direction == "left"
+            ? (CurrentIndex + 1) % MediaList.Count
+            : (CurrentIndex - 1 + MediaList.Count) % MediaList.Count;
+
+        if (nextIndex == CurrentIndex) return;
+
+        CurrentIndex = nextIndex;
+        _isImageLoading = true;
+        _currentZoomPercent = 100;
+        StateHasChanged();
+    }
+    
+    private async Task OnImageLoaded()
+    {
+        _isImageLoading = false;
+        StateHasChanged();
+        if (_module != null)
+        {
+            try
+            {
+                await _module.InvokeVoidAsync("updateImage", "lightbox-image", MediaList.Count > 1);
+            }
+            catch { }
+        }
+    }
+
+    private void OnImageError()
+    {
+        _isImageLoading = false;
+        StateHasChanged();
+    }
+    
+    private void OnPrevClick()
+    {
+        if (MediaList.Count > 1) ChangeImage("right");
+    }
+
+    private void OnNextClick()
+    {
+        if (MediaList.Count > 1) ChangeImage("left");
+    }
+
+    private async Task ZoomIn()
+    {
+        if (_module != null && IsImage)
+        {
+            await _module.InvokeVoidAsync("zoomIn");
+        }
+    }
+
+    private async Task ZoomOut()
+    {
+        if (_module != null && IsImage)
+        {
+            await _module.InvokeVoidAsync("zoomOut");
+        }
+    }
+
+    private async Task ResetZoom()
+    {
+        if (_module != null && IsImage)
+        {
+            await _module.InvokeVoidAsync("resetZoom");
+        }
+    }
+
+    private async Task ToggleZoom()
+    {
+        if (_module != null && IsImage)
+        {
+            if (_currentZoomPercent > 100)
+            {
+                await ResetZoom();
+            }
+            else
+            {
+                await _module.InvokeVoidAsync("setZoom", 200);
+            }
+        }
+    }
+
+    private async Task HandleKeyDown(KeyboardEventArgs e)
+    {
+        if (IsImage)
+        {
+            if (e.Key is "+" or "=" or "Add")
+            {
+                await ZoomIn();
+                return;
+            }
+            if (e.Key is "-" or "_" or "Subtract")
+            {
+                await ZoomOut();
+                return;
+            }
+            if (e.Key is "0" or "Digit0" or "Numpad0")
+            {
+                await ResetZoom();
+                return;
+            }
+        }
+
+        if (e.Key is "Escape")
+        {
+            if (_currentZoomPercent > 100)
+            {
+                await ResetZoom();
+                return;
+            }
+            if (_isFullscreen)
+            {
+                ToggleFullscreen();
+                return;
+            }
+            Close();
+            return;
+        }
+
+        if (e.Key is "f" or "F")
+        {
+            ToggleFullscreen();
+            return;
+        }
+
+        if (e.Key is "ArrowLeft")
+        {
+            if (_currentZoomPercent > 100 && _module != null && IsImage)
+            {
+                await _module.InvokeVoidAsync("pan", 80, 0);
+            }
+            else if (MediaList.Count > 1)
+            {
+                OnPrevClick();
+            }
+            return;
+        }
+
+        if (e.Key is "ArrowRight")
+        {
+            if (_currentZoomPercent > 100 && _module != null && IsImage)
+            {
+                await _module.InvokeVoidAsync("pan", -80, 0);
+            }
+            else if (MediaList.Count > 1)
+            {
+                OnNextClick();
+            }
+            return;
+        }
+
+        if (e.Key is "ArrowUp" && _currentZoomPercent > 100 && _module != null && IsImage)
+        {
+            await _module.InvokeVoidAsync("pan", 0, 80);
+            return;
+        }
+
+        if (e.Key is "ArrowDown" && _currentZoomPercent > 100 && _module != null && IsImage)
+        {
+            await _module.InvokeVoidAsync("pan", 0, -80);
+            return;
+        }
+    }
+
+    private async Task DownloadCurrent()
+    {
+        if (CurrentMedia != null)
+        {
+            try
+            {
+                await JS.InvokeVoidAsync("downloadMediaFromUrl", CurrentMedia.FileName, CurrentMedia.FilePath);
+            }
+            catch (Exception ex)
+            {
+                Logger.LogError(ex, "Download error in MediaViewerDialog");
+                Snackbar.Add(Loc["Failed to download media."].Value, Severity.Warning);
+            }
+        }
+    }
+
+    private async Task ShareCurrent()
+    {
+        if (CurrentMedia != null)
+        {
+            try
+            {
+                await JS.InvokeVoidAsync("shareFileFromUrl", CurrentMedia.FileName, CurrentMedia.FilePath);
+            }
+            catch (Exception ex)
+            {
+                Logger.LogError(ex, "Share error in MediaViewerDialog");
+                Snackbar.Add(Loc["Failed to share media."].Value, Severity.Warning);
+            }
+        }
+    }
+
+    private void Close()
+    {
+        // Ensure status bar is restored when closing
+        _ = JS.InvokeVoidAsync("eval", "if(window.Capacitor && window.Capacitor.Plugins.StatusBar) { window.Capacitor.Plugins.StatusBar.show(); } else if(document.fullscreenElement) { document.exitFullscreen().catch(()=>{}); }");
+
+        if (_module != null)
+        {
+            _module.InvokeVoidAsync("cleanupLightboxState", true);
+        }
+        MudDialog.Close();
+    }
+
+    private string FormatFileSize(long bytes)
+    {
+        string[] sizes = { "B", "KB", "MB", "GB" };
+        int order = 0;
+        double len = bytes;
+        while (len >= 1024 && order < sizes.Length - 1)
+        {
+            order++;
+            len /= 1024;
+        }
+        return $"{len:0.##} {sizes[order]}";
+    }
+}

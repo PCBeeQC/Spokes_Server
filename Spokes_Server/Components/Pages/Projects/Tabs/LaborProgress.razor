@@ -1,14 +1,304 @@
 @using Spokes_Server.Core.Models.Core
 @using Spokes_Server.Core.Models.Projects
 @using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Services.Projects
+@using Spokes_Server.Core.Services.Reports.Helpers
 @using Spokes_Server.Core.Data
+@using Spokes_Server.Core.Services.UI
 @using System.Globalization
 @inject Database Db
+@inject AppLabelService AppLabels
 
-@if (SubTaskGroups.Any())
+@if (Model.SubTaskGroups.Any())
 {
     <MudStack Spacing="4">
-        @foreach (var group in SubTaskGroups)
+        @* --- LABOR SUMMARY CARD (TOP) --- *@
+        <MudCard Elevation="1">
+            <MudCardHeader>
+                <CardHeaderContent>
+                    <div class="d-flex justify-space-between align-center flex-wrap gap-2">
+                        <div>
+                            <MudText Typo="Typo.h6">@BizLoc["Labor Summary"]</MudText>
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                @BizLoc["Overview of hours logged per task and total project labor to date."]
+                            </MudText>
+                        </div>
+                        <div class="d-flex align-center gap-2">
+                            <MudChip T="string" Color="Color.Primary" Variant="Variant.Filled" Size="Size.Small" Icon="@Icons.Material.Filled.Schedule">
+                                @TimesheetFormatHelper.FormatDurationHhMm(Model.TotalHours) @BizLoc["Total Time"]
+                            </MudChip>
+                            <MudChip T="string" Color="Color.Info" Variant="Variant.Outlined" Size="Size.Small" Icon="@Icons.Material.Filled.Group">
+                                @Model.TotalContributorsCount @BizLoc["Contributors"]
+                            </MudChip>
+                        </div>
+                    </div>
+                </CardHeaderContent>
+            </MudCardHeader>
+            <MudCardContent Class="pt-0">
+                <MudTable Items="@Model.TaskSummaries" Hover="true" Dense="true" Striped="true" Elevation="0">
+                    <HeaderContent>
+                        <MudTh><MudTableSortLabel SortBy="new Func<TaskLaborSummary, object>(x => x.TaskName)">@BizLoc["Task"]</MudTableSortLabel></MudTh>
+                        <MudTh><MudTableSortLabel SortBy="new Func<TaskLaborSummary, object>(x => x.SubTaskName)">@BizLoc["Subtask"]</MudTableSortLabel></MudTh>
+                        <MudTh>@BizLoc["Contributors"]</MudTh>
+                        <MudTh Style="text-align: right;"><MudTableSortLabel InitialDirection="SortDirection.Descending" SortBy="new Func<TaskLaborSummary, object>(x => x.TotalHours)">@BizLoc["Hours Spent"]</MudTableSortLabel></MudTh>
+                        <MudTh Style="min-width: 140px;"><MudTableSortLabel SortBy="new Func<TaskLaborSummary, object>(x => x.Percentage)">@BizLoc["Share"]</MudTableSortLabel></MudTh>
+                    </HeaderContent>
+                    <RowTemplate>
+                        <MudTd DataLabel="Task">
+                            <MudText Typo="Typo.body2" Style="font-weight: 500;">@context.TaskName</MudText>
+                        </MudTd>
+                        <MudTd DataLabel="Subtask">
+                            @if (!string.IsNullOrEmpty(context.SubTaskName))
+                            {
+                                <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Default">@context.SubTaskName</MudChip>
+                            }
+                            else
+                            {
+                                <MudText Typo="Typo.caption" Color="Color.Secondary">—</MudText>
+                            }
+                        </MudTd>
+                        <MudTd DataLabel="Contributors">
+                            <div class="d-flex align-center gap-1">
+                                @foreach (var emp in context.Employees.Take(4))
+                                {
+                                    <MudTooltip Text="@emp.FullName" Placement="Placement.Top" RootStyle="display: inline-flex; align-items: center;">
+                                        <EmployeeAvatar Employee="emp" Size="Size.Small" ShowPresence="false" Style="width: 22px; height: 22px; min-width: 22px; min-height: 22px; font-size: 0.6rem;" />
+                                    </MudTooltip>
+                                }
+                                @if (context.Employees.Count > 4)
+                                {
+                                    <MudTooltip Text="@string.Join(", ", context.Employees.Skip(4).Select(e => e.FullName))" Placement="Placement.Top">
+                                        <MudText Typo="Typo.caption" Color="Color.Secondary" Style="font-size: 0.75rem; font-weight: 600;" Class="ml-1">
+                                            +@(context.Employees.Count - 4)
+                                        </MudText>
+                                    </MudTooltip>
+                                }
+                            </div>
+                        </MudTd>
+                        <MudTd DataLabel="Hours Spent" Style="text-align: right;">
+                            <MudText Typo="Typo.body2" Style="font-weight: 600;">@TimesheetFormatHelper.FormatDurationHhMm(context.TotalHours)</MudText>
+                        </MudTd>
+                        <MudTd DataLabel="Share">
+                            <div class="d-flex align-center gap-2">
+                                <MudProgressLinear Color="Color.Primary" Value="@((double)context.Percentage)" Rounded="true" Size="Size.Small" Style="min-width: 60px;" />
+                                <MudText Typo="Typo.caption" Style="min-width: 45px;">@context.Percentage.ToString("N1")%</MudText>
+                            </div>
+                        </MudTd>
+                    </RowTemplate>
+                    <FooterContent>
+                        <MudTd colspan="2">
+                            <MudText Typo="Typo.subtitle2" Style="font-weight: 700;">@BizLoc["Total Project Labor"]</MudText>
+                        </MudTd>
+                        <MudTd>
+                            <div class="d-flex align-center gap-1">
+                                @foreach (var emp in Model.AllDistinctEmployees.Take(4))
+                                {
+                                    <MudTooltip Text="@emp.FullName" Placement="Placement.Top" RootStyle="display: inline-flex; align-items: center;">
+                                        <EmployeeAvatar Employee="emp" Size="Size.Small" ShowPresence="false" Style="width: 22px; height: 22px; min-width: 22px; min-height: 22px; font-size: 0.6rem;" />
+                                    </MudTooltip>
+                                }
+                                @if (Model.AllDistinctEmployees.Count > 4)
+                                {
+                                    <MudTooltip Text="@string.Join(", ", Model.AllDistinctEmployees.Skip(4).Select(e => e.FullName))" Placement="Placement.Top">
+                                        <MudText Typo="Typo.caption" Color="Color.Secondary" Style="font-size: 0.75rem; font-weight: 600;" Class="ml-1">
+                                            +@(Model.AllDistinctEmployees.Count - 4)
+                                        </MudText>
+                                    </MudTooltip>
+                                }
+                            </div>
+                        </MudTd>
+                        <MudTd Style="text-align: right;">
+                            <MudText Typo="Typo.subtitle2" Color="Color.Primary" Style="font-weight: 700;">
+                                @TimesheetFormatHelper.FormatDurationHhMm(Model.TotalHours)
+                            </MudText>
+                        </MudTd>
+                        <MudTd>
+                            <MudText Typo="Typo.caption" Style="font-weight: 600;">100%</MudText>
+                        </MudTd>
+                    </FooterContent>
+                </MudTable>
+            </MudCardContent>
+        </MudCard>
+
+        @* --- WEEKLY LABOR SUMMARY CARD (ALL TASKS) --- *@
+        <MudCard Elevation="1">
+            <MudCardHeader>
+                <CardHeaderContent>
+                    <div class="d-flex justify-space-between align-center flex-wrap gap-2">
+                        <div>
+                            <MudText Typo="Typo.h6">@BizLoc["Weekly Labor Summary"]</MudText>
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                @BizLoc["Total hours spent on the project per week across all tasks."]
+                            </MudText>
+                        </div>
+                        <div class="d-flex align-center flex-wrap gap-2">
+                            <MudChip T="string" Color="Color.Primary" Variant="Variant.Filled" Size="Size.Small" Icon="@Icons.Material.Filled.Schedule">
+                                @TimesheetFormatHelper.FormatDurationHhMm(Model.WeeklyLabor.GrandTotal) @BizLoc["Total Time"]
+                            </MudChip>
+                            <MudChip T="string" Color="Color.Info" Variant="Variant.Outlined" Size="Size.Small" Icon="@Icons.Material.Filled.DateRange">
+                                @Model.WeeklyLabor.Rows.Count @BizLoc["Weeks Logged"]
+                            </MudChip>
+
+                            <MudDatePicker @bind-Date="_startDate"
+                                           @bind-Date:after="OnDateFilterChanged"
+                                           Label="@BizLoc["Start Date"]"
+                                           Clearable="true"
+                                           Margin="Margin.Dense"
+                                           Variant="Variant.Outlined"
+                                           DateFormat="yyyy-MM-dd"
+                                           Style="min-width: 140px; max-width: 160px;" />
+
+                            <MudDatePicker @bind-Date="_endDate"
+                                           @bind-Date:after="OnDateFilterChanged"
+                                           Label="@BizLoc["End Date"]"
+                                           MinDate="_startDate"
+                                           Clearable="true"
+                                           Margin="Margin.Dense"
+                                           Variant="Variant.Outlined"
+                                           DateFormat="yyyy-MM-dd"
+                                           Style="min-width: 140px; max-width: 160px;" />
+
+                            @if (Model.WeeklyLabor.Teams.Count > 1)
+                            {
+                                <MudToggleGroup T="WeeklyViewMode" @bind-Value="_weeklyViewMode" Outlined="true" Size="Size.Small" Color="Color.Primary">
+                                    <MudToggleItem Value="@WeeklyViewMode.ByContributor" Text="@(string.Format(BizLoc["By {0}"].Value, AppLabels.Employee))" />
+                                    <MudToggleItem Value="@WeeklyViewMode.ByTeam" Text="@(string.Format(BizLoc["By {0}"].Value, AppLabels.Team))" />
+                                </MudToggleGroup>
+
+                                <MudSelect T="string" @bind-Value="_selectedTeamFilter" Disabled="@(_weeklyViewMode == WeeklyViewMode.ByTeam)" Dense="true" Margin="Margin.Dense" Variant="Variant.Outlined" Style="min-width: 140px;" FullWidth="false">
+                                    <MudSelectItem Value="@("all")">@string.Format(BizLoc["All {0}"].Value, AppLabels.Teams)</MudSelectItem>
+                                    @foreach (var team in Model.WeeklyLabor.Teams)
+                                    {
+                                        var teamVal = string.IsNullOrEmpty(team.Id) ? "unassigned" : team.Id;
+                                        <MudSelectItem Value="@teamVal">
+                                            @(string.IsNullOrEmpty(team.Id) ? BizLoc["Unassigned"].Value : team.Name)
+                                        </MudSelectItem>
+                                    }
+                                </MudSelect>
+                            }
+                        </div>
+                    </div>
+                </CardHeaderContent>
+            </MudCardHeader>
+            <MudCardContent>
+                @if (_weeklyViewMode == WeeklyViewMode.ByContributor)
+                {
+                    var displayEmployees = GetFilteredWeeklyEmployees().ToList();
+                    var runningTotals = ComputeRunningTotals(Model.WeeklyLabor.Rows, r => displayEmployees.Sum(e => r.GetHours(e.Id)));
+                    var filteredTotal = displayEmployees.Sum(e => Model.WeeklyLabor.GetTotalForEmployee(e.Id));
+                    <MudSimpleTable Dense="true" Hover="true" Striped="true" Style="overflow-x: auto;">
+                        <thead>
+                            <tr>
+                                <th>@BizLoc["Week"]</th>
+                                @foreach (var emp in displayEmployees)
+                                {
+                                    <th>@(string.IsNullOrEmpty(emp.FirstName) ? emp.FullName : emp.FirstName)</th>
+                                }
+                                <th><strong>@BizLoc["Total"]</strong></th>
+                                <th><strong>@BizLoc["Running Total"]</strong></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @if (!Model.WeeklyLabor.Rows.Any())
+                            {
+                                <tr>
+                                    <td colspan="@(displayEmployees.Count + 3)" class="text-center py-4" style="color: var(--mud-palette-text-secondary);">
+                                        @BizLoc["No labor entries found for the selected date range."]
+                                    </td>
+                                </tr>
+                            }
+                            else
+                            {
+                                @foreach (var row in Model.WeeklyLabor.Rows)
+                                {
+                                    var rowSum = displayEmployees.Sum(e => row.GetHours(e.Id));
+                                    var running = runningTotals.TryGetValue(row, out var rt) ? rt : 0m;
+                                    <tr>
+                                        <td>@row.WeekLabel</td>
+                                        @foreach (var emp in displayEmployees)
+                                        {
+                                            var hours = row.GetHours(emp.Id);
+                                            <td>@(hours > 0 ? hours.ToString("N1") : "-")</td>
+                                        }
+                                        <td><strong>@rowSum.ToString("N1")</strong></td>
+                                        <td><strong>@running.ToString("N1")</strong></td>
+                                    </tr>
+                                }
+                            }
+                        </tbody>
+                        <tfoot>
+                            <tr>
+                                <td><strong>@BizLoc["Total"]</strong></td>
+                                @foreach (var emp in displayEmployees)
+                                {
+                                    <td><strong>@Model.WeeklyLabor.GetTotalForEmployee(emp.Id).ToString("N1")</strong></td>
+                                }
+                                <td><strong>@filteredTotal.ToString("N1")</strong></td>
+                                <td><strong>@filteredTotal.ToString("N1")</strong></td>
+                            </tr>
+                        </tfoot>
+                    </MudSimpleTable>
+                }
+                else
+                {
+                    var runningTotals = ComputeRunningTotals(Model.WeeklyLabor.Rows, r => r.TotalHours);
+                    <MudSimpleTable Dense="true" Hover="true" Striped="true" Style="overflow-x: auto;">
+                        <thead>
+                            <tr>
+                                <th>@BizLoc["Week"]</th>
+                                @foreach (var team in Model.WeeklyLabor.Teams)
+                                {
+                                    <th>@(string.IsNullOrEmpty(team.Id) ? BizLoc["Unassigned"].Value : team.Name)</th>
+                                }
+                                <th><strong>@BizLoc["Total"]</strong></th>
+                                <th><strong>@BizLoc["Running Total"]</strong></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @if (!Model.WeeklyLabor.Rows.Any())
+                            {
+                                <tr>
+                                    <td colspan="@(Model.WeeklyLabor.Teams.Count + 3)" class="text-center py-4" style="color: var(--mud-palette-text-secondary);">
+                                        @BizLoc["No labor entries found for the selected date range."]
+                                    </td>
+                                </tr>
+                            }
+                            else
+                            {
+                                @foreach (var row in Model.WeeklyLabor.Rows)
+                                {
+                                    var running = runningTotals.TryGetValue(row, out var rt) ? rt : 0m;
+                                    <tr>
+                                        <td>@row.WeekLabel</td>
+                                        @foreach (var team in Model.WeeklyLabor.Teams)
+                                        {
+                                            var hours = row.GetTeamHours(team.Id);
+                                            <td>@(hours > 0 ? hours.ToString("N1") : "-")</td>
+                                        }
+                                        <td><strong>@row.TotalHours.ToString("N1")</strong></td>
+                                        <td><strong>@running.ToString("N1")</strong></td>
+                                    </tr>
+                                }
+                            }
+                        </tbody>
+                        <tfoot>
+                            <tr>
+                                <td><strong>@BizLoc["Total"]</strong></td>
+                                @foreach (var team in Model.WeeklyLabor.Teams)
+                                {
+                                    <td><strong>@Model.WeeklyLabor.GetTotalForTeam(team.Id).ToString("N1")</strong></td>
+                                }
+                                <td><strong>@Model.WeeklyLabor.GrandTotal.ToString("N1")</strong></td>
+                                <td><strong>@Model.WeeklyLabor.GrandTotal.ToString("N1")</strong></td>
+                            </tr>
+                        </tfoot>
+                    </MudSimpleTable>
+                }
+            </MudCardContent>
+        </MudCard>
+
+        @* --- PER-TASK MATRIX TABLES --- *@
+        @foreach (var group in Model.SubTaskGroups)
         {
             <MudCard Elevation="1">
                 <MudCardHeader>
@@ -20,12 +310,12 @@
                     <MudSimpleTable Dense="true" Hover="true" Striped="true" Style="overflow-x: auto;">
                         <thead>
                             <tr>
-                                <th>Week</th>
+                                <th>@BizLoc["Week"]</th>
                                 @foreach (var emp in group.Employees)
                                 {
-                                    <th>@emp.Name</th>
+                                    <th>@(string.IsNullOrEmpty(emp.FirstName) ? emp.FullName : emp.FirstName)</th>
                                 }
-                                <th><strong>Total</strong></th>
+                                <th><strong>@BizLoc["Total"]</strong></th>
                             </tr>
                         </thead>
                         <tbody>
@@ -44,7 +334,7 @@
                         </tbody>
                         <tfoot>
                             <tr>
-                                <td><strong>Total</strong></td>
+                                <td><strong>@BizLoc["Total"]</strong></td>
                                 @foreach (var emp in group.Employees)
                                 {
                                     <td><strong>@group.GetTotalForEmployee(emp.Id).ToString("N1")</strong></td>
@@ -60,154 +350,101 @@
 }
 else
 {
-    <MudAlert Severity="Severity.Info">No labor entries found for this project.</MudAlert>
+    <MudAlert Severity="Severity.Info">@BizLoc["No labor entries found for this project."]</MudAlert>
 }
 
 @code {
-    [Parameter] public string ProjectId { get; set; }
+    [Parameter] public string ProjectId { get; set; } = string.Empty;
 
-    private List<SubTaskGroupViewModels> SubTaskGroups = [];
+    private ProjectLaborProgressModel Model = new();
+    private WeeklyViewMode _weeklyViewMode = WeeklyViewMode.ByContributor;
+    private string _selectedTeamFilter = "all";
+    private DateTime? _startDate;
+    private DateTime? _endDate;
+
+    private List<Timesheet> _allTimesheets = [];
+    private Dictionary<string, WorkType> _workTypes = [];
+    private Dictionary<string, Employee> _employees = [];
+    private Dictionary<string, Team> _teams = [];
+
+    private enum WeeklyViewMode
+    {
+        ByContributor,
+        ByTeam
+    }
 
     protected override void OnInitialized() => LoadData();
 
+    protected override void OnParametersSet() => LoadData();
+
     private void LoadData()
     {
-        var allTimesheets = Db.Timesheets.GetAll();
-        var workTypes = Db.WorkTypes.GetAll().ToDictionary(x => x.Id, x => x);
-        var employees = Db.Employees.GetAll().ToDictionary(x => x.Id, x => x);
+        _allTimesheets = Db.Timesheets.GetAll();
+        _workTypes = Db.WorkTypes.GetAll().ToDictionary(x => x.Id, x => x);
+        _employees = Db.Employees.GetAll().ToDictionary(x => x.Id, x => x);
+        _teams = Db.Teams.GetAll().ToDictionary(x => x.Id, x => x);
 
-        // Flatten entries
-        List<LaborEntry> entries = [];
+        UpdateLaborModel();
+    }
 
-        foreach (var ts in allTimesheets)
+    private void UpdateLaborModel()
+    {
+        Model = ProjectLaborCalculator.Calculate(
+            ProjectId,
+            _allTimesheets,
+            _workTypes,
+            _employees,
+            _teams,
+            _startDate,
+            _endDate);
+    }
+
+    private void OnDateFilterChanged()
+    {
+        if (_startDate.HasValue && _endDate.HasValue && _endDate.Value < _startDate.Value)
         {
-            foreach (var entry in ts.Entries)
-            {
-                if (entry.ProjectId == ProjectId)
-                {
-                    entries.Add(new LaborEntry
-                        {
-                            EmployeeId = ts.EmployeeId,
-                            WorkTypeId = entry.WorkTypeId,
-                            SubTaskId = entry.SubTaskId,
-                            Year = ts.Year,
-                            WeekNumber = ts.WeekNumber,
-                            Hours = entry.Hours
-                        });
-                }
-            }
+            _endDate = _startDate;
         }
 
-        // Group by (WorkType, SubTask)
-        var grouped = entries
-        .GroupBy(x => new { x.WorkTypeId, x.SubTaskId })
-        .OrderBy(x => x.Key.WorkTypeId)
-        .ToList();
+        Model.WeeklyLabor = ProjectLaborCalculator.CalculateWeeklyLabor(
+            ProjectId,
+            _allTimesheets,
+            _employees,
+            _teams,
+            _startDate,
+            _endDate,
+            Model.AllDistinctEmployees);
 
-        SubTaskGroups.Clear();
+        StateHasChanged();
+    }
 
-        foreach (var g in grouped)
+    private IEnumerable<Employee> GetFilteredWeeklyEmployees()
+    {
+        if (_selectedTeamFilter == "all")
         {
-            var workType = workTypes.TryGetValue(g.Key.WorkTypeId, out var wt) ? wt : null;
-            var taskName = workType?.Name ?? "Unknown Task";
-
-            string subTaskName = "";
-            string title = taskName;
-
-            if (!string.IsNullOrEmpty(g.Key.SubTaskId) && workType != null)
-            {
-                var st = workType.SubTasks.FirstOrDefault(s => s.Id == g.Key.SubTaskId);
-                if (st != null)
-                {
-                    subTaskName = st.Name;
-                    title = $"{taskName} - {subTaskName}";
-                }
-            }
-
-            var uniqueEmployeeIds = g.Select(x => x.EmployeeId).Distinct().ToList();
-            var distinctEmployees = uniqueEmployeeIds
-            .Select(id => new EmployeeHeader { Id = id, Name = employees.TryGetValue(id, out var e) ? e.FirstName : "Unknown" })
-            .OrderBy(e => e.Name)
-            .ToList();
-
-            var rowData = g.GroupBy(x => new { x.Year, x.WeekNumber })
-            .Select(weekGroup => new RowViewModel
-                {
-                    Year = weekGroup.Key.Year,
-                    Week = weekGroup.Key.WeekNumber,
-                    EmployeeHours = weekGroup.GroupBy(x => x.EmployeeId)
-                .ToDictionary(x => x.Key, x => x.Sum(e => e.Hours))
-                })
-            .OrderByDescending(r => r.Year).ThenByDescending(r => r.Week)
-            .ToList();
-
-            var groupVm = new SubTaskGroupViewModels
-                {
-                    Title = title, // Changed property name
-                    TaskName = taskName,
-                    SubTaskName = subTaskName,
-                    Employees = distinctEmployees,
-                    Rows = rowData
-                };
-            SubTaskGroups.Add(groupVm);
-        }
-    }
-
-    private class LaborEntry
-    {
-        public string EmployeeId { get; set; }
-        public string WorkTypeId { get; set; }
-        public string? SubTaskId { get; set; }
-        public int Year { get; set; }
-        public int WeekNumber { get; set; }
-        public decimal Hours { get; set; }
-    }
-
-    private class SubTaskGroupViewModels
-    {
-        public string Title { get; set; }
-        public string TaskName { get; set; }
-        public string SubTaskName { get; set; }
-        public List<EmployeeHeader> Employees { get; set; } = [];
-        public List<RowViewModel> Rows { get; set; } = [];
-
-        public decimal GetTotalForEmployee(string empId) => Rows.Sum(r => r.GetHours(empId));
-
-        public decimal GrandTotal => Rows.Sum(r => r.TotalHours);
-    }
-
-    private class EmployeeHeader
-    {
-        public string Id { get; set; }
-        public string Name { get; set; }
-    }
-
-    private class RowViewModel
-    {
-        public int Year { get; set; }
-        public int Week { get; set; }
-        public Dictionary<string, decimal> EmployeeHours { get; set; } = [];
-
-        public string WeekLabel
-        {
-            get
-            {
-                try
-                {
-                    var date = ISOWeek.ToDateTime(Year, Week, DayOfWeek.Monday);
-                    return $"Week {Week} ({date:MMM dd})";
-                }
-                catch
-                {
-                    return $"Week {Week}, {Year}";
-                }
-            }
+            return Model.WeeklyLabor.Employees;
         }
 
-        public decimal GetHours(string empId) =>
-            EmployeeHours.TryGetValue(empId, out var h) ? h : 0;
+        if (_selectedTeamFilter == "unassigned")
+        {
+            return Model.WeeklyLabor.Employees.Where(e => string.IsNullOrEmpty(e.TeamId));
+        }
 
-        public decimal TotalHours => EmployeeHours.Values.Sum();
+        return Model.WeeklyLabor.Employees.Where(e => e.TeamId == _selectedTeamFilter);
+    }
+
+    private static Dictionary<ProjectWeeklyRowViewModel, decimal> ComputeRunningTotals(
+        IEnumerable<ProjectWeeklyRowViewModel> rows,
+        Func<ProjectWeeklyRowViewModel, decimal> rowTotalSelector)
+    {
+        var result = new Dictionary<ProjectWeeklyRowViewModel, decimal>();
+        var chronological = rows.OrderBy(r => r.Year).ThenBy(r => r.Week).ToList();
+        decimal running = 0m;
+        foreach (var row in chronological)
+        {
+            running += rowTotalSelector(row);
+            result[row] = running;
+        }
+        return result;
     }
 }
-

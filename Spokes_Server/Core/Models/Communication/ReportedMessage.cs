@@ -42,7 +42,7 @@ public class ReportedMessage : IDataEntity
     /// <summary>
     /// Status of the report: "Open", "Resolved", "Dismissed"
     /// </summary>
-    public string Status { get; set; } = "Open";
+    public string Status { get; set; } = ReportedMessageStatus.Open;
 
     /// <summary>
     /// Snapshot of the message content at the time of reporting. 
@@ -64,4 +64,11 @@ public class ReportedMessage : IDataEntity
     /// The name of the moderator who resolved this report.
     /// </summary>
     public string ResolvedBy { get; set; } = string.Empty;
+}
+
+public static class ReportedMessageStatus
+{
+    public const string Open = "Open";
+    public const string Resolved = "Resolved";
+    public const string Dismissed = "Dismissed";
 }

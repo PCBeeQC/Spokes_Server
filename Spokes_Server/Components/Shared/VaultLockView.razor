@@ -1,0 +1,185 @@
+@inject ICryptoService Crypto
+@inject ScopedKeystoreService ScopedKeystore
+@inject GlobalKeystoreService GlobalKeystore
+@inject IJSRuntime JS
+@inject IDialogService DialogService
+@inject UserService UserService
+@inject Database Db
+
+@if (IsNotOnAccessList)
+{
+    <div class="d-flex flex-column align-center justify-center flex-grow-1 pa-6" style="background: var(--mud-palette-background-grey); min-height: @MinHeight; border-radius: 12px;">
+        <MudIcon Icon="@Icons.Material.Filled.Lock" Size="Size.Large" Style="font-size: 4rem; color: var(--mud-palette-primary);" Class="mb-4" />
+        <MudText Typo="Typo.h5" Class="mb-2">@(string.IsNullOrEmpty(Title) ? Loc["Secure Content"] : Title)</MudText>
+        <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-4 text-center px-4" Style="max-width: 440px;">
+            @(string.IsNullOrEmpty(NotOnAccessListText) ? Loc["This content is encrypted and you are not on the access list to view its contents."] : NotOnAccessListText)
+        </MudText>
+    </div>
+}
+else if (!ScopedKeystore.IsUnlocked)
+{
+    if (IsCheckingKeystoreCookie)
+    {
+        <div class="d-flex flex-column align-center justify-center flex-grow-1 pa-6" style="background: var(--mud-palette-background-grey); min-height: @MinHeight; border-radius: 12px;">
+            <MudProgressCircular Indeterminate="true" Color="Color.Primary" Size="Size.Large" Class="mb-4" />
+            <MudText Typo="Typo.h6" Color="Color.Surface">@(string.IsNullOrEmpty(CheckingText) ? Loc["Unlocking Secure Channel..."] : CheckingText)</MudText>
+            <MudText Typo="Typo.body2" Color="Color.Surface" Class="mt-2 text-center px-4" Style="opacity: 0.7; max-width: 400px;">
+                @Loc["Checking for locally stored credentials"]
+            </MudText>
+        </div>
+    }
+    else
+    {
+        <div class="d-flex flex-column align-center justify-center flex-grow-1 pa-6" style="background: var(--mud-palette-background-grey); min-height: @MinHeight; border-radius: 12px;">
+            <MudIcon Icon="@Icons.Material.Filled.Lock" Size="Size.Large" Style="font-size: 4rem; color: var(--mud-palette-primary);" Class="mb-4" />
+            <MudText Typo="Typo.h5" Class="mb-2">@(string.IsNullOrEmpty(Title) ? Loc["Secure Content"] : Title)</MudText>
+            
+            @if (EffectiveUser?.HasVaultPassword == true)
+            {
+                <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-4 text-center px-4" Style="max-width: 440px;">
+                    @(string.IsNullOrEmpty(Description) ? Loc["Enter your vault password to unlock your secure key and continue."] : Description)
+                </MudText>
+                
+                <div style="width: 100%; max-width: 320px;">
+                    @{
+                        string vaultUsername = !string.IsNullOrWhiteSpace(EffectiveUser?.FullName) ? EffectiveUser.FullName : EffectiveUser?.Id ?? "";
+                    }
+                    <input type="text" autocomplete="username" value="@($"{vaultUsername} (Chat Vault)")" style="position: absolute; left: -9999px;" tabindex="-1" aria-hidden="true" />
+                    <MudTextField @bind-Value="_vaultPassword" 
+                                  Label="@Loc["Vault Password"]" 
+                                  InputType="@(_showVaultPassword ? InputType.Text : InputType.Password)" 
+                                  Variant="Variant.Outlined" 
+                                  Margin="Margin.Dense" 
+                                  Class="mb-2" 
+                                  Immediate="true" 
+                                  AutoFocus="true"
+                                  Adornment="Adornment.End" 
+                                  AdornmentIcon="@(_showVaultPassword ? Icons.Material.Filled.Visibility : Icons.Material.Filled.VisibilityOff)" 
+                                  OnAdornmentClick="@(() => _showVaultPassword = !_showVaultPassword)" 
+                                  AdornmentAriaLabel="@Loc["Show/hide password"]" 
+                                  OnKeyDown="@(async (e) => { if (e.Key == "Enter" || e.Key == "NumpadEnter") await UnlockVaultAsync(); })" 
+                                  UserAttributes="@(new Dictionary<string,object>{{ "autocomplete", "current-password" }})" />
+                    
+                    <MudButton Variant="Variant.Filled" 
+                               Color="Color.Primary" 
+                               FullWidth="true" 
+                               Disabled="_isUnlocking"
+                               OnClick="UnlockVaultAsync">
+                        @if (_isUnlocking)
+                        {
+                            <MudProgressCircular Indeterminate="true" Size="Size.Small" Class="mr-2" />
+                            <span>@Loc["Unlocking..."]</span>
+                        }
+                        else
+                        {
+                            <span>@(string.IsNullOrEmpty(ButtonText) ? Loc["Unlock"] : ButtonText)</span>
+                        }
+                    </MudButton>
+                    
+                    @if (_hasVaultError)
+                    {
+                        <MudText Typo="Typo.caption" Color="Color.Error" Class="mt-2 text-center d-block">@Loc["Incorrect vault password."]</MudText>
+                    }
+                </div>
+            }
+            else
+            {
+                <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-4 text-center px-4" Style="max-width: 440px;">
+                    @(string.IsNullOrEmpty(SetupText) ? Loc["This channel is encrypted. You must set up your secure Chat Vault password before you can view these messages."] : SetupText)
+                </MudText>
+                
+                <div style="width: 100%; max-width: 320px;">
+                    <MudButton Variant="Variant.Filled" Color="Color.Primary" FullWidth="true" OnClick="OpenSecureChatSettingsAsync">
+                        @(string.IsNullOrEmpty(SetupButtonText) ? Loc["Set Up Vault Password"] : SetupButtonText)
+                    </MudButton>
+                </div>
+            }
+        </div>
+    }
+}
+
+@code {
+    [Parameter] public Employee? CurrentUser { get; set; }
+    [Parameter] public string Title { get; set; } = "";
+    [Parameter] public string? Description { get; set; }
+    [Parameter] public string ButtonText { get; set; } = "";
+    [Parameter] public string? SetupText { get; set; }
+    [Parameter] public string SetupButtonText { get; set; } = "";
+    [Parameter] public bool IsNotOnAccessList { get; set; }
+    [Parameter] public string? NotOnAccessListText { get; set; }
+    [Parameter] public bool IsCheckingKeystoreCookie { get; set; }
+    [Parameter] public string? CheckingText { get; set; }
+    [Parameter] public string MinHeight { get; set; } = "100%";
+
+    [Parameter] public EventCallback OnUnlocked { get; set; }
+    [Parameter] public EventCallback OnSetupCompleted { get; set; }
+
+    private Employee? _resolvedUser;
+    private Employee? EffectiveUser => CurrentUser ?? _resolvedUser;
+
+    private string _vaultPassword = "";
+    private bool _showVaultPassword = false;
+    private bool _hasVaultError = false;
+    private bool _isUnlocking = false;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (CurrentUser == null)
+        {
+            _resolvedUser = await UserService.GetEmployeeAsync();
+        }
+    }
+
+    protected override void OnParametersSet()
+    {
+        if (CurrentUser != null)
+        {
+            _resolvedUser = CurrentUser;
+        }
+    }
+
+    private async Task UnlockVaultAsync()
+    {
+        if (EffectiveUser == null || string.IsNullOrWhiteSpace(_vaultPassword) || string.IsNullOrEmpty(EffectiveUser.EncryptedPrivateKey)) return;
+
+        _isUnlocking = true;
+        _hasVaultError = false;
+        try
+        {
+            var unlocked = await ScopedKeystore.UnlockWithPasswordAsync(JS, EffectiveUser, _vaultPassword, rememberDevice: true);
+            if (unlocked)
+            {
+                _vaultPassword = "";
+                _hasVaultError = false;
+                await OnUnlocked.InvokeAsync();
+            }
+            else
+            {
+                _hasVaultError = true;
+            }
+        }
+        finally
+        {
+            _isUnlocking = false;
+        }
+    }
+
+    private async Task OpenSecureChatSettingsAsync()
+    {
+        if (EffectiveUser == null) return;
+        var parameters = new DialogParameters { ["Employee"] = EffectiveUser };
+        var options = new DialogOptions { CloseButton = true, MaxWidth = MaxWidth.Small, FullWidth = true };
+        var dialog = await DialogService.ShowAsync<SecureChatSettingsDialog>(Loc["Secure Chat Settings"].Value, parameters, options);
+        var result = await dialog.Result;
+
+        _resolvedUser = Db.Employees.GetById(EffectiveUser.Id);
+        if (result != null && !result.Canceled)
+        {
+            await OnSetupCompleted.InvokeAsync();
+            if (ScopedKeystore.IsUnlocked)
+            {
+                await OnUnlocked.InvokeAsync();
+            }
+        }
+    }
+}
