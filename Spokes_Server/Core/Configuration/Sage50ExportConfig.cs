@@ -149,6 +149,13 @@ public class Sage50ExportConfig
     public bool IncludeNewCustomersAndVendorsInImp { get; set; } = true;
 
     /// <summary>
+    /// When true and <see cref="ImportedServiceItems"/> contains items with <see cref="SageServiceItemRecord.LinkedRevenueGl"/>
+    /// or <see cref="SageServiceItemRecord.LinkedExpenseGl"/> matching a line's GL account, emits the linked Sage Service Item ID
+    /// on .imp detail lines instead of the raw GL account code.
+    /// </summary>
+    public bool PreferServiceItemCodesFromGl { get; set; } = false;
+
+    /// <summary>
     /// Timestamp of the last Sage 50 baseline import.
     /// </summary>
     public DateTime? LastBaselineImportAt { get; set; }
@@ -183,6 +190,16 @@ public class Sage50ExportConfig
     /// </summary>
     public Dictionary<string, string> VendorNameMappings { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>
+    /// Remembered default Sales Revenue GL account code per Spokes Client Name.
+    /// </summary>
+    public Dictionary<string, string> CustomerDefaultGlMappings { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Remembered default Expense GL account code per Spokes Supplier / Payee Name.
+    /// </summary>
+    public Dictionary<string, string> VendorDefaultGlMappings { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+
     public Sage50ExportConfig Clone() => new()
     {
         VersionHeader = VersionHeader,
@@ -203,6 +220,7 @@ public class Sage50ExportConfig
         TvqTaxAccount = TvqTaxAccount,
         CombinedTaxCode = CombinedTaxCode,
         IncludeNewCustomersAndVendorsInImp = IncludeNewCustomersAndVendorsInImp,
+        PreferServiceItemCodesFromGl = PreferServiceItemCodesFromGl,
         LastBaselineImportAt = LastBaselineImportAt,
         ImportedCustomers = ImportedCustomers.Select(c => new SagePartyRecord
         {
@@ -228,6 +246,8 @@ public class Sage50ExportConfig
             DescriptionFr = s.DescriptionFr
         }).ToList(),
         CustomerNameMappings = new Dictionary<string, string>(CustomerNameMappings, StringComparer.OrdinalIgnoreCase),
-        VendorNameMappings = new Dictionary<string, string>(VendorNameMappings, StringComparer.OrdinalIgnoreCase)
+        VendorNameMappings = new Dictionary<string, string>(VendorNameMappings, StringComparer.OrdinalIgnoreCase),
+        CustomerDefaultGlMappings = new Dictionary<string, string>(CustomerDefaultGlMappings, StringComparer.OrdinalIgnoreCase),
+        VendorDefaultGlMappings = new Dictionary<string, string>(VendorDefaultGlMappings, StringComparer.OrdinalIgnoreCase)
     };
 }

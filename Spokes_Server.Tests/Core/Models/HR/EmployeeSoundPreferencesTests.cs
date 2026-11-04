@@ -15,10 +15,12 @@ public class EmployeeSoundPreferencesTests
         var chatSound = employee.GetNotificationSound(NotificationCategories.Chat);
         var callSound = employee.GetNotificationSound(NotificationCategories.Call);
         var calSound = employee.GetNotificationSound(NotificationCategories.Calendar);
+        var emailSound = employee.GetNotificationSound(NotificationCategories.Email);
 
         Assert.Equal(NotificationSoundIds.SpokesDefault, chatSound);
         Assert.Equal(NotificationSoundIds.SpokesDefault, callSound);
         Assert.Equal(NotificationSoundIds.SpokesDefault, calSound);
+        Assert.Equal(NotificationSoundIds.SpokesDefault, emailSound);
     }
 
     [Fact]
@@ -28,10 +30,12 @@ public class EmployeeSoundPreferencesTests
 
         employee.SetNotificationSound(NotificationCategories.Chat, "mixkit_cowbell_sharp_hit_1743");
         employee.SetNotificationSound(NotificationCategories.Call, NotificationSoundIds.SystemDefault);
+        employee.SetNotificationSound(NotificationCategories.Email, "mixkit_happy_bell_alert_601");
 
         Assert.Equal("mixkit_cowbell_sharp_hit_1743", employee.GetNotificationSound(NotificationCategories.Chat));
         Assert.Equal(NotificationSoundIds.SystemDefault, employee.GetNotificationSound(NotificationCategories.Call));
         Assert.Equal(NotificationSoundIds.SpokesDefault, employee.GetNotificationSound(NotificationCategories.Calendar));
+        Assert.Equal("mixkit_happy_bell_alert_601", employee.GetNotificationSound(NotificationCategories.Email));
     }
 
     [Fact]
@@ -45,6 +49,7 @@ public class EmployeeSoundPreferencesTests
         };
         employee.SetNotificationSound(NotificationCategories.Chat, "mixkit_happy_bell_alert_601");
         employee.SetNotificationSound(NotificationCategories.Call, "mixkit_on_hold_ringtone_1361");
+        employee.SetNotificationSound(NotificationCategories.Email, "mixkit_cowbell_sharp_hit_1743");
 
         var json = JsonSerializer.Serialize(employee);
         var deserialized = JsonSerializer.Deserialize<Employee>(json);
@@ -52,5 +57,6 @@ public class EmployeeSoundPreferencesTests
         Assert.NotNull(deserialized);
         Assert.Equal("mixkit_happy_bell_alert_601", deserialized.GetNotificationSound(NotificationCategories.Chat));
         Assert.Equal("mixkit_on_hold_ringtone_1361", deserialized.GetNotificationSound(NotificationCategories.Call));
+        Assert.Equal("mixkit_cowbell_sharp_hit_1743", deserialized.GetNotificationSound(NotificationCategories.Email));
     }
 }

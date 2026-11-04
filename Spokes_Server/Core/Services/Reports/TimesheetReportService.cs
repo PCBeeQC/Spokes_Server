@@ -47,7 +47,9 @@ public class TimesheetReportService
         _companyProfiles = coreContext.CompanyProfile;
     }
 
-    public async Task<List<TimesheetReportEntry>> LoadAllEntriesAsync()
+    public async Task<List<TimesheetReportEntry>> LoadAllEntriesAsync(
+        bool includeCostRates = true,
+        IReadOnlySet<string>? allowedProjectIds = null)
     {
         return await Task.Run(() =>
         {
@@ -79,6 +81,13 @@ public class TimesheetReportService
 
                 foreach (var entry in ts.Entries)
                 {
+                    if (allowedProjectIds != null &&
+                        !string.IsNullOrWhiteSpace(entry.ProjectId) &&
+                        !allowedProjectIds.Contains(entry.ProjectId))
+                    {
+                        continue;
+                    }
+
                     projectMap.TryGetValue(entry.ProjectId ?? string.Empty, out var proj);
                     taskMap.TryGetValue(entry.WorkTypeId ?? string.Empty, out var task);
 
@@ -99,13 +108,16 @@ public class TimesheetReportService
                     }
 
                     var costRate = 0m;
-                    if (emp != null && emp.HourlyRate > 0)
+                    if (includeCostRates)
                     {
-                        costRate = emp.HourlyRate;
-                    }
-                    else if (task != null)
-                    {
-                        costRate = task.CostRate;
+                        if (emp != null && emp.HourlyRate > 0)
+                        {
+                            costRate = emp.HourlyRate;
+                        }
+                        else if (task != null)
+                        {
+                            costRate = task.CostRate;
+                        }
                     }
 
                     decimal? allocatedHours = null;

@@ -23,10 +23,14 @@ public class ChatStateService
     public event Action<Employee>? EmployeeProfileUpdated;
     public event Action<CalendarEvent>? CalendarEventUpdated;
     public event Action<string>? CalendarEventDeleted;
+    public event Action<ChatPoll>? PollUpdated;
+    public event Action<string>? PollDeleted;
 
     // Methods to trigger events
     public void NotifyCalendarEventUpdated(CalendarEvent calendarEvent) => CalendarEventUpdated?.Invoke(calendarEvent);
     public void NotifyCalendarEventDeleted(string eventId) => CalendarEventDeleted?.Invoke(eventId);
+    public void NotifyPollUpdated(ChatPoll poll) => PollUpdated?.Invoke(poll);
+    public void NotifyPollDeleted(string pollId) => PollDeleted?.Invoke(pollId);
     public void NotifyMessageReceived(ChatMessage message) => MessageReceived?.Invoke(message);
     public void NotifyModerationAlert(ReportedMessage report) => ModerationAlertReceived?.Invoke(report);
     public void NotifyModerationReportUpdated(ReportedMessage report) => ModerationReportUpdated?.Invoke(report);
@@ -44,6 +48,8 @@ public class ChatStateService
 
     // Voice Presence State
     private readonly Dictionary<string, HashSet<string>> _voiceParticipants = new();
+    private readonly Dictionary<(string ChannelId, string UserId), (string DeviceId, string DeviceName)> _voiceParticipantDevices = new();
+    private readonly Dictionary<(string ChannelId, string UserId), (string FilterType, double EstimatedCaptureLatencyMs, string Platform, double ServerToClientDelayMs)> _voiceParticipantAudioTelemetry = new();
     private readonly Dictionary<string, string[]> _activeSpeakersList = new();
     private readonly Dictionary<string, HashSet<string>> _mutedUsers = new();
     private readonly object _voiceLock = new();
@@ -52,20 +58,93 @@ public class ChatStateService
     public event Action<string, string>? VoiceMemberLeft;
     public event Action<string, string[]>? VoiceActiveSpeakersChanged;
     public event Action<string, string, bool>? VoiceUserMutedChanged;
+    public event Action? PhysicalRoomsChanged;
 
-    public bool NotifyVoiceMemberJoined(string channelId, string userId)
+    public void NotifyPhysicalRoomsChanged() => PhysicalRoomsChanged?.Invoke();
+
+    public bool NotifyVoiceMemberJoined(string channelId, string userId, string? deviceId = null, string? deviceName = null)
     {
         bool added;
         lock (_voiceLock)
         {
             if (!_voiceParticipants.ContainsKey(channelId)) _voiceParticipants[channelId] = new HashSet<string>();
             added = _voiceParticipants[channelId].Add(userId);
+            if (!string.IsNullOrWhiteSpace(deviceId))
+            {
+                _voiceParticipantDevices[(channelId, userId)] = (deviceId, deviceName ?? string.Empty);
+            }
         }
         if (added)
         {
             VoiceMemberJoined?.Invoke(channelId, userId);
         }
         return added;
+    }
+
+    public void SetVoiceParticipantDevice(string channelId, string userId, string deviceId, string? deviceName = null)
+    {
+        if (string.IsNullOrWhiteSpace(channelId) || string.IsNullOrWhiteSpace(userId) || string.IsNullOrWhiteSpace(deviceId))
+        {
+            return;
+        }
+        lock (_voiceLock)
+        {
+            _voiceParticipantDevices[(channelId, userId)] = (deviceId, deviceName ?? string.Empty);
+        }
+        PhysicalRoomsChanged?.Invoke();
+    }
+
+    public (string DeviceId, string DeviceName)? GetVoiceParticipantDevice(string channelId, string userId)
+    {
+        lock (_voiceLock)
+        {
+            if (_voiceParticipantDevices.TryGetValue((channelId, userId), out var info))
+            {
+                return info;
+            }
+            return null;
+        }
+    }
+
+    public void SetVoiceParticipantAudioTelemetry(
+        string channelId,
+        string userId,
+        string filterType,
+        double estimatedCaptureLatencyMs,
+        string? platform = null,
+        double serverToClientDelayMs = 0.0)
+    {
+        if (string.IsNullOrWhiteSpace(channelId) || string.IsNullOrWhiteSpace(userId))
+        {
+            return;
+        }
+
+        string cleanFilter = string.IsNullOrWhiteSpace(filterType) ? "webrtc" : filterType.Trim();
+        double clampedLatency = Math.Clamp(estimatedCaptureLatencyMs, 0.0, 500.0);
+        string cleanPlatform = string.IsNullOrWhiteSpace(platform) ? "web" : platform.Trim();
+        double clampedServerDelay = Math.Clamp(serverToClientDelayMs, 0.0, 1000.0);
+
+        lock (_voiceLock)
+        {
+            if (clampedServerDelay <= 0.0 && _voiceParticipantAudioTelemetry.TryGetValue((channelId, userId), out var existing))
+            {
+                clampedServerDelay = existing.ServerToClientDelayMs;
+            }
+            _voiceParticipantAudioTelemetry[(channelId, userId)] = (cleanFilter, clampedLatency, cleanPlatform, clampedServerDelay);
+        }
+        PhysicalRoomsChanged?.Invoke();
+    }
+
+    public (string FilterType, double EstimatedCaptureLatencyMs, string Platform, double ServerToClientDelayMs)? GetVoiceParticipantAudioTelemetry(string channelId, string userId)
+    {
+        lock (_voiceLock)
+        {
+            if (_voiceParticipantAudioTelemetry.TryGetValue((channelId, userId), out var telemetry))
+            {
+                return telemetry;
+            }
+            return null;
+        }
     }
 
     public bool NotifyVoiceMemberLeft(string channelId, string userId)
@@ -75,6 +154,8 @@ public class ChatStateService
         string[]? updatedSpeakers = null;
         lock (_voiceLock)
         {
+            _voiceParticipantDevices.Remove((channelId, userId));
+            _voiceParticipantAudioTelemetry.Remove((channelId, userId));
             if (_voiceParticipants.ContainsKey(channelId))
             {
                 wasRemoved = _voiceParticipants[channelId].Remove(userId);

@@ -292,7 +292,7 @@ public class MediaControllerTests : TestDataTestBase
     }
 
     [Fact]
-    public void GetAvatar_SuspendedUserWithoutToken_ReturnsUnauthorized()
+    public void GetAvatar_SuspendedUserWithoutToken_AllowsReadOnlyAccess()
     {
         // Arrange
         var empId = "SuspendedUser_" + Guid.NewGuid().ToString("N");
@@ -306,9 +306,9 @@ public class MediaControllerTests : TestDataTestBase
         var result = controller.GetAvatar("TestUser", t: null);
 
         // Assert
-        var unauthorized = Assert.IsType<UnauthorizedObjectResult>(result);
-        var payload = Assert.IsType<SpokesResult>(unauthorized.Value);
-        Assert.False(payload.IsSuccess);
+        var fileResult = Assert.IsType<FileContentResult>(result);
+        Assert.Equal("image/png", fileResult.ContentType);
+        Assert.NotEmpty(fileResult.FileContents);
     }
 
     [Fact]

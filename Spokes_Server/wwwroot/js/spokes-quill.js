@@ -16,11 +16,10 @@ window.spokesQuill = {
                 Quill.register('modules/imageResize', Resizer.default || Resizer);
             }
         }
-        
+
         const toolbarOptions = [
             ['bold', 'italic', 'underline', 'strike'],
             ['blockquote', 'code-block'],
-            [{ 'header': 1 }, { 'header': 2 }],
             [{ 'header': [1, 2, 3, 4, 5, 6, false] }],
             [{ 'list': 'ordered'}, { 'list': 'bullet' }],
             [{ 'indent': '-1'}, { 'indent': '+1' }],
@@ -31,9 +30,11 @@ window.spokesQuill = {
         ];
 
         const hasImageResize = !!Quill.imports['modules/imageResize'];
+        const scrollHost = container.closest('[data-quill-scroll-container]');
 
         const config = {
             theme: 'snow',
+            scrollingContainer: scrollHost || null,
             modules: {
                 toolbar: toolbarOptions,
                 imageResize: hasImageResize ? {} : false,
@@ -44,7 +45,7 @@ window.spokesQuill = {
         };
 
         const quill = new Quill(container, config);
-        
+
         if (content) {
             const delta = quill.clipboard.convert({ html: content });
             quill.setContents(delta, 'silent');

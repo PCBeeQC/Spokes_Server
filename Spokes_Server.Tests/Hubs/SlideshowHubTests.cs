@@ -188,9 +188,17 @@ public class SlideshowHubTests : IDisposable
         Assert.True(result.IsSuccess);
         Assert.Equal(tvSession.SessionId, result.Value);
 
-        // TV client should have received "SessionStarted"
+        // TV client should have received "SessionStarted" with ?st= capability token on URLs
         _mockClients.Verify(c => c.Client("tv-screen-conn"), Times.AtLeastOnce);
-        _mockSingleClientProxy.Verify(p => p.SendCoreAsync("SessionStarted", It.Is<object[]>(args => args.Length == 1 && args[0] is SlideshowStagePayload), default), Times.Once);
+        _mockSingleClientProxy.Verify(p => p.SendCoreAsync(
+            "SessionStarted",
+            It.Is<object[]>(args =>
+                args.Length == 1 &&
+                args[0] is SlideshowStagePayload &&
+                ((SlideshowStagePayload)args[0]).Items.Count == 1 &&
+                ((SlideshowStagePayload)args[0]).Items[0].Url.Contains("?st=") &&
+                ((SlideshowStagePayload)args[0]).Items[0].ThumbnailUrl.Contains("/thumb?st=")),
+            default), Times.Once);
     }
 
     [Fact]
@@ -240,10 +248,19 @@ public class SlideshowHubTests : IDisposable
     }
 
     [Fact]
-    public async Task EndSession_NotifiesBothPeers()
+    public async Task EndSession_RejectsUnauthorizedCaller_AndNotifiesBothPeersForHost()
     {
-        var session = _sessionService.CreateSession("tv-screen-conn");
+        var hostEmp = new Employee { Id = "owner-1", IsActive = true };
+        var attackerEmp = new Employee { Id = "attacker-1", IsActive = true };
+        _employees.Save(hostEmp);
+        _employees.Save(attackerEmp);
+
+        var session = _sessionService.CreateSession("tv-screen-conn", SlideshowDisplayKind.SignalRCastReceiver);
         _sessionService.TryPair(session.PairingPin, "owner-1", "host-conn-verified", "album-1", out _, out _);
+
+        var attackerHub = CreateHub("attacker-1", "attacker-conn");
+        await attackerHub.EndSession(session.SessionId);
+        Assert.NotNull(_sessionService.GetSessionById(session.SessionId));
 
         var hostHub = CreateHub("owner-1", "host-conn-verified");
         await hostHub.EndSession(session.SessionId);
@@ -253,13 +270,25 @@ public class SlideshowHubTests : IDisposable
     }
 
     [Fact]
-    public async Task RebindTvConnection_UpdatesTvConnectionId_AndAddsToGroup()
+    public async Task RebindTvConnection_RequiresDisconnectedCastReceiverAndValidTvSecret()
     {
-        var session = _sessionService.CreateSession("tv-screen-conn");
+        var session = _sessionService.CreateSession("tv-screen-conn", SlideshowDisplayKind.SignalRCastReceiver);
         _sessionService.TryPair(session.PairingPin, "owner-1", "host-conn-verified", "album-1", out _, out _);
 
+        // Rejected before disconnect even with valid secret
+        var prematureHub = CreateHub(userId: null, connectionId: "tv-premature-conn");
+        Assert.False(await prematureHub.RebindTvConnection(session.SessionId, session.TvSecret));
+
+        // Simulate TV disconnect
+        _sessionService.HandleDisconnect("tv-screen-conn");
+
+        // Rejected with wrong secret
+        var hijackHub = CreateHub(userId: null, connectionId: "attacker-tv-conn");
+        Assert.False(await hijackHub.RebindTvConnection(session.SessionId, "wrong-secret"));
+
+        // Succeeds after disconnect with valid TvSecret
         var tvHub = CreateHub(userId: null, connectionId: "tv-reconnected-conn");
-        bool result = await tvHub.RebindTvConnection(session.SessionId);
+        bool result = await tvHub.RebindTvConnection(session.SessionId, session.TvSecret);
 
         Assert.True(result);
         var updated = _sessionService.GetSessionById(session.SessionId);

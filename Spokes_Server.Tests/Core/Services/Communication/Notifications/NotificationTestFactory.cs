@@ -12,6 +12,8 @@ namespace Spokes_Server.Tests.Core.Services.Communication.Notifications;
 
 public static class NotificationTestFactory
 {
+    public const string DefaultTestMasterPassword = "NotificationQueueTestMasterPwd!";
+
     public static NotificationQueueService CreateQueueService(
         ILogger<NotificationQueueService>? logger = null,
         DiskPersistenceService? persistence = null,
@@ -21,7 +23,11 @@ public static class NotificationTestFactory
     {
         var tempDir = dataPath ?? Path.Combine(Path.GetTempPath(), $"NotificationQueueTest_{Guid.NewGuid():N}");
         var finalConfig = config ?? new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?> { ["DataPath"] = tempDir })
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["DataPath"] = tempDir,
+                ["SPOKES_MASTER_PASSWORD"] = DefaultTestMasterPassword
+            })
             .Build();
         var finalPersistence = persistence ?? new DiskPersistenceService(new Mock<ILogger<DiskPersistenceService>>().Object);
         var finalCompanyRepo = companyRepo ?? new CompanyProfileRepository(finalPersistence, finalConfig);

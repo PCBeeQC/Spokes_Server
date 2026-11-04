@@ -116,7 +116,8 @@ public class FileController : SpokesControllerBase
         string contextId,
         string? token,
         out UploadContext? context,
-        bool isThumbnail = false)
+        bool isThumbnail = false,
+        bool allowDemoImport = false)
     {
         context = null;
 
@@ -126,7 +127,7 @@ public class FileController : SpokesControllerBase
         }
 
         var config = _config;
-        if (config?.GetValue<bool>("Spokes_DemoMode") == true)
+        if (!allowDemoImport && config?.GetValue<bool>("Spokes_DemoMode") == true)
         {
             var demoUser = _userService.GetEmployee(User);
             if (demoUser == null || !demoUser.IsAdmin)
@@ -458,41 +459,177 @@ public class FileController : SpokesControllerBase
     public IActionResult GetDemoMediaThumb(string fileName)
         => GetDemoMedia(fileName);
 
+    [HttpPost("demo-media/import/{category}/{contextId}")]
+    public async Task<IActionResult> ImportDemoMedia(
+        string category,
+        string contextId,
+        [FromQuery] string fileName,
+        [FromQuery] string? t = null)
+    {
+        var config = _config;
+        if (config == null || (!config.GetValue<bool>("Spokes_DemoMode") && !config.GetValue<bool>("Spokes_DemoSetup")))
+        {
+            return NotFoundError("Demo media not available.", "DEMO_MEDIA_NOT_FOUND");
+        }
+
+        if (string.IsNullOrWhiteSpace(fileName))
+        {
+            return BadRequestError("FileName is required.");
+        }
+
+        fileName = Path.GetFileName(fileName);
+        var dataPath = config["DataPath"] ?? "Data";
+        var demoMediaPath = Path.Combine(dataPath, "DemoMedia", fileName);
+
+        if (!System.IO.File.Exists(demoMediaPath))
+        {
+            return NotFoundError("Sample media file not found.", "SAMPLE_FILE_NOT_FOUND");
+        }
+
+        var errorResult = ValidateUploadPrelude(category, contextId, t, out var uploadCtx, allowDemoImport: true);
+        if (errorResult != null) return errorResult;
+
+        var encryptionKey = uploadCtx!.EncryptionKey;
+        var profile = _companyProfiles.Get();
+        int serverMaxDim;
+        int serverQuality;
+
+        if (category.Equals("albums", StringComparison.OrdinalIgnoreCase))
+        {
+            serverMaxDim = profile?.Albums?.DesktopPhotoMaxDimension ?? 3840;
+            serverQuality = profile?.Albums?.DesktopPhotoQuality ?? 90;
+        }
+        else if (category.Equals("chat", StringComparison.OrdinalIgnoreCase))
+        {
+            serverMaxDim = profile?.Chat?.DesktopPhotoMaxDimension ?? 3840;
+            serverQuality = profile?.Chat?.DesktopPhotoQuality ?? 85;
+        }
+        else
+        {
+            serverMaxDim = 3840;
+            serverQuality = 90;
+        }
+
+        string safeName = _fileService.GenerateSafeName(fileName);
+        string contentType = _fileService.GetContentType(fileName);
+
+        int? imageWidth = null;
+        int? imageHeight = null;
+        double? durationSeconds = null;
+        bool hasThumbnail = false;
+
+        using var fileStream = new FileStream(demoMediaPath, FileMode.Open, FileAccess.Read, FileShare.Read);
+        Stream uploadStream = fileStream;
+
+        try
+        {
+            if (!category.Equals("temp", StringComparison.OrdinalIgnoreCase) &&
+                _imageService.TryProcessUploadImage(uploadStream, contentType, fileStream.Length, out var processedImage, serverMaxDim, serverQuality))
+            {
+                if (processedImage.ProcessedStream != uploadStream)
+                {
+                    uploadStream = processedImage.ProcessedStream;
+                }
+
+                imageWidth = processedImage.Width;
+                imageHeight = processedImage.Height;
+
+                if (processedImage.ThumbnailBytes != null)
+                {
+                    using var msThumb = new MemoryStream(processedImage.ThumbnailBytes);
+                    await _fileService.UploadThumbnailAsync(category, contextId, msThumb, safeName, encryptionKey);
+                    hasThumbnail = true;
+                }
+            }
+            else if (!category.Equals("temp", StringComparison.OrdinalIgnoreCase) &&
+                     _fastStartService != null &&
+                     (contentType.StartsWith("video/", StringComparison.OrdinalIgnoreCase) || IsMp4Video(fileName)))
+            {
+                if (_fastStartService.TryProcessMp4(uploadStream, out var videoMeta) && videoMeta.Success)
+                {
+                    if (videoMeta.WasModified && videoMeta.ProcessedStream != null)
+                    {
+                        uploadStream = videoMeta.ProcessedStream;
+                    }
+
+                    imageWidth = videoMeta.Width;
+                    imageHeight = videoMeta.Height;
+                    durationSeconds = videoMeta.DurationSeconds;
+                }
+            }
+
+            if (uploadStream.CanSeek)
+            {
+                uploadStream.Position = 0;
+            }
+
+            var url = await _fileService.UploadStreamAsync(category, contextId, uploadStream, fileName, encryptionKey, safeName);
+
+            var result = new FileUploadResult(
+                url,
+                fileName,
+                contentType,
+                uploadStream.CanSeek ? uploadStream.Length : fileStream.Length,
+                imageWidth,
+                imageHeight,
+                hasThumbnail,
+                durationSeconds);
+
+            return Ok(new List<FileUploadResult> { result });
+        }
+        finally
+        {
+            if (uploadStream != fileStream)
+            {
+                uploadStream.Dispose();
+            }
+        }
+    }
+
     [HttpGet("email/{messageId}/{attachmentId}")]
     [HttpGet("/internal/attachments/email/{messageId}/{attachmentId}")]
     [HttpGet("/spokesapi/attachments/email/{messageId}/{attachmentId}")]
     public IActionResult GetEmailAttachment(
         string messageId,
         string attachmentId,
-        [FromQuery] string employeeId,
+        [FromQuery] string? employeeId = null, [FromQuery] string? accountId = null,
         [FromQuery] string? ct = null,
         [FromQuery] string? fn = null)
     {
-        // Validate authenticated user
+        // Validate authenticated user (suspended users retain read-only download access)
         var user = _userService.GetEmployee(User);
-        if (user == null || !user.IsActive || user.IsSuspended || user.IsBanned)
+        if (user == null || !user.IsActive || user.IsBanned)
         {
             return UnauthorizedError("Authentication required.", "UNAUTHORIZED");
         }
 
+        employeeId = !string.IsNullOrEmpty(accountId) ? accountId : employeeId;
         if (string.IsNullOrEmpty(employeeId))
         {
             return BadRequestError("employeeId is required");
         }
 
-        // Enforce ownership via EmailFileAccessProvider
-        if (!_fileAuthService.CanAccess("email", employeeId, user))
+        // Prevent path traversal and delimiter injection before scoping access check
+        if (string.IsNullOrWhiteSpace(messageId) || messageId.Contains("..") || messageId.Contains('/') || messageId.Contains('\\') ||
+            string.IsNullOrWhiteSpace(attachmentId) || attachmentId.Contains("..") || attachmentId.Contains('/') || attachmentId.Contains('\\') ||
+            employeeId.Contains("..") || employeeId.Contains('/') || employeeId.Contains('\\') || employeeId.Contains(':'))
+        {
+            return BadRequestError("Invalid path parameters");
+        }
+
+        // Enforce message-scoped ownership via EmailFileAccessProvider ("accountId:messageId")
+        if (!_fileAuthService.CanAccess("email", $"{employeeId}:{messageId}", user))
         {
             return ForbiddenError("Access to email attachment forbidden.", "FORBIDDEN");
         }
 
-
-        // Prevent path traversal
-        if (string.IsNullOrWhiteSpace(messageId) || messageId.Contains("..") || messageId.Contains('/') || messageId.Contains('\\') ||
-            string.IsNullOrWhiteSpace(attachmentId) || attachmentId.Contains("..") || attachmentId.Contains('/') || attachmentId.Contains('\\') ||
-            employeeId.Contains("..") || employeeId.Contains('/') || employeeId.Contains('\\'))
+        var emailInboxService = HttpContext?.RequestServices?.GetService<Spokes_Server.Core.Services.Communication.Email.IEmailInboxService>();
+        if (emailInboxService != null && !employeeId.Equals(Spokes_Server.Core.Constants.CompanyBillInboxConstants.SystemEmployeeId, StringComparison.OrdinalIgnoreCase))
         {
-            return BadRequestError("Invalid path parameters");
+            if (!emailInboxService.CanUserAccessEmailMessage(user, employeeId, messageId))
+            {
+                return ForbiddenError("Access to email attachment forbidden.", "FORBIDDEN");
+            }
         }
 
         string filePath;
@@ -510,17 +647,35 @@ public class FileController : SpokesControllerBase
             try
             {
                 var attachmentsDir = Path.GetDirectoryName(filePath);
-                var emailDir = Directory.GetParent(attachmentsDir ?? "")?.FullName;
-                if (!string.IsNullOrEmpty(emailDir))
+                var attachmentsRootDir = Directory.GetParent(attachmentsDir ?? "")?.FullName;
+                var emailAccountDir = Directory.GetParent(attachmentsRootDir ?? "")?.FullName;
+                if (!string.IsNullOrEmpty(emailAccountDir))
                 {
-                    var mimePath = Path.Combine(emailDir, "Mime", $"{messageId}.eml");
-                    if (System.IO.File.Exists(mimePath))
+                    string? mimePath = Path.Combine(emailAccountDir, "Mime", $"{messageId}.eml");
+                    if (!System.IO.File.Exists(mimePath))
+                    {
+                        var billMimePath = Path.Combine(emailAccountDir, "Email", "Mime", $"{messageId}.eml");
+                        if (System.IO.File.Exists(billMimePath))
+                        {
+                            mimePath = billMimePath;
+                        }
+                        else if (!string.IsNullOrEmpty(attachmentsRootDir))
+                        {
+                            var legacyMimePath = Path.Combine(attachmentsRootDir, "Mime", $"{messageId}.eml");
+                            mimePath = System.IO.File.Exists(legacyMimePath) ? legacyMimePath : null;
+                        }
+                        else
+                        {
+                            mimePath = null;
+                        }
+                    }
+
+                    if (!string.IsNullOrEmpty(mimePath))
                     {
                         using var stream = System.IO.File.OpenRead(mimePath);
                         var mime = MimeKit.MimeMessage.Load(stream);
                         var part = mime.Attachments.OfType<MimeKit.MimePart>()
-                            .FirstOrDefault(p => !string.IsNullOrEmpty(fn) && p.FileName == fn)
-                            ?? mime.Attachments.OfType<MimeKit.MimePart>().FirstOrDefault();
+                            .FirstOrDefault(p => !string.IsNullOrEmpty(fn) && string.Equals(p.FileName, fn, StringComparison.Ordinal));
                         if (part != null && part.Content != null)
                         {
                             Directory.CreateDirectory(attachmentsDir!);
@@ -541,11 +696,30 @@ public class FileController : SpokesControllerBase
             return NotFoundError("Attachment not found");
         }
 
-        // Use content type from query param or resolve from IFileService
-        var contentType = !string.IsNullOrEmpty(ct) ? ct : _fileService.GetContentType(filePath);
         var originalFileName = !string.IsNullOrEmpty(fn) ? fn : attachmentId;
-
         var extension = Path.GetExtension(originalFileName);
+        var inferredContentType = !string.IsNullOrEmpty(extension)
+            ? _fileService.GetContentType(originalFileName)
+            : _fileService.GetContentType(filePath);
+
+        string contentType;
+        if (!string.IsNullOrWhiteSpace(ct) && !ct.Contains('\r') && !ct.Contains('\n'))
+        {
+            contentType = ct.Trim();
+            if (SafeInlineContentTypes.Contains(contentType) &&
+                !string.IsNullOrEmpty(extension) &&
+                !string.Equals(inferredContentType, contentType, StringComparison.OrdinalIgnoreCase))
+            {
+                contentType = inferredContentType;
+            }
+        }
+        else
+        {
+            contentType = inferredContentType;
+        }
+
+        Response.Headers.Append("X-Content-Type-Options", "nosniff");
+        Response.Headers.Append("Referrer-Policy", "no-referrer");
 
         bool forceDownload = Request.Query.ContainsKey("download") || 
                              ForceDownloadExtensions.Contains(extension) || 
@@ -575,9 +749,9 @@ public class FileController : SpokesControllerBase
 
         fileName = Path.GetFileName(fileName);
 
-        // 1. Identify User (always available from [Authorize] middleware)
+        // 1. Identify User (always available from [Authorize] middleware; suspended users retain read-only access)
         var user = _userService.GetEmployee(User);
-        if (user == null || !user.IsActive || user.IsSuspended || user.IsBanned) return UnauthorizedError("Authentication required.");
+        if (user == null || !user.IsActive || user.IsBanned) return UnauthorizedError("Authentication required.");
 
         var sessionId = User.FindFirst("SessionId")?.Value;
 
@@ -614,7 +788,7 @@ public class FileController : SpokesControllerBase
         fileName = Path.GetFileName(fileName);
         var extension = Path.GetExtension(fileName);
 
-        if (user == null || !user.IsActive || user.IsSuspended || user.IsBanned)
+        if (user == null || !user.IsActive || user.IsBanned)
         {
             return UnauthorizedError("Authentication required.");
         }
@@ -759,6 +933,7 @@ public class FileController : SpokesControllerBase
         // 5.5 Self-heal missing thumbnail on demand so subsequent requests serve the compact JPEG thumbnail directly
         byte[]? regeneratedThumbBytes = null;
         if (fellBackToOriginalForThumb &&
+            !user.IsSuspended &&
             TrySelfHealMissingThumbnail(category, contextId, fileName, path, activeEncryptionKey, out var healedThumbPath, out regeneratedThumbBytes))
         {
             targetFileName = FileService.GetThumbnailFileName(fileName);

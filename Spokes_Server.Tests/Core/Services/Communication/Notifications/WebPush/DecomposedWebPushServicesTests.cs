@@ -200,6 +200,50 @@ public class DecomposedWebPushServicesTests : IDisposable
     }
 
     [Fact]
+    public void PushPayloadBuilder_BuildRelayPayload_ClearNotification_DoesNotEncryptEvenWithPublicKey()
+    {
+        using var rsa = System.Security.Cryptography.RSA.Create(2048);
+        var publicKeyBase64 = Convert.ToBase64String(rsa.ExportSubjectPublicKeyInfo());
+
+        var builder = new PushPayloadBuilder();
+        var request = new PushNotificationRequest
+        {
+            UserId = "user1",
+            Title = "",
+            Body = "",
+            Category = "clear_notification",
+            ThreadId = "channel-guid-123",
+            IsSilent = true
+        };
+        var sub = new DeviceSession
+        {
+            PushEndpoint = "endpoint-clear",
+            PushPublicKey = publicKeyBase64
+        };
+        var profile = new CompanyProfile { CompanyName = "Acme Corp", LicensePayload = "LIC-DATA" };
+        var serverConfig = new ServerConfig
+        {
+            DatabaseCreationId = "srv-1",
+            DatabaseCreationVersion = "v1"
+        };
+
+        var context = new PushRelayContext(profile, serverConfig, "/icon.png", "https://spokes.example.com");
+        var payload = builder.BuildRelayPayload(request, sub, context);
+
+        Assert.Equal("endpoint-clear", payload.Token);
+        Assert.Equal("clear_notification", payload.Category);
+        Assert.Equal("channel-guid-123", payload.ThreadId);
+        Assert.True(payload.IsSilent);
+        Assert.False(payload.IsEncrypted);
+        Assert.Null(payload.EncryptedKey);
+        Assert.Null(payload.Nonce);
+        Assert.Null(payload.Ciphertext);
+        Assert.Null(payload.Tag);
+        Assert.Null(payload.ServerName);
+        Assert.Null(payload.OriginUrl);
+    }
+
+    [Fact]
     public async Task NativeRelayDispatcher_DispatchRelayPushAsync_WhenHttpSucceeds_ReturnsTrue()
     {
         var handlerMock = new Mock<HttpMessageHandler>();
@@ -395,5 +439,98 @@ public class DecomposedWebPushServicesTests : IDisposable
 
         await Assert.ThrowsAsync<HttpRequestException>(() =>
             dispatcher.DispatchRelayPushOrThrowAsync(new RelayPushPayload { Token = "t" }, new DeviceSession { Id = "s1", DeviceType = "Mobile" }));
+    }
+
+    [Theory]
+    [InlineData("call", null, 60)]
+    [InlineData("calendar", null, 7200)]
+    [InlineData("clear_notification", null, 86400)]
+    [InlineData("chat", null, 604800)]
+    [InlineData("email", null, 604800)]
+    [InlineData("moderation", null, 604800)]
+    [InlineData("chat", 300, 300)]
+    [InlineData("chat", 9999999, 604800)]
+    public void PushPayloadBuilder_GetEffectiveTtlSeconds_ReturnsExpectedCategoryTtl(string category, int? explicitTtl, int expectedSeconds)
+    {
+        var builder = new PushPayloadBuilder();
+        var request = new PushNotificationRequest
+        {
+            UserId = "u1",
+            Title = "T",
+            Body = "B",
+            Category = category,
+            TtlSeconds = explicitTtl
+        };
+
+        Assert.Equal(expectedSeconds, builder.GetEffectiveTtlSeconds(request));
+    }
+
+    [Fact]
+    public void PushPayloadBuilder_GetWebPushTopic_ReturnsRfc8030CompliantTopic()
+    {
+        var builder = new PushPayloadBuilder();
+        var request = new PushNotificationRequest
+        {
+            UserId = "u1",
+            Title = "T",
+            Body = "B",
+            Category = "chat",
+            ThreadId = "channel-general-123"
+        };
+
+        var topic = builder.GetWebPushTopic(request);
+        Assert.NotNull(topic);
+        Assert.Equal(32, topic!.Length);
+        Assert.Matches("^[A-Za-z0-9\\-_]{1,32}$", topic);
+
+        // Deterministic across identical category + threadId
+        Assert.Equal(topic, builder.GetWebPushTopic(request));
+
+        // Null when neither ThreadId nor Tag is provided
+        var untagged = new PushNotificationRequest { UserId = "u1", Title = "T", Body = "B" };
+        Assert.Null(builder.GetWebPushTopic(untagged));
+    }
+
+    [Fact]
+    public void PushPayloadBuilder_StampsSentAtUtcAndTtlSeconds_AcrossWebPushAndEncryptedRelay()
+    {
+        using var rsa = System.Security.Cryptography.RSA.Create(2048);
+        var publicKeyBase64 = Convert.ToBase64String(rsa.ExportSubjectPublicKeyInfo());
+
+        var sentAt = new DateTime(2026, 10, 25, 14, 30, 0, DateTimeKind.Utc);
+        var builder = new PushPayloadBuilder();
+        var request = new PushNotificationRequest
+        {
+            UserId = "u1",
+            Title = "Title",
+            Body = "Body",
+            Category = "chat",
+            ThreadId = "chan-1",
+            SentAtUtc = sentAt
+        };
+
+        var profile = new CompanyProfile { CompanyName = "Acme" };
+        var webPushJson = builder.BuildWebPushPayloadJson(request, profile, "/icon.png");
+        Assert.Contains("2026-10-25T14:30:00", webPushJson);
+
+        var sub = new DeviceSession { PushEndpoint = "tok", PushPublicKey = publicKeyBase64 };
+        var context = new PushRelayContext(profile, new ServerConfig(), "/icon.png", "https://spokes.example.com");
+        var relayPayload = builder.BuildRelayPayload(request, sub, context);
+
+        Assert.Equal(604800, relayPayload.TtlSeconds);
+        Assert.Null(relayPayload.SentAtUtc); // Hidden from outer zero-knowledge envelope when encrypted
+
+        var encryptedKeyBytes = Convert.FromBase64String(relayPayload.EncryptedKey!);
+        var aesKey = rsa.Decrypt(encryptedKeyBytes, System.Security.Cryptography.RSAEncryptionPadding.OaepSHA1);
+        var plaintextBytes = new byte[Convert.FromBase64String(relayPayload.Ciphertext!).Length];
+        using var aesGcm = new System.Security.Cryptography.AesGcm(aesKey, 16);
+        aesGcm.Decrypt(
+            Convert.FromBase64String(relayPayload.Nonce!),
+            Convert.FromBase64String(relayPayload.Ciphertext!),
+            Convert.FromBase64String(relayPayload.Tag!),
+            plaintextBytes);
+
+        var innerJson = System.Text.Encoding.UTF8.GetString(plaintextBytes);
+        Assert.Contains("\"SentAtUtc\":\"2026-10-25T14:30:00", innerJson);
     }
 }

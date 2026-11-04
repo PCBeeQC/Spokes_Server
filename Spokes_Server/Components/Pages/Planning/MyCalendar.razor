@@ -793,6 +793,7 @@
     private bool _hasHandledQueryParameters;
 
     private bool Loading;
+    private Employee? _currentUser;
     private string CurrentUserId = "";
     private string CurrentUserTeamId = "";
 
@@ -814,6 +815,7 @@
     protected override async Task OnInitializedAsync()
     {
         var emp = await UserService.GetEmployeeAsync();
+        _currentUser = emp;
         if (emp != null)
         {
             CurrentUserId = emp.Id;
@@ -846,6 +848,10 @@
             if (!string.IsNullOrEmpty(QueryEventId))
             {
                 targetEvt = CalendarService.GetEventById(QueryEventId);
+                if (targetEvt != null && (_currentUser == null || !CalendarService.CanUserViewEvent(targetEvt, _currentUser, CurrentUserTeamIds)))
+                {
+                    targetEvt = null;
+                }
             }
 
             if (targetEvt != null)
@@ -1119,10 +1125,13 @@
         {
             if (result.Data is CalendarEvent resultEvent) // Saved
             {
-                CalendarService.SaveEvent(resultEvent);
-                Snackbar.Add(Loc["Event saved"].Value, Severity.Success);
+                if (isNew || CalendarService.CanUserEditEvent(evt, _currentUser))
+                {
+                    CalendarService.SaveEvent(resultEvent);
+                    Snackbar.Add(Loc["Event saved"].Value, Severity.Success);
+                }
             }
-            else if (!isNew) // Deleted
+            else if (!isNew && CalendarService.CanUserEditEvent(evt, _currentUser)) // Deleted
             {
                 CalendarService.DeleteEvent(evt.Id);
                 Snackbar.Add(Loc["Event deleted"].Value, Severity.Success);

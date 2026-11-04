@@ -10,6 +10,7 @@
 @inject ScopedKeystoreService ScopedKeystore
 @inject IChatAuthorizationService ChatAuth
 @inject ICryptoService Crypto
+@inject FileTokenService FileTokens
 @inject ISnackbar Snackbar
 @inject IDialogService DialogService
 @inject AppLabelService AppLabels
@@ -712,7 +713,8 @@
     private Employee? _currentUserObj => Employees.FirstOrDefault(e => e.Id == CurrentUserId);
     private bool IsAdminOrCreator => !IsChannelLocked && ChatAuth.CanUserManageChannel(Channel, _currentUserObj, ScopedKeystore.IsUnlocked);
     private bool CanDeleteChannel => !IsChannelLocked && ChatAuth.CanUserDeleteChannel(Channel, _currentUserObj, ScopedKeystore.IsUnlocked);
-    private bool CanManageCategories => _currentUserObj?.HasPermission(AppPermissions.Chat.CreateChannels) == true || _currentUserObj?.IsAdmin == true;
+    private bool CanManageCategories => _currentUserObj is { IsActive: true, IsSuspended: false, IsBanned: false } u &&
+                                        (u.HasPermission(AppPermissions.Chat.CreateChannels) || u.IsAdmin);
 
     private bool CanEditChannelInfo()
     {
@@ -783,7 +785,7 @@
 
             Channel.AllowedTeamIds.Clear();
             Channel.ParticipantIds.Clear();
-            ChatService.UpdateChannel(Channel, CurrentUserId, ScopedKeystore.IsUnlocked);
+            ChatService.UpdateChannel(Channel, CurrentUserId ?? string.Empty, ScopedKeystore.IsUnlocked);
             await OnChannelUpdated.InvokeAsync();
             LoadMembers();
             LoadTeams();
@@ -804,7 +806,7 @@
                 Channel.ParticipantIds.Add(Channel.CreatedById);
             }
 
-            ChatService.UpdateChannel(Channel, CurrentUserId, ScopedKeystore.IsUnlocked);
+            ChatService.UpdateChannel(Channel, CurrentUserId ?? string.Empty, ScopedKeystore.IsUnlocked);
             await OnChannelUpdated.InvokeAsync();
             LoadMembers();
             LoadTeams();
@@ -827,7 +829,7 @@
     {
         if (Channel == null || !CanEditChannelInfo()) return;
         Channel.CategoryId = categoryId;
-        ChatService.UpdateChannel(Channel, CurrentUserId, ScopedKeystore.IsUnlocked);
+        ChatService.UpdateChannel(Channel, CurrentUserId ?? string.Empty, ScopedKeystore.IsUnlocked);
         await OnChannelUpdated.InvokeAsync();
         StateHasChanged();
     }
@@ -836,7 +838,7 @@
     {
         if (Channel == null || !CanEditChannelInfo()) return;
         Channel.AudioBitrateKbps = bitrateKbps;
-        ChatService.UpdateChannel(Channel, CurrentUserId, ScopedKeystore.IsUnlocked);
+        ChatService.UpdateChannel(Channel, CurrentUserId ?? string.Empty, ScopedKeystore.IsUnlocked);
         await OnChannelUpdated.InvokeAsync();
         Snackbar.Add(string.Format(Loc["Audio bitrate set to {0} kbps"].Value, bitrateKbps), Severity.Success);
         StateHasChanged();
@@ -850,7 +852,7 @@
         {
             Channel.IsVoiceChannel = false;
         }
-        ChatService.UpdateChannel(Channel, CurrentUserId, ScopedKeystore.IsUnlocked);
+        ChatService.UpdateChannel(Channel, CurrentUserId ?? string.Empty, ScopedKeystore.IsUnlocked);
         await OnChannelUpdated.InvokeAsync();
         StateHasChanged();
     }
@@ -862,7 +864,7 @@
         if (!Channel.AllowedPostTeamIds.Contains(team.Id))
         {
             Channel.AllowedPostTeamIds.Add(team.Id);
-            ChatService.UpdateChannel(Channel, CurrentUserId, ScopedKeystore.IsUnlocked);
+            ChatService.UpdateChannel(Channel, CurrentUserId ?? string.Empty, ScopedKeystore.IsUnlocked);
             await OnChannelUpdated.InvokeAsync();
         }
 
@@ -874,7 +876,7 @@
         if (Channel == null || string.IsNullOrEmpty(teamId) || !CanManageAnnouncements) return;
 
         Channel.AllowedPostTeamIds.Remove(teamId);
-        ChatService.UpdateChannel(Channel, CurrentUserId, ScopedKeystore.IsUnlocked);
+        ChatService.UpdateChannel(Channel, CurrentUserId ?? string.Empty, ScopedKeystore.IsUnlocked);
         await OnChannelUpdated.InvokeAsync();
         StateHasChanged();
     }
@@ -886,7 +888,7 @@
         if (!Channel.AllowedPostUserIds.Contains(user.Id))
         {
             Channel.AllowedPostUserIds.Add(user.Id);
-            ChatService.UpdateChannel(Channel, CurrentUserId, ScopedKeystore.IsUnlocked);
+            ChatService.UpdateChannel(Channel, CurrentUserId ?? string.Empty, ScopedKeystore.IsUnlocked);
             await OnChannelUpdated.InvokeAsync();
         }
 
@@ -898,7 +900,7 @@
         if (Channel == null || string.IsNullOrEmpty(userId) || !CanManageAnnouncements) return;
 
         Channel.AllowedPostUserIds.Remove(userId);
-        ChatService.UpdateChannel(Channel, CurrentUserId, ScopedKeystore.IsUnlocked);
+        ChatService.UpdateChannel(Channel, CurrentUserId ?? string.Empty, ScopedKeystore.IsUnlocked);
         await OnChannelUpdated.InvokeAsync();
         StateHasChanged();
     }
@@ -924,7 +926,7 @@
 
         Channel.Name = _editingName.Trim();
         _isEditingName = false;
-        ChatService.UpdateChannel(Channel, CurrentUserId, ScopedKeystore.IsUnlocked);
+        ChatService.UpdateChannel(Channel, CurrentUserId ?? string.Empty, ScopedKeystore.IsUnlocked);
         await OnChannelUpdated.InvokeAsync();
         Snackbar.Add(Loc["Channel name updated"].Value, Severity.Success);
     }
@@ -942,7 +944,7 @@
         
         Channel.Description = _editingDescription?.Trim() ?? "";
         _isEditingDescription = false;
-        ChatService.UpdateChannel(Channel, CurrentUserId, ScopedKeystore.IsUnlocked);
+        ChatService.UpdateChannel(Channel, CurrentUserId ?? string.Empty, ScopedKeystore.IsUnlocked);
         await OnChannelUpdated.InvokeAsync();
         Snackbar.Add(Loc["Channel description updated"].Value, Severity.Success);
     }
@@ -956,7 +958,7 @@
         if (result != null && !result.Canceled && result.Data is string icon)
         {
             Channel!.Icon = icon;
-            ChatService.UpdateChannel(Channel, CurrentUserId, ScopedKeystore.IsUnlocked);
+            ChatService.UpdateChannel(Channel, CurrentUserId ?? string.Empty, ScopedKeystore.IsUnlocked);
             await OnChannelUpdated.InvokeAsync();
             StateHasChanged();
         }
@@ -981,7 +983,7 @@
 
         if (added)
         {
-            var updateResult = ChatService.UpdateChannel(Channel, CurrentUserId, ScopedKeystore.IsUnlocked);
+            var updateResult = ChatService.UpdateChannel(Channel, CurrentUserId ?? string.Empty, ScopedKeystore.IsUnlocked);
             if (!updateResult.IsSuccess)
             {
                 Snackbar.Add(updateResult.ErrorMessage ?? Loc["Failed to update channel"].Value, Severity.Error);
@@ -1032,12 +1034,14 @@
             }
         }
 
-        var updateResult = ChatService.UpdateChannel(Channel, CurrentUserId, ScopedKeystore.IsUnlocked);
+        var updateResult = ChatService.UpdateChannel(Channel, CurrentUserId ?? string.Empty, ScopedKeystore.IsUnlocked);
         if (!updateResult.IsSuccess)
         {
             Snackbar.Add(updateResult.ErrorMessage ?? Loc["Failed to update channel"].Value, Severity.Error);
             return;
         }
+
+        FileTokens.InvalidateUserEncryptedTokens(memberId);
 
         await OnRemoveMember.InvokeAsync(memberId);
         LoadMembers();
@@ -1051,29 +1055,20 @@
     {
         if (Channel == null || string.IsNullOrEmpty(CurrentUserId) || IsChannelLocked) return;
 
-        lock (Channel)
+        var leaveResult = ChatService.LeaveGroupChannel(Channel.Id, CurrentUserId);
+        if (!leaveResult.IsSuccess)
         {
-            var updated = new List<string>(Channel.ParticipantIds);
-            updated.Remove(CurrentUserId);
-            Channel.ParticipantIds = updated;
-
-            if (Channel.IsEncrypted)
-            {
-                Channel.EncryptedChannelKeys.Remove(CurrentUserId);
-            }
-
-            // Transfer ownership if the creator is leaving
-            if (Channel.CreatedById == CurrentUserId && Channel.ParticipantIds.Any())
-            {
-                Channel.CreatedById = Channel.ParticipantIds.First();
-            }
+            Snackbar.Add(leaveResult.ErrorMessage ?? Loc["Failed to update channel"].Value, Severity.Error);
+            return;
         }
 
-        var updateResult = ChatService.UpdateChannel(Channel, CurrentUserId, ScopedKeystore.IsUnlocked);
-        if (!updateResult.IsSuccess)
+        FileTokens.InvalidateUserEncryptedTokens(CurrentUserId);
+        var refreshed = Db.ChatChannels.GetById(Channel.Id);
+        if (refreshed != null)
         {
-            Snackbar.Add(updateResult.ErrorMessage ?? Loc["Failed to update channel"].Value, Severity.Error);
-            return;
+            Channel.ParticipantIds = refreshed.ParticipantIds;
+            Channel.EncryptedChannelKeys = refreshed.EncryptedChannelKeys;
+            Channel.CreatedById = refreshed.CreatedById;
         }
 
         Snackbar.Add(Loc["You left the group"].Value, Severity.Info);
@@ -1119,7 +1114,7 @@
         if (!Channel.AllowedTeamIds.Contains(team.Id))
         {
             Channel.AllowedTeamIds.Add(team.Id);
-            var updateResult = ChatService.UpdateChannel(Channel, CurrentUserId, ScopedKeystore.IsUnlocked);
+            var updateResult = ChatService.UpdateChannel(Channel, CurrentUserId ?? string.Empty, ScopedKeystore.IsUnlocked);
             if (!updateResult.IsSuccess)
             {
                 Snackbar.Add(updateResult.ErrorMessage ?? Loc["Failed to update channel"].Value, Severity.Error);
@@ -1161,7 +1156,7 @@
         }
 
         Channel.AllowedTeamIds.Remove(teamId);
-        var updateResult = ChatService.UpdateChannel(Channel, CurrentUserId, ScopedKeystore.IsUnlocked);
+        var updateResult = ChatService.UpdateChannel(Channel, CurrentUserId ?? string.Empty, ScopedKeystore.IsUnlocked);
         if (!updateResult.IsSuccess)
         {
             Snackbar.Add(updateResult.ErrorMessage ?? Loc["Failed to update channel"].Value, Severity.Error);

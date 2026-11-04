@@ -1,13 +1,16 @@
 @page "/business/documents"
 @attribute [Authorize(Policy = AppPermissions.BusinessDocuments.View)]
 @using Spokes_Server.Core.Constants
+@using Spokes_Server.Core.Services.Identity
 @inject Database Db
 @inject IDialogService DialogService
 @inject ISnackbar Snackbar
 @inject NavigationManager Nav
+@inject UserService UserService
 
 <PageTitle>Business Documents</PageTitle>
 
+<MudContainer MaxWidth="MaxWidth.Large" Class="mt-4 pb-6">
 <MudPaper Class="pa-4 mb-4" Elevation="0" Outlined="true">
     <MudGrid Class="align-center">
         <MudItem xs="6">
@@ -62,14 +65,16 @@
         </NoRecordsContent>
     </MudTable>
 </MudPaper>
+</MudContainer>
 
 @code {
     private List<ProjectDocument> _documents = [];
     private bool CanEdit;
 
-    protected override void OnInitialized()
+    protected override async Task OnInitializedAsync()
     {
-        CanEdit = true;
+        var user = await UserService.GetEmployeeAsync();
+        CanEdit = user != null && (user.IsAdmin || user.HasPermission(AppPermissions.BusinessDocuments.View));
         Reload();
     }
 
@@ -80,6 +85,7 @@
 
     private async Task CreateBlankDocument()
     {
+        if (!CanEdit) return;
         var name = await PromptForName("Untitled Document");
         if (name == null) return;
 
@@ -121,6 +127,7 @@
 
     private async Task RenameDocument(ProjectDocument doc)
     {
+        if (!CanEdit || !string.IsNullOrEmpty(doc.ProjectId)) return;
         var parameters = new DialogParameters
             {
                 ["ContentText"] = "Enter a new name for this document:",
@@ -147,6 +154,7 @@
 
     private async Task OnDelete(ProjectDocument doc)
     {
+        if (!CanEdit || !string.IsNullOrEmpty(doc.ProjectId)) return;
         var confirm = await DialogService.ShowMessageBoxAsync("Delete Document",
         $"Are you sure you want to delete '{doc.Name}'?",
         yesText: "Delete", cancelText: "Cancel");

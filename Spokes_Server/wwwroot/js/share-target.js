@@ -34,6 +34,7 @@ window.registerShareTarget = (dotNetRef) => {
         // Listen to the Capacitor Share Target plugin while Blazor is running
         if (window.Capacitor?.Plugins?.CapacitorShareTarget) {
             window.Capacitor.Plugins.CapacitorShareTarget.addListener('shareReceived', async (payload) => {
+                if (window._spokesHostViewActive === false) return;
                 console.log('[ShareTarget] Blazor active WebView received share payload:', payload);
                 // This event is a fallback — checkPendingIntent() handles the primary path.
                 // Only act if there's no pending payload already stored by native extraction.
@@ -49,6 +50,7 @@ window.registerShareTarget = (dotNetRef) => {
         // iOS Warm-Start Fix: Listen to App lifecycle events to manually poll for intents
         if (window.Capacitor?.Plugins?.App) {
             window.Capacitor.Plugins.App.addListener('appUrlOpen', async (data) => {
+                if (window._spokesHostViewActive === false) return;
                 if (data.url && data.url.includes('spokes://share')) {
                     console.log('[ShareTarget] appUrlOpen detected share URL, polling intent...');
                     await pollNativePendingIntent();
@@ -56,6 +58,7 @@ window.registerShareTarget = (dotNetRef) => {
             });
 
             window.Capacitor.Plugins.App.addListener('appStateChange', async ({ isActive }) => {
+                if (window._spokesHostViewActive === false) return;
                 if (isActive) {
                     // Only poll if we're not already routing a share — avoids racing with appUrlOpen
                     if (_isRouting || _pollInProgress) {
@@ -64,6 +67,7 @@ window.registerShareTarget = (dotNetRef) => {
                     }
                     console.log('[ShareTarget] appStateChange active, polling intent as fallback...');
                     setTimeout(async () => {
+                        if (window._spokesHostViewActive === false) return;
                         await pollNativePendingIntent();
                     }, 500);
                 }
@@ -196,6 +200,9 @@ const handleSharePayload = async (payload) => {
 };
 
 const pollNativePendingIntent = async () => {
+    if (window._spokesHostViewActive === false) {
+        return false;
+    }
     // Deduplicate concurrent polls (appUrlOpen + appStateChange fire together on iOS)
     if (_pollInProgress) {
         console.log('[ShareTarget] pollNativePendingIntent skipped — already in progress');
@@ -239,6 +246,7 @@ window.checkPendingShares = async (retryCount = 0) => {
     const MAX_RETRIES = 10;
     const BASE_DELAY_MS = 1000;
 
+    if (window._spokesHostViewActive === false) return;
     if (!window.Capacitor || !_shareTargetDotNetRef) return;
     
     // Guard 0: We are navigating away — do not process shares locally
@@ -337,6 +345,9 @@ window.uploadSharedFiles = async (filesArray, uploadUrl) => {
     // Try native upload pipeline first if supported (fixes iOS App Group CORS issue)
     if (window.Capacitor?.isNativePlatform?.() && window.Capacitor?.Plugins?.BridgeManager?.uploadSharedFiles) {
         try {
+            if (!window.spokesUpload && typeof window.ensureUploadScriptsLoaded === 'function') {
+                await window.ensureUploadScriptsLoaded();
+            }
             const uris = filesArray.map(f => f.uri).filter(Boolean);
             if (uris.length > 0) {
                 const nativeResult = await window.spokesUpload.uploadNativeFiles(uris, uploadUrl, null);
@@ -427,6 +438,7 @@ window.spokesRemoveShortcut = async (serverUrl, id) => {
 };
 
 window.spokesCheckAppShortcuts = async () => {
+    if (window._spokesHostViewActive === false) return;
     if (window.Capacitor?.Plugins?.ShortcutManager && _shareTargetDotNetRef) {
         try {
             const pending = await window.Capacitor.Plugins.ShortcutManager.getPendingShortcut();

@@ -945,9 +945,6 @@
   <data name="Contact Information" xml:space="preserve">
     <value>Contact Information</value>
   </data>
-  <data name="content deleted" xml:space="preserve">
-    <value>content deleted</value>
-  </data>
   <data name="Content Moderation" xml:space="preserve">
     <value>Content Moderation</value>
   </data>
@@ -1131,9 +1128,6 @@
   <data name="Deleted {0} items" xml:space="preserve">
     <value>Deleted {0} items</value>
   </data>
-  <data name="Deleted Message" xml:space="preserve">
-    <value>Deleted Message</value>
-  </data>
   <data name="Deleted User" xml:space="preserve">
     <value>Deleted User</value>
   </data>
@@ -1169,9 +1163,6 @@
   </data>
   <data name="Dismiss" xml:space="preserve">
     <value>Dismiss</value>
-  </data>
-  <data name="Dismissed" xml:space="preserve">
-    <value>Dismissed</value>
   </data>
   <data name="Done" xml:space="preserve">
     <value>Done</value>
@@ -1280,9 +1271,6 @@
   </data>
   <data name="Enter a name" xml:space="preserve">
     <value>Enter a name</value>
-  </data>
-  <data name="Enter to send • Shift+Enter for new line • @ to mention • # for events and Albums" xml:space="preserve">
-    <value>Enter to send • Shift+Enter for new line • @ to mention • # for events and Albums</value>
   </data>
   <data name="Enter words to block, separated by commas." xml:space="preserve">
     <value>Enter words to block, separated by commas.</value>
@@ -1842,9 +1830,6 @@
   <data name="Moderation Dashboard" xml:space="preserve">
     <value>Moderation Dashboard</value>
   </data>
-  <data name="Moderator" xml:space="preserve">
-    <value>Moderator</value>
-  </data>
   <data name="Modify Default Order" xml:space="preserve">
     <value>Modify Default Order</value>
   </data>
@@ -2148,9 +2133,6 @@
   <data name="Pass Required" xml:space="preserve">
     <value>Pass Required</value>
   </data>
-  <data name="Password is encrypted before storage" xml:space="preserve">
-    <value>Password is encrypted before storage</value>
-  </data>
   <data name="Pause" xml:space="preserve">
     <value>Pause</value>
   </data>
@@ -2448,9 +2430,6 @@
   <data name="Resolve in Server Settings" xml:space="preserve">
     <value>Resolve in Server Settings</value>
   </data>
-  <data name="Resolved" xml:space="preserve">
-    <value>Resolved</value>
-  </data>
   <data name="Restart Server" xml:space="preserve">
     <value>Restart Server</value>
   </data>
@@ -2556,9 +2535,6 @@
   <data name="Search messages" xml:space="preserve">
     <value>Search messages</value>
   </data>
-  <data name="Search messages..." xml:space="preserve">
-    <value>Search messages...</value>
-  </data>
   <data name="Search Reports..." xml:space="preserve">
     <value>Search Reports...</value>
   </data>
@@ -2630,9 +2606,6 @@
   </data>
   <data name="Session revoked." xml:space="preserve">
     <value>Session revoked.</value>
-  </data>
-  <data name="Set the `SPOKES_MASTER_PASSWORD` environment variable to enable Server-assisted message recovery for public channels." xml:space="preserve">
-    <value>Set the `SPOKES_MASTER_PASSWORD` environment variable to enable Server-assisted message recovery for public channels.</value>
   </data>
   <data name="Set Up Vault Password" xml:space="preserve">
     <value>Set Up Vault Password</value>
@@ -4739,5 +4712,1469 @@
   </data>
   <data name="Your secure vault will auto-unlock on this browser." xml:space="preserve">
     <value>Your secure vault will auto-unlock on this browser.</value>
+  </data>
+  <data name="Connect GitHub" xml:space="preserve">
+    <value>Connect GitHub</value>
+  </data>
+  <data name="Connected to GitHub" xml:space="preserve">
+    <value>Connected to GitHub</value>
+  </data>
+  <data name="Copy all server data files directly into a GitHub repository folder so Git can track individual file changes across commits." xml:space="preserve">
+    <value>Copy all server data files directly into a GitHub repository folder so Git can track individual file changes across commits.</value>
+  </data>
+  <data name="Disconnected from GitHub." xml:space="preserve">
+    <value>Disconnected from GitHub.</value>
+  </data>
+  <data name="GitHub" xml:space="preserve">
+    <value>GitHub</value>
+  </data>
+  <data name="GitHub authentication failed." xml:space="preserve">
+    <value>GitHub authentication failed.</value>
+  </data>
+  <data name="GitHub connected successfully!" xml:space="preserve">
+    <value>GitHub connected successfully!</value>
+  </data>
+  <data name="Loading folders from repository..." xml:space="preserve">
+    <value>Loading folders from repository...</value>
+  </data>
+  <data name="Loading repositories..." xml:space="preserve">
+    <value>Loading repositories...</value>
+  </data>
+  <data name="Personal Access Token (PAT)" xml:space="preserve">
+    <value>Personal Access Token (PAT)</value>
+  </data>
+  <data name="Repository" xml:space="preserve">
+    <value>Repository</value>
+  </data>
+  <data name="Requires 'repo' scope (classic) or 'Contents: Read and write' permission (fine-grained)." xml:space="preserve">
+    <value>Requires 'repo' scope (classic) or 'Contents: Read and write' permission (fine-grained).</value>
+  </data>
+  <data name="Select a repository or enter owner/repo" xml:space="preserve">
+    <value>Select a repository or enter owner/repo</value>
+  </data>
+  <data name="Select an existing folder or type a new folder path (created automatically)" xml:space="preserve">
+    <value>Select an existing folder or type a new folder path (created automatically)</value>
+  </data>
+  <data name="Sync individual server data files to a GitHub repository folder so Git tracks file changes." xml:space="preserve">
+    <value>Sync individual server data files to a GitHub repository folder so Git tracks file changes.</value>
+  </data>
+  <data name="Syncing backup files to GitHub repository..." xml:space="preserve">
+    <value>Syncing backup files to GitHub repository...</value>
+  </data>
+  <data name="Target Folder in Repository" xml:space="preserve">
+    <value>Target Folder in Repository</value>
+  </data>
+  <data name="{0} linked identity(ies)" xml:space="preserve">
+    <value>{0} linked identity(ies)</value>
+  </data>
+  <data name="A valid username and sending domain are required." xml:space="preserve">
+    <value>A valid username and sending domain are required.</value>
+  </data>
+  <data name="Add Email to Timeline" xml:space="preserve">
+    <value>Add Email to Timeline</value>
+  </data>
+  <data name="Add Incoming Server" xml:space="preserve">
+    <value>Add Incoming Server</value>
+  </data>
+  <data name="Add to Calendar" xml:space="preserve">
+    <value>Add to Calendar</value>
+  </data>
+  <data name="Add to Project Timeline" xml:space="preserve">
+    <value>Add to Project Timeline</value>
+  </data>
+  <data name="Add to Timeline" xml:space="preserve">
+    <value>Add to Timeline</value>
+  </data>
+  <data name="All Folders" xml:space="preserve">
+    <value>All Folders</value>
+  </data>
+  <data name="All Inboxes" xml:space="preserve">
+    <value>All Inboxes</value>
+  </data>
+  <data name="All Mailbox Messages" xml:space="preserve">
+    <value>All Mailbox Messages</value>
+  </data>
+  <data name="Are you sure you want to delete '{0}' and all its contents? This cannot be undone." xml:space="preserve">
+    <value>Are you sure you want to delete '{0}' and all its contents? This cannot be undone.</value>
+  </data>
+  <data name="Are you sure you want to delete sending identity '{0}'?" xml:space="preserve">
+    <value>Are you sure you want to delete sending identity '{0}'?</value>
+  </data>
+  <data name="Bcc:" xml:space="preserve">
+    <value>Bcc:</value>
+  </data>
+  <data name="Cc:" xml:space="preserve">
+    <value>Cc:</value>
+  </data>
+  <data name="Compose" xml:space="preserve">
+    <value>Compose</value>
+  </data>
+  <data name="Compose Message" xml:space="preserve">
+    <value>Compose Message</value>
+  </data>
+  <data name="Contact deleted" xml:space="preserve">
+    <value>Contact deleted</value>
+  </data>
+  <data name="Could not display calendar event details." xml:space="preserve">
+    <value>Could not display calendar event details.</value>
+  </data>
+  <data name="Create" xml:space="preserve">
+    <value>Create</value>
+  </data>
+  <data name="Create Inbox for {0}" xml:space="preserve">
+    <value>Create Inbox for {0}</value>
+  </data>
+  <data name="Create Private Contact" xml:space="preserve">
+    <value>Create Private Contact</value>
+  </data>
+  <data name="Create Sending Identity" xml:space="preserve">
+    <value>Create Sending Identity</value>
+  </data>
+  <data name="Current View" xml:space="preserve">
+    <value>Current View</value>
+  </data>
+  <data name="Custom IMAP Server" xml:space="preserve">
+    <value>Custom IMAP Server</value>
+  </data>
+  <data name="Custom SMTP Server" xml:space="preserve">
+    <value>Custom SMTP Server</value>
+  </data>
+  <data name="Delete Folder" xml:space="preserve">
+    <value>Delete Folder</value>
+  </data>
+  <data name="Delete Sending Identity" xml:space="preserve">
+    <value>Delete Sending Identity</value>
+  </data>
+  <data name="Deleting a contact cannot be undone. Are you sure you want to delete '{0}'?" xml:space="preserve">
+    <value>Deleting a contact cannot be undone. Are you sure you want to delete '{0}'?</value>
+  </data>
+  <data name="Do you really want to go to" xml:space="preserve">
+    <value>Do you really want to go to</value>
+  </data>
+  <data name="Downloaded:" xml:space="preserve">
+    <value>Downloaded:</value>
+  </data>
+  <data name="Edit Private Contact" xml:space="preserve">
+    <value>Edit Private Contact</value>
+  </data>
+  <data name="Edit Sending Identity" xml:space="preserve">
+    <value>Edit Sending Identity</value>
+  </data>
+  <data name="Email Address" xml:space="preserve">
+    <value>Email Address</value>
+  </data>
+  <data name="Email address is required." xml:space="preserve">
+    <value>Email address is required.</value>
+  </data>
+  <data name="Email Server" xml:space="preserve">
+    <value>Email Server</value>
+  </data>
+  <data name="Email Settings" xml:space="preserve">
+    <value>Email Settings</value>
+  </data>
+  <data name="Email Signature" xml:space="preserve">
+    <value>Email Signature</value>
+  </data>
+  <data name="Enable Background IMAP Sync" xml:space="preserve">
+    <value>Enable Background IMAP Sync</value>
+  </data>
+  <data name="Event added to calendar" xml:space="preserve">
+    <value>Event added to calendar</value>
+  </data>
+  <data name="Export" xml:space="preserve">
+    <value>Export</value>
+  </data>
+  <data name="External Link" xml:space="preserve">
+    <value>External Link</value>
+  </data>
+  <data name="Failed to create folder." xml:space="preserve">
+    <value>Failed to create folder.</value>
+  </data>
+  <data name="Failed to delete folder." xml:space="preserve">
+    <value>Failed to delete folder.</value>
+  </data>
+  <data name="Failed to rename folder." xml:space="preserve">
+    <value>Failed to rename folder.</value>
+  </data>
+  <data name="Flag Message" xml:space="preserve">
+    <value>Flag Message</value>
+  </data>
+  <data name="Folder" xml:space="preserve">
+    <value>Folder</value>
+  </data>
+  <data name="Folder '{0}' created." xml:space="preserve">
+    <value>Folder '{0}' created.</value>
+  </data>
+  <data name="Folder deleted." xml:space="preserve">
+    <value>Folder deleted.</value>
+  </data>
+  <data name="Folder renamed to '{0}'." xml:space="preserve">
+    <value>Folder renamed to '{0}'.</value>
+  </data>
+  <data name="Forward" xml:space="preserve">
+    <value>Forward</value>
+  </data>
+  <data name="Full Sending Address:" xml:space="preserve">
+    <value>Full Sending Address:</value>
+  </data>
+  <data name="Grant other individuals or teams permission to send emails from this identity." xml:space="preserve">
+    <value>Grant other individuals or teams permission to send emails from this identity.</value>
+  </data>
+  <data name="IMAP Host" xml:space="preserve">
+    <value>IMAP Host</value>
+  </data>
+  <data name="Important" xml:space="preserve">
+    <value>Important</value>
+  </data>
+  <data name="Inboxes" xml:space="preserve">
+    <value>Inboxes</value>
+  </data>
+  <data name="Inboxes &amp; Mailboxes" xml:space="preserve">
+    <value>Inboxes &amp; Mailboxes</value>
+  </data>
+  <data name="Incoming Mail Servers (IMAP)" xml:space="preserve">
+    <value>Incoming Mail Servers (IMAP)</value>
+  </data>
+  <data name="Junk" xml:space="preserve">
+    <value>Junk</value>
+  </data>
+  <data name="Last synced:" xml:space="preserve">
+    <value>Last synced:</value>
+  </data>
+  <data name="Leave blank if same as email address" xml:space="preserve">
+    <value>Leave blank if same as email address</value>
+  </data>
+  <data name="Linked Sending Identities" xml:space="preserve">
+    <value>Linked Sending Identities</value>
+  </data>
+  <data name="Load Images" xml:space="preserve">
+    <value>Load Images</value>
+  </data>
+  <data name="Mark as Unread" xml:space="preserve">
+    <value>Mark as Unread</value>
+  </data>
+  <data name="Messages" xml:space="preserve">
+    <value>Messages</value>
+  </data>
+  <data name="Move" xml:space="preserve">
+    <value>Move</value>
+  </data>
+  <data name="Move to Folder" xml:space="preserve">
+    <value>Move to Folder</value>
+  </data>
+  <data name="Move to..." xml:space="preserve">
+    <value>Move to...</value>
+  </data>
+  <data name="New Folder" xml:space="preserve">
+    <value>New Folder</value>
+  </data>
+  <data name="New Private Contact" xml:space="preserve">
+    <value>New Private Contact</value>
+  </data>
+  <data name="New Sending Identity" xml:space="preserve">
+    <value>New Sending Identity</value>
+  </data>
+  <data name="New Subfolder" xml:space="preserve">
+    <value>New Subfolder</value>
+  </data>
+  <data name="New subfolder in {0}" xml:space="preserve">
+    <value>New subfolder in {0}</value>
+  </data>
+  <data name="No" xml:space="preserve">
+    <value>No</value>
+  </data>
+  <data name="No message content available." xml:space="preserve">
+    <value>No message content available.</value>
+  </data>
+  <data name="No messages" xml:space="preserve">
+    <value>No messages</value>
+  </data>
+  <data name="No other folders available." xml:space="preserve">
+    <value>No other folders available.</value>
+  </data>
+  <data name="Open the sender's unsubscribe page?" xml:space="preserve">
+    <value>Open the sender's unsubscribe page?</value>
+  </data>
+  <data name="Organizer" xml:space="preserve">
+    <value>Organizer</value>
+  </data>
+  <data name="Password is required." xml:space="preserve">
+    <value>Password is required.</value>
+  </data>
+  <data name="Phone" xml:space="preserve">
+    <value>Phone</value>
+  </data>
+  <data name="Print" xml:space="preserve">
+    <value>Print</value>
+  </data>
+  <data name="Private contact created" xml:space="preserve">
+    <value>Private contact created</value>
+  </data>
+  <data name="Private contact updated" xml:space="preserve">
+    <value>Private contact updated</value>
+  </data>
+  <data name="Private Contacts" xml:space="preserve">
+    <value>Private Contacts</value>
+  </data>
+  <data name="Remote images are blocked to protect your privacy." xml:space="preserve">
+    <value>Remote images are blocked to protect your privacy.</value>
+  </data>
+  <data name="Remove Flag" xml:space="preserve">
+    <value>Remove Flag</value>
+  </data>
+  <data name="Rename {0}" xml:space="preserve">
+    <value>Rename {0}</value>
+  </data>
+  <data name="Repair Cached Emails" xml:space="preserve">
+    <value>Repair Cached Emails</value>
+  </data>
+  <data name="Reply All" xml:space="preserve">
+    <value>Reply All</value>
+  </data>
+  <data name="Save Contact" xml:space="preserve">
+    <value>Save Contact</value>
+  </data>
+  <data name="Search across:" xml:space="preserve">
+    <value>Search across:</value>
+  </data>
+  <data name="Searching" xml:space="preserve">
+    <value>Searching</value>
+  </data>
+  <data name="Security Warning" xml:space="preserve">
+    <value>Security Warning</value>
+  </data>
+  <data name="Select a message to read" xml:space="preserve">
+    <value>Select a message to read</value>
+  </data>
+  <data name="Sender Display Name" xml:space="preserve">
+    <value>Sender Display Name</value>
+  </data>
+  <data name="Sending Domain" xml:space="preserve">
+    <value>Sending Domain</value>
+  </data>
+  <data name="Sending Identities" xml:space="preserve">
+    <value>Sending Identities</value>
+  </data>
+  <data name="Server:" xml:space="preserve">
+    <value>Server:</value>
+  </data>
+  <data name="Share Identity With Users &amp; Groups" xml:space="preserve">
+    <value>Share Identity With Users &amp; Groups</value>
+  </data>
+  <data name="Shared ({0} users, {1} groups)" xml:space="preserve">
+    <value>Shared ({0} users, {1} groups)</value>
+  </data>
+  <data name="Signature" xml:space="preserve">
+    <value>Signature</value>
+  </data>
+  <data name="SMTP Host" xml:space="preserve">
+    <value>SMTP Host</value>
+  </data>
+  <data name="SMTP Password" xml:space="preserve">
+    <value>SMTP Password</value>
+  </data>
+  <data name="SMTP Password (Saved - enter to change)" xml:space="preserve">
+    <value>SMTP Password (Saved - enter to change)</value>
+  </data>
+  <data name="SMTP Username" xml:space="preserve">
+    <value>SMTP Username</value>
+  </data>
+  <data name="SSL / TLS" xml:space="preserve">
+    <value>SSL / TLS</value>
+  </data>
+  <data name="Starred" xml:space="preserve">
+    <value>Starred</value>
+  </data>
+  <data name="Sync Mailbox Now" xml:space="preserve">
+    <value>Sync Mailbox Now</value>
+  </data>
+  <data name="This link was blocked for security reasons." xml:space="preserve">
+    <value>This link was blocked for security reasons.</value>
+  </data>
+  <data name="Title" xml:space="preserve">
+    <value>Title</value>
+  </data>
+  <data name="to" xml:space="preserve">
+    <value>to</value>
+  </data>
+  <data name="To:" xml:space="preserve">
+    <value>To:</value>
+  </data>
+  <data name="Unread" xml:space="preserve">
+    <value>Unread</value>
+  </data>
+  <data name="Unsubscribe" xml:space="preserve">
+    <value>Unsubscribe</value>
+  </data>
+  <data name="Username (Before @)" xml:space="preserve">
+    <value>Username (Before @)</value>
+  </data>
+  <data name="Warning" xml:space="preserve">
+    <value>Warning</value>
+  </data>
+  <data name="Yes" xml:space="preserve">
+    <value>Yes</value>
+  </data>
+  <data name="Add Incoming Server (IMAP)" xml:space="preserve">
+    <value>Add Incoming Server (IMAP)</value>
+  </data>
+  <data name="Add Outgoing Server" xml:space="preserve">
+    <value>Add Outgoing Server</value>
+  </data>
+  <data name="Add Outgoing Server (SMTP)" xml:space="preserve">
+    <value>Add Outgoing Server (SMTP)</value>
+  </data>
+  <data name="All Users" xml:space="preserve">
+    <value>All Users</value>
+  </data>
+  <data name="Allow Users to Configure Custom IMAP/SMTP Servers" xml:space="preserve">
+    <value>Allow Users to Configure Custom IMAP/SMTP Servers</value>
+  </data>
+  <data name="Allow Users to Connect Real Inboxes" xml:space="preserve">
+    <value>Allow Users to Connect Real Inboxes</value>
+  </data>
+  <data name="Allow Users to Create Sending Identities" xml:space="preserve">
+    <value>Allow Users to Create Sending Identities</value>
+  </data>
+  <data name="Allow Users to Create Virtual Inboxes" xml:space="preserve">
+    <value>Allow Users to Create Virtual Inboxes</value>
+  </data>
+  <data name="Allow Users to Share Inboxes &amp; Identities" xml:space="preserve">
+    <value>Allow Users to Share Inboxes &amp; Identities</value>
+  </data>
+  <data name="API Key / SMTP Password" xml:space="preserve">
+    <value>API Key / SMTP Password</value>
+  </data>
+  <data name="API Key / SMTP password is required for shared relay credentials." xml:space="preserve">
+    <value>API Key / SMTP password is required for shared relay credentials.</value>
+  </data>
+  <data name="API Key / SMTP password is required when shared credentials are enabled." xml:space="preserve">
+    <value>API Key / SMTP password is required when shared credentials are enabled.</value>
+  </data>
+  <data name="App Password / Mailbox Password" xml:space="preserve">
+    <value>App Password / Mailbox Password</value>
+  </data>
+  <data name="Are you sure you want to delete Virtual Inbox '{0}'?" xml:space="preserve">
+    <value>Are you sure you want to delete Virtual Inbox '{0}'?</value>
+  </data>
+  <data name="Are you sure you want to delete Virtual Inbox '{0}'? Underlying emails remain in the Real Inbox." xml:space="preserve">
+    <value>Are you sure you want to delete Virtual Inbox '{0}'? Underlying emails remain in the Real Inbox.</value>
+  </data>
+  <data name="Available to all users who are permitted to connect Real Inboxes" xml:space="preserve">
+    <value>Available to all users who are permitted to connect Real Inboxes</value>
+  </data>
+  <data name="Available to all users who are permitted to create identities or inboxes" xml:space="preserve">
+    <value>Available to all users who are permitted to create identities or inboxes</value>
+  </data>
+  <data name="Browse Folders" xml:space="preserve">
+    <value>Browse Folders</value>
+  </data>
+  <data name="Configure incoming IMAP server presets and pair each with an Outgoing Server (or create a new Outgoing Server inline)." xml:space="preserve">
+    <value>Configure incoming IMAP server presets and pair each with an Outgoing Server (or create a new Outgoing Server inline).</value>
+  </data>
+  <data name="Configure New Outgoing Server..." xml:space="preserve">
+    <value>Configure New Outgoing Server...</value>
+  </data>
+  <data name="Configure standalone outgoing SMTP servers or transactional relays (e.g. Resend, Postmark, Amazon SES, or standard SMTP). Outgoing Servers do not require an Incoming Server." xml:space="preserve">
+    <value>Configure standalone outgoing SMTP servers or transactional relays (e.g. Resend, Postmark, Amazon SES, or standard SMTP). Outgoing Servers do not require an Incoming Server.</value>
+  </data>
+  <data name="Connect a Real Inbox above first, then you can create optional Virtual Inboxes to filter specific addresses or domains." xml:space="preserve">
+    <value>Connect a Real Inbox above first, then you can create optional Virtual Inboxes to filter specific addresses or domains.</value>
+  </data>
+  <data name="Connect an existing IMAP mailbox to sync and read messages. Connecting a Real Inbox automatically creates its matching Sending Identity." xml:space="preserve">
+    <value>Connect an existing IMAP mailbox to sync and read messages. Connecting a Real Inbox automatically creates its matching Sending Identity.</value>
+  </data>
+  <data name="Connect Real Inbox" xml:space="preserve">
+    <value>Connect Real Inbox</value>
+  </data>
+  <data name="Connect Real Inbox (IMAP)" xml:space="preserve">
+    <value>Connect Real Inbox (IMAP)</value>
+  </data>
+  <data name="Control which email configuration actions regular users can perform from their personal Email Settings." xml:space="preserve">
+    <value>Control which email configuration actions regular users can perform from their personal Email Settings.</value>
+  </data>
+  <data name="Create filtered inboxes from any Real Inbox by recipient address (e.g. support@, billing@) or @domain, link a Sending Identity, and share them with teammates." xml:space="preserve">
+    <value>Create filtered inboxes from any Real Inbox by recipient address (e.g. support@, billing@) or @domain, link a Sending Identity, and share them with teammates.</value>
+  </data>
+  <data name="Create Virtual Inbox" xml:space="preserve">
+    <value>Create Virtual Inbox</value>
+  </data>
+  <data name="Delete Real Inbox" xml:space="preserve">
+    <value>Delete Real Inbox</value>
+  </data>
+  <data name="Delete Virtual Inbox" xml:space="preserve">
+    <value>Delete Virtual Inbox</value>
+  </data>
+  <data name="Detected addresses in this Real Inbox (click to add):" xml:space="preserve">
+    <value>Detected addresses in this Real Inbox (click to add):</value>
+  </data>
+  <data name="Drafts" xml:space="preserve">
+    <value>Drafts</value>
+  </data>
+  <data name="Each Real Inbox or Sending Identity on this server will authenticate with its own mailbox or SMTP credentials." xml:space="preserve">
+    <value>Each Real Inbox or Sending Identity on this server will authenticate with its own mailbox or SMTP credentials.</value>
+  </data>
+  <data name="Edit Incoming Server (IMAP)" xml:space="preserve">
+    <value>Edit Incoming Server (IMAP)</value>
+  </data>
+  <data name="Edit Outgoing Server (SMTP)" xml:space="preserve">
+    <value>Edit Outgoing Server (SMTP)</value>
+  </data>
+  <data name="Edit Real Inbox" xml:space="preserve">
+    <value>Edit Real Inbox</value>
+  </data>
+  <data name="Edit Virtual Inbox" xml:space="preserve">
+    <value>Edit Virtual Inbox</value>
+  </data>
+  <data name="Encrypted with server master password before storage" xml:space="preserve">
+    <value>Encrypted with server master password before storage</value>
+  </data>
+  <data name="Encrypted with server master password before storage on disk" xml:space="preserve">
+    <value>Encrypted with server master password before storage on disk</value>
+  </data>
+  <data name="Enter one or more recipient addresses (e.g. support@company.com) or domain patterns (e.g. @company.com) to filter from the selected Real Inbox." xml:space="preserve">
+    <value>Enter one or more recipient addresses (e.g. support@company.com) or domain patterns (e.g. @company.com) to filter from the selected Real Inbox.</value>
+  </data>
+  <data name="Filter folders..." xml:space="preserve">
+    <value>Filter folders...</value>
+  </data>
+  <data name="Filtered Email Addresses or @Domain" xml:space="preserve">
+    <value>Filtered Email Addresses or @Domain</value>
+  </data>
+  <data name="Grant other individuals or teams access to view and reply from this Virtual Inbox." xml:space="preserve">
+    <value>Grant other individuals or teams access to view and reply from this Virtual Inbox.</value>
+  </data>
+  <data name="IMAP host is required." xml:space="preserve">
+    <value>IMAP host is required.</value>
+  </data>
+  <data name="IMAP Port" xml:space="preserve">
+    <value>IMAP Port</value>
+  </data>
+  <data name="INBOX" xml:space="preserve">
+    <value>INBOX</value>
+  </data>
+  <data name="Incoming Server Label" xml:space="preserve">
+    <value>Incoming Server Label</value>
+  </data>
+  <data name="Incoming server saved." xml:space="preserve">
+    <value>Incoming server saved.</value>
+  </data>
+  <data name="Incoming server updated." xml:space="preserve">
+    <value>Incoming server updated.</value>
+  </data>
+  <data name="Mailbox Folders" xml:space="preserve">
+    <value>Mailbox Folders</value>
+  </data>
+  <data name="Manage outbound sender addresses, display names, and signatures. Sending Identities are created automatically from Real Inboxes, or from Virtual Inboxes and Outgoing Servers." xml:space="preserve">
+    <value>Manage outbound sender addresses, display names, and signatures. Sending Identities are created automatically from Real Inboxes, or from Virtual Inboxes and Outgoing Servers.</value>
+  </data>
+  <data name="Manage your personal address book and import or export vCard (.vcf) files." xml:space="preserve">
+    <value>Manage your personal address book and import or export vCard (.vcf) files.</value>
+  </data>
+  <data name="New Virtual Inbox" xml:space="preserve">
+    <value>New Virtual Inbox</value>
+  </data>
+  <data name="No folders found." xml:space="preserve">
+    <value>No folders found.</value>
+  </data>
+  <data name="No incoming IMAP server presets configured yet. Click 'Add Incoming Server' above to configure an IMAP server and its paired Outgoing Server." xml:space="preserve">
+    <value>No incoming IMAP server presets configured yet. Click 'Add Incoming Server' above to configure an IMAP server and its paired Outgoing Server.</value>
+  </data>
+  <data name="No outgoing SMTP servers configured yet. Add an Outgoing Server above or inside the Incoming Server dialog." xml:space="preserve">
+    <value>No outgoing SMTP servers configured yet. Add an Outgoing Server above or inside the Incoming Server dialog.</value>
+  </data>
+  <data name="No Real Inboxes connected yet. Click 'Connect Real Inbox' to add an IMAP mailbox." xml:space="preserve">
+    <value>No Real Inboxes connected yet. Click 'Connect Real Inbox' to add an IMAP mailbox.</value>
+  </data>
+  <data name="No Real Inboxes have been shared with your account yet." xml:space="preserve">
+    <value>No Real Inboxes have been shared with your account yet.</value>
+  </data>
+  <data name="No Real Inboxes, Virtual Inboxes, or Sending Identities have been provisioned yet." xml:space="preserve">
+    <value>No Real Inboxes, Virtual Inboxes, or Sending Identities have been provisioned yet.</value>
+  </data>
+  <data name="No Sending Identities available yet. Connect a Real Inbox or create a Sending Identity to send and reply to emails." xml:space="preserve">
+    <value>No Sending Identities available yet. Connect a Real Inbox or create a Sending Identity to send and reply to emails.</value>
+  </data>
+  <data name="No Virtual Inboxes created yet. Real Inboxes already appear directly in your sidebar; create a Virtual Inbox when you want to filter specific addresses (like support@ or @domain)." xml:space="preserve">
+    <value>No Virtual Inboxes created yet. Real Inboxes already appear directly in your sidebar; create a Virtual Inbox when you want to filter specific addresses (like support@ or @domain).</value>
+  </data>
+  <data name="Outgoing Mail Servers (SMTP / Relays)" xml:space="preserve">
+    <value>Outgoing Mail Servers (SMTP / Relays)</value>
+  </data>
+  <data name="Outgoing Server" xml:space="preserve">
+    <value>Outgoing Server</value>
+  </data>
+  <data name="Outgoing Server (SMTP)" xml:space="preserve">
+    <value>Outgoing Server (SMTP)</value>
+  </data>
+  <data name="Outgoing Server Label" xml:space="preserve">
+    <value>Outgoing Server Label</value>
+  </data>
+  <data name="Outgoing SMTP Host" xml:space="preserve">
+    <value>Outgoing SMTP Host</value>
+  </data>
+  <data name="Outgoing SMTP host is required." xml:space="preserve">
+    <value>Outgoing SMTP host is required.</value>
+  </data>
+  <data name="Outgoing: {0}" xml:space="preserve">
+    <value>Outgoing: {0}</value>
+  </data>
+  <data name="Paired Outgoing Server (SMTP)" xml:space="preserve">
+    <value>Paired Outgoing Server (SMTP)</value>
+  </data>
+  <data name="Per-Inbox Credentials" xml:space="preserve">
+    <value>Per-Inbox Credentials</value>
+  </data>
+  <data name="Please add at least one filtered email address or @domain." xml:space="preserve">
+    <value>Please add at least one filtered email address or @domain.</value>
+  </data>
+  <data name="Please select a source Real Inbox." xml:space="preserve">
+    <value>Please select a source Real Inbox.</value>
+  </data>
+  <data name="Please select or configure a paired Outgoing Server." xml:space="preserve">
+    <value>Please select or configure a paired Outgoing Server.</value>
+  </data>
+  <data name="Provision and share Real Inboxes, Virtual Inboxes, and Sending Identities across users and groups from one place." xml:space="preserve">
+    <value>Provision and share Real Inboxes, Virtual Inboxes, and Sending Identities across users and groups from one place.</value>
+  </data>
+  <data name="Provisioned Mailboxes, Virtual Inboxes &amp; Identities" xml:space="preserve">
+    <value>Provisioned Mailboxes, Virtual Inboxes &amp; Identities</value>
+  </data>
+  <data name="Real Inbox" xml:space="preserve">
+    <value>Real Inbox</value>
+  </data>
+  <data name="Real Inbox connected! Starting initial sync..." xml:space="preserve">
+    <value>Real Inbox connected! Starting initial sync...</value>
+  </data>
+  <data name="Real Inbox updated." xml:space="preserve">
+    <value>Real Inbox updated.</value>
+  </data>
+  <data name="Real Inboxes (IMAP Mailboxes)" xml:space="preserve">
+    <value>Real Inboxes (IMAP Mailboxes)</value>
+  </data>
+  <data name="Restrict which users and groups can select this Incoming Server." xml:space="preserve">
+    <value>Restrict which users and groups can select this Incoming Server.</value>
+  </data>
+  <data name="Restrict which users and groups can select this Outgoing Server." xml:space="preserve">
+    <value>Restrict which users and groups can select this Outgoing Server.</value>
+  </data>
+  <data name="Sending Identity created." xml:space="preserve">
+    <value>Sending Identity created.</value>
+  </data>
+  <data name="Sending Identity deleted." xml:space="preserve">
+    <value>Sending Identity deleted.</value>
+  </data>
+  <data name="Sending Identity Linked" xml:space="preserve">
+    <value>Sending Identity Linked</value>
+  </data>
+  <data name="Sending Identity updated." xml:space="preserve">
+    <value>Sending Identity updated.</value>
+  </data>
+  <data name="Sent" xml:space="preserve">
+    <value>Sent</value>
+  </data>
+  <data name="Share Real Inbox With Users &amp; Groups" xml:space="preserve">
+    <value>Share Real Inbox With Users &amp; Groups</value>
+  </data>
+  <data name="Share Virtual Inbox With Users &amp; Groups" xml:space="preserve">
+    <value>Share Virtual Inbox With Users &amp; Groups</value>
+  </data>
+  <data name="Shared Credentials" xml:space="preserve">
+    <value>Shared Credentials</value>
+  </data>
+  <data name="Shared users can monitor and reply from this inbox without duplicating messages on disk." xml:space="preserve">
+    <value>Shared users can monitor and reply from this inbox without duplicating messages on disk.</value>
+  </data>
+  <data name="SMTP host is required." xml:space="preserve">
+    <value>SMTP host is required.</value>
+  </data>
+  <data name="SMTP Port" xml:space="preserve">
+    <value>SMTP Port</value>
+  </data>
+  <data name="Source Real Inbox" xml:space="preserve">
+    <value>Source Real Inbox</value>
+  </data>
+  <data name="Spam" xml:space="preserve">
+    <value>Spam</value>
+  </data>
+  <data name="Trash" xml:space="preserve">
+    <value>Trash</value>
+  </data>
+  <data name="Use shared relay credentials (API key) for all Sending Identities on this server" xml:space="preserve">
+    <value>Use shared relay credentials (API key) for all Sending Identities on this server</value>
+  </data>
+  <data name="Use shared relay credentials (API key) instead of each mailbox's own login" xml:space="preserve">
+    <value>Use shared relay credentials (API key) instead of each mailbox's own login</value>
+  </data>
+  <data name="User Email Permissions &amp; Policies" xml:space="preserve">
+    <value>User Email Permissions &amp; Policies</value>
+  </data>
+  <data name="Virtual Inbox" xml:space="preserve">
+    <value>Virtual Inbox</value>
+  </data>
+  <data name="Virtual Inbox created." xml:space="preserve">
+    <value>Virtual Inbox created.</value>
+  </data>
+  <data name="Virtual Inbox deleted." xml:space="preserve">
+    <value>Virtual Inbox deleted.</value>
+  </data>
+  <data name="Virtual Inbox Name" xml:space="preserve">
+    <value>Virtual Inbox Name</value>
+  </data>
+  <data name="Virtual Inbox name is required." xml:space="preserve">
+    <value>Virtual Inbox name is required.</value>
+  </data>
+  <data name="Virtual Inbox updated." xml:space="preserve">
+    <value>Virtual Inbox updated.</value>
+  </data>
+  <data name="Virtual Inboxes (Filtered Views)" xml:space="preserve">
+    <value>Virtual Inboxes (Filtered Views)</value>
+  </data>
+  <data name="When disabled, users must select from the Incoming and Outgoing Server presets configured below." xml:space="preserve">
+    <value>When disabled, users must select from the Incoming and Outgoing Server presets configured below.</value>
+  </data>
+  <data name="When enabled, users can connect their own IMAP mailboxes in Email Settings." xml:space="preserve">
+    <value>When enabled, users can connect their own IMAP mailboxes in Email Settings.</value>
+  </data>
+  <data name="When enabled, users can create additional Sending Identities from permitted Outgoing Servers." xml:space="preserve">
+    <value>When enabled, users can create additional Sending Identities from permitted Outgoing Servers.</value>
+  </data>
+  <data name="When enabled, users can create address- or domain-filtered Virtual Inboxes from Real Inboxes they can access." xml:space="preserve">
+    <value>When enabled, users can create address- or domain-filtered Virtual Inboxes from Real Inboxes they can access.</value>
+  </data>
+  <data name="When enabled, users can share their Real Inboxes, Virtual Inboxes, and Sending Identities with other users and groups." xml:space="preserve">
+    <value>When enabled, users can share their Real Inboxes, Virtual Inboxes, and Sending Identities with other users and groups.</value>
+  </data>
+  <data name="e.g. support@company.com or @company.com" xml:space="preserve">
+    <value>e.g. support@company.com or @company.com</value>
+  </data>
+  <data name="Private (Only You)" xml:space="preserve">
+    <value>Private (Only You)</value>
+  </data>
+  <data name="Server Shared" xml:space="preserve">
+    <value>Server Shared</value>
+  </data>
+  <data name="Unassigned (Share with users or groups to grant access)" xml:space="preserve">
+    <value>Unassigned (Share with users or groups to grant access)</value>
+  </data>
+  <data name="Custom IMAP / SMTP Server" xml:space="preserve">
+    <value>Custom IMAP / SMTP Server</value>
+  </data>
+  <data name="Custom Server Connection" xml:space="preserve">
+    <value>Custom Server Connection</value>
+  </data>
+  <data name="Domain linked to this Outgoing Server" xml:space="preserve">
+    <value>Domain linked to this Outgoing Server</value>
+  </data>
+  <data name="Email Domain" xml:space="preserve">
+    <value>Email Domain</value>
+  </data>
+  <data name="Every Incoming Server is paired with an Outgoing Server for its domain so Real Inboxes automatically receive a working Sending Identity." xml:space="preserve">
+    <value>Every Incoming Server is paired with an Outgoing Server for its domain so Real Inboxes automatically receive a working Sending Identity.</value>
+  </data>
+  <data name="Incoming IMAP Host" xml:space="preserve">
+    <value>Incoming IMAP Host</value>
+  </data>
+  <data name="Links this Incoming Server and its paired Outgoing Server to this domain" xml:space="preserve">
+    <value>Links this Incoming Server and its paired Outgoing Server to this domain</value>
+  </data>
+  <data name="Login Username (Optional)" xml:space="preserve">
+    <value>Login Username (Optional)</value>
+  </data>
+  <data name="Mailbox" xml:space="preserve">
+    <value>Mailbox</value>
+  </data>
+  <data name="Outgoing Provider Preset" xml:space="preserve">
+    <value>Outgoing Provider Preset</value>
+  </data>
+  <data name="Provider Preset" xml:space="preserve">
+    <value>Provider Preset</value>
+  </data>
+  <data name="Saved - enter to change" xml:space="preserve">
+    <value>Saved - enter to change</value>
+  </data>
+  <data name="Custom / External Email Provider" xml:space="preserve">
+    <value>Custom / External Email Provider</value>
+  </data>
+  <data name="Detect from IMAP Sent folder" xml:space="preserve">
+    <value>Detect from IMAP Sent folder</value>
+  </data>
+  <data name="Detected sender name: {0}" xml:space="preserve">
+    <value>Detected sender name: {0}</value>
+  </data>
+  <data name="Email Provider Preset" xml:space="preserve">
+    <value>Email Provider Preset</value>
+  </data>
+  <data name="Inbox Name (UI Label)" xml:space="preserve">
+    <value>Inbox Name (UI Label)</value>
+  </data>
+  <data name="Incoming Server" xml:space="preserve">
+    <value>Incoming Server</value>
+  </data>
+  <data name="No sender display name found in IMAP Sent folder; using default name." xml:space="preserve">
+    <value>No sender display name found in IMAP Sent folder; using default name.</value>
+  </data>
+  <data name="Only visible inside Spokes to organize your sidebar" xml:space="preserve">
+    <value>Only visible inside Spokes to organize your sidebar</value>
+  </data>
+  <data name="Shown to recipients when you send emails" xml:space="preserve">
+    <value>Shown to recipients when you send emails</value>
+  </data>
+  <data name="View Email with Light Background" xml:space="preserve">
+    <value>View Email with Light Background</value>
+  </data>
+  <data name="Active device: {0} (room enrollment only applies to this device)." xml:space="preserve">
+    <value>Active device: {0} (room enrollment only applies to this device).</value>
+  </data>
+  <data name="Admin: Assign Call Participants to a Physical Room" xml:space="preserve">
+    <value>Admin: Assign Call Participants to a Physical Room</value>
+  </data>
+  <data name="Archive Real Inbox" xml:space="preserve">
+    <value>Archive Real Inbox</value>
+  </data>
+  <data name="Archived" xml:space="preserve">
+    <value>Archived</value>
+  </data>
+  <data name="Archived mailboxes remain stored on disk and never sync automatically. You can browse their emails, trigger a manual sync, restore them, or delete them permanently." xml:space="preserve">
+    <value>Archived mailboxes remain stored on disk and never sync automatically. You can browse their emails, trigger a manual sync, restore them, or delete them permanently.</value>
+  </data>
+  <data name="Archived Real Inboxes" xml:space="preserve">
+    <value>Archived Real Inboxes</value>
+  </data>
+  <data name="Archived:" xml:space="preserve">
+    <value>Archived:</value>
+  </data>
+  <data name="Are you sure you want to permanently delete Real Inbox '{0}', all of its downloaded emails and attachments on disk, and any Virtual Inboxes attached to it?" xml:space="preserve">
+    <value>Are you sure you want to permanently delete Real Inbox '{0}', all of its downloaded emails and attachments on disk, and any Virtual Inboxes attached to it?</value>
+  </data>
+  <data name="Assign connected participants' current devices to a physical room." xml:space="preserve">
+    <value>Assign connected participants' current devices to a physical room.</value>
+  </data>
+  <data name="Browse Inbox" xml:space="preserve">
+    <value>Browse Inbox</value>
+  </data>
+  <data name="Could not create room." xml:space="preserve">
+    <value>Could not create room.</value>
+  </data>
+  <data name="Delete Room" xml:space="preserve">
+    <value>Delete Room</value>
+  </data>
+  <data name="Enrolled Devices in {0} ({1})" xml:space="preserve">
+    <value>Enrolled Devices in {0} ({1})</value>
+  </data>
+  <data name="Group computers located in the same physical room so the server automatically cancels microphone bleed and room echo between them." xml:space="preserve">
+    <value>Group computers located in the same physical room so the server automatically cancels microphone bleed and room echo between them.</value>
+  </data>
+  <data name="Mailbox sync completed." xml:space="preserve">
+    <value>Mailbox sync completed.</value>
+  </data>
+  <data name="Mute users in my room" xml:space="preserve">
+    <value>Mute users in my room</value>
+  </data>
+  <data name="Mutes other people in your physical room in your headphones so you only hear them naturally in the room without network delay. Everyone else in the call will still hear all of you." xml:space="preserve">
+    <value>Mutes other people in your physical room in your headphones so you only hear them naturally in the room without network delay. Everyone else in the call will still hear all of you.</value>
+  </data>
+  <data name="New Room" xml:space="preserve">
+    <value>New Room</value>
+  </data>
+  <data name="None (Standalone Device)" xml:space="preserve">
+    <value>None (Standalone Device)</value>
+  </data>
+  <data name="Physical Room (This Device)" xml:space="preserve">
+    <value>Physical Room (This Device)</value>
+  </data>
+  <data name="Physical Rooms" xml:space="preserve">
+    <value>Physical Rooms</value>
+  </data>
+  <data name="Real Inbox and all local emails removed." xml:space="preserve">
+    <value>Real Inbox and all local emails removed.</value>
+  </data>
+  <data name="Real Inbox archived. Emails remain on disk and automatic syncing is disabled." xml:space="preserve">
+    <value>Real Inbox archived. Emails remain on disk and automatic syncing is disabled.</value>
+  </data>
+  <data name="Real Inbox restored to active inboxes." xml:space="preserve">
+    <value>Real Inbox restored to active inboxes.</value>
+  </data>
+  <data name="Remove device from room" xml:space="preserve">
+    <value>Remove device from room</value>
+  </data>
+  <data name="Restore to Active Inboxes" xml:space="preserve">
+    <value>Restore to Active Inboxes</value>
+  </data>
+  <data name="Room Name (e.g. Family Gaming Room)" xml:space="preserve">
+    <value>Room Name (e.g. Family Gaming Room)</value>
+  </data>
+  <data name="{0} days left" xml:space="preserve">
+    <value>{0} days left</value>
+  </data>
+  <data name="{0} hours left" xml:space="preserve">
+    <value>{0} hours left</value>
+  </data>
+  <data name="{0} minutes left" xml:space="preserve">
+    <value>{0} minutes left</value>
+  </data>
+  <data name="1 day left" xml:space="preserve">
+    <value>1 day left</value>
+  </data>
+  <data name="1 hour left" xml:space="preserve">
+    <value>1 hour left</value>
+  </data>
+  <data name="1 minute left" xml:space="preserve">
+    <value>1 minute left</value>
+  </data>
+  <data name="Add another option" xml:space="preserve">
+    <value>Add another option</value>
+  </data>
+  <data name="Add option" xml:space="preserve">
+    <value>Add option</value>
+  </data>
+  <data name="Allow multiple answers" xml:space="preserve">
+    <value>Allow multiple answers</value>
+  </data>
+  <data name="Allow participants to add options" xml:space="preserve">
+    <value>Allow participants to add options</value>
+  </data>
+  <data name="Anonymous" xml:space="preserve">
+    <value>Anonymous</value>
+  </data>
+  <data name="Anonymous voting" xml:space="preserve">
+    <value>Anonymous voting</value>
+  </data>
+  <data name="Answers" xml:space="preserve">
+    <value>Answers</value>
+  </data>
+  <data name="Choose Emoji" xml:space="preserve">
+    <value>Choose Emoji</value>
+  </data>
+  <data name="Create a Poll" xml:space="preserve">
+    <value>Create a Poll</value>
+  </data>
+  <data name="Create Poll" xml:space="preserve">
+    <value>Create Poll</value>
+  </data>
+  <data name="Delete Poll" xml:space="preserve">
+    <value>Delete Poll</value>
+  </data>
+  <data name="Duration" xml:space="preserve">
+    <value>Duration</value>
+  </data>
+  <data name="Edit Poll" xml:space="preserve">
+    <value>Edit Poll</value>
+  </data>
+  <data name="End Poll Now" xml:space="preserve">
+    <value>End Poll Now</value>
+  </data>
+  <data name="Enter to send • Shift+Enter for new line • @ to mention • # for events, albums, and polls" xml:space="preserve">
+    <value>Enter to send • Shift+Enter for new line • @ to mention • # for events, albums, and polls</value>
+  </data>
+  <data name="Existing votes will be preserved" xml:space="preserve">
+    <value>Existing votes will be preserved</value>
+  </data>
+  <data name="Failed to add option." xml:space="preserve">
+    <value>Failed to add option.</value>
+  </data>
+  <data name="Failed to create poll." xml:space="preserve">
+    <value>Failed to create poll.</value>
+  </data>
+  <data name="Failed to delete poll." xml:space="preserve">
+    <value>Failed to delete poll.</value>
+  </data>
+  <data name="Failed to record vote." xml:space="preserve">
+    <value>Failed to record vote.</value>
+  </data>
+  <data name="Failed to update poll status." xml:space="preserve">
+    <value>Failed to update poll status.</value>
+  </data>
+  <data name="Failed to update poll." xml:space="preserve">
+    <value>Failed to update poll.</value>
+  </data>
+  <data name="Final Results" xml:space="preserve">
+    <value>Final Results</value>
+  </data>
+  <data name="New option..." xml:space="preserve">
+    <value>New option...</value>
+  </data>
+  <data name="No expiration" xml:space="preserve">
+    <value>No expiration</value>
+  </data>
+  <data name="No votes yet." xml:space="preserve">
+    <value>No votes yet.</value>
+  </data>
+  <data name="Open poll" xml:space="preserve">
+    <value>Open poll</value>
+  </data>
+  <data name="Option {0}" xml:space="preserve">
+    <value>Option {0}</value>
+  </data>
+  <data name="Poll" xml:space="preserve">
+    <value>Poll</value>
+  </data>
+  <data name="Poll ended" xml:space="preserve">
+    <value>Poll ended</value>
+  </data>
+  <data name="Poll Votes" xml:space="preserve">
+    <value>Poll Votes</value>
+  </data>
+  <data name="Post Poll" xml:space="preserve">
+    <value>Post Poll</value>
+  </data>
+  <data name="Question" xml:space="preserve">
+    <value>Question</value>
+  </data>
+  <data name="Remove Emoji" xml:space="preserve">
+    <value>Remove Emoji</value>
+  </data>
+  <data name="Remove option" xml:space="preserve">
+    <value>Remove option</value>
+  </data>
+  <data name="Reopen Poll" xml:space="preserve">
+    <value>Reopen Poll</value>
+  </data>
+  <data name="Select one option" xml:space="preserve">
+    <value>Select one option</value>
+  </data>
+  <data name="Select one or more options" xml:space="preserve">
+    <value>Select one or more options</value>
+  </data>
+  <data name="This poll is no longer available." xml:space="preserve">
+    <value>This poll is no longer available.</value>
+  </data>
+  <data name="View Votes" xml:space="preserve">
+    <value>View Votes</value>
+  </data>
+  <data name="vote" xml:space="preserve">
+    <value>vote</value>
+  </data>
+  <data name="Voter identities are hidden on anonymous polls." xml:space="preserve">
+    <value>Voter identities are hidden on anonymous polls.</value>
+  </data>
+  <data name="votes" xml:space="preserve">
+    <value>votes</value>
+  </data>
+  <data name="What question do you want to ask?" xml:space="preserve">
+    <value>What question do you want to ask?</value>
+  </data>
+  <data name="Default identity when composing or replying from this inbox:" xml:space="preserve">
+    <value>Default identity when composing or replying from this inbox:</value>
+  </data>
+  <data name="Link one or more Sending Identities to send and reply from this Virtual Inbox." xml:space="preserve">
+    <value>Link one or more Sending Identities to send and reply from this Virtual Inbox.</value>
+  </data>
+  <data name="No Sending Identities available yet. Create a Sending Identity in Email Settings to link it to this Virtual Inbox." xml:space="preserve">
+    <value>No Sending Identities available yet. Create a Sending Identity in Email Settings to link it to this Virtual Inbox.</value>
+  </data>
+  <data name="Unlink identity" xml:space="preserve">
+    <value>Unlink identity</value>
+  </data>
+  <data name="Attachment" xml:space="preserve">
+    <value>Attachment</value>
+  </data>
+  <data name="Filter Suggestions" xml:space="preserve">
+    <value>Filter Suggestions</value>
+  </data>
+  <data name="Image" xml:space="preserve">
+    <value>Image</value>
+  </data>
+  <data name="Search messages (try from: or isPicture:)..." xml:space="preserve">
+    <value>Search messages (try from: or isPicture:)...</value>
+  </data>
+  <data name="Tab ↵" xml:space="preserve">
+    <value>Tab ↵</value>
+  </data>
+  <data name="Active Room Microphones" xml:space="preserve">
+    <value>Active Room Microphones</value>
+  </data>
+  <data name="Auto-Latency &amp; Bleed Matrix" xml:space="preserve">
+    <value>Auto-Latency &amp; Bleed Matrix</value>
+  </data>
+  <data name="Bleed Gated" xml:space="preserve">
+    <value>Bleed Gated</value>
+  </data>
+  <data name="Bleed: {0:F1} dB" xml:space="preserve">
+    <value>Bleed: {0:F1} dB</value>
+  </data>
+  <data name="Cancelled: {0:F1} dB" xml:space="preserve">
+    <value>Cancelled: {0:F1} dB</value>
+  </data>
+  <data name="Conf: {0:F0}%" xml:space="preserve">
+    <value>Conf: {0:F0}%</value>
+  </data>
+  <data name="Could not access clipboard directly. Log opened below for manual copy." xml:space="preserve">
+    <value>Could not access clipboard directly. Log opened below for manual copy.</value>
+  </data>
+  <data name="Could not rename room." xml:space="preserve">
+    <value>Could not rename room.</value>
+  </data>
+  <data name="Direct Lock" xml:space="preserve">
+    <value>Direct Lock</value>
+  </data>
+  <data name="Double-Talk Clean" xml:space="preserve">
+    <value>Double-Talk Clean</value>
+  </data>
+  <data name="Edit Room Name" xml:space="preserve">
+    <value>Edit Room Name</value>
+  </data>
+  <data name="Hide Log" xml:space="preserve">
+    <value>Hide Log</value>
+  </data>
+  <data name="Isolation Active" xml:space="preserve">
+    <value>Isolation Active</value>
+  </data>
+  <data name="Join a voice channel with at least 2 enrolled devices in this room to inspect live acoustic telemetry." xml:space="preserve">
+    <value>Join a voice channel with at least 2 enrolled devices in this room to inspect live acoustic telemetry.</value>
+  </data>
+  <data name="Join Call to Test" xml:space="preserve">
+    <value>Join Call to Test</value>
+  </data>
+  <data name="Latency: {0:+0.0;-0.0;0.0} ms" xml:space="preserve">
+    <value>Latency: {0:+0.0;-0.0;0.0} ms</value>
+  </data>
+  <data name="Live Telemetry" xml:space="preserve">
+    <value>Live Telemetry</value>
+  </data>
+  <data name="Lookahead: {0} ms" xml:space="preserve">
+    <value>Lookahead: {0} ms</value>
+  </data>
+  <data name="No diagnostic telemetry available to copy yet." xml:space="preserve">
+    <value>No diagnostic telemetry available to copy yet.</value>
+  </data>
+  <data name="Reciprocal Prior" xml:space="preserve">
+    <value>Reciprocal Prior</value>
+  </data>
+  <data name="Recording room acoustics... Speak normally for a few seconds. One person speaking tests one-way bleed and auto-latency; having roommates speak or talk together tests all directions and double-talk." xml:space="preserve">
+    <value>Recording room acoustics... Speak normally for a few seconds. One person speaking tests one-way bleed and auto-latency; having roommates speak or talk together tests all directions and double-talk.</value>
+  </data>
+  <data name="Room Isolation Diagnostics" xml:space="preserve">
+    <value>Room Isolation Diagnostics</value>
+  </data>
+  <data name="Room name" xml:space="preserve">
+    <value>Room name</value>
+  </data>
+  <data name="Room name updated" xml:space="preserve">
+    <value>Room name updated</value>
+  </data>
+  <data name="Standby (1 Device)" xml:space="preserve">
+    <value>Standby (1 Device)</value>
+  </data>
+  <data name="Stop &amp; Analyze" xml:space="preserve">
+    <value>Stop &amp; Analyze</value>
+  </data>
+  <data name="Test Room Isolation" xml:space="preserve">
+    <value>Test Room Isolation</value>
+  </data>
+  <data name="View Log" xml:space="preserve">
+    <value>View Log</value>
+  </data>
+  <data name="Vocal: {0:F1} dBFS" xml:space="preserve">
+    <value>Vocal: {0:F1} dBFS</value>
+  </data>
+  <data name="Copy Diagnostic Log" xml:space="preserve">
+    <value>Copy Diagnostic Log</value>
+  </data>
+  <data name="Diagnostic log copied to clipboard!" xml:space="preserve">
+    <value>Diagnostic log copied to clipboard!</value>
+  </data>
+  <data name="Diagnostic report ready." xml:space="preserve">
+    <value>Diagnostic report ready.</value>
+  </data>
+  <data name="Uncalibrated" xml:space="preserve">
+    <value>Uncalibrated</value>
+  </data>
+  <data name="Failed to refresh email" xml:space="preserve">
+    <value>Failed to refresh email</value>
+  </data>
+  <data name="Refresh" xml:space="preserve">
+    <value>Refresh</value>
+  </data>
+  <data name="View Email with Dark Background" xml:space="preserve">
+    <value>View Email with Dark Background</value>
+  </data>
+  <data name="Controls WebRTC media server logging verbosity in container logs. Applies immediately." xml:space="preserve">
+    <value>Controls WebRTC media server logging verbosity in container logs. Applies immediately.</value>
+  </data>
+  <data name="Debug (Detailed Events)" xml:space="preserve">
+    <value>Debug (Detailed Events)</value>
+  </data>
+  <data name="Error Only" xml:space="preserve">
+    <value>Error Only</value>
+  </data>
+  <data name="Info (Default)" xml:space="preserve">
+    <value>Info (Default)</value>
+  </data>
+  <data name="LiveKit Log Level" xml:space="preserve">
+    <value>LiveKit Log Level</value>
+  </data>
+  <data name="LiveKit log level updated and reloaded." xml:space="preserve">
+    <value>LiveKit log level updated and reloaded.</value>
+  </data>
+  <data name="Anonymous voting cannot be disabled once enabled." xml:space="preserve">
+    <value>Anonymous voting cannot be disabled once enabled.</value>
+  </data>
+  <data name="Day" xml:space="preserve">
+    <value>Day</value>
+  </data>
+  <data name="Days" xml:space="preserve">
+    <value>Days</value>
+  </data>
+  <data name="Hour" xml:space="preserve">
+    <value>Hour</value>
+  </data>
+  <data name="Hours" xml:space="preserve">
+    <value>Hours</value>
+  </data>
+  <data name="Minute" xml:space="preserve">
+    <value>Minute</value>
+  </data>
+  <data name="Minutes" xml:space="preserve">
+    <value>Minutes</value>
+  </data>
+  <data name="Set duration" xml:space="preserve">
+    <value>Set duration</value>
+  </data>
+  <data name="Week" xml:space="preserve">
+    <value>Week</value>
+  </data>
+  <data name="Weeks" xml:space="preserve">
+    <value>Weeks</value>
+  </data>
+  <data name="Audio Processing Delay: {0:F1} ms ({1:F1} ms device + {2} ms lookahead)" xml:space="preserve">
+    <value>Audio Processing Delay: {0:F1} ms ({1:F1} ms device + {2} ms lookahead)</value>
+  </data>
+  <data name="Delay &amp; Distance Breakdown" xml:space="preserve">
+    <value>Delay &amp; Distance Breakdown</value>
+  </data>
+  <data name="Estimated Distance Delay ({0} - {1}): {2:F2} ms (~{3:F2} m)" xml:space="preserve">
+    <value>Estimated Distance Delay ({0} - {1}): {2:F2} ms (~{3:F2} m)</value>
+  </data>
+  <data name="Estimated Distance Delay ({0} - {1}): ~4.00 ms (~1.37 m prior, speak to calibrate)" xml:space="preserve">
+    <value>Estimated Distance Delay ({0} - {1}): ~4.00 ms (~1.37 m prior, speak to calibrate)</value>
+  </data>
+  <data name="Relative Audio Processing Offset: {0:+0.0;-0.0;0.0} ms" xml:space="preserve">
+    <value>Relative Audio Processing Offset: {0:+0.0;-0.0;0.0} ms</value>
+  </data>
+  <data name="Relative Audio Processing Offset: {0:+0.0;-0.0;0.0} ms (telemetry prior)" xml:space="preserve">
+    <value>Relative Audio Processing Offset: {0:+0.0;-0.0;0.0} ms (telemetry prior)</value>
+  </data>
+  <data name="Server-to-Client Delay: {0:F1} ms" xml:space="preserve">
+    <value>Server-to-Client Delay: {0:F1} ms</value>
+  </data>
+  <data name="GitHub backups store individual data files directly in the repository for version tracking and external tool access. Files synced to GitHub are not encrypted with the backup archive password, regardless of the backup encryption setting." xml:space="preserve">
+    <value>GitHub backups store individual data files directly in the repository for version tracking and external tool access. Files synced to GitHub are not encrypted with the backup archive password, regardless of the backup encryption setting.</value>
+  </data>
+  <data name="Set the `SPOKES_MASTER_PASSWORD` environment variable to enable Server-assisted message recovery for public channels and protect encrypted database secrets with a server-unique key." xml:space="preserve">
+    <value>Set the `SPOKES_MASTER_PASSWORD` environment variable to enable Server-assisted message recovery for public channels and protect encrypted database secrets with a server-unique key.</value>
+  </data>
+  <data name="You cannot modify or delete an Administrator account." xml:space="preserve">
+    <value>You cannot modify or delete an Administrator account.</value>
+  </data>
+  <data name="You do not have permission to manage email servers." xml:space="preserve">
+    <value>You do not have permission to manage email servers.</value>
+  </data>
+  <data name="Pinned automatically on first connection (TOFU), or enter an expected SHA256:... fingerprint manually." xml:space="preserve">
+    <value>Pinned automatically on first connection (TOFU), or enter an expected SHA256:... fingerprint manually.</value>
+  </data>
+  <data name="Pinned SSH host key cleared. The next SFTP connection will trust and pin the host key." xml:space="preserve">
+    <value>Pinned SSH host key cleared. The next SFTP connection will trust and pin the host key.</value>
+  </data>
+  <data name="Reset / Re-trust Host Key" xml:space="preserve">
+    <value>Reset / Re-trust Host Key</value>
+  </data>
+  <data name="SSL / TLS is required for custom mail servers." xml:space="preserve">
+    <value>SSL / TLS is required for custom mail servers.</value>
+  </data>
+  <data name="This presentation stage is unavailable or has ended." xml:space="preserve">
+    <value>This presentation stage is unavailable or has ended.</value>
+  </data>
+  <data name="Too many active pairing screens. Please close unused tabs and try again." xml:space="preserve">
+    <value>Too many active pairing screens. Please close unused tabs and try again.</value>
+  </data>
+  <data name="Trusted SSH Host Key Fingerprint" xml:space="preserve">
+    <value>Trusted SSH Host Key Fingerprint</value>
+  </data>
+  <data name="You are not authorized to compose or send emails." xml:space="preserve">
+    <value>You are not authorized to compose or send emails.</value>
+  </data>
+  <data name="You do not have permission to manage server Virtual Inboxes." xml:space="preserve">
+    <value>You do not have permission to manage server Virtual Inboxes.</value>
+  </data>
+  <data name="You do not have permission to manage Virtual Inboxes." xml:space="preserve">
+    <value>You do not have permission to manage Virtual Inboxes.</value>
+  </data>
+  <data name="You do not have permission to open this draft." xml:space="preserve">
+    <value>You do not have permission to open this draft.</value>
+  </data>
+  <data name="You do not have permission to send email from this inbox." xml:space="preserve">
+    <value>You do not have permission to send email from this inbox.</value>
+  </data>
+  <data name="You do not have permission to view this album." xml:space="preserve">
+    <value>You do not have permission to view this album.</value>
+  </data>
+  <data name="Lifetime" xml:space="preserve">
+    <value>Lifetime</value>
+  </data>
+  <data name="Never" xml:space="preserve">
+    <value>Never</value>
+  </data>
+  <data name="All ({0})" xml:space="preserve">
+    <value>All ({0})</value>
+  </data>
+  <data name="Are you sure you want to permanently remove all resolved and dismissed reports?" xml:space="preserve">
+    <value>Are you sure you want to permanently remove all resolved and dismissed reports?</value>
+  </data>
+  <data name="Clear History" xml:space="preserve">
+    <value>Clear History</value>
+  </data>
+  <data name="Clear Moderation History" xml:space="preserve">
+    <value>Clear Moderation History</value>
+  </data>
+  <data name="Dismissed ({0})" xml:space="preserve">
+    <value>Dismissed ({0})</value>
+  </data>
+  <data name="Failed to clear history." xml:space="preserve">
+    <value>Failed to clear history.</value>
+  </data>
+  <data name="Failed to dismiss report." xml:space="preserve">
+    <value>Failed to dismiss report.</value>
+  </data>
+  <data name="Failed to remove report." xml:space="preserve">
+    <value>Failed to remove report.</value>
+  </data>
+  <data name="Failed to report message." xml:space="preserve">
+    <value>Failed to report message.</value>
+  </data>
+  <data name="Failed to update user status." xml:space="preserve">
+    <value>Failed to update user status.</value>
+  </data>
+  <data name="History ({0})" xml:space="preserve">
+    <value>History ({0})</value>
+  </data>
+  <data name="Moderation history cleared." xml:space="preserve">
+    <value>Moderation history cleared.</value>
+  </data>
+  <data name="No matching reports" xml:space="preserve">
+    <value>No matching reports</value>
+  </data>
+  <data name="No Moderation History" xml:space="preserve">
+    <value>No Moderation History</value>
+  </data>
+  <data name="Open ({0})" xml:space="preserve">
+    <value>Open ({0})</value>
+  </data>
+  <data name="Report removed from history." xml:space="preserve">
+    <value>Report removed from history.</value>
+  </data>
+  <data name="Resolved ({0})" xml:space="preserve">
+    <value>Resolved ({0})</value>
+  </data>
+  <data name="Resolved and dismissed reports will appear here." xml:space="preserve">
+    <value>Resolved and dismissed reports will appear here.</value>
+  </data>
+  <data name="Scroll to bottom" xml:space="preserve">
+    <value>Scroll to bottom</value>
+  </data>
+  <data name="Try adjusting or clearing your search filter." xml:space="preserve">
+    <value>Try adjusting or clearing your search filter.</value>
+  </data>
+  <data name="Connected (Disabled)" xml:space="preserve">
+    <value>Connected (Disabled)</value>
+  </data>
+  <data name="GitHub is connected, but this backup destination is currently disabled. Enable the switch above to include it in backups." xml:space="preserve">
+    <value>GitHub is connected, but this backup destination is currently disabled. Enable the switch above to include it in backups.</value>
+  </data>
+  <data name="Google Drive is connected, but this backup destination is currently disabled. Enable the switch above to include it in backups." xml:space="preserve">
+    <value>Google Drive is connected, but this backup destination is currently disabled. Enable the switch above to include it in backups.</value>
+  </data>
+  <data name="Retry Connection" xml:space="preserve">
+    <value>Retry Connection</value>
+  </data>
+  <data name="Switch Server" xml:space="preserve">
+    <value>Switch Server</value>
+  </data>
+  <data name="Microphone is muted by hardware switch" xml:space="preserve">
+    <value>Microphone is muted by hardware switch</value>
+  </data>
+  <data name="Muted by hardware switch" xml:space="preserve">
+    <value>Muted by hardware switch</value>
+  </data>
+  <data name="Exit Picture in Picture" xml:space="preserve">
+    <value>Exit Picture in Picture</value>
+  </data>
+  <data name="Minimize" xml:space="preserve">
+    <value>Minimize</value>
+  </data>
+  <data name="Picture in Picture" xml:space="preserve">
+    <value>Picture in Picture</value>
+  </data>
+  <data name="Return to Call" xml:space="preserve">
+    <value>Return to Call</value>
+  </data>
+  <data name="Expand" xml:space="preserve">
+    <value>Expand</value>
+  </data>
+  <data name="Bring back to stage" xml:space="preserve">
+    <value>Bring back to stage</value>
+  </data>
+  <data name="Call is in Picture in Picture" xml:space="preserve">
+    <value>Call is in Picture in Picture</value>
+  </data>
+  <data name="Video playback is active in the floating window." xml:space="preserve">
+    <value>Video playback is active in the floating window.</value>
+  </data>
+  <data name="{0} photos will be moved into the album and shared in this channel." xml:space="preserve">
+    <value>{0} photos will be moved into the album and shared in this channel.</value>
+  </data>
+  <data name="Add &amp; Post Album" xml:space="preserve">
+    <value>Add &amp; Post Album</value>
+  </data>
+  <data name="Add to Album &amp; Replace Photos" xml:space="preserve">
+    <value>Add to Album &amp; Replace Photos</value>
+  </data>
+  <data name="Add to Existing Album" xml:space="preserve">
+    <value>Add to Existing Album</value>
+  </data>
+  <data name="Album Title" xml:space="preserve">
+    <value>Album Title</value>
+  </data>
+  <data name="Create &amp; Post Album" xml:space="preserve">
+    <value>Create &amp; Post Album</value>
+  </data>
+  <data name="Create Album &amp; Replace Photos" xml:space="preserve">
+    <value>Create Album &amp; Replace Photos</value>
+  </data>
+  <data name="Create Album from Photos" xml:space="preserve">
+    <value>Create Album from Photos</value>
+  </data>
+  <data name="Create New Album" xml:space="preserve">
+    <value>Create New Album</value>
+  </data>
+  <data name="Enter album title..." xml:space="preserve">
+    <value>Enter album title...</value>
+  </data>
+  <data name="Failed to create album." xml:space="preserve">
+    <value>Failed to create album.</value>
+  </data>
+  <data name="Organize Photos into Album" xml:space="preserve">
+    <value>Organize Photos into Album</value>
+  </data>
+  <data name="Photos organized into album." xml:space="preserve">
+    <value>Photos organized into album.</value>
+  </data>
+  <data name="Posting {0} photos — want to create an album instead?" xml:space="preserve">
+    <value>Posting {0} photos — want to create an album instead?</value>
+  </data>
+  <data name="Select Album" xml:space="preserve">
+    <value>Select Album</value>
+  </data>
+  <data name="Unlock secure chat to create an album in this channel." xml:space="preserve">
+    <value>Unlock secure chat to create an album in this channel.</value>
+  </data>
+  <data name="You posted {0} photos — organize them into an album?" xml:space="preserve">
+    <value>You posted {0} photos — organize them into an album?</value>
+  </data>
+  <data name="All Users View" xml:space="preserve">
+    <value>All Users View</value>
+  </data>
+  <data name="Focus Speaker" xml:space="preserve">
+    <value>Focus Speaker</value>
   </data>
 </root>

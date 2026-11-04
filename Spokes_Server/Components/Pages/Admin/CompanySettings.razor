@@ -27,6 +27,9 @@
 @inject LiveKitService LiveKitService
 @inject ICompanyBrandingService BrandingService
 @inject ISpokesClock SpokesClock
+@inject Spokes_Server.Core.Services.Security.EncryptionService EncryptionService
+@inject UserService UserService
+@inject Spokes_Server.Core.Services.Communication.Email.IEmailInboxService EmailInboxService
 @using Spokes_Server.Core.Services.Maintenance
 @using Spokes_Server.Core.Services.Maintenance.Destinations
 @using Spokes_Server.Core.Services.Maintenance.Time
@@ -353,6 +356,52 @@
                     </div>
                 </ChildContent>
             </SettingsCard>
+
+            <SettingsCard Title="@BizLoc["Terms & Conditions"]"
+                          Icon="@Icons.Material.Filled.Gavel"
+                          Description="@BizLoc["Manage reusable terms and conditions presets for quotes and templates."]">
+                <HeaderActions>
+                    <MudButton StartIcon="@Icons.Material.Filled.Add" Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                               OnClick="CreateTermsAndConditions">@BizLoc["New Terms & Conditions"]</MudButton>
+                </HeaderActions>
+                <ChildContent>
+                    <div class="overflow-x-auto">
+                        <MudTable Items="@TermsList" Breakpoint="Breakpoint.None" Hover="true" Elevation="0" Outlined="true" Bordered="true" Striped="true" Class="mt-2">
+                            <HeaderContent>
+                                <MudTh Style="min-width: 220px;">@Loc["Name"]</MudTh>
+                                <MudTh Style="min-width: 320px;">@Loc["Preview"]</MudTh>
+                                <MudTh Style="width: 100px;">@BizLoc["Default"]</MudTh>
+                                <MudTh Style="width: 120px;">@Loc["Actions"]</MudTh>
+                            </HeaderContent>
+                            <RowTemplate>
+                                <MudTd>
+                                    <MudText Typo="Typo.body2" Style="font-weight: 500;">@context.Name</MudText>
+                                </MudTd>
+                                <MudTd>
+                                    <MudText Typo="Typo.body2" Class="text-truncate" Style="max-width: 450px; color: var(--mud-palette-text-secondary);">
+                                        @GetTermsPreview(context.Content)
+                                    </MudText>
+                                </MudTd>
+                                <MudTd>
+                                    @if (context.IsDefault)
+                                    {
+                                        <MudChip T="string" Size="Size.Small" Color="Color.Success" Variant="Variant.Filled">@BizLoc["Default"]</MudChip>
+                                    }
+                                </MudTd>
+                                <MudTd>
+                                    <MudIconButton Icon="@Icons.Material.Filled.Edit" Size="Size.Small" OnClick="@(() => EditTermsAndConditions(context))" />
+                                    <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small" Color="Color.Error" OnClick="@(() => DeleteTermsAndConditions(context))" />
+                                </MudTd>
+                            </RowTemplate>
+                            <NoRecordsContent>
+                                <MudText Typo="Typo.body2" Class="pa-4 text-center" Color="Color.Secondary">
+                                    @BizLoc["No terms and conditions created yet."]
+                                </MudText>
+                            </NoRecordsContent>
+                        </MudTable>
+                    </div>
+                </ChildContent>
+            </SettingsCard>
         </MudStack>
     }
     else if (activeTabIndex == 2)
@@ -659,49 +708,371 @@
 
         </MudStack>
     }
-    else if (activeTabIndex == 6)
+    else if (activeTabIndex == 6 && !IsFriendEdition)
     {
         <MudStack Spacing="4">
-            @* --- Card 1: Incoming Mail (IMAP) --- *@
-            <SettingsCard Title="Incoming Mail (IMAP)"
+            @* --- Card 1: User Email Permissions & Policies --- *@
+            <SettingsCard Title="@Loc["User Email Permissions & Policies"]"
+                          Icon="@Icons.Material.Filled.Security"
+                          Description="@Loc["Control which email configuration actions regular users can perform from their personal Email Settings."]">
+                <MudStack Spacing="1">
+                    <SettingsSwitchRow Title="@Loc["Allow Users to Connect Real Inboxes"]"
+                                       Description="@Loc["When enabled, users can connect their own IMAP mailboxes in Email Settings."]"
+                                       Value="Profile.EmailSettings.AllowUsersToConnectRealInboxes"
+                                       ValueChanged="@((bool v) => Profile.EmailSettings.AllowUsersToConnectRealInboxes = v)" />
+                    <MudDivider />
+                    <SettingsSwitchRow Title="@Loc["Allow Users to Create Virtual Inboxes"]"
+                                       Description="@Loc["When enabled, users can create address- or domain-filtered Virtual Inboxes from Real Inboxes they can access."]"
+                                       Value="Profile.EmailSettings.AllowUsersToCreateVirtualInboxes"
+                                       ValueChanged="@((bool v) => Profile.EmailSettings.AllowUsersToCreateVirtualInboxes = v)" />
+                    <MudDivider />
+                    <SettingsSwitchRow Title="@Loc["Allow Users to Create Sending Identities"]"
+                                       Description="@Loc["When enabled, users can create additional Sending Identities from permitted Outgoing Servers."]"
+                                       Value="Profile.EmailSettings.AllowUsersToCreateSendingIdentities"
+                                       ValueChanged="@((bool v) => Profile.EmailSettings.AllowUsersToCreateSendingIdentities = v)" />
+                    <MudDivider />
+                    <SettingsSwitchRow Title="@Loc["Allow Users to Share Inboxes & Identities"]"
+                                       Description="@Loc["When enabled, users can share their Real Inboxes, Virtual Inboxes, and Sending Identities with other users and groups."]"
+                                       Value="Profile.EmailSettings.AllowUsersToShareEmailEntities"
+                                       ValueChanged="@((bool v) => Profile.EmailSettings.AllowUsersToShareEmailEntities = v)" />
+                    <MudDivider />
+                    <SettingsSwitchRow Title="@Loc["Allow Users to Configure Custom IMAP/SMTP Servers"]"
+                                       Description="@Loc["When disabled, users must select from the Incoming and Outgoing Server presets configured below."]"
+                                       Value="Profile.EmailSettings.AllowUsersToManageServers"
+                                       ValueChanged="@((bool v) => Profile.EmailSettings.AllowUsersToManageServers = v)" />
+                </MudStack>
+            </SettingsCard>
+
+            @* --- Card 2: Incoming Mail Servers (IMAP) --- *@
+            <SettingsCard Title="@Loc["Incoming Mail Servers (IMAP)"]"
                           Icon="@Icons.Material.Filled.MoveToInbox"
-                          Description="Configure the IMAP server settings used to retrieve incoming employee emails.">
-                <MudGrid>
-                    <MudItem xs="12" sm="8">
-                        <MudTextField ShrinkLabel="true" Variant="Variant.Outlined" Margin="Margin.Dense" @bind-Value="Profile.EmailSettings.ImapHost" Label="IMAP Host" HelperText="e.g. imap.gmail.com" />
-                    </MudItem>
-                    <MudItem xs="12" sm="4">
-                        <MudNumericField ShrinkLabel="true" @bind-Value="Profile.EmailSettings.ImapPort" Margin="Margin.Dense" Label="Port" Variant="Variant.Outlined" HelperText="e.g. 993" />
-                    </MudItem>
-                    <MudItem xs="12">
-                        <SettingsSwitchRow Title="Use SSL / TLS Encryption"
-                                           Description="Encrypt connection with IMAP server using TLS/SSL."
-                                           Value="Profile.EmailSettings.ImapSsl"
-                                           ValueChanged="@((bool v) => Profile.EmailSettings.ImapSsl = v)" />
-                    </MudItem>
-                </MudGrid>
+                          Description="@Loc["Configure incoming IMAP server presets and pair each with an Outgoing Server (or create a new Outgoing Server inline)."]">
+                <div class="d-flex justify-end mb-3">
+                    <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                               StartIcon="@Icons.Material.Filled.Add" OnClick="AddIncomingServerAsync">
+                        @Loc["Add Incoming Server"]
+                    </MudButton>
+                </div>
+
+                @if (Profile.EmailSettings.IncomingServers.Count == 0)
+                {
+                    <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true">
+                        @Loc["No incoming IMAP server presets configured yet. Click 'Add Incoming Server' above to configure an IMAP server and its paired Outgoing Server."]
+                    </MudAlert>
+                }
+                else
+                {
+                    <MudStack Spacing="2">
+                        @foreach (var server in Profile.EmailSettings.IncomingServers.ToList())
+                        {
+                            var pairedOutgoing = Profile.EmailSettings.SendingServers.FirstOrDefault(s => s.Id == server.DefaultOutgoingServerId);
+                            <MudPaper Outlined="true" Class="pa-3 rounded-lg">
+                                <div class="d-flex align-center justify-space-between flex-wrap gap-2">
+                                    <div class="d-flex flex-column gap-1">
+                                        <div class="d-flex align-center gap-2 flex-wrap">
+                                            <MudIcon Icon="@Icons.Material.Filled.MoveToInbox" Size="Size.Small" Color="Color.Primary" />
+                                            <MudText Typo="Typo.subtitle2" Style="font-weight: 600;">
+                                                @(!string.IsNullOrWhiteSpace(server.Name) ? server.Name : server.Host)
+                                            </MudText>
+                                            @if (!string.IsNullOrWhiteSpace(server.Domain))
+                                            {
+                                                <MudChip T="string" Size="Size.Small" Color="Color.Primary" Variant="Variant.Outlined">@@@server.Domain</MudChip>
+                                            }
+                                            <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Default">
+                                                @($"{server.Host}:{server.Port}")
+                                            </MudChip>
+                                            @if (pairedOutgoing != null)
+                                            {
+                                                <MudChip T="string" Size="Size.Small" Color="Color.Success" Variant="Variant.Text" Icon="@Icons.Material.Filled.Send">
+                                                    @string.Format(Loc["Outgoing: {0}"].Value, pairedOutgoing.Name)
+                                                </MudChip>
+                                            }
+                                            <MudChip T="string" Size="Size.Small" Color="Color.Info" Variant="Variant.Text">
+                                                @(server.IsSharedWithAllUsers
+                                                    ? Loc["All Users"].Value
+                                                    : string.Format(Loc["Shared ({0} users, {1} groups)"].Value, server.AllowedUserIds.Count, server.AllowedTeamIds.Count))
+                                            </MudChip>
+                                        </div>
+                                    </div>
+                                    <div class="d-flex align-center gap-1">
+                                        <MudIconButton Icon="@Icons.Material.Filled.Edit" Color="Color.Primary" Size="Size.Small"
+                                                       OnClick="@(() => EditIncomingServerAsync(server))" />
+                                        <MudIconButton Icon="@Icons.Material.Filled.DeleteOutline" Color="Color.Error" Size="Size.Small"
+                                                       OnClick="@(() => DeleteIncomingServerAsync(server))" />
+                                    </div>
+                                </div>
+                            </MudPaper>
+                        }
+                    </MudStack>
+                }
             </SettingsCard>
 
-            @* --- Card 2: Outgoing Mail (SMTP) --- *@
-            <SettingsCard Title="Outgoing Mail (SMTP)"
+            @* --- Card 3: Outgoing Mail Servers (SMTP / Relays) --- *@
+            <SettingsCard Title="@Loc["Outgoing Mail Servers (SMTP / Relays)"]"
                           Icon="@Icons.Material.Filled.Send"
-                          Description="Configure the SMTP server settings used to send notifications and outgoing emails.">
-                <MudGrid>
-                    <MudItem xs="12" sm="8">
-                        <MudTextField ShrinkLabel="true" Variant="Variant.Outlined" Margin="Margin.Dense" @bind-Value="Profile.EmailSettings.SmtpHost" Label="SMTP Host" HelperText="e.g. smtp.gmail.com" />
-                    </MudItem>
-                    <MudItem xs="12" sm="4">
-                        <MudNumericField ShrinkLabel="true" @bind-Value="Profile.EmailSettings.SmtpPort" Margin="Margin.Dense" Label="Port" HelperText="e.g. 465" Variant="Variant.Outlined" />
-                    </MudItem>
-                    <MudItem xs="12">
-                        <SettingsSwitchRow Title="Use SSL / TLS Encryption"
-                                           Description="Encrypt connection with SMTP server using TLS/SSL."
-                                           Value="Profile.EmailSettings.SmtpSsl"
-                                           ValueChanged="@((bool v) => Profile.EmailSettings.SmtpSsl = v)" />
-                    </MudItem>
-                </MudGrid>
+                          Description="@Loc["Configure standalone outgoing SMTP servers or transactional relays (e.g. Resend, Postmark, Amazon SES, or standard SMTP). Outgoing Servers do not require an Incoming Server."]">
+                <div class="d-flex justify-end mb-3">
+                    <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                               StartIcon="@Icons.Material.Filled.Add" OnClick="AddSendingServerAsync">
+                        @Loc["Add Outgoing Server"]
+                    </MudButton>
+                </div>
+
+                @if (Profile.EmailSettings.SendingServers.Count == 0)
+                {
+                    <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true">
+                        @Loc["No outgoing SMTP servers configured yet. Add an Outgoing Server above or inside the Incoming Server dialog."]
+                    </MudAlert>
+                }
+                else
+                {
+                    <MudStack Spacing="2">
+                        @foreach (var server in Profile.EmailSettings.SendingServers.ToList())
+                        {
+                            <MudPaper Outlined="true" Class="pa-3 rounded-lg">
+                                <div class="d-flex align-center justify-space-between flex-wrap gap-2">
+                                    <div class="d-flex flex-column gap-1">
+                                        <div class="d-flex align-center gap-2 flex-wrap">
+                                            <MudIcon Icon="@Icons.Material.Filled.Send" Size="Size.Small" Color="Color.Primary" />
+                                            <MudText Typo="Typo.subtitle2" Style="font-weight: 600;">
+                                                @(!string.IsNullOrWhiteSpace(server.Name) ? server.Name : server.Host)
+                                            </MudText>
+                                            @if (!string.IsNullOrWhiteSpace(server.Domain))
+                                            {
+                                                <MudChip T="string" Size="Size.Small" Color="Color.Primary" Variant="Variant.Outlined">@@@server.Domain</MudChip>
+                                            }
+                                            <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Default">
+                                                @($"{server.Host}:{server.Port}")
+                                            </MudChip>
+                                            <MudChip T="string" Size="Size.Small" Color="@(server.UseSharedCredentials ? Color.Secondary : Color.Default)" Variant="Variant.Text">
+                                                @(server.UseSharedCredentials ? Loc["Shared Credentials"].Value : Loc["Per-Inbox Credentials"].Value)
+                                            </MudChip>
+                                            <MudChip T="string" Size="Size.Small" Color="Color.Info" Variant="Variant.Text">
+                                                @(server.IsSharedWithAllUsers
+                                                    ? Loc["All Users"].Value
+                                                    : string.Format(Loc["Shared ({0} users, {1} groups)"].Value, server.AllowedUserIds.Count, server.AllowedTeamIds.Count))
+                                            </MudChip>
+                                        </div>
+                                    </div>
+                                    <div class="d-flex align-center gap-1">
+                                        <MudIconButton Icon="@Icons.Material.Filled.Edit" Color="Color.Primary" Size="Size.Small"
+                                                       OnClick="@(() => EditSendingServerAsync(server))" />
+                                        <MudIconButton Icon="@Icons.Material.Filled.DeleteOutline" Color="Color.Error" Size="Size.Small"
+                                                       OnClick="@(() => DeleteSendingServerAsync(server))" />
+                                    </div>
+                                </div>
+                            </MudPaper>
+                        }
+                    </MudStack>
+                }
             </SettingsCard>
 
+            @* --- Card 4: Provisioned Mailboxes, Virtual Inboxes & Sending Identities --- *@
+            <SettingsCard Title="@Loc["Provisioned Mailboxes, Virtual Inboxes & Identities"]"
+                          Icon="@Icons.Material.Filled.SupervisorAccount"
+                          Description="@Loc["Provision and share Real Inboxes, Virtual Inboxes, and Sending Identities across users and groups from one place."]">
+                <div class="d-flex flex-wrap gap-2 mb-3">
+                    <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                               StartIcon="@Icons.Material.Filled.AddLink" OnClick="AdminConnectRealInboxAsync">
+                        @Loc["Connect Real Inbox"]
+                    </MudButton>
+                    <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small"
+                               StartIcon="@Icons.Material.Filled.AlternateEmail"
+                               Disabled="@(!Db.EmailAccounts.GetAll().Any(a => a.IsServerManaged && !a.IsArchived))"
+                               OnClick="AdminCreateVirtualInboxAsync">
+                        @Loc["New Virtual Inbox"]
+                    </MudButton>
+                    <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small"
+                               StartIcon="@Icons.Material.Filled.Badge"
+                               OnClick="AdminCreateSendingIdentityAsync">
+                        @Loc["New Sending Identity"]
+                    </MudButton>
+                </div>
+
+                @{
+                    var allAccounts = Db.EmailAccounts.GetAll().Where(a => a.IsServerManaged && !a.IsArchived).OrderBy(a => a.SortOrder).ThenBy(a => a.Name).ToList();
+                    var allVirtualInboxes = Db.EmailInboxes.GetAll().Where(i => i.IsServerManaged).OrderBy(i => i.SortOrder).ThenBy(i => i.Name).ToList();
+                    var allIdentities = Db.EmailSendingIdentities.GetAll().Where(i => i.IsServerManaged).OrderBy(i => i.DisplayName).ToList();
+                }
+
+                @if (allAccounts.Count == 0 && allVirtualInboxes.Count == 0 && allIdentities.Count == 0)
+                {
+                    <MudAlert Severity="Severity.Normal" Variant="Variant.Outlined" Dense="true">
+                        @Loc["No Real Inboxes, Virtual Inboxes, or Sending Identities have been provisioned yet."]
+                    </MudAlert>
+                }
+                else
+                {
+                    <MudStack Spacing="2">
+                        @foreach (var account in allAccounts)
+                        {
+                            <MudPaper Outlined="true" Class="pa-3 rounded-lg">
+                                <div class="d-flex align-center justify-space-between flex-wrap gap-2">
+                                    <div class="d-flex align-center gap-2 flex-wrap">
+                                        <MudChip T="string" Size="Size.Small" Color="Color.Primary" Variant="Variant.Filled">@Loc["Real Inbox"]</MudChip>
+                                        <MudText Typo="Typo.subtitle2" Style="font-weight: 600;">@account.Name</MudText>
+                                        <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined">@account.EmailAddress</MudChip>
+                                        @if (account.AllowedUserIds.Count == 0 && account.AllowedTeamIds.Count == 0)
+                                        {
+                                            <MudChip T="string" Size="Size.Small" Color="Color.Warning" Variant="Variant.Text">
+                                                @Loc["Unassigned (Share with users or groups to grant access)"]
+                                            </MudChip>
+                                        }
+                                        else
+                                        {
+                                            <MudText Typo="Typo.caption" Color="Color.Info">
+                                                @string.Format(Loc["Shared ({0} users, {1} groups)"].Value, account.AllowedUserIds.Count, account.AllowedTeamIds.Count)
+                                            </MudText>
+                                        }
+                                    </div>
+                                    <div class="d-flex align-center gap-1">
+                                        <MudTooltip Text="@Loc["Edit Real Inbox"]">
+                                            <MudIconButton Icon="@Icons.Material.Filled.Edit" Color="Color.Primary" Size="Size.Small"
+                                                           OnClick="@(() => AdminEditRealInboxAsync(account))" />
+                                        </MudTooltip>
+                                        <MudTooltip Text="@Loc["Archive Real Inbox"]">
+                                            <MudIconButton Icon="@Icons.Material.Outlined.Archive" Color="Color.Warning" Size="Size.Small"
+                                                           OnClick="@(() => AdminArchiveRealInbox(account))" />
+                                        </MudTooltip>
+                                        <MudTooltip Text="@Loc["Delete Real Inbox"]">
+                                            <MudIconButton Icon="@Icons.Material.Filled.DeleteOutline" Color="Color.Error" Size="Size.Small"
+                                                           OnClick="@(() => AdminDeleteRealInboxAsync(account))" />
+                                        </MudTooltip>
+                                    </div>
+                                </div>
+                            </MudPaper>
+                        }
+                        @foreach (var inbox in allVirtualInboxes)
+                        {
+                            <MudPaper Outlined="true" Class="pa-3 rounded-lg">
+                                <div class="d-flex align-center justify-space-between flex-wrap gap-2">
+                                    <div class="d-flex align-center gap-2 flex-wrap">
+                                        <MudChip T="string" Size="Size.Small" Color="Color.Secondary" Variant="Variant.Filled">@Loc["Virtual Inbox"]</MudChip>
+                                        <MudText Typo="Typo.subtitle2" Style="font-weight: 600;">@inbox.Name</MudText>
+                                        @foreach (var addr in inbox.TargetAddresses)
+                                        {
+                                            <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Primary">@addr</MudChip>
+                                        }
+                                        @if (inbox.AllowedUserIds.Count == 0 && inbox.AllowedTeamIds.Count == 0)
+                                        {
+                                            <MudChip T="string" Size="Size.Small" Color="Color.Warning" Variant="Variant.Text">
+                                                @Loc["Unassigned (Share with users or groups to grant access)"]
+                                            </MudChip>
+                                        }
+                                        else
+                                        {
+                                            <MudText Typo="Typo.caption" Color="Color.Info">
+                                                @string.Format(Loc["Shared ({0} users, {1} groups)"].Value, inbox.AllowedUserIds.Count, inbox.AllowedTeamIds.Count)
+                                            </MudText>
+                                        }
+                                    </div>
+                                    <div class="d-flex align-center gap-1">
+                                        <MudIconButton Icon="@Icons.Material.Filled.Edit" Color="Color.Primary" Size="Size.Small"
+                                                       OnClick="@(() => AdminEditVirtualInboxAsync(inbox))" />
+                                        <MudIconButton Icon="@Icons.Material.Filled.DeleteOutline" Color="Color.Error" Size="Size.Small"
+                                                       OnClick="@(() => AdminDeleteVirtualInboxAsync(inbox))" />
+                                    </div>
+                                </div>
+                            </MudPaper>
+                        }
+                        @foreach (var identity in allIdentities)
+                        {
+                            <MudPaper Outlined="true" Class="pa-3 rounded-lg">
+                                <div class="d-flex align-center justify-space-between flex-wrap gap-2">
+                                    <div class="d-flex align-center gap-2 flex-wrap">
+                                        <MudChip T="string" Size="Size.Small" Color="Color.Info" Variant="Variant.Filled">@Loc["Identity"]</MudChip>
+                                        <MudText Typo="Typo.subtitle2" Style="font-weight: 600;">@identity.DisplayName</MudText>
+                                        <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined">@identity.EmailAddress</MudChip>
+                                        @if (identity.AllowedUserIds.Count == 0 && identity.AllowedTeamIds.Count == 0)
+                                        {
+                                            <MudChip T="string" Size="Size.Small" Color="Color.Warning" Variant="Variant.Text">
+                                                @Loc["Unassigned (Share with users or groups to grant access)"]
+                                            </MudChip>
+                                        }
+                                        else
+                                        {
+                                            <MudText Typo="Typo.caption" Color="Color.Info">
+                                                @string.Format(Loc["Shared ({0} users, {1} groups)"].Value, identity.AllowedUserIds.Count, identity.AllowedTeamIds.Count)
+                                            </MudText>
+                                        }
+                                    </div>
+                                    <div class="d-flex align-center gap-1">
+                                        <MudIconButton Icon="@Icons.Material.Filled.Edit" Color="Color.Primary" Size="Size.Small"
+                                                       OnClick="@(() => AdminEditSendingIdentityAsync(identity))" />
+                                        <MudIconButton Icon="@Icons.Material.Filled.DeleteOutline" Color="Color.Error" Size="Size.Small"
+                                                       OnClick="@(() => AdminDeleteSendingIdentityAsync(identity))" />
+                                    </div>
+                                </div>
+                            </MudPaper>
+                        }
+                    </MudStack>
+                }
+            </SettingsCard>
+
+            @{
+                var archivedAccounts = Db.EmailAccounts.GetAll().Where(a => a.IsServerManaged && a.IsArchived).OrderByDescending(a => a.ArchivedAt).ThenBy(a => a.Name).ToList();
+            }
+            @if (archivedAccounts.Count > 0)
+            {
+                <SettingsCard Title="@Loc["Archived Real Inboxes"]"
+                              Icon="@Icons.Material.Filled.Archive"
+                              Description="@Loc["Archived mailboxes remain stored on disk and never sync automatically. You can browse their emails, trigger a manual sync, restore them, or delete them permanently."]">
+                    <MudStack Spacing="2">
+                        @foreach (var account in archivedAccounts)
+                        {
+                            <MudPaper Outlined="true" Class="pa-3 rounded-lg">
+                                <div class="d-flex align-center justify-space-between flex-wrap gap-2">
+                                    <div class="d-flex align-center gap-2 flex-wrap">
+                                        <MudChip T="string" Size="Size.Small" Color="Color.Warning" Variant="Variant.Filled">@Loc["Archived"]</MudChip>
+                                        <MudText Typo="Typo.subtitle2" Style="font-weight: 600;">@account.Name</MudText>
+                                        <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined">@account.EmailAddress</MudChip>
+                                        @if (account.LastSyncedAt.HasValue)
+                                        {
+                                            <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                                @Loc["Last synced:"] @account.LastSyncedAt.Value.ToLocalTime().ToString("g")
+                                            </MudText>
+                                        }
+                                        @if (account.ArchivedAt.HasValue)
+                                        {
+                                            <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                                • @Loc["Archived:"] @account.ArchivedAt.Value.ToLocalTime().ToString("d")
+                                            </MudText>
+                                        }
+                                    </div>
+                                    <div class="d-flex align-center gap-1">
+                                        <MudButton Variant="Variant.Outlined"
+                                                   Size="Size.Small"
+                                                   Color="Color.Primary"
+                                                   StartIcon="@Icons.Material.Filled.FolderOpen"
+                                                   OnClick="@(() => Nav.NavigateTo($"/email/real-{account.Id}"))">
+                                            @Loc["Browse Inbox"]
+                                        </MudButton>
+                                        <MudTooltip Text="@Loc["Sync Mailbox Now"]">
+                                            <MudIconButton Icon="@Icons.Material.Filled.Sync"
+                                                           Size="Size.Small"
+                                                           Color="Color.Primary"
+                                                           Disabled="@(_adminSyncingAccountId == account.Id)"
+                                                           OnClick="@(() => AdminSyncRealInboxNowAsync(account))" />
+                                        </MudTooltip>
+                                        <MudTooltip Text="@Loc["Edit Real Inbox"]">
+                                            <MudIconButton Icon="@Icons.Material.Filled.Edit" Color="Color.Primary" Size="Size.Small"
+                                                           OnClick="@(() => AdminEditRealInboxAsync(account))" />
+                                        </MudTooltip>
+                                        <MudTooltip Text="@Loc["Restore to Active Inboxes"]">
+                                            <MudIconButton Icon="@Icons.Material.Filled.Unarchive" Color="Color.Success" Size="Size.Small"
+                                                           OnClick="@(() => AdminUnarchiveRealInbox(account))" />
+                                        </MudTooltip>
+                                        <MudTooltip Text="@Loc["Delete Real Inbox"]">
+                                            <MudIconButton Icon="@Icons.Material.Filled.DeleteOutline" Color="Color.Error" Size="Size.Small"
+                                                           OnClick="@(() => AdminDeleteRealInboxAsync(account))" />
+                                        </MudTooltip>
+                                    </div>
+                                </div>
+                            </MudPaper>
+                        }
+                    </MudStack>
+                </SettingsCard>
+            }
         </MudStack>
     }
     else if (activeTabIndex == 5)
@@ -784,7 +1155,7 @@
                 else
                 {
                     <MudAlert Severity="Severity.Warning" Class="mb-4">
-                        <b>@Loc["Master Password Missing:"]</b> @Loc["Set the `SPOKES_MASTER_PASSWORD` environment variable to enable Server-assisted message recovery for public channels."]
+                        <b>@Loc["Master Password Missing:"]</b> @Loc["Set the `SPOKES_MASTER_PASSWORD` environment variable to enable Server-assisted message recovery for public channels and protect encrypted database secrets with a server-unique key."]
                     </MudAlert>
                 }
 
@@ -1002,12 +1373,12 @@
                             <MudText Typo="Typo.subtitle2" Class="mb-2">@Loc["License Details"]</MudText>
                             <MudGrid>
                                 <MudItem xs="12" sm="4">
-                                    <MudText Typo="Typo.caption" Color="Color.Secondary">@Loc["Registered Email"]</MudText>
+                                    <MudText Typo="Typo.caption" Color="Color.Secondary">@Loc["Registered Email"]</MudText> 
                                     <MudText Typo="Typo.body2">@license.Email</MudText>
                                 </MudItem>
                                 <MudItem xs="12" sm="4">
                                     <MudText Typo="Typo.caption" Color="Color.Secondary">@Loc["Push Notifications Expiry Date"]</MudText>
-                                    <MudText Typo="Typo.body2">@license.ValidForUpdatesUntil.ToString("yyyy-MM-dd")</MudText>
+                                    <MudText Typo="Typo.body2">@(Spokes_Server.Core.Services.Licensing.LicenseValidationService.IsLifetimeExpiry(license.ValidForUpdatesUntil) ? Loc["Never"].Value : license.ValidForUpdatesUntil.ToString("yyyy-MM-dd"))</MudText>
                                 </MudItem>
                                 <MudItem xs="12" sm="4">
                                     <MudText Typo="Typo.caption" Color="Color.Secondary">@Loc["Time Until Expiry"]</MudText>
@@ -1266,6 +1637,24 @@
                                    Description="@Loc["Transmits detailed exception stack traces to the browser console and Blazor UI for debugging. Requires a new connection or server restart to take effect. Leave disabled in production for security and performance."]"
                                    Value="_systemConfig.EnableDetailedCircuitErrors"
                                    ValueChanged="OnDetailedCircuitErrorsChanged" />
+                <MudDivider Class="my-3" />
+                <MudGrid>
+                    <MudItem xs="12" sm="6">
+                        <MudSelect T="string"
+                                   ShrinkLabel="true"
+                                   Value="@LiveKitService.NormalizeLogLevel(_systemConfig.LiveKitLogLevel)"
+                                   ValueChanged="OnLiveKitLogLevelChanged"
+                                   Label="@Loc["LiveKit Log Level"]"
+                                   HelperText="@Loc["Controls WebRTC media server logging verbosity in container logs. Applies immediately."]"
+                                   Variant="Variant.Outlined"
+                                   Margin="Margin.Dense">
+                            <MudSelectItem Value="@("error")">@Loc["Error Only"]</MudSelectItem>
+                            <MudSelectItem Value="@("warn")">@Loc["Warning"]</MudSelectItem>
+                            <MudSelectItem Value="@("info")">@Loc["Info (Default)"]</MudSelectItem>
+                            <MudSelectItem Value="@("debug")">@Loc["Debug (Detailed Events)"]</MudSelectItem>
+                        </MudSelect>
+                    </MudItem>
+                </MudGrid>
             </SettingsCard>
 
             @* --- Card 2: Server Event Logs --- *@
@@ -1543,9 +1932,10 @@
     private SystemConfig _systemConfig = new();
     private SystemConfig _initialSystemConfig = new();
     private List<DocumentTemplate> Templates = new();
+    private List<TermsAndConditions> TermsList = [];
     private string _primaryColor = string.Empty;
     private string _secondaryColor = string.Empty;
-    private string MaskedPrivateKey => string.IsNullOrEmpty(Profile?.VapidPrivateKey) ? "" : new string('�', 20);
+    private string MaskedPrivateKey => string.IsNullOrEmpty(Profile?.VapidPrivateKey) ? "" : new string('*', 20);
     private bool IsFriendEdition => Db.CompanyProfile.Get()?.Edition == "Family";
     [Inject] private IWebPushService WebPush { get; set; } = default!;
     [Inject] private Spokes_Server.Core.Services.Licensing.LicenseValidationService LicenseService { get; set; } = default!;
@@ -1602,6 +1992,34 @@
     {
         _isDisposed = true;
         BackupSvc.OnLocalBackupStateChanged -= HandleLocalBackupStateChanged;
+        Db.CompanyProfile.OnSaved -= HandleCompanyProfileUpdated;
+        Db.CompanyProfile.OnLoaded -= HandleCompanyProfileLoaded;
+    }
+
+    private void HandleCompanyProfileUpdated(CompanyProfile updated)
+    {
+        if (_isDisposed) return;
+        _ = InvokeAsync(() =>
+        {
+            if (_isDisposed) return;
+            Profile = updated;
+            _primaryColor = Profile.PrimaryColor;
+            _secondaryColor = Profile.SecondaryColor;
+            StateHasChanged();
+        });
+    }
+
+    private void HandleCompanyProfileLoaded()
+    {
+        if (_isDisposed) return;
+        _ = InvokeAsync(() =>
+        {
+            if (_isDisposed) return;
+            Profile = Db.CompanyProfile.Get();
+            _primaryColor = Profile.PrimaryColor;
+            _secondaryColor = Profile.SecondaryColor;
+            StateHasChanged();
+        });
     }
 
     private void HandleLocalBackupStateChanged()
@@ -1692,13 +2110,17 @@
         _primaryColor = Profile.PrimaryColor;
         _secondaryColor = Profile.SecondaryColor;
         RefreshTemplates();
+        RefreshTermsList();
         RefreshBackups();
         BackupSvc.OnLocalBackupStateChanged += HandleLocalBackupStateChanged;
+        Db.CompanyProfile.OnSaved += HandleCompanyProfileUpdated;
+        Db.CompanyProfile.OnLoaded += HandleCompanyProfileLoaded;
 
         _availableLogDates = SystemLog.GetAvailableLogDates().Select(d => d.Date).ToHashSet();
         _selectedLogDate = DateTime.Today;
         await LoadLogsForDate(_selectedLogDate);
 
+        _currentUser = await UserService.GetEmployeeAsync();
         _activeAdmins = Db.Employees.GetAll().Where(e => e.IsAdmin && e.IsActive).ToList();
 
         if (!string.IsNullOrEmpty(GDriveTokenParam))
@@ -1774,6 +2196,7 @@
     }
 
     private void RefreshTemplates() => Templates = Db.DocumentTemplates.GetAll().OrderBy(t => t.Name).ToList();
+    private void RefreshTermsList() => TermsList = Db.TermsAndConditions.GetAll().OrderBy(t => t.Name).ToList();
 
     // --- Logs Logic ---
     private async Task OnLogDateChanged(DateTime newDate)
@@ -1825,6 +2248,17 @@
         Db.SystemConfigs.Save(_systemConfig);
         _initialSystemConfig.EnableDetailedCircuitErrors = enabled;
         Snackbar.Add(Loc["Diagnostic settings updated."].Value, Severity.Success);
+        return Task.CompletedTask;
+    }
+
+    private Task OnLiveKitLogLevelChanged(string level)
+    {
+        var normalized = LiveKitService.NormalizeLogLevel(level);
+        _systemConfig.LiveKitLogLevel = normalized;
+        Db.SystemConfigs.Save(_systemConfig);
+        _initialSystemConfig.LiveKitLogLevel = normalized;
+        LiveKitService.ApplyPortConfiguration(_systemConfig);
+        Snackbar.Add(Loc["LiveKit log level updated and reloaded."].Value, Severity.Success);
         return Task.CompletedTask;
     }
 
@@ -2030,6 +2464,8 @@
 
     // --- Permission Group Logic ---
 
+    private Employee? _currentUser;
+
     private async Task AddPermissionGroup()
     {
         var group = new PermissionGroup { Name = Loc["New Group"].Value };
@@ -2039,6 +2475,10 @@
 
         if (result != null && !result.Canceled && result.Data is PermissionGroup newGroup)
         {
+            if (_currentUser?.IsAdmin != true)
+            {
+                newGroup.Permissions = UserService.FilterAllowedPermissions(_currentUser, newGroup.Permissions);
+            }
             Profile.PermissionGroups.Add(newGroup);
             await SaveProfile();
         }
@@ -2046,12 +2486,31 @@
 
     private async Task EditPermissionGroup(PermissionGroup group)
     {
-        var parameters = new DialogParameters { ["Group"] = group };
+        var initialPerms = group.Permissions?.ToList() ?? [];
+        var clone = new PermissionGroup
+        {
+            Id = group.Id,
+            Name = group.Name,
+            Permissions = group.Permissions?.ToList() ?? []
+        };
+        var parameters = new DialogParameters { ["Group"] = clone };
         var dialog = await DialogService.ShowAsync<PermissionGroupDialog>(Loc["Edit Permission Group"].Value, parameters, new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true });
         var result = await dialog.Result;
 
         if (result != null && !result.Canceled && result.Data is PermissionGroup updatedGroup)
         {
+            if (_currentUser?.IsAdmin != true)
+            {
+                var allowed = UserService.FilterAllowedPermissions(_currentUser, updatedGroup.Permissions);
+                foreach (var existing in initialPerms)
+                {
+                    if (updatedGroup.Permissions.Contains(existing) && !allowed.Contains(existing, StringComparer.OrdinalIgnoreCase))
+                    {
+                        allowed.Add(existing);
+                    }
+                }
+                updatedGroup.Permissions = allowed;
+            }
             var index = Profile.PermissionGroups.FindIndex(g => g.Id == updatedGroup.Id);
             if (index != -1)
             {
@@ -2271,6 +2730,75 @@
         RefreshTemplates();
     }
 
+    // --- Terms & Conditions Logic ---
+
+    private async Task CreateTermsAndConditions()
+    {
+        var item = new TermsAndConditions { Name = "New Terms & Conditions" };
+        var parameters = new DialogParameters { ["Item"] = item, ["IsNew"] = true };
+        var options = new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true };
+        var dialog = await DialogService.ShowAsync<TermsAndConditionsDialog>(BizLoc["New Terms & Conditions"].Value, parameters, options);
+        var result = await dialog.Result;
+        if (result != null && !result.Canceled)
+        {
+            RefreshTermsList();
+        }
+    }
+
+    private async Task EditTermsAndConditions(TermsAndConditions terms)
+    {
+        var cloned = new TermsAndConditions
+        {
+            Id = terms.Id,
+            Name = terms.Name,
+            Content = terms.Content,
+            IsDefault = terms.IsDefault,
+            CreatedAt = terms.CreatedAt,
+            UpdatedAt = terms.UpdatedAt
+        };
+        var parameters = new DialogParameters { ["Item"] = cloned, ["IsNew"] = false };
+        var options = new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true };
+        var title = string.Format(BizLoc["Edit {0}"].Value, terms.Name);
+        var dialog = await DialogService.ShowAsync<TermsAndConditionsDialog>(title, parameters, options);
+        var result = await dialog.Result;
+        if (result != null && !result.Canceled)
+        {
+            RefreshTermsList();
+        }
+    }
+
+    private async Task DeleteTermsAndConditions(TermsAndConditions terms)
+    {
+        var inUse = Templates.Where(t => t.DefaultTermsAndConditionsId == terms.Id).ToList();
+        string message = inUse.Any()
+            ? $"This preset is used by {inUse.Count} template(s) ({string.Join(", ", inUse.Select(x => x.Name))}). Are you sure you want to delete '{terms.Name}'?"
+            : $"Are you sure you want to delete '{terms.Name}'?";
+        var confirm = await DialogService.ShowMessageBoxAsync(
+            "Delete Terms & Conditions",
+            message,
+            yesText: "Delete",
+            cancelText: "Cancel");
+
+        if (confirm == true)
+        {
+            Db.TermsAndConditions.Delete(terms.Id);
+            foreach (var t in inUse)
+            {
+                t.DefaultTermsAndConditionsId = string.Empty;
+                Db.DocumentTemplates.Save(t);
+            }
+            RefreshTermsList();
+            Snackbar.Add("Terms & Conditions deleted", Severity.Success);
+        }
+    }
+
+    private string GetTermsPreview(string? markdown)
+    {
+        if (string.IsNullOrWhiteSpace(markdown)) return string.Empty;
+        var flat = System.Text.RegularExpressions.Regex.Replace(markdown, @"[#*_\[\]\(\)\n\r]", " ").Trim();
+        return flat.Length > 100 ? flat.Substring(0, 100) + "..." : flat;
+    }
+
     private async Task ExportTemplate(DocumentTemplate t)
     {
         var json = System.Text.Json.JsonSerializer.Serialize(t, new System.Text.Json.JsonSerializerOptions
@@ -2461,7 +2989,7 @@
         3 => Loc["Default Calendar Categories"].Value,
         4 => Loc["Backups & Restore"].Value,
         5 => Loc["Permission Groups"].Value,
-        6 => BizLoc["Email Server"].Value,
+        6 => Loc["Email Server"].Value,
         7 => Loc["Chat Settings"].Value,
         8 => Loc["System Setup"].Value,
         9 => Loc["Server Logs"].Value,
@@ -2489,6 +3017,9 @@
 
     private string GetTimeUntilExpiry(DateTime expiry)
     {
+        if (Spokes_Server.Core.Services.Licensing.LicenseValidationService.IsLifetimeExpiry(expiry))
+            return Loc["Lifetime"].Value;
+
         var span = expiry - DateTime.UtcNow;
         if (span.TotalDays < 0) return string.Format(Loc["Expired {0} days ago"].Value, (int)Math.Abs(span.TotalDays));
         
@@ -2665,6 +3196,383 @@
         finally
         {
             _isNtpSyncing = false;
+            StateHasChanged();
+        }
+    }
+
+    [Inject] private IEmailSyncService EmailSyncService { get; set; } = default!;
+
+    private async Task AddIncomingServerAsync()
+    {
+        var server = new IncomingServerConfig
+        {
+            Port = 993,
+            UseSsl = true,
+            IsSharedWithAllUsers = true
+        };
+
+        var dialog = await DialogService.ShowAsync<EmailIncomingServerDialog>(
+            Loc["Add Incoming Server (IMAP)"].Value,
+            new DialogParameters<EmailIncomingServerDialog>
+            {
+                { x => x.Server, server },
+                { x => x.IsNew, true }
+            },
+            new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true });
+
+        var result = await dialog.Result;
+        if (result is { Canceled: false, Data: IncomingServerConfig saved })
+        {
+            Profile = Db.CompanyProfile.Get();
+            Profile.EmailSettings.IncomingServers.Add(saved);
+            Db.CompanyProfile.Save(Profile);
+            Snackbar.Add(Loc["Incoming server saved."].Value, Severity.Success);
+        }
+    }
+
+    private async Task EditIncomingServerAsync(IncomingServerConfig server)
+    {
+        var clone = System.Text.Json.JsonSerializer.Deserialize<IncomingServerConfig>(
+            System.Text.Json.JsonSerializer.Serialize(server)) ?? server;
+
+        var dialog = await DialogService.ShowAsync<EmailIncomingServerDialog>(
+            Loc["Edit Incoming Server (IMAP)"].Value,
+            new DialogParameters<EmailIncomingServerDialog>
+            {
+                { x => x.Server, clone },
+                { x => x.IsNew, false }
+            },
+            new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true });
+
+        var result = await dialog.Result;
+        if (result is { Canceled: false, Data: IncomingServerConfig updated })
+        {
+            Profile = Db.CompanyProfile.Get();
+            var idx = Profile.EmailSettings.IncomingServers.FindIndex(s => s.Id == updated.Id);
+            if (idx >= 0)
+            {
+                Profile.EmailSettings.IncomingServers[idx] = updated;
+            }
+            Db.CompanyProfile.Save(Profile);
+            Snackbar.Add(Loc["Incoming server updated."].Value, Severity.Success);
+        }
+    }
+
+    private async Task DeleteIncomingServerAsync(IncomingServerConfig server)
+    {
+        Profile.EmailSettings.IncomingServers.RemoveAll(s => s.Id == server.Id);
+        await SaveProfile();
+    }
+
+    private async Task AddSendingServerAsync()
+    {
+        var server = new SendingServerConfig
+        {
+            Port = 587,
+            UseSsl = true,
+            UseSharedCredentials = true,
+            IsSharedWithAllUsers = true
+        };
+
+        var dialog = await DialogService.ShowAsync<EmailOutgoingServerDialog>(
+            Loc["Add Outgoing Server (SMTP)"].Value,
+            new DialogParameters<EmailOutgoingServerDialog>
+            {
+                { x => x.Server, server },
+                { x => x.IsNew, true }
+            },
+            new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true });
+
+        var result = await dialog.Result;
+        if (result is { Canceled: false, Data: SendingServerConfig saved })
+        {
+            Profile.EmailSettings.SendingServers.Add(saved);
+            await SaveProfile();
+        }
+    }
+
+    private async Task EditSendingServerAsync(SendingServerConfig server)
+    {
+        var clone = System.Text.Json.JsonSerializer.Deserialize<SendingServerConfig>(
+            System.Text.Json.JsonSerializer.Serialize(server)) ?? server;
+
+        var dialog = await DialogService.ShowAsync<EmailOutgoingServerDialog>(
+            Loc["Edit Outgoing Server (SMTP)"].Value,
+            new DialogParameters<EmailOutgoingServerDialog>
+            {
+                { x => x.Server, clone },
+                { x => x.IsNew, false }
+            },
+            new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true });
+
+        var result = await dialog.Result;
+        if (result is { Canceled: false, Data: SendingServerConfig updated })
+        {
+            var idx = Profile.EmailSettings.SendingServers.FindIndex(s => s.Id == updated.Id);
+            if (idx >= 0)
+            {
+                Profile.EmailSettings.SendingServers[idx] = updated;
+            }
+            await SaveProfile();
+        }
+    }
+
+    private async Task DeleteSendingServerAsync(SendingServerConfig server)
+    {
+        Profile.EmailSettings.SendingServers.RemoveAll(s => s.Id == server.Id);
+        await SaveProfile();
+    }
+
+    private async Task AdminConnectRealInboxAsync()
+    {
+        var adminOwnerId = _activeAdmins.FirstOrDefault()?.Id ?? string.Empty;
+        var newAccount = new EmailAccount
+        {
+            OwnerEmployeeId = adminOwnerId,
+            IsServerManaged = true,
+            SortOrder = Db.EmailAccounts.GetAll().Count
+        };
+
+        var dialog = await DialogService.ShowAsync<EmailAccountDialog>(
+            Loc["Connect Real Inbox (IMAP)"].Value,
+            new DialogParameters<EmailAccountDialog>
+            {
+                { x => x.Account, newAccount },
+                { x => x.IsNew, true },
+                { x => x.AllowSharing, true }
+            },
+            new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true });
+
+        var result = await dialog.Result;
+        if (result is { Canceled: false, Data: EmailAccount savedAccount })
+        {
+            Snackbar.Add(Loc["Real Inbox connected! Starting initial sync..."].Value, Severity.Success);
+            _ = EmailSyncService.SyncAccountAsync(savedAccount.Id);
+            StateHasChanged();
+        }
+    }
+
+    private async Task AdminEditRealInboxAsync(EmailAccount account)
+    {
+        var clone = System.Text.Json.JsonSerializer.Deserialize<EmailAccount>(
+            System.Text.Json.JsonSerializer.Serialize(account)) ?? account;
+
+        var dialog = await DialogService.ShowAsync<EmailAccountDialog>(
+            Loc["Edit Real Inbox"].Value,
+            new DialogParameters<EmailAccountDialog>
+            {
+                { x => x.Account, clone },
+                { x => x.IsNew, false },
+                { x => x.AllowSharing, true }
+            },
+            new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true });
+
+        var result = await dialog.Result;
+        if (result is { Canceled: false })
+        {
+            Snackbar.Add(Loc["Real Inbox updated."].Value, Severity.Success);
+            StateHasChanged();
+        }
+    }
+
+    private string? _adminSyncingAccountId;
+
+    private void AdminArchiveRealInbox(EmailAccount account)
+    {
+        EmailInboxService.SetRealInboxArchived(account.Id, true);
+        Snackbar.Add(Loc["Real Inbox archived. Emails remain on disk and automatic syncing is disabled."].Value, Severity.Info);
+        StateHasChanged();
+    }
+
+    private void AdminUnarchiveRealInbox(EmailAccount account)
+    {
+        EmailInboxService.SetRealInboxArchived(account.Id, false);
+        Snackbar.Add(Loc["Real Inbox restored to active inboxes."].Value, Severity.Success);
+        StateHasChanged();
+    }
+
+    private async Task AdminSyncRealInboxNowAsync(EmailAccount account)
+    {
+        _adminSyncingAccountId = account.Id;
+        StateHasChanged();
+        try
+        {
+            await EmailSyncService.SyncAccountAsync(account.Id);
+            Snackbar.Add(Loc["Mailbox sync completed."].Value, Severity.Success);
+        }
+        finally
+        {
+            _adminSyncingAccountId = null;
+            StateHasChanged();
+        }
+    }
+
+    private async Task AdminDeleteRealInboxAsync(EmailAccount account)
+    {
+        var dialog = await DialogService.ShowAsync<ConfirmDialog>(
+            Loc["Delete Real Inbox"].Value,
+            new DialogParameters<ConfirmDialog>
+            {
+                { x => x.ContentText, string.Format(Loc["Are you sure you want to permanently delete Real Inbox '{0}', all of its downloaded emails and attachments on disk, and any Virtual Inboxes attached to it?"].Value, account.Name) },
+                { x => x.ButtonText, Loc["Delete"].Value },
+                { x => x.CancelText, Loc["Cancel"].Value },
+                { x => x.Color, Color.Error },
+                { x => x.OnConfirmAsync, () => Task.Run(() => EmailInboxService.DeleteRealInbox(account.Id)) }
+            },
+            new DialogOptions { MaxWidth = MaxWidth.ExtraSmall, FullWidth = true, BackdropClick = false, CloseOnEscapeKey = false });
+
+        var result = await dialog.Result;
+        if (result is { Canceled: false })
+        {
+            Snackbar.Add(Loc["Real Inbox and all local emails removed."].Value, Severity.Success);
+            StateHasChanged();
+        }
+    }
+
+    private async Task AdminCreateVirtualInboxAsync()
+    {
+        var allAccounts = Db.EmailAccounts.GetAll().Where(a => a.IsServerManaged && !a.IsArchived).ToList();
+        var adminOwnerId = _activeAdmins.FirstOrDefault()?.Id ?? string.Empty;
+        var newInbox = new EmailInbox
+        {
+            OwnerEmployeeId = adminOwnerId,
+            IsServerManaged = true,
+            AccountId = allAccounts.FirstOrDefault()?.Id ?? string.Empty,
+            SortOrder = Db.EmailInboxes.GetAll().Count
+        };
+
+        var dialog = await DialogService.ShowAsync<EmailInboxDialog>(
+            Loc["Create Virtual Inbox"].Value,
+            new DialogParameters<EmailInboxDialog>
+            {
+                { x => x.Inbox, newInbox },
+                { x => x.AvailableAccounts, allAccounts },
+                { x => x.AvailableIdentities, Db.EmailSendingIdentities.GetAll().Where(i => i.IsServerManaged).ToList() },
+                { x => x.IsNew, true },
+                { x => x.AllowSharing, true }
+            },
+            new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true });
+
+        var result = await dialog.Result;
+        if (result is { Canceled: false, Data: EmailInbox saved })
+        {
+            saved.IsServerManaged = true;
+            Db.EmailInboxes.Save(saved);
+            Snackbar.Add(Loc["Virtual Inbox created."].Value, Severity.Success);
+            StateHasChanged();
+        }
+    }
+
+    private async Task AdminEditVirtualInboxAsync(EmailInbox inbox)
+    {
+        var clone = System.Text.Json.JsonSerializer.Deserialize<EmailInbox>(
+            System.Text.Json.JsonSerializer.Serialize(inbox)) ?? inbox;
+
+        var dialog = await DialogService.ShowAsync<EmailInboxDialog>(
+            Loc["Edit Virtual Inbox"].Value,
+            new DialogParameters<EmailInboxDialog>
+            {
+                { x => x.Inbox, clone },
+                { x => x.AvailableAccounts, Db.EmailAccounts.GetAll().Where(a => a.IsServerManaged).ToList() },
+                { x => x.AvailableIdentities, Db.EmailSendingIdentities.GetAll().Where(i => i.IsServerManaged).ToList() },
+                { x => x.IsNew, false },
+                { x => x.AllowSharing, true }
+            },
+            new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true });
+
+        var result = await dialog.Result;
+        if (result is { Canceled: false, Data: EmailInbox updated })
+        {
+            updated.IsServerManaged = true;
+            Db.EmailInboxes.Save(updated);
+            Snackbar.Add(Loc["Virtual Inbox updated."].Value, Severity.Success);
+            StateHasChanged();
+        }
+    }
+
+    private async Task AdminDeleteVirtualInboxAsync(EmailInbox inbox)
+    {
+        var confirmed = await DialogService.ShowMessageBoxAsync(
+            Loc["Delete Virtual Inbox"].Value,
+            string.Format(Loc["Are you sure you want to delete Virtual Inbox '{0}'?"].Value, inbox.Name),
+            yesText: Loc["Delete"].Value,
+            cancelText: Loc["Cancel"].Value);
+
+        if (confirmed == true)
+        {
+            EmailInboxService.DeleteVirtualInbox(inbox.Id);
+            Snackbar.Add(Loc["Virtual Inbox deleted."].Value, Severity.Success);
+            StateHasChanged();
+        }
+    }
+
+    private async Task AdminCreateSendingIdentityAsync()
+    {
+        var adminOwnerId = _activeAdmins.FirstOrDefault()?.Id ?? string.Empty;
+        var newIdentity = new EmailSendingIdentity
+        {
+            OwnerEmployeeId = adminOwnerId,
+            IsServerManaged = true,
+            DisplayName = Profile.CompanyName,
+            SourceType = EmailIdentitySourceType.OutgoingServer
+        };
+
+        var dialog = await DialogService.ShowAsync<EmailSendingIdentityDialog>(
+            Loc["Create Sending Identity"].Value,
+            new DialogParameters<EmailSendingIdentityDialog>
+            {
+                { x => x.Identity, newIdentity },
+                { x => x.IsNew, true },
+                { x => x.AllowSharing, true }
+            },
+            new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true });
+
+        var result = await dialog.Result;
+        if (result is { Canceled: false, Data: EmailSendingIdentity saved })
+        {
+            saved.IsServerManaged = true;
+            Db.EmailSendingIdentities.Save(saved);
+            Snackbar.Add(Loc["Sending Identity created."].Value, Severity.Success);
+            StateHasChanged();
+        }
+    }
+
+    private async Task AdminEditSendingIdentityAsync(EmailSendingIdentity identity)
+    {
+        var clone = System.Text.Json.JsonSerializer.Deserialize<EmailSendingIdentity>(
+            System.Text.Json.JsonSerializer.Serialize(identity)) ?? identity;
+
+        var dialog = await DialogService.ShowAsync<EmailSendingIdentityDialog>(
+            Loc["Edit Sending Identity"].Value,
+            new DialogParameters<EmailSendingIdentityDialog>
+            {
+                { x => x.Identity, clone },
+                { x => x.IsNew, false },
+                { x => x.AllowSharing, true }
+            },
+            new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true });
+
+        var result = await dialog.Result;
+        if (result is { Canceled: false, Data: EmailSendingIdentity updated })
+        {
+            Db.EmailSendingIdentities.Save(updated);
+            Snackbar.Add(Loc["Sending Identity updated."].Value, Severity.Success);
+            StateHasChanged();
+        }
+    }
+
+    private async Task AdminDeleteSendingIdentityAsync(EmailSendingIdentity identity)
+    {
+        var confirmed = await DialogService.ShowMessageBoxAsync(
+            Loc["Delete Sending Identity"].Value,
+            string.Format(Loc["Are you sure you want to delete sending identity '{0}'?"].Value, identity.DisplayLabel),
+            yesText: Loc["Delete"].Value,
+            cancelText: Loc["Cancel"].Value);
+
+        if (confirmed == true)
+        {
+            EmailInboxService.DeleteSendingIdentity(identity.Id);
+            Snackbar.Add(Loc["Sending Identity deleted."].Value, Severity.Success);
             StateHasChanged();
         }
     }

@@ -1,20 +1,29 @@
 using System.Collections.Concurrent;
+using System.IO;
 using Microsoft.Extensions.Logging;
 using Spokes_Server.Core.Data.Repositories.Communication;
 using Spokes_Server.Core.Data.Repositories.HR;
 using Spokes_Server.Core.Helpers;
 using Spokes_Server.Core.Models.Communication;
+using Spokes_Server.Core.Models.HR;
 using Spokes_Server.Core.Services.Security;
+using Spokes_Server.Core.Services.Storage;
 
 namespace Spokes_Server.Core.Services.Communication.Chat;
 
 public class AlbumService
 {
+    public const int AlbumSuggestionPhotoThreshold = 4;
+
     private readonly AlbumRepository _albums;
     private readonly ChatChannelRepository _channels;
     private readonly ICryptoService _crypto;
     private readonly ServerEscrowService _escrowService;
     private readonly EmployeeRepository _employees;
+    private readonly IChatChannelAccessService? _chatAccess;
+    private readonly IChatAuthorizationService? _chatAuth;
+    private readonly FileTokenService? _fileTokenService;
+    private readonly IFileService? _fileService;
     private readonly ILogger<AlbumService>? _logger;
     private readonly ConcurrentDictionary<string, object> _albumLocks = new();
 
@@ -28,7 +37,11 @@ public class AlbumService
         ICryptoService crypto,
         ServerEscrowService escrowService,
         EmployeeRepository employees,
-        ILogger<AlbumService>? logger = null)
+        ILogger<AlbumService>? logger = null,
+        IChatChannelAccessService? chatAccess = null,
+        IChatAuthorizationService? chatAuth = null,
+        FileTokenService? fileTokenService = null,
+        IFileService? fileService = null)
     {
         ArgumentNullException.ThrowIfNull(albums);
         ArgumentNullException.ThrowIfNull(channels);
@@ -42,6 +55,210 @@ public class AlbumService
         _escrowService = escrowService;
         _employees = employees;
         _logger = logger;
+        _chatAccess = chatAccess;
+        _chatAuth = chatAuth;
+        _fileTokenService = fileTokenService;
+        _fileService = fileService;
+    }
+
+    private bool IsCallerWriteBlocked(string? userId)
+    {
+        if (string.IsNullOrEmpty(userId))
+        {
+            return true;
+        }
+
+        var employee = _employees.GetById(userId);
+        return employee != null && (!employee.IsActive || employee.IsSuspended || employee.IsBanned);
+    }
+
+    private bool CanUserReadSharedChannel(ChatChannel channel, string userId, Employee? user)
+    {
+        if (channel == null || string.IsNullOrEmpty(userId))
+        {
+            return false;
+        }
+
+        if (_chatAuth != null)
+        {
+            return user != null
+                ? _chatAuth.CanUserAccessChannel(channel, user)
+                : _chatAuth.CanUserAccessChannel(channel.Id, userId);
+        }
+
+        if (_chatAccess != null)
+        {
+            return _chatAccess.GetUsersForChannel(channel.Id).Contains(userId);
+        }
+
+        if (channel.IsPublicChannel)
+        {
+            return true;
+        }
+
+        if (channel.ParticipantIds != null && channel.ParticipantIds.Contains(userId))
+        {
+            return true;
+        }
+
+        if (user != null)
+        {
+            if (user.IsAdmin)
+            {
+                return true;
+            }
+
+            if (!string.IsNullOrEmpty(user.TeamId) && channel.AllowedTeamIds != null && channel.AllowedTeamIds.Contains(user.TeamId))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private bool CanUserPostToSharedChannel(ChatChannel channel, string userId, Employee? user)
+    {
+        if (channel == null || channel.IsArchived || string.IsNullOrEmpty(userId))
+        {
+            return false;
+        }
+
+        var resolvedUser = user ?? _employees.GetById(userId);
+        if (_chatAuth != null)
+        {
+            return resolvedUser != null
+                && _chatAuth.CanUserAccessChannel(channel, resolvedUser)
+                && _chatAuth.CanUserPostToChannel(channel, resolvedUser);
+        }
+
+        if (!CanUserReadSharedChannel(channel, userId, user))
+        {
+            return false;
+        }
+
+        if (!channel.IsAnnouncementOnly)
+        {
+            return true;
+        }
+
+        return (user?.IsAdmin == true) ||
+               (channel.AllowedPostUserIds != null && channel.AllowedPostUserIds.Contains(userId)) ||
+               (user != null && !string.IsNullOrEmpty(user.TeamId) && channel.AllowedPostTeamIds != null && channel.AllowedPostTeamIds.Contains(user.TeamId)) ||
+               (channel.ChannelType == ChatChannelType.Group && channel.CreatedById == userId);
+    }
+
+    public virtual bool CanUserDecryptAlbum(Album? album, Employee? user)
+    {
+        if (album == null || user == null || !user.IsActive || user.IsBanned)
+        {
+            return false;
+        }
+
+        if (!CanUserViewAlbum(album, user.Id))
+        {
+            return false;
+        }
+
+        if (!album.IsEncrypted)
+        {
+            return true;
+        }
+
+        if (album.EncryptedAlbumKeys.ContainsKey(user.Id))
+        {
+            return true;
+        }
+
+        bool userHasVault = !string.IsNullOrEmpty(user.PublicKey) || user.HasVaultPassword;
+        if (album.SharedWithChannelIds != null)
+        {
+            foreach (var channelId in album.SharedWithChannelIds)
+            {
+                if (!album.EncryptedAlbumKeys.ContainsKey($"Channel_{channelId}"))
+                {
+                    continue;
+                }
+
+                var channel = _channels.GetById(channelId);
+                if (channel == null || !CanUserReadSharedChannel(channel, user.Id, user))
+                {
+                    continue;
+                }
+
+                if (channel.EncryptedChannelKeys.ContainsKey(user.Id) ||
+                    (!userHasVault && channel.EncryptedChannelKeys.ContainsKey("ServerMaster")))
+                {
+                    return true;
+                }
+            }
+        }
+
+        var owner = !string.IsNullOrEmpty(album.OwnerId) ? _employees.GetById(album.OwnerId) : null;
+        bool ownerHasVault = owner != null && (!string.IsNullOrEmpty(owner.PublicKey) || owner.HasVaultPassword);
+        bool allowEscrowFallback = !ownerHasVault || HasUnencryptedSharedChannel(album);
+
+        return allowEscrowFallback && album.EncryptedAlbumKeys.ContainsKey("Escrow");
+    }
+
+    public virtual bool CanUserViewAlbum(string? albumId, string? userId)
+    {
+        if (string.IsNullOrEmpty(albumId) || string.IsNullOrEmpty(userId))
+        {
+            return false;
+        }
+
+        var album = _albums.GetById(albumId);
+        return CanUserViewAlbum(album, userId);
+    }
+
+    public virtual bool CanUserViewAlbum(Album? album, string? userId)
+    {
+        if (album == null || string.IsNullOrEmpty(userId))
+        {
+            return false;
+        }
+
+        if (string.Equals(album.OwnerId, userId, StringComparison.OrdinalIgnoreCase) ||
+            (album.ContributorUserIds != null && album.ContributorUserIds.Contains(userId)))
+        {
+            return true;
+        }
+
+        if (album.SharedWithChannelIds != null)
+        {
+            foreach (var channelId in album.SharedWithChannelIds)
+            {
+                if (_chatAccess != null)
+                {
+                    var channelUsers = _chatAccess.GetUsersForChannel(channelId);
+                    if (channelUsers.Contains(userId))
+                    {
+                        return true;
+                    }
+                }
+                else
+                {
+                    var channel = _channels.GetById(channelId);
+                    if (channel == null) continue;
+                    if (channel.IsPublicChannel)
+                    {
+                        return true;
+                    }
+                    if (channel.ParticipantIds != null && channel.ParticipantIds.Contains(userId))
+                    {
+                        return true;
+                    }
+                    var user = _employees.GetById(userId);
+                    if (user != null && !string.IsNullOrEmpty(user.TeamId) && channel.AllowedTeamIds != null && channel.AllowedTeamIds.Contains(user.TeamId))
+                    {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        return false;
     }
 
     public SpokesResult<Album> CreateAlbum(Album album, string ownerId, string? ownerPrivateKey)
@@ -53,6 +270,10 @@ public class AlbumService
         if (string.IsNullOrEmpty(ownerId))
         {
             return SpokesResult<Album>.Failure("OwnerId is required.", "INVALID_ARGUMENT");
+        }
+        if (IsCallerWriteBlocked(ownerId))
+        {
+            return SpokesResult<Album>.Failure("User account is suspended or inactive.", "FORBIDDEN");
         }
 
         album.OwnerId = ownerId;
@@ -238,7 +459,7 @@ public class AlbumService
 
     public virtual string? GetPlainAlbumKey(Album album, string currentUserId, string? currentPrivateKey)
     {
-        if (album == null)
+        if (album == null || !CanUserViewAlbum(album, currentUserId))
         {
             return null;
         }
@@ -359,16 +580,16 @@ public class AlbumService
 
     public SpokesResult ShareAlbumWithChannel(string albumId, string currentUserId, string channelId, string? currentPrivateKey)
     {
+        if (IsCallerWriteBlocked(currentUserId))
+        {
+            return SpokesResult.Failure("User account is suspended or inactive.", "FORBIDDEN");
+        }
+
         var album = _albums.GetById(albumId);
         if (album == null)
         {
             _logger?.LogWarning("ShareAlbumWithChannel failed: album {AlbumId} not found", albumId);
             return SpokesResult.Failure($"Album '{albumId}' not found.", "NOT_FOUND");
-        }
-        if (album.OwnerId != currentUserId && !album.ContributorUserIds.Contains(currentUserId))
-        {
-            _logger?.LogWarning("ShareAlbumWithChannel failed: user {UserId} not authorized to share album {AlbumId}", currentUserId, albumId);
-            return SpokesResult.Failure($"User '{currentUserId}' is not authorized to share album '{albumId}'.", "FORBIDDEN");
         }
 
         var channel = _channels.GetById(channelId);
@@ -378,9 +599,38 @@ public class AlbumService
             return SpokesResult.Failure($"Channel '{channelId}' not found.", "NOT_FOUND");
         }
 
+        var callerEmployee = _employees.GetById(currentUserId);
+
         lock (GetAlbumLock(albumId))
         {
             album = _albums.GetById(albumId) ?? album;
+
+            // Re-mentioning an album in a channel where it is ALREADY shared does not mutate keys or escrow;
+            // allow any authorized viewer who has read access to that channel.
+            if (album.SharedWithChannelIds.Contains(channelId))
+            {
+                if (!CanUserViewAlbum(album, currentUserId) || !CanUserReadSharedChannel(channel, currentUserId, callerEmployee))
+                {
+                    _logger?.LogWarning("ShareAlbumWithChannel failed: user {UserId} cannot access already-shared channel {ChannelId} for album {AlbumId}", currentUserId, channelId, albumId);
+                    return SpokesResult.Failure($"User '{currentUserId}' does not have access to channel '{channelId}'.", "FORBIDDEN");
+                }
+
+                return SpokesResult.Success();
+            }
+
+            // Sharing an album with a NEW channel requires the album owner and posting permission in the target channel.
+            if (album.OwnerId != currentUserId)
+            {
+                _logger?.LogWarning("ShareAlbumWithChannel failed: non-owner {UserId} attempted to share album {AlbumId} with new channel {ChannelId}", currentUserId, albumId, channelId);
+                return SpokesResult.Failure($"User '{currentUserId}' is not authorized to share album '{albumId}' with a new channel.", "FORBIDDEN");
+            }
+
+            if (!CanUserPostToSharedChannel(channel, currentUserId, callerEmployee))
+            {
+                _logger?.LogWarning("ShareAlbumWithChannel failed: owner {UserId} is not permitted to post to channel {ChannelId}", currentUserId, channelId);
+                return SpokesResult.Failure($"User '{currentUserId}' is not authorized to post to channel '{channelId}'.", "FORBIDDEN");
+            }
+
             var updatedSharedChannels = new HashSet<string>(album.SharedWithChannelIds);
             if (updatedSharedChannels.Add(channelId))
             {
@@ -446,37 +696,63 @@ public class AlbumService
 
     public SpokesResult UnshareAlbumWithChannel(string albumId, string currentUserId, string channelId)
     {
+        if (IsCallerWriteBlocked(currentUserId))
+        {
+            return SpokesResult.Failure("User account is suspended or inactive.", "FORBIDDEN");
+        }
+
         var album = _albums.GetById(albumId);
         if (album == null)
         {
             _logger?.LogWarning("UnshareAlbumWithChannel failed: album {AlbumId} not found", albumId);
             return SpokesResult.Failure($"Album '{albumId}' not found.", "NOT_FOUND");
         }
-        if (album.OwnerId != currentUserId && !album.ContributorUserIds.Contains(currentUserId))
+        if (album.OwnerId != currentUserId)
         {
             _logger?.LogWarning("UnshareAlbumWithChannel failed: user {UserId} not authorized to unshare album {AlbumId}", currentUserId, albumId);
             return SpokesResult.Failure($"User '{currentUserId}' is not authorized to unshare album '{albumId}'.", "FORBIDDEN");
         }
 
+        bool removed = false;
         lock (GetAlbumLock(albumId))
         {
             album = _albums.GetById(albumId) ?? album;
             var updatedSharedChannels = new HashSet<string>(album.SharedWithChannelIds);
             if (updatedSharedChannels.Remove(channelId))
             {
+                removed = true;
                 album.EncryptedAlbumKeys.Remove($"Channel_{channelId}");
                 album.SharedWithChannelIds = updatedSharedChannels.ToList();
 
                 var owner = _employees.GetById(album.OwnerId);
-                bool ownerHasVault = owner != null && (!string.IsNullOrEmpty(owner.PublicKey) || owner.HasVaultPassword);
-                if (!HasUnencryptedSharedChannel(album) && ownerHasVault)
+                bool ownerHasPublicKey = owner != null && !string.IsNullOrEmpty(owner.PublicKey);
+                if (!HasUnencryptedSharedChannel(album) && ownerHasPublicKey)
                 {
                     SyncAlbumEncryptionKeys(album);
-                    album.EncryptedAlbumKeys.Remove("Escrow");
+                    if (album.EncryptedAlbumKeys.ContainsKey(album.OwnerId))
+                    {
+                        album.EncryptedAlbumKeys.Remove("Escrow");
+                    }
                 }
 
                 _albums.Save(album);
                 OnAlbumUpdated?.Invoke(albumId);
+            }
+        }
+
+        if (removed && _fileTokenService != null)
+        {
+            _fileTokenService.InvalidateContextTokens("albums", albumId);
+            var affectedUsers = _chatAccess?.GetUsersForChannel(channelId);
+            if (affectedUsers != null)
+            {
+                foreach (var userId in affectedUsers)
+                {
+                    if (!string.Equals(userId, currentUserId, StringComparison.Ordinal))
+                    {
+                        _fileTokenService.InvalidateUserTokens(userId);
+                    }
+                }
             }
         }
 
@@ -554,6 +830,11 @@ public class AlbumService
 
     public SpokesResult<List<AlbumMedia>> UpdateContributors(string albumId, string currentUserId, IEnumerable<string> newContributorIds, string? currentPrivateKey)
     {
+        if (IsCallerWriteBlocked(currentUserId))
+        {
+            return SpokesResult<List<AlbumMedia>>.Failure("User account is suspended or inactive.", "FORBIDDEN");
+        }
+
         var album = _albums.GetById(albumId);
         if (album == null)
         {
@@ -567,13 +848,13 @@ public class AlbumService
         }
 
         List<AlbumMedia> removedMedia = [];
+        List<string> removedContributors = [];
 
         lock (GetAlbumLock(albumId))
         {
             album = _albums.GetById(albumId) ?? album;
             var existingContributors = new HashSet<string>(album.ContributorUserIds);
             var newContributors = new HashSet<string>(newContributorIds);
-            List<string> removedContributors = [];
 
             foreach (var existing in existingContributors)
             {
@@ -625,11 +906,25 @@ public class AlbumService
             OnAlbumUpdated?.Invoke(albumId);
         }
 
+        if (_fileTokenService != null && removedContributors.Count > 0)
+        {
+            _fileTokenService.InvalidateContextTokens("albums", albumId);
+            foreach (var removedId in removedContributors)
+            {
+                _fileTokenService.InvalidateUserTokens(removedId);
+            }
+        }
+
         return SpokesResult<List<AlbumMedia>>.Success(removedMedia);
     }
 
     public SpokesResult AddMedia(string albumId, string currentUserId, IEnumerable<AlbumMedia> mediaItems)
     {
+        if (IsCallerWriteBlocked(currentUserId))
+        {
+            return SpokesResult.Failure("User account is suspended or inactive.", "FORBIDDEN");
+        }
+
         var album = _albums.GetById(albumId);
         if (album == null)
         {
@@ -657,6 +952,11 @@ public class AlbumService
 
     public SpokesResult RemoveMedia(string albumId, string currentUserId, AlbumMedia mediaItem)
     {
+        if (IsCallerWriteBlocked(currentUserId))
+        {
+            return SpokesResult.Failure("User account is suspended or inactive.", "FORBIDDEN");
+        }
+
         var album = _albums.GetById(albumId);
         if (album == null)
         {
@@ -692,6 +992,11 @@ public class AlbumService
 
     public SpokesResult<List<AlbumMedia>> RemoveMediaBulk(string albumId, string currentUserId, IEnumerable<string> mediaIds)
     {
+        if (IsCallerWriteBlocked(currentUserId))
+        {
+            return SpokesResult<List<AlbumMedia>>.Failure("User account is suspended or inactive.", "FORBIDDEN");
+        }
+
         var album = _albums.GetById(albumId);
         if (album == null)
         {
@@ -741,6 +1046,11 @@ public class AlbumService
 
     public SpokesResult DeleteAlbum(string albumId, string currentUserId)
     {
+        if (IsCallerWriteBlocked(currentUserId))
+        {
+            return SpokesResult.Failure("User account is suspended or inactive.", "FORBIDDEN");
+        }
+
         var album = _albums.GetById(albumId);
         if (album == null)
         {
@@ -761,6 +1071,11 @@ public class AlbumService
 
     public SpokesResult RenameAlbum(string albumId, string currentUserId, string newTitle)
     {
+        if (IsCallerWriteBlocked(currentUserId))
+        {
+            return SpokesResult.Failure("User account is suspended or inactive.", "FORBIDDEN");
+        }
+
         if (string.IsNullOrWhiteSpace(newTitle))
         {
             return SpokesResult.Failure("Album title cannot be empty.", "INVALID_ARGUMENT");
@@ -791,6 +1106,9 @@ public class AlbumService
 
     public SpokesResult TrySelfHealContributorKeys(string albumId, string currentUserId, string? currentPrivateKey)
     {
+        if (IsCallerWriteBlocked(currentUserId))
+            return SpokesResult.Failure("User account is suspended or inactive.", "FORBIDDEN");
+
         if (string.IsNullOrEmpty(currentPrivateKey))
             return SpokesResult.Failure("Private key required to self-heal keys.", "UNAUTHORIZED");
 
@@ -844,5 +1162,257 @@ public class AlbumService
         }
 
         return SpokesResult.Success();
+    }
+
+    public virtual List<Album> GetWritableAlbumsForChannel(string? userId, string? channelId, string? currentPrivateKey = null)
+    {
+        if (string.IsNullOrEmpty(userId) || string.IsNullOrEmpty(channelId) || IsCallerWriteBlocked(userId))
+        {
+            return [];
+        }
+
+        return _albums.GetAll()
+            .Where(a =>
+                (string.Equals(a.OwnerId, userId, StringComparison.OrdinalIgnoreCase) ||
+                 (a.ContributorUserIds.Contains(userId) && a.SharedWithChannelIds.Contains(channelId))) &&
+                !IsAlbumLocked(a, userId, currentPrivateKey))
+            .OrderByDescending(a => a.CreatedAt)
+            .ToList();
+    }
+
+    public virtual async Task<SpokesResult<Album>> ImportChatAttachmentsToAlbumAsync(
+        string currentUserId,
+        string channelId,
+        IReadOnlyList<ChatAttachment> imageAttachments,
+        string? targetAlbumId,
+        string? newAlbumTitle,
+        string? currentPrivateKey = null,
+        string? plainChannelKey = null,
+        bool deleteSourceFiles = true)
+    {
+        if (IsCallerWriteBlocked(currentUserId))
+        {
+            return SpokesResult<Album>.Failure("User account is suspended or inactive.", "FORBIDDEN");
+        }
+
+        if (_fileService == null)
+        {
+            return SpokesResult<Album>.Failure("File service is not configured on AlbumService.", "INTERNAL_ERROR");
+        }
+
+        if (string.IsNullOrWhiteSpace(channelId))
+        {
+            return SpokesResult<Album>.Failure("ChannelId is required.", "INVALID_ARGUMENT");
+        }
+
+        if (imageAttachments == null || imageAttachments.Count == 0)
+        {
+            return SpokesResult<Album>.Failure("At least one image attachment is required.", "INVALID_ARGUMENT");
+        }
+
+        var channel = _channels.GetById(channelId);
+        if (channel == null)
+        {
+            return SpokesResult<Album>.Failure($"Channel '{channelId}' not found.", "NOT_FOUND");
+        }
+
+        var callerEmployee = _employees.GetById(currentUserId);
+        if (!CanUserPostToSharedChannel(channel, currentUserId, callerEmployee))
+        {
+            return SpokesResult<Album>.Failure("User is not authorized to post to this channel.", "FORBIDDEN");
+        }
+
+        if (channel.IsEncrypted)
+        {
+            if (string.IsNullOrEmpty(plainChannelKey))
+            {
+                if (string.IsNullOrEmpty(currentPrivateKey))
+                {
+                    return SpokesResult<Album>.Failure("Vault is locked. Cannot decrypt channel attachments.", "VAULT_LOCKED");
+                }
+
+                if (!channel.EncryptedChannelKeys.TryGetValue(currentUserId, out var cipherChannelKey))
+                {
+                    return SpokesResult<Album>.Failure("Channel key not found for current user.", "KEY_NOT_FOUND");
+                }
+
+                try
+                {
+                    plainChannelKey = _crypto.DecryptRsa(cipherChannelKey, currentPrivateKey);
+                }
+                catch (Exception ex)
+                {
+                    _logger?.LogError(ex, "ImportChatAttachmentsToAlbumAsync failed: RSA decryption of channel key failed for user {UserId} in channel {ChannelId}", currentUserId, channelId);
+                    return SpokesResult<Album>.Failure($"Failed to decrypt channel key: {ex.Message}", "CRYPTO_FAILED");
+                }
+            }
+        }
+
+        Album album;
+        bool createdNewAlbum = false;
+
+        if (!string.IsNullOrWhiteSpace(targetAlbumId))
+        {
+            var existing = _albums.GetById(targetAlbumId);
+            if (existing == null)
+            {
+                return SpokesResult<Album>.Failure($"Album '{targetAlbumId}' not found.", "NOT_FOUND");
+            }
+
+            if (existing.OwnerId != currentUserId && !existing.ContributorUserIds.Contains(currentUserId))
+            {
+                return SpokesResult<Album>.Failure($"User '{currentUserId}' is not authorized to add media to album '{targetAlbumId}'.", "FORBIDDEN");
+            }
+
+            album = existing;
+        }
+        else
+        {
+            if (string.IsNullOrWhiteSpace(newAlbumTitle))
+            {
+                return SpokesResult<Album>.Failure("Album title is required when creating a new album.", "INVALID_ARGUMENT");
+            }
+
+            var createResult = CreateAlbum(new Album { Title = newAlbumTitle.Trim() }, currentUserId, currentPrivateKey);
+            if (!createResult.IsSuccess || createResult.Value == null)
+            {
+                return createResult;
+            }
+
+            album = createResult.Value;
+            createdNewAlbum = true;
+        }
+
+        var shareResult = ShareAlbumWithChannel(album.Id, currentUserId, channelId, currentPrivateKey);
+        if (!shareResult.IsSuccess)
+        {
+            if (createdNewAlbum)
+            {
+                _albums.Delete(album.Id);
+                _albumLocks.TryRemove(album.Id, out _);
+            }
+
+            return SpokesResult<Album>.Failure(shareResult.ErrorMessage ?? "Failed to share album with channel.", shareResult.Code ?? "FORBIDDEN");
+        }
+
+        album = _albums.GetById(album.Id) ?? album;
+        var plainAlbumKey = GetPlainAlbumKey(album, currentUserId, currentPrivateKey);
+        if (string.IsNullOrEmpty(plainAlbumKey))
+        {
+            if (createdNewAlbum)
+            {
+                _albums.Delete(album.Id);
+                _albumLocks.TryRemove(album.Id, out _);
+            }
+
+            return SpokesResult<Album>.Failure("Cannot decrypt album key.", "ENCRYPTION_ERROR");
+        }
+
+        var expectedChannelPrefix = $"/spokesapi/files/chat/{channelId}/";
+        var importedMedia = new List<AlbumMedia>();
+        var migratedSourcePaths = new List<string>();
+
+        foreach (var att in imageAttachments)
+        {
+            if (string.IsNullOrWhiteSpace(att.FilePath))
+            {
+                continue;
+            }
+
+            var normalizedPath = att.FilePath.StartsWith('/') ? att.FilePath : "/" + att.FilePath;
+            var qIdx = normalizedPath.IndexOf('?');
+            if (qIdx >= 0) normalizedPath = normalizedPath[..qIdx];
+
+            if (normalizedPath.Contains("..", StringComparison.Ordinal) ||
+                !normalizedPath.StartsWith(expectedChannelPrefix, StringComparison.OrdinalIgnoreCase))
+            {
+                _logger?.LogWarning("Rejected invalid or cross-channel attachment path {FilePath} during album import for channel {ChannelId}", att.FilePath, channelId);
+                continue;
+            }
+
+            var safeName = Path.GetFileName(normalizedPath);
+            if (string.IsNullOrWhiteSpace(safeName))
+            {
+                continue;
+            }
+
+            try
+            {
+                using var sourceStream = _fileService.OpenRead("chat", channelId, safeName, channel.IsEncrypted ? plainChannelKey : null);
+                if (sourceStream == null)
+                {
+                    _logger?.LogWarning("Source chat attachment not found on disk: {FilePath}", normalizedPath);
+                    continue;
+                }
+
+                var targetFilePath = await _fileService.UploadStreamAsync("albums", album.Id, sourceStream, att.FileName, plainAlbumKey);
+                var targetSafeName = Path.GetFileName(targetFilePath);
+
+                bool hasThumb = false;
+                if (att.HasServerThumbnail)
+                {
+                    var sourceThumbName = FileService.GetThumbnailFileName(safeName);
+                    using var thumbStream = _fileService.OpenRead("chat", channelId, sourceThumbName, channel.IsEncrypted ? plainChannelKey : null);
+                    if (thumbStream != null)
+                    {
+                        await _fileService.UploadThumbnailAsync("albums", album.Id, thumbStream, targetSafeName, plainAlbumKey);
+                        hasThumb = true;
+                    }
+                }
+
+                importedMedia.Add(new AlbumMedia
+                {
+                    FilePath = targetFilePath,
+                    FileName = att.FileName,
+                    ContentType = att.ContentType,
+                    FileSizeBytes = att.FileSizeBytes,
+                    AddedByUserId = currentUserId,
+                    AddedAt = DateTime.UtcNow,
+                    HasServerThumbnail = hasThumb,
+                    ImageWidth = att.ImageWidth,
+                    ImageHeight = att.ImageHeight
+                });
+                migratedSourcePaths.Add(normalizedPath);
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogError(ex, "Failed to migrate chat attachment {FilePath} to album {AlbumId}", normalizedPath, album.Id);
+            }
+        }
+
+        if (importedMedia.Count == 0)
+        {
+            if (createdNewAlbum)
+            {
+                _albums.Delete(album.Id);
+                _albumLocks.TryRemove(album.Id, out _);
+            }
+
+            return SpokesResult<Album>.Failure("No valid image attachments could be imported into the album.", "FILE_NOT_FOUND");
+        }
+
+        var addResult = AddMedia(album.Id, currentUserId, importedMedia);
+        if (!addResult.IsSuccess)
+        {
+            return SpokesResult<Album>.Failure(addResult.ErrorMessage ?? "Failed to add media to album.", addResult.Code ?? "SAVE_FAILED");
+        }
+
+        if (deleteSourceFiles)
+        {
+            foreach (var sourcePath in migratedSourcePaths)
+            {
+                try
+                {
+                    await _fileService.DeleteAsync(sourcePath);
+                }
+                catch (Exception ex)
+                {
+                    _logger?.LogWarning(ex, "Failed to delete migrated chat attachment {FilePath}", sourcePath);
+                }
+            }
+        }
+
+        album = _albums.GetById(album.Id) ?? album;
+        return SpokesResult<Album>.Success(album);
     }
 }

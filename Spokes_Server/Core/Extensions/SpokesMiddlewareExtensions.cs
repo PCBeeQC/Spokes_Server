@@ -4,6 +4,7 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using Microsoft.AspNetCore.Localization;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Authentication;
@@ -15,6 +16,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Spokes_Server.Core.Data.Repositories.Core;
+using Spokes_Server.Core.Helpers;
 using Spokes_Server.Core.Middleware;
 using Spokes_Server.Core.Services.Communication.Chat;
 using Spokes_Server.Core.Services.Identity;
@@ -24,6 +26,8 @@ namespace Spokes_Server.Core.Extensions;
 
 public static class SpokesMiddlewareExtensions
 {
+    private static readonly JsonSerializerOptions SetupErrorJsonOptions = new(JsonSerializerDefaults.Web);
+
     /// <summary>
     /// Captures startup correlation IDs, client timing metrics, and diagnostic headers for auth paths.
     /// </summary>
@@ -31,8 +35,6 @@ public static class SpokesMiddlewareExtensions
     {
         return app.Use(async (context, next) =>
         {
-            var path = context.Request.Path.Value?.ToLowerInvariant() ?? "";
-
             string? startupId = null;
             string? cTimes = null;
 
@@ -68,8 +70,7 @@ public static class SpokesMiddlewareExtensions
                 }
             }
 
-            if (string.IsNullOrEmpty(startupId) && string.IsNullOrEmpty(Path.GetExtension(path))
-                && !path.StartsWith("/api") && !path.StartsWith("/spokesapi") && !path.StartsWith("/hubs") && !path.StartsWith("/_blazor"))
+            if (string.IsNullOrEmpty(startupId) && SpokesRequestClassifier.IsHtmlPageNavigation(context))
             {
                 startupId = $"st-{Guid.NewGuid().ToString("N")[..8]}";
             }
@@ -98,14 +99,11 @@ public static class SpokesMiddlewareExtensions
         {
             context.Response.OnStarting(() =>
             {
-                var path = context.Request.Path.Value?.ToLowerInvariant() ?? "";
-                bool isHtml = context.Response.ContentType?.StartsWith("text/html", StringComparison.OrdinalIgnoreCase) == true;
+                context.Response.Headers.TryAdd("X-Content-Type-Options", "nosniff");
 
-                bool isLikelyPage = string.IsNullOrEmpty(Path.GetExtension(path))
-                                    && !path.StartsWith("/api")
-                                    && !path.StartsWith("/spokesapi")
-                                    && !path.StartsWith("/hubs")
-                                    && !path.StartsWith("/_blazor");
+                bool isHtml = context.Response.ContentType?.StartsWith("text/html", StringComparison.OrdinalIgnoreCase) == true;
+                bool isLikelyPage = string.IsNullOrEmpty(context.Response.ContentType)
+                                    && SpokesRequestClassifier.IsHtmlPageNavigation(context);
 
                 if (isHtml || isLikelyPage)
                 {
@@ -141,8 +139,12 @@ public static class SpokesMiddlewareExtensions
                 var ct = context.Response.ContentType;
                 if (ct != null && ct.StartsWith("text/html", StringComparison.OrdinalIgnoreCase))
                 {
-                    var origin = $"{context.Request.Scheme}://{context.Request.Host}";
-                    context.Response.Headers.Append("Link", $"<{origin}>; rel=preconnect");
+                    var publicUrl = context.RequestServices.GetService<SystemConfigRepository>()?.Get()?.ServerPublicUrl;
+                    var origin = Core.Security.ServerUrlResolver.GetSafeServerBaseUrl(context, publicUrl);
+                    if (!string.IsNullOrEmpty(origin))
+                    {
+                        context.Response.Headers.Append("Link", $"<{origin}>; rel=preconnect");
+                    }
                 }
                 return Task.CompletedTask;
             });
@@ -175,23 +177,10 @@ public static class SpokesMiddlewareExtensions
     {
         return app.Use(async (context, next) =>
         {
-            var path = context.Request.Path.Value?.ToLowerInvariant() ?? "";
+            var requestPath = context.Request.Path;
 
-            if (path.StartsWith("/_blazor") ||
-                path.StartsWith("/_framework") ||
-                path.StartsWith("/css") ||
-                path.StartsWith("/fonts") ||
-                path.StartsWith("/_content") ||
-                path.StartsWith("/js") ||
-                path.EndsWith(".png") ||
-                path.EndsWith(".ico") ||
-                path.EndsWith(".svg") ||
-                path.EndsWith(".woff2") ||
-                path.EndsWith(".woff") ||
-                path.EndsWith(".ttf") ||
-                path.EndsWith(".jpg") ||
-                path.EndsWith(".jpeg") ||
-                path.EndsWith(".webp"))
+            if (SpokesRequestClassifier.IsBlazorTransportRequest(requestPath)
+                || SpokesRequestClassifier.IsStaticAssetPath(requestPath))
             {
                 await next(context);
                 return;
@@ -201,24 +190,37 @@ public static class SpokesMiddlewareExtensions
             var sysConfig = systemConfigs.Get();
             if (!sysConfig.IsSetupComplete)
             {
-                if (!path.StartsWith("/setup"))
+                if (SpokesRequestClassifier.IsAllowedDuringSetup(context))
                 {
-                    context.Response.Redirect("/setup");
+                    await next(context);
                     return;
                 }
+
+                if (SpokesRequestClassifier.IsApiOrNonHtmlRequest(context))
+                {
+                    context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+                    context.Response.ContentType = "application/json; charset=utf-8";
+                    context.Response.Headers.CacheControl = "no-store";
+                    var payload = SpokesResult.Failure("Server initial setup is not complete.", "SETUP_REQUIRED");
+                    await JsonSerializer.SerializeAsync(context.Response.Body, payload, SetupErrorJsonOptions, context.RequestAborted);
+                    return;
+                }
+
+                context.Response.Redirect("/setup");
+                return;
             }
-            else
+
+            if (requestPath.StartsWithSegments("/setup", StringComparison.OrdinalIgnoreCase))
             {
-                if (path.StartsWith("/setup"))
+                if (!SpokesRequestClassifier.IsApiOrNonHtmlRequest(context))
                 {
                     context.Response.Redirect("/");
                     return;
                 }
-
-                if (path == "/" || path == "")
-                {
-                    context.Response.Cookies.Delete("Spokes_SSO_Attempt");
-                }
+            }
+            else if (requestPath == "/" || string.IsNullOrEmpty(requestPath.Value))
+            {
+                context.Response.Cookies.Delete("Spokes_SSO_Attempt");
             }
 
             await next(context);
@@ -232,6 +234,17 @@ public static class SpokesMiddlewareExtensions
     {
         return app.Use(async (context, next) =>
         {
+            if (context.Items.TryGetValue("Spokes.AuthRedirect", out var redirectObj) &&
+                redirectObj is string redirectTarget &&
+                !string.IsNullOrEmpty(redirectTarget))
+            {
+                if (context.Response.StatusCode != StatusCodes.Status302Found)
+                {
+                    context.Response.Redirect(redirectTarget);
+                }
+                return;
+            }
+
             var path = context.Request.Path.Value?.ToLowerInvariant() ?? "";
 
             if (path.StartsWith("/spokesapi/auth/force-logout"))
@@ -240,15 +253,27 @@ public static class SpokesMiddlewareExtensions
                 return;
             }
 
-            var authResult = await context.AuthenticateAsync(CookieAuthenticationDefaults.AuthenticationScheme);
-            if (authResult?.Properties?.GetParameter<bool>("IsRevoked") == true)
+            var authResult = context.Features.Get<IAuthenticateResultFeature>()?.AuthenticateResult ?? await context.AuthenticateAsync(CookieAuthenticationDefaults.AuthenticationScheme);
+            bool isRevoked = (context.Items.TryGetValue("Spokes.SessionRevoked", out var revObj) && revObj is true) ||
+                             authResult?.Properties?.GetParameter<bool>("IsRevoked") == true;
+            if (isRevoked)
             {
-                bool isHtmlPage = !path.StartsWith("/api") &&
-                                  !path.StartsWith("/spokesapi") &&
-                                  !path.StartsWith("/internal") &&
-                                  !path.StartsWith("/hubs") &&
-                                  !path.StartsWith("/_blazor");
-                if (isHtmlPage && context.Request.Method == "GET")
+                context.Response.Cookies.Delete("Spokes_Refresh", new CookieOptions
+                {
+                    HttpOnly = true,
+                    Secure = context.Request.IsHttps,
+                    SameSite = SameSiteMode.Lax,
+                    Path = "/"
+                });
+                context.Response.Cookies.Delete("chat_vault_key", new CookieOptions
+                {
+                    Path = "/",
+                    HttpOnly = true,
+                    Secure = true,
+                    SameSite = SameSiteMode.Lax
+                });
+
+                if (SpokesRequestClassifier.IsHtmlPageNavigation(context) && HttpMethods.IsGet(context.Request.Method))
                 {
                     await context.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
                     var redirectUrl = context.Request.PathBase + context.Request.Path + context.Request.QueryString;
@@ -266,9 +291,16 @@ public static class SpokesMiddlewareExtensions
                 }
                 else
                 {
+                    await context.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
                     context.Response.StatusCode = 401;
                     return;
                 }
+            }
+
+            if (context.Items.TryGetValue("Spokes.SessionRejected", out var rejObj) && rejObj is true)
+            {
+                context.Response.StatusCode = 401;
+                return;
             }
             await next();
         });
@@ -285,6 +317,7 @@ public static class SpokesMiddlewareExtensions
             var path = context.Request.Path.Value?.ToLowerInvariant() ?? "";
             
             if (context.Request.Method == "GET" && 
+                !context.Request.Path.StartsWithSegments("/setup", StringComparison.OrdinalIgnoreCase) &&
                 !path.StartsWith("/api") && 
                 !path.StartsWith("/spokesapi") && 
                 !path.StartsWith("/_blazor") &&
@@ -292,6 +325,8 @@ public static class SpokesMiddlewareExtensions
                 !path.StartsWith("/sso") &&
                 !path.StartsWith("/mobile-login") &&
                 !path.StartsWith("/session-expired") &&
+                !path.StartsWith("/banned") &&
+                !path.StartsWith("/access-pending") &&
                 !path.StartsWith("/login") &&
                 !path.StartsWith("/signup") &&
                 !path.StartsWith("/forget") &&
@@ -326,17 +361,27 @@ public static class SpokesMiddlewareExtensions
                                             sessionStorage.setItem('spokes_startup_meta', JSON.stringify({ startupId: sid || '', clientTimings: ct || '' }));
                                         }
                                     } catch(e) {}
-                                    if (!window.Capacitor || !window.Capacitor.Plugins || !window.Capacitor.Plugins.Preferences) {
-                                        await new Promise(res => setTimeout(res, 50));
+                                    var waitDeadline = Date.now() + 60;
+                                    while ((!window.Capacitor || !window.Capacitor.Plugins || !window.Capacitor.Plugins.Preferences) && Date.now() < waitDeadline) {
+                                        await new Promise(res => setTimeout(res, 4));
                                     }
                                     var hostname = window.location.hostname;
+                                    var prefs = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.Preferences;
                                     var refreshRes = null;
-                                    try {
-                                        refreshRes = await window.Capacitor.Plugins.Preferences.get({ key: 'spokes_refresh_' + hostname });
-                                        if (!refreshRes || !refreshRes.value) {
-                                            refreshRes = await window.Capacitor.Plugins.Preferences.get({ key: 'spokes_refresh' });
-                                        }
-                                    } catch(e) {}
+                                    var devRes = null;
+                                    if (prefs) {
+                                        try {
+                                            var pair = await Promise.all([
+                                                prefs.get({ key: 'spokes_refresh_' + hostname }).catch(function() { return null; }),
+                                                prefs.get({ key: 'spokes_device_id' }).catch(function() { return null; })
+                                            ]);
+                                            refreshRes = pair[0];
+                                            devRes = pair[1];
+                                            if (!refreshRes || !refreshRes.value) {
+                                                refreshRes = await prefs.get({ key: 'spokes_refresh' });
+                                            }
+                                        } catch(e) {}
+                                    }
                                     
                                     if (refreshRes && refreshRes.value) {
                                         var form = document.createElement('form');
@@ -347,13 +392,12 @@ public static class SpokesMiddlewareExtensions
                                         var ru = document.createElement('input'); ru.type = 'hidden'; ru.name = 'returnUrl'; ru.value = window.location.pathname + window.location.search + window.location.hash;
                                         form.appendChild(ru);
                                         try {
-                                            var devRes = await window.Capacitor.Plugins.Preferences.get({ key: 'spokes_device_id' });
                                             var devId = (devRes && devRes.value) || localStorage.getItem('spokes_device_id') || '';
-                                            if ((!devId || devId.startsWith('dev_')) && window.Capacitor.Plugins && window.Capacitor.Plugins.NotificationCrypto && window.Capacitor.Plugins.NotificationCrypto.getStableDeviceId) {
+                                            if ((!devId || devId.startsWith('dev_')) && window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.NotificationCrypto && window.Capacitor.Plugins.NotificationCrypto.getStableDeviceId) {
                                                 var cryptoRes = await window.Capacitor.Plugins.NotificationCrypto.getStableDeviceId();
                                                 if (cryptoRes && cryptoRes.deviceId) {
                                                     devId = cryptoRes.deviceId;
-                                                    try { await window.Capacitor.Plugins.Preferences.set({ key: 'spokes_device_id', value: devId }); } catch(e) {}
+                                                    if (prefs) { try { await prefs.set({ key: 'spokes_device_id', value: devId }); } catch(e) {} }
                                                 }
                                             }
                                             if (devId) {
@@ -490,5 +534,39 @@ public static class SpokesMiddlewareExtensions
 
         return app;
     }
-}
 
+    /// <summary>
+    /// In Business Edition, if an authenticated user navigates directly to "/" via HTTP GET
+    /// and has a custom LandingPage configured, redirects them immediately (HTTP 302)
+    /// to avoid loading the Home dashboard and redirecting.
+    /// </summary>
+    public static IApplicationBuilder UseSpokesLandingPageRedirect(this IApplicationBuilder app)
+    {
+        return app.Use(async (context, next) =>
+        {
+            if (context.Request.Path == "/" && HttpMethods.IsGet(context.Request.Method))
+            {
+                if (context.User.Identity?.IsAuthenticated == true)
+                {
+                    var companyProfiles = context.RequestServices.GetService<CompanyProfileRepository>();
+                    if (companyProfiles?.Get()?.Edition != "Family")
+                    {
+                        var userService = context.RequestServices.GetService<UserService>();
+                        var employee = userService?.GetEmployee(context.User);
+                        if (!string.IsNullOrWhiteSpace(employee?.LandingPage)
+                            && employee.LandingPage != ""
+                            && employee.LandingPage != "/")
+                        {
+                            var target = employee.LandingPage.StartsWith('/')
+                                ? employee.LandingPage
+                                : "/" + employee.LandingPage;
+                            context.Response.Redirect(target);
+                            return;
+                        }
+                    }
+                }
+            }
+            await next();
+        });
+    }
+}

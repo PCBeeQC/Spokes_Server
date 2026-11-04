@@ -10,7 +10,7 @@ public class EmailModelsTests
         var folder = new EmailFolder();
 
         Assert.False(string.IsNullOrEmpty(folder.Id));
-        Assert.Equal(string.Empty, folder.EmployeeId);
+        Assert.Equal(string.Empty, folder.AccountId);
         Assert.Equal(string.Empty, folder.Name);
         Assert.Equal(string.Empty, folder.Path);
         Assert.Equal(string.Empty, folder.ParentPath);
@@ -71,7 +71,7 @@ public class EmailModelsTests
         var folder = new EmailFolder
         {
             Id = "custom-folder-id",
-            EmployeeId = "emp-001",
+            AccountId = "emp-001",
             Name = "Archive 2026",
             Path = "Archive/2026",
             ParentPath = "Archive",
@@ -88,7 +88,7 @@ public class EmailModelsTests
         };
 
         Assert.Equal("custom-folder-id", folder.Id);
-        Assert.Equal("emp-001", folder.EmployeeId);
+        Assert.Equal("emp-001", folder.AccountId);
         Assert.Equal("Archive 2026", folder.Name);
         Assert.Equal("Archive/2026", folder.Path);
         Assert.Equal("Archive", folder.ParentPath);
@@ -110,7 +110,7 @@ public class EmailModelsTests
         var message = new EmailMessage();
 
         Assert.False(string.IsNullOrEmpty(message.Id));
-        Assert.Equal(string.Empty, message.EmployeeId);
+        Assert.Equal(string.Empty, message.AccountId);
         Assert.Equal(string.Empty, message.FolderPath);
         Assert.Equal(0u, message.UniqueId);
         Assert.Equal(string.Empty, message.GlobalMessageId);
@@ -153,7 +153,7 @@ public class EmailModelsTests
         var message = new EmailMessage
         {
             Id = "msg-999",
-            EmployeeId = "emp-002",
+            AccountId = "emp-002",
             FolderPath = "INBOX/Work",
             UniqueId = 55u,
             GlobalMessageId = "<uuid-1234@mail.domain.com>",
@@ -172,7 +172,7 @@ public class EmailModelsTests
         };
 
         Assert.Equal("msg-999", message.Id);
-        Assert.Equal("emp-002", message.EmployeeId);
+        Assert.Equal("emp-002", message.AccountId);
         Assert.Equal("INBOX/Work", message.FolderPath);
         Assert.Equal(55u, message.UniqueId);
         Assert.Equal("<uuid-1234@mail.domain.com>", message.GlobalMessageId);

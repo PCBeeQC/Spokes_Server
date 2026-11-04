@@ -36,11 +36,25 @@ public static class NotificationCategoryRegistry
             DefaultSoundId = NotificationSoundIds.SpokesDefault,
             DefaultSoundFileName = "mixkit_alert_quick_chime_766.wav",
             SortOrder = 3
+        },
+        new NotificationCategoryDefinition
+        {
+            Id = NotificationCategories.Email,
+            DisplayName = "Incoming Emails",
+            Description = "Notifications for new incoming email messages.",
+            Icon = Icons.Material.Filled.Email,
+            DefaultSoundId = NotificationSoundIds.SpokesDefault,
+            DefaultSoundFileName = "spokesnotif1.wav",
+            SortOrder = 4,
+            IsBusinessOnly = true
         }
     ];
 
-    public static IReadOnlyList<NotificationCategoryDefinition> GetAllCategories() =>
-        _categories.OrderBy(c => c.SortOrder).ToList();
+    public static IReadOnlyList<NotificationCategoryDefinition> GetAllCategories(bool isBusinessEdition = true) =>
+        _categories
+            .Where(c => !c.IsBusinessOnly || isBusinessEdition)
+            .OrderBy(c => c.SortOrder)
+            .ToList();
 
     public static NotificationCategoryDefinition? GetCategory(string categoryId) =>
         _categories.FirstOrDefault(c => string.Equals(c.Id, categoryId, StringComparison.OrdinalIgnoreCase));

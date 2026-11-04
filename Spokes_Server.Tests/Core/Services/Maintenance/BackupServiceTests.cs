@@ -1,4 +1,6 @@
 using System.IO.Compression;
+using System.Security.Cryptography;
+using System.Text;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Moq;
@@ -166,6 +168,20 @@ public class BackupServiceTests : IDisposable
             Directory.CreateDirectory(emailDir);
             File.WriteAllText(Path.Combine(emailDir, "msg.eml"), "Subject: Test employee email");
 
+            var accountRoot = Path.Combine(_testDataDir, "EmailAccounts", "acc-1");
+            Directory.CreateDirectory(Path.Combine(accountRoot, "Messages"));
+            Directory.CreateDirectory(Path.Combine(accountRoot, "Bodies"));
+            Directory.CreateDirectory(Path.Combine(accountRoot, "Mime"));
+            Directory.CreateDirectory(Path.Combine(accountRoot, "Folders"));
+            Directory.CreateDirectory(Path.Combine(accountRoot, "Attachments", "msg-1"));
+            File.WriteAllText(Path.Combine(accountRoot, "Account.json"), "{\"id\":\"acc-1\"}");
+            File.WriteAllText(Path.Combine(accountRoot, "index.json"), "{}");
+            File.WriteAllText(Path.Combine(accountRoot, "Messages", "msg-1.json"), "{\"id\":\"msg-1\"}");
+            File.WriteAllText(Path.Combine(accountRoot, "Bodies", "msg-1.html"), "<p>Hello</p>");
+            File.WriteAllText(Path.Combine(accountRoot, "Mime", "msg-1.eml"), "Subject: Hello");
+            File.WriteAllText(Path.Combine(accountRoot, "Folders", "inbox.json"), "{\"id\":\"inbox\"}");
+            File.WriteAllText(Path.Combine(accountRoot, "Attachments", "msg-1", "att.pdf"), "PDF");
+
             var otherDir = Path.Combine(_testDataDir, "Employees", "emp1");
             File.WriteAllText(Path.Combine(otherDir, "profile.json"), "{\"name\":\"emp1\"}");
 
@@ -183,7 +199,14 @@ public class BackupServiceTests : IDisposable
             using (var zip = ZipFile.OpenRead(backupPath))
             {
                 Assert.Contains(zip.Entries, e => e.FullName == "Employees/emp1/profile.json");
+                Assert.Contains(zip.Entries, e => e.FullName == "EmailAccounts/acc-1/Account.json");
                 Assert.DoesNotContain(zip.Entries, e => e.FullName.Contains("msg.eml", StringComparison.OrdinalIgnoreCase));
+                Assert.DoesNotContain(zip.Entries, e => e.FullName.Contains("EmailAccounts/acc-1/Messages/", StringComparison.OrdinalIgnoreCase));
+                Assert.DoesNotContain(zip.Entries, e => e.FullName.Contains("EmailAccounts/acc-1/Bodies/", StringComparison.OrdinalIgnoreCase));
+                Assert.DoesNotContain(zip.Entries, e => e.FullName.Contains("EmailAccounts/acc-1/Mime/", StringComparison.OrdinalIgnoreCase));
+                Assert.DoesNotContain(zip.Entries, e => e.FullName.Contains("EmailAccounts/acc-1/Folders/", StringComparison.OrdinalIgnoreCase));
+                Assert.DoesNotContain(zip.Entries, e => e.FullName.Contains("EmailAccounts/acc-1/Attachments/", StringComparison.OrdinalIgnoreCase));
+                Assert.DoesNotContain(zip.Entries, e => e.FullName.Equals("EmailAccounts/acc-1/index.json", StringComparison.OrdinalIgnoreCase));
             }
         }
 
@@ -193,6 +216,11 @@ public class BackupServiceTests : IDisposable
             var emailDir = Path.Combine(_testDataDir, "Employees", "emp1", "Email");
             Directory.CreateDirectory(emailDir);
             File.WriteAllText(Path.Combine(emailDir, "msg.eml"), "Subject: Test employee email");
+
+            var accountRoot = Path.Combine(_testDataDir, "EmailAccounts", "acc-1");
+            Directory.CreateDirectory(Path.Combine(accountRoot, "Messages"));
+            File.WriteAllText(Path.Combine(accountRoot, "Account.json"), "{\"id\":\"acc-1\"}");
+            File.WriteAllText(Path.Combine(accountRoot, "Messages", "msg-1.json"), "{\"id\":\"msg-1\"}");
 
             var profile = _db.CompanyProfile.Get();
             profile.BackupEmployeeEmails = true;
@@ -208,6 +236,8 @@ public class BackupServiceTests : IDisposable
             using (var zip = ZipFile.OpenRead(backupPath))
             {
                 Assert.Contains(zip.Entries, e => e.FullName == "Employees/emp1/Email/msg.eml");
+                Assert.Contains(zip.Entries, e => e.FullName == "EmailAccounts/acc-1/Account.json");
+                Assert.Contains(zip.Entries, e => e.FullName == "EmailAccounts/acc-1/Messages/msg-1.json");
             }
         }
 
@@ -830,6 +860,158 @@ public class BackupServiceTests : IDisposable
             Assert.Contains(LocalBackupStage.Archiving, stagesSeen);
             Assert.Contains(LocalBackupStage.Encrypting, stagesSeen);
             Assert.Contains(LocalBackupStage.Completed, stagesSeen);
+        }
+
+        [Fact]
+        public async Task RestoreBackupAsync_FromPlaintextGitHubZipballWithTargetFolder_UnwrapsWrapperAndRestoresAllFiles()
+        {
+            const string companyJson = "{\"Id\":\"company_profile\",\"CompanyName\":\"Restored Spokes Robotics\"}";
+            const string dpKeyXml = "<key id=\"dp-dr-01\"><value>RESTORED_DATA_PROTECTION_SECRET</value></key>";
+            const string employeeJson = "{\"Id\":\"emp-ada\",\"FirstName\":\"Ada\",\"LastName\":\"Lovelace\"}";
+
+            var zipballPath = Path.Combine(_testDataDir, "github_zipball_plaintext.zip");
+            using (var zipStream = new FileStream(zipballPath, FileMode.Create, FileAccess.Write))
+            using (var archive = new ZipArchive(zipStream, ZipArchiveMode.Create))
+            {
+                static void WriteEntry(ZipArchive zip, string entryPath, ReadOnlySpan<byte> content)
+                {
+                    var entry = zip.CreateEntry(entryPath);
+                    using var s = entry.Open();
+                    s.Write(content);
+                }
+
+                WriteEntry(
+                    archive,
+                    "acme-spokes-backups-9f8e7d6/spokes-backups/.gitkeep",
+                    ReadOnlySpan<byte>.Empty);
+                WriteEntry(
+                    archive,
+                    "acme-spokes-backups-9f8e7d6/spokes-backups/Settings/company.json",
+                    Encoding.UTF8.GetBytes(companyJson));
+                WriteEntry(
+                    archive,
+                    "acme-spokes-backups-9f8e7d6/spokes-backups/keys/key-dr-01.xml",
+                    Encoding.UTF8.GetBytes(dpKeyXml));
+                WriteEntry(
+                    archive,
+                    "acme-spokes-backups-9f8e7d6/spokes-backups/Employees/emp-ada.json",
+                    Encoding.UTF8.GetBytes(employeeJson));
+            }
+
+            var freshDrDir = Path.Combine(Path.GetTempPath(), "Spokes_FreshDR_" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(freshDrDir);
+            using var drPersistence = new DiskPersistenceService(new Mock<ILogger<DiskPersistenceService>>().Object);
+
+            try
+            {
+                var drConfig = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["DataPath"] = freshDrDir
+                }).Build();
+                var drProfiles = new CompanyProfileRepository(drPersistence, drConfig);
+                var drBackupService = new BackupService(_mockLogger.Object, drProfiles, drConfig, drPersistence, db: null, new BackupEncryptionService(), destinationCoordinator: null);
+
+                var restoreResult = await drBackupService.RestoreBackupAsync(
+                    zipballPath,
+                    logger: null,
+                    CancellationToken.None);
+
+                Assert.True(restoreResult.Success, restoreResult.ErrorMessage);
+                Assert.Equal(companyJson, await File.ReadAllTextAsync(Path.Combine(freshDrDir, "Settings", "company.json")));
+                Assert.Equal(dpKeyXml, await File.ReadAllTextAsync(Path.Combine(freshDrDir, "keys", "key-dr-01.xml")));
+                Assert.Equal(employeeJson, await File.ReadAllTextAsync(Path.Combine(freshDrDir, "Employees", "emp-ada.json")));
+                Assert.False(File.Exists(Path.Combine(freshDrDir, ".gitkeep")));
+                Assert.False(Directory.Exists(Path.Combine(freshDrDir, "acme-spokes-backups-9f8e7d6")));
+                Assert.False(Directory.Exists(Path.Combine(freshDrDir, "Backups", ".staging")));
+            }
+            finally
+            {
+                drPersistence.Dispose();
+                if (Directory.Exists(freshDrDir))
+                {
+                    try { Directory.Delete(freshDrDir, true); } catch { }
+                }
+            }
+        }
+
+        [Fact]
+        public async Task StagingHygiene_PreventsAndPurgesOrphanedTmpZipAndStagingDirectories()
+        {
+            await File.WriteAllTextAsync(Path.Combine(_testDataDir, "sample.json"), "{\"ok\":true}");
+
+            var profile = _db.CompanyProfile.Get() ?? new CompanyProfile();
+            profile.Backup.EncryptBackupsWithMasterPassword = true;
+            profile.PublicChannelMasterPassword = null;
+            _db.CompanyProfile.Save(profile);
+            await _persistence.FlushAllAsync();
+
+            var backupDir = Path.Combine(_testDataDir, "Backups");
+
+            // 1. Missing SPOKES_MASTER_PASSWORD fails BEFORE creating any plaintext .tmp.zip
+            var noPassService = new BackupService(_mockLogger.Object, _db.CompanyProfile, _config, _persistence, _db);
+            var noPassResult = await noPassService.RunBackupNowAsync();
+            Assert.False(noPassResult.Success);
+            if (Directory.Exists(backupDir))
+            {
+                Assert.Empty(Directory.GetFiles(backupDir, "*.tmp.zip"));
+                Assert.Empty(Directory.GetFiles(backupDir, "*.spkbackup"));
+            }
+
+            // 2. Exception thrown mid-encryption deletes both plaintext .tmp.zip and partial .spkbackup in finally
+            var configWithPass = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["DataPath"] = _testDataDir,
+                ["SPOKES_MASTER_PASSWORD"] = "ValidMasterPass!123"
+            }).Build();
+
+            var throwingEncryption = new Mock<IBackupEncryptionService>();
+            throwingEncryption
+                .Setup(e => e.EncryptBackupAsync(
+                    It.IsAny<Stream>(),
+                    It.IsAny<Stream>(),
+                    It.IsAny<string>(),
+                    It.IsAny<IProgress<long>?>(),
+                    It.IsAny<CancellationToken>()))
+                .Callback<Stream, Stream, string, IProgress<long>?, CancellationToken>((_, outStream, _, _, _) =>
+                {
+                    outStream.Write(new byte[] { 1, 2, 3, 4 });
+                })
+                .ThrowsAsync(new IOException("Simulated disk full during encryption"));
+
+            var failingService = new BackupService(
+                _mockLogger.Object,
+                _db.CompanyProfile,
+                configWithPass,
+                _persistence,
+                _db,
+                throwingEncryption.Object,
+                destinationCoordinator: null);
+
+            var failedEncResult = await failingService.RunBackupNowAsync();
+            Assert.False(failedEncResult.Success);
+            Assert.Empty(Directory.GetFiles(backupDir, "*.tmp.zip"));
+            Assert.Empty(Directory.GetFiles(backupDir, "*.spkbackup"));
+
+            // 3. GetBackups() excludes .tmp.zip and .staging, and BackupService constructor purges leftover crash artifacts
+            var orphanStagingFile = Path.Combine(backupDir, ".staging", "crashed-run", "plaintext.json");
+            Directory.CreateDirectory(Path.GetDirectoryName(orphanStagingFile)!);
+            await File.WriteAllTextAsync(orphanStagingFile, "{\"secret\":true}");
+
+            var orphanTmpZip = Path.Combine(backupDir, "Spokes_Backup_20260101_000000.tmp.zip");
+            await File.WriteAllTextAsync(orphanTmpZip, "orphan-plaintext-zip");
+
+            var validArchive = Path.Combine(backupDir, "Spokes_Backup_20260101_010000.zip");
+            await File.WriteAllTextAsync(validArchive, "valid-zip");
+
+            var listedBeforeRestart = failingService.GetBackups();
+            Assert.Single(listedBeforeRestart);
+            Assert.Equal("Spokes_Backup_20260101_010000.zip", listedBeforeRestart[0].FileName);
+
+            // Simulate server restart -> constructor purges Backups/.staging and *.tmp.zip
+            _ = new BackupService(_mockLogger.Object, _db.CompanyProfile, configWithPass, _persistence, _db);
+            Assert.False(Directory.Exists(Path.Combine(backupDir, ".staging")));
+            Assert.False(File.Exists(orphanTmpZip));
+            Assert.True(File.Exists(validArchive));
         }
     }
 

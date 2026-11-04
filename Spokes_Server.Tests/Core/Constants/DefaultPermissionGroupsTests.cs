@@ -96,6 +96,7 @@ public class DefaultPermissionGroupsTests
         Assert.Equal("Member", member.Name);
         Assert.Equal(3, member.Permissions.Count);
         Assert.Contains(AppPermissions.Chat.Use, member.Permissions);
+        Assert.DoesNotContain(AppPermissions.Email.Use, member.Permissions);
         Assert.Contains(AppPermissions.Calendar.View, member.Permissions);
         Assert.Contains(AppPermissions.Albums.View, member.Permissions);
         Assert.DoesNotContain(AppPermissions.Chat.Moderator, member.Permissions);
@@ -105,6 +106,7 @@ public class DefaultPermissionGroupsTests
         Assert.Equal("Administrator", admin.Name);
         Assert.Equal(7, admin.Permissions.Count);
         Assert.Contains(AppPermissions.Chat.Use, admin.Permissions);
+        Assert.DoesNotContain(AppPermissions.Email.Use, admin.Permissions);
         Assert.Contains(AppPermissions.Calendar.View, admin.Permissions);
         Assert.Contains(AppPermissions.Albums.View, admin.Permissions);
         Assert.Contains(AppPermissions.Chat.CreateChannels, admin.Permissions);

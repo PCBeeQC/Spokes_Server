@@ -70,12 +70,19 @@ public class AlbumFileKeyResolver : IFileKeyResolver
 
     public FileKeyResolutionResult ResolveAlbumKey(string albumId, Employee user, string? tokenEncryptionKey = null, HttpContext? httpContext = null)
     {
-        if (!string.IsNullOrEmpty(tokenEncryptionKey))
-            return FileKeyResolutionResult.Success(tokenEncryptionKey);
-
         var album = _albums.GetById(albumId);
         if (album == null || !album.IsEncrypted)
             return FileKeyResolutionResult.NotEncrypted();
+
+        if (!string.IsNullOrEmpty(tokenEncryptionKey))
+        {
+            if (!_albumService.CanUserDecryptAlbum(album, user))
+            {
+                return FileKeyResolutionResult.Failure("You do not have the encryption key to access this album.");
+            }
+
+            return FileKeyResolutionResult.Success(tokenEncryptionKey);
+        }
 
         if (!_keystore.IsUnlocked && httpContext != null && !string.IsNullOrEmpty(user.EncryptedPrivateKey))
         {

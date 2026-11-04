@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using Spokes_Server.Components;
 using Spokes_Server.Core.Data.Repositories.Core;
+using Spokes_Server.Core.Security;
 using Spokes_Server.Hubs;
 
 namespace Spokes_Server.Core.Extensions;
@@ -13,11 +14,11 @@ public static class SpokesEndpointExtensions
     public static IEndpointRouteBuilder MapSpokesEndpoints(this IEndpointRouteBuilder app)
     {
         // Disallow search engine crawlers from indexing private Spokes instances and demo servers
-        app.MapGet("/robots.txt", [AllowAnonymous] () =>
+        app.MapGet("/robots.txt", [AllowAnonymous, AllowDuringSetup] () =>
             Results.Text("User-agent: *\nDisallow: /\n", "text/plain"));
 
         // TLS check handlers for Caddy reverse proxy on-demand certificates
-        Delegate tlsAskHandler = [AllowAnonymous] (string? domain, SystemConfigRepository systemConfigs) =>
+        Delegate tlsAskHandler = [AllowAnonymous, AllowDuringSetup] (string? domain, SystemConfigRepository systemConfigs) =>
         {
             if (string.IsNullOrWhiteSpace(domain)) return Results.StatusCode(403);
             

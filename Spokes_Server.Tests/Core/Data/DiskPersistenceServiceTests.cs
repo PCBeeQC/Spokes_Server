@@ -51,6 +51,20 @@ public class DiskPersistenceServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task QueueWriteBytes_WritesExactBinaryPayloadAtomically()
+    {
+        var filePath = Path.Combine(_testDataDir, "binary", "payload.bin");
+        byte[] expectedBytes = [0x53, 0x50, 0x4B, 0x45, 0x4E, 0x43, 0x30, 0x32, 0x00, 0xFF, 0x7F, 0x42];
+
+        _service.QueueWriteBytes(filePath, expectedBytes);
+        await _service.FlushAllAsync();
+
+        Assert.True(File.Exists(filePath));
+        var actualBytes = await File.ReadAllBytesAsync(filePath);
+        Assert.Equal(expectedBytes, actualBytes);
+    }
+
+    [Fact]
     public async Task QueueDelete_DeletesFileFromDisk()
     {
         Directory.CreateDirectory(_testDataDir);
@@ -217,4 +231,3 @@ public class DiskPersistenceServiceTests : IDisposable
         mockLog.Verify(l => l.LogError("Storage", It.IsAny<string>(), It.IsAny<string?>()), Times.Once);
     }
 }
-

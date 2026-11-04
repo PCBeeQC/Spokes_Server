@@ -12,6 +12,7 @@ FROM mcr.microsoft.com/dotnet/sdk:9.0 AS build
 WORKDIR /src
 
 # Copy the project file and restore dependencies
+COPY ["Directory.Build.props", "./"]
 COPY ["Spokes_Server/Spokes_Server.csproj", "Spokes_Server/"]
 RUN dotnet restore "Spokes_Server/Spokes_Server.csproj" -r linux-x64
 

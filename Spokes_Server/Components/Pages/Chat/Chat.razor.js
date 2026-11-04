@@ -454,7 +454,7 @@ export function initScrollListener(containerOrId, dotNetHelper) {
         if (scrollTimer) clearTimeout(scrollTimer);
         
         scrollTimer = setTimeout(() => {
-            if (window._blazorDisconnected) return;
+            if (window._blazorDisconnected || !container.isConnected) return;
             const scrollAmount = Math.abs(container.scrollTop);
             const isScrolledUp = scrollAmount > 200; // 200px threshold
             

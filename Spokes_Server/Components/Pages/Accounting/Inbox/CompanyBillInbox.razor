@@ -27,7 +27,7 @@
 
 <PageTitle>@BizLoc["Company Bill Inbox"]</PageTitle>
 
-<div class="d-flex flex-column" style="min-height: 100%;">
+<MudContainer MaxWidth="MaxWidth.False" Class="pa-4 px-md-6 d-flex flex-column" Style="min-height: 100%;">
     <!-- Inbox Section: Takes full monitor height -->
     <div class="d-flex flex-column flex-shrink-0" style="height: calc(100vh - 80px); height: calc(100dvh - 80px); min-height: 650px;">
         <!-- Top Header -->
@@ -1355,7 +1355,7 @@
                                  MessageBody="@_messageBody"
                                  IsLoadingBody="_isLoadingBody"
                                  TimeZoneId="@_timeZoneId"
-                                 EmployeeId="@CompanyBillInboxConstants.SystemEmployeeId"
+                                 AccountId="@CompanyBillInboxConstants.SystemEmployeeId"
                                  ShowFolderActions="false"
                                  ShowDelete="false"
                                  CanAddToTimeline="false"
@@ -1512,7 +1512,7 @@
             }
         </MudPaper>
     }
-</div>
+</MudContainer>
 
 @code {
     private List<EmailMessage> _allMessages = [];
@@ -1580,6 +1580,7 @@
     private bool _isScanningDuplicates = false;
     private bool _isDeleting = false;
     private string _currentUserId = "";
+    private Employee? _currentEmployee;
 
     private int ActionRequiredCount => _allMessages.Count(m => string.IsNullOrEmpty(m.BillingStatus)
         || m.BillingStatus == CompanyBillInboxConstants.BillingStatus.Unprocessed
@@ -1618,6 +1619,7 @@
         var authState = await AuthStateProvider.GetAuthenticationStateAsync();
         var user = authState.User;
         var emp = UserService.GetEmployee(user);
+        _currentEmployee = emp;
         _currentUserId = emp?.Id ?? "user";
 
         var profile = Db.CompanyProfile.Get();
@@ -1656,7 +1658,7 @@
         var prevFiltered = FilteredMessages;
         var prevIndex = _selectedMessage != null ? prevFiltered.FindIndex(m => m.Id == _selectedMessage.Id) : -1;
 
-        _allMessages = Db.EmailMessages.GetAllForEmployee(CompanyBillInboxConstants.SystemEmployeeId)
+        _allMessages = Db.EmailMessages.GetAllForAccount(CompanyBillInboxConstants.SystemEmployeeId)
             .OrderByDescending(m => m.Date)
             .ToList();
 
@@ -2124,8 +2126,38 @@
         }
     }
 
+    private bool CanUserSendFromBillInbox() =>
+        _currentEmployee is { IsActive: true, IsBanned: false, IsSuspended: false } &&
+        (_currentEmployee.IsAdmin ||
+         _currentEmployee.HasPermission(AppPermissions.Finance.AccessAccounting) ||
+         _currentEmployee.HasPermission(AppPermissions.Purchases.ManageBills));
+
+    private static List<string> BuildReplyReferences(EmailMessage selectedMessage)
+    {
+        var refs = new List<string>();
+        if (selectedMessage.References != null)
+        {
+            foreach (var r in selectedMessage.References.Where(r => !string.IsNullOrWhiteSpace(r)))
+            {
+                refs.Add(r);
+            }
+        }
+        if (!string.IsNullOrWhiteSpace(selectedMessage.GlobalMessageId) &&
+            !refs.Contains(selectedMessage.GlobalMessageId, StringComparer.OrdinalIgnoreCase))
+        {
+            refs.Add(selectedMessage.GlobalMessageId);
+        }
+        return refs;
+    }
+
     private async Task OpenCompose()
     {
+        if (!CanUserSendFromBillInbox())
+        {
+            Snackbar.Add(Loc["You do not have permission to send email from this inbox."].Value, Severity.Error);
+            return;
+        }
+
         var senderFrom = !string.IsNullOrEmpty(_settings.DisplayName) && !string.IsNullOrEmpty(_settings.EmailAddress)
             ? $"{_settings.DisplayName} <{_settings.EmailAddress}>"
             : _settings.EmailAddress;
@@ -2133,7 +2165,7 @@
         var parameters = new DialogParameters<EmailComposer>
         {
             { x => x.Subject, "Accounting Inquiry" },
-            { x => x.SenderEmployeeId, CompanyBillInboxConstants.SystemEmployeeId },
+            { x => x.AccountId, CompanyBillInboxConstants.SystemEmployeeId },
             { x => x.SenderFrom, senderFrom }
         };
         await DialogService.ShowAsync<EmailComposer>("Compose Email (Company Facturation)", parameters, new DialogOptions
@@ -2148,6 +2180,12 @@
     {
         if (_selectedMessage == null) return;
 
+        if (!CanUserSendFromBillInbox())
+        {
+            Snackbar.Add(Loc["You do not have permission to send email from this inbox."].Value, Severity.Error);
+            return;
+        }
+
         var senderFrom = !string.IsNullOrEmpty(_settings.DisplayName) && !string.IsNullOrEmpty(_settings.EmailAddress)
             ? $"{_settings.DisplayName} <{_settings.EmailAddress}>"
             : _settings.EmailAddress;
@@ -2157,8 +2195,10 @@
             { x => x.To, _selectedMessage.FromAddress },
             { x => x.Subject, _selectedMessage.Subject.StartsWith("Re:", StringComparison.OrdinalIgnoreCase) ? _selectedMessage.Subject : $"Re: {_selectedMessage.Subject}" },
             { x => x.Body, !string.IsNullOrEmpty(_messageBody) ? _messageBody : _selectedMessage.Snippet },
-            { x => x.SenderEmployeeId, CompanyBillInboxConstants.SystemEmployeeId },
-            { x => x.SenderFrom, senderFrom }
+            { x => x.AccountId, CompanyBillInboxConstants.SystemEmployeeId },
+            { x => x.SenderFrom, senderFrom },
+            { x => x.InReplyTo, _selectedMessage.GlobalMessageId },
+            { x => x.References, BuildReplyReferences(_selectedMessage) }
         };
 
         await DialogService.ShowAsync<EmailComposer>("Reply to Supplier", parameters, new DialogOptions
@@ -2504,7 +2544,7 @@
         var prevFiltered = FilteredMessages;
         var prevIndex = prevFiltered.FindIndex(m => m.Id == completedMessageId);
 
-        _allMessages = Db.EmailMessages.GetAllForEmployee(CompanyBillInboxConstants.SystemEmployeeId)
+        _allMessages = Db.EmailMessages.GetAllForAccount(CompanyBillInboxConstants.SystemEmployeeId)
             .OrderByDescending(m => m.Date)
             .ToList();
 

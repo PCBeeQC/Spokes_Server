@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Spokes_Server.Aggregate;
 using Spokes_Server.Components.Shared;
@@ -16,17 +17,27 @@ namespace Spokes_Server.Controllers;
 [Route("setup/api")]
 [ApiController]
 [AllowAnonymous]
+[Spokes_Server.Core.Security.AllowDuringSetup]
 public class SetupApiController : SpokesControllerBase
 {
     private readonly Database _db;
     private readonly BackupService _backupService;
     private readonly ILogger<SetupApiController> _logger;
+    private readonly IConfiguration? _config;
+    private readonly IBackupEncryptionService? _encryptionService;
 
-    public SetupApiController(Database db, BackupService backupService, ILogger<SetupApiController> logger)
+    public SetupApiController(
+        Database db,
+        BackupService backupService,
+        ILogger<SetupApiController> logger,
+        IConfiguration? config = null,
+        IBackupEncryptionService? encryptionService = null)
     {
         _db = db;
         _backupService = backupService;
         _logger = logger;
+        _config = config;
+        _encryptionService = encryptionService;
     }
 
     [HttpPost("restore-backup")]
@@ -46,12 +57,60 @@ public class SetupApiController : SpokesControllerBase
             return BadRequestError("No backup file provided.");
         }
 
-        var tempFile = Path.Combine(Path.GetTempPath(), $"spokes_setup_restore_{Guid.NewGuid():N}_{Path.GetFileName(file.FileName)}");
+        var configuredMasterPassword = _config?["SPOKES_MASTER_PASSWORD"]
+            ?? Environment.GetEnvironmentVariable("SPOKES_MASTER_PASSWORD");
+
+        // Pre-validate encrypted backup password match before saving or extracting the archive on disk
+        if (_encryptionService != null)
+        {
+            await using var uploadInspectionStream = file.OpenReadStream();
+            if (uploadInspectionStream.CanSeek)
+            {
+                bool isEncryptedArchive = _encryptionService.IsEncryptedArchive(uploadInspectionStream);
+                uploadInspectionStream.Position = 0;
+
+                if (isEncryptedArchive)
+                {
+                    if (string.IsNullOrWhiteSpace(configuredMasterPassword))
+                    {
+                        return BadRequestError("Backup archive is encrypted, but SPOKES_MASTER_PASSWORD is not configured on this server.");
+                    }
+
+                    if (!_encryptionService.VerifyMasterPassword(uploadInspectionStream, configuredMasterPassword))
+                    {
+                        return BadRequestError("Backup master password does not match SPOKES_MASTER_PASSWORD.");
+                    }
+                }
+            }
+        }
+
+        var dataPath = _config?["DataPath"] ?? "Data";
+        var stagingDir = !string.IsNullOrWhiteSpace(dataPath)
+            ? Path.Combine(dataPath, "Backups", ".staging")
+            : Path.GetTempPath();
+        Directory.CreateDirectory(stagingDir);
+
+        var tempFile = Path.Combine(stagingDir, $"spokes_setup_restore_{Guid.NewGuid():N}_{Path.GetFileName(file.FileName)}");
         try
         {
             await using (var fs = System.IO.File.Create(tempFile))
             {
                 await file.CopyToAsync(fs, ct);
+            }
+
+            if (_encryptionService != null)
+            {
+                await using var fileVerifyStream = System.IO.File.OpenRead(tempFile);
+                bool isEncrypted = _encryptionService.IsEncryptedArchive(fileVerifyStream);
+                fileVerifyStream.Position = 0;
+                if (isEncrypted)
+                {
+                    if (string.IsNullOrWhiteSpace(configuredMasterPassword) ||
+                        !_encryptionService.VerifyMasterPassword(fileVerifyStream, configuredMasterPassword))
+                    {
+                        return BadRequestError("Backup master password does not match SPOKES_MASTER_PASSWORD.");
+                    }
+                }
             }
 
             var result = await _backupService.RestoreBackupAsync(tempFile, _logger, ct);

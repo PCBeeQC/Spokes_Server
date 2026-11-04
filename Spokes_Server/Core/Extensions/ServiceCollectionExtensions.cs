@@ -19,6 +19,7 @@ using Spokes_Server.Core.Services.Content;
 using Spokes_Server.Core.Services.UI;
 using Spokes_Server.Core.Services.HR;
 using Spokes_Server.Core.Services.Communication.Voice;
+using Spokes_Server.Core.Services.Communication.Voice.Pipeline;
 using Spokes_Server.Core.Services.Communication.Presence;
 using Spokes_Server.Core.Services.Communication.Email;
 using Spokes_Server.Core.Services.Documents;
@@ -35,6 +36,7 @@ using Spokes_Server.Core.Services.Communication.Notifications.Routing;
 using Spokes_Server.Core.Services.Communication.Notifications.WebPush;
 using Spokes_Server.Core.Services.Logging;
 using Spokes_Server.Core.Services;
+using Spokes_Server.Core.Security;
 using Microsoft.Extensions.Hosting;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -123,6 +125,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<CompanyProfileRepository>();
         services.AddSingleton<DocumentTemplateRepository>();
         services.AddSingleton<StandardDocumentRepository>();
+        services.AddSingleton<TermsAndConditionsRepository>();
         services.AddSingleton<ProjectDocumentRepository>();
         services.AddSingleton<ExpenseReportRepository>();
         services.AddSingleton<BillRepository>();
@@ -145,6 +148,8 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<UserClientStateRepository>();
         services.AddSingleton<ReportedMessageRepository>();
         services.AddSingleton<AlbumRepository>();
+        services.AddSingleton<ChatPollRepository>();
+        services.AddSingleton<PhysicalVoiceRoomRepository>();
 
         // Boards Feature
         services.AddSingleton<BoardRepository>();
@@ -152,6 +157,9 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<BoardTemplateRepository>();
 
         // Email Feature
+        services.AddSingleton<EmailAccountRepository>();
+        services.AddSingleton<EmailInboxRepository>();
+        services.AddSingleton<EmailSendingIdentityRepository>();
         services.AddSingleton<EmailFolderRepository>();
         services.AddSingleton<EmailMessageRepository>();
 
@@ -209,11 +217,15 @@ public static class ServiceCollectionExtensions
         services.AddScoped<Spokes_Server.Components.UI.IVoiceUiStateService, Spokes_Server.Components.UI.VoiceUiStateService>();
         services.AddHostedService<VoiceStateSyncService>();
         services.AddSingleton<LiveKitService>();
+        services.AddSingleton<PhysicalVoiceRoomService>();
+        services.AddSingleton<PhysicalRoomPipelineStage>();
+        services.AddSingleton<IVoiceRoomPipelineStage>(sp => sp.GetRequiredService<PhysicalRoomPipelineStage>());
         services.AddSingleton<IVoiceBotService, VoiceBotService>();
         services.AddSingleton<MarkdownSanitizerService>();
 
         // Chat & Collaboration Services
         services.AddSingleton<AlbumService>();
+        services.AddSingleton<PollService>();
         services.AddSingleton<ISlideshowSessionService, SlideshowSessionService>();
         services.AddScoped<ISlideshowCastService, SlideshowCastService>();
         services.AddSingleton<ChatAuthorizationService>();
@@ -238,6 +250,8 @@ public static class ServiceCollectionExtensions
             sp.GetRequiredService<ICryptoService>(),
             sp.GetService<IUserPrivacyService>()));
         services.AddSingleton<IChatService>(sp => sp.GetRequiredService<ChatService>());
+        services.AddSingleton<ModerationReportService>();
+        services.AddSingleton<IModerationReportService>(sp => sp.GetRequiredService<ModerationReportService>());
         services.AddScoped<ChatNotificationService>();
         services.AddScoped<IGifSearchService, GifSearchService>();
         services.AddSingleton<BoardService>();
@@ -261,18 +275,21 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<EncryptionService>();
         services.AddSingleton<IImapConnectionFactory, ImapConnectionFactory>();
         services.AddSingleton<EmailIdleService>(); // Realtime IMAP
+        services.AddSingleton<IEmailInboxService, EmailInboxService>();
         services.AddScoped<IEmailCacheMaintenanceService, EmailCacheMaintenanceService>();
         services.AddScoped<IEmailDraftService, EmailDraftService>();
         services.AddScoped<IEmailDeliveryService, EmailDeliveryService>();
         services.AddScoped<IEmailFolderService, EmailFolderService>();
         services.AddScoped<IEmailMessageLifecycleService, EmailMessageLifecycleService>();
         services.AddScoped<IEmailSyncService, EmailSyncService>();
+        services.AddHostedService<EmailBackgroundService>();
         services.AddSingleton<IBackupEncryptionService, BackupEncryptionService>();
         services.AddSingleton<IBackupDestinationProvider, LocalMountBackupProvider>();
         services.AddSingleton<IBackupDestinationProvider, S3BackupProvider>();
         services.AddSingleton<IBackupDestinationProvider, WebDavBackupProvider>();
         services.AddSingleton<IBackupDestinationProvider, SftpBackupProvider>();
         services.AddSingleton<IBackupDestinationProvider, GoogleDriveBackupProvider>();
+        services.AddSingleton<IBackupDestinationProvider, GitHubBackupProvider>();
         services.AddSingleton<BackupDestinationCoordinator>();
         services.AddSingleton<StorageMaintenanceService>();
         services.AddSingleton<NtpClient>();
@@ -309,12 +326,19 @@ public static class ServiceCollectionExtensions
             client.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 (compatible; SpokesBot/1.0; +https://spokes.app)");
             client.Timeout = TimeSpan.FromSeconds(5);
             client.MaxResponseContentBufferSize = 512 * 1024;
-        });
+        }).ConfigurePrimaryHttpMessageHandler(() => new SafeExternalHttpHandler());
+        services.AddHttpClient("WebPush")
+            .ConfigurePrimaryHttpMessageHandler(() => new SafeExternalHttpHandler(requireHttps: true, allowRedirects: false));
         services.AddHttpClient("ServerUpdate", client =>
         {
             client.DefaultRequestHeaders.UserAgent.ParseAdd("Spokes-Update-Checker/1.0");
         });
         services.AddHttpClient("Casdoor");
+        services.AddHttpClient("WebDavBackup")
+            .ConfigurePrimaryHttpMessageHandler(() => new System.Net.Http.HttpClientHandler
+            {
+                AllowAutoRedirect = false
+            });
         services.AddHostedService<TelemetryBackgroundService>();
         services.AddHostedService<NotificationQueueBackgroundService>();
         services.AddHostedService<ServerUpdateService>();

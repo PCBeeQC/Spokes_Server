@@ -1,6 +1,8 @@
 using System;
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
+using Microsoft.AspNetCore.WebUtilities;
 using Spokes_Server.Core.Constants;
 using Spokes_Server.Core.Models.Core;
 using Spokes_Server.Core.Services.Communication.Notifications;
@@ -18,6 +20,11 @@ public record PushRelayContext(
 
 public class PushPayloadBuilder
 {
+    public const int CallTtlSeconds = 60;
+    public const int CalendarTtlSeconds = 2 * 3600;
+    public const int ClearNotificationTtlSeconds = 24 * 3600;
+    public const int DefaultTtlSeconds = 7 * 24 * 3600;
+
     public virtual string GetEffectiveServerName(PushNotificationRequest request, CompanyProfile profile)
     {
         return !string.IsNullOrWhiteSpace(request.ServerName)
@@ -40,11 +47,70 @@ public class PushPayloadBuilder
             ?? (request.Category == "chat" ? "spokesnotif1.wav" : "default");
     }
 
+    public virtual int GetEffectiveTtlSeconds(PushNotificationRequest request)
+    {
+        if (request.TtlSeconds.HasValue)
+        {
+            return Math.Clamp(request.TtlSeconds.Value, 0, DefaultTtlSeconds);
+        }
+
+        if (string.Equals(request.Category, "call", StringComparison.OrdinalIgnoreCase))
+        {
+            return CallTtlSeconds;
+        }
+
+        if (string.Equals(request.Category, "calendar", StringComparison.OrdinalIgnoreCase))
+        {
+            return CalendarTtlSeconds;
+        }
+
+        if (string.Equals(request.Category, "clear_notification", StringComparison.OrdinalIgnoreCase))
+        {
+            return ClearNotificationTtlSeconds;
+        }
+
+        return DefaultTtlSeconds;
+    }
+
+    /// <summary>
+    /// Computes an RFC 8030 §5.4 compliant Topic header (&lt;= 32 URL-safe base64 chars)
+    /// so WebPush servers collapse undelivered notifications within the same category and thread.
+    /// </summary>
+    public virtual string? GetWebPushTopic(PushNotificationRequest request)
+    {
+        var effectiveThreadId = GetEffectiveThreadId(request);
+        if (string.IsNullOrWhiteSpace(effectiveThreadId))
+        {
+            return null;
+        }
+
+        var category = string.IsNullOrWhiteSpace(request.Category) ? "chat" : request.Category.ToLowerInvariant();
+        var hash = SHA256.HashData(Encoding.UTF8.GetBytes($"{category}:{effectiveThreadId}"));
+        // 24 bytes encodes to exact 32 base64url characters without padding
+        return WebEncoders.Base64UrlEncode(hash.AsSpan(0, 24));
+    }
+
+    private static DateTime NormalizeUtc(DateTime value)
+    {
+        if (value == default)
+        {
+            return DateTime.UtcNow;
+        }
+
+        return value.Kind switch
+        {
+            DateTimeKind.Utc => value,
+            DateTimeKind.Local => value.ToUniversalTime(),
+            _ => DateTime.SpecifyKind(value, DateTimeKind.Utc)
+        };
+    }
+
     public virtual string BuildWebPushPayloadJson(PushNotificationRequest request, CompanyProfile profile, string defaultIcon)
     {
         var effectiveServerName = GetEffectiveServerName(request, profile);
         var effectiveThreadId = GetEffectiveThreadId(request);
         var effectiveSound = GetEffectiveSound(request);
+        var sentAtUtc = NormalizeUtc(request.SentAtUtc);
 
         var payload = new
         {
@@ -53,16 +119,19 @@ public class PushPayloadBuilder
             icon = request.Icon ?? defaultIcon,
             badge = defaultIcon,
             tag = request.Tag,
+            category = request.Category,
             actions = request.Actions,
             isSilent = request.IsSilent,
             sound = effectiveSound,
             data = new
             {
                 url = request.Url ?? (request.Category == "calendar" ? "/planning/calendar" : "/chat"),
+                category = request.Category,
                 threadId = effectiveThreadId,
                 serverName = effectiveServerName,
                 channelName = request.ChannelName,
-                isGroupChat = request.IsGroupChat
+                isGroupChat = request.IsGroupChat,
+                sentAtUtc = sentAtUtc
             }
         };
 
@@ -77,6 +146,7 @@ public class PushPayloadBuilder
         var effectiveServerName = GetEffectiveServerName(request, context.Profile);
         var effectiveThreadId = GetEffectiveThreadId(request);
         var effectiveSound = GetEffectiveSound(request);
+        var sentAtUtc = NormalizeUtc(request.SentAtUtc);
 
         string? absoluteImageUrl = null;
         if (!string.IsNullOrEmpty(request.Icon) && !string.IsNullOrEmpty(context.OriginUrl))
@@ -85,8 +155,21 @@ public class PushPayloadBuilder
         }
 
         var payload = CreateBaseRelayPayload(request, sub, context, effectiveServerName, effectiveThreadId, effectiveSound);
+        payload.TtlSeconds = GetEffectiveTtlSeconds(request);
 
-        if (!string.IsNullOrEmpty(sub.PushPublicKey))
+        bool isClearNotification = string.Equals(request.Category, "clear_notification", StringComparison.OrdinalIgnoreCase);
+
+        if (isClearNotification)
+        {
+            payload.Title = string.Empty;
+            payload.Body = string.Empty;
+            payload.ServerName = null;
+            payload.ChannelName = null;
+            payload.OriginUrl = null;
+            payload.ServerIconUrl = null;
+            payload.SentAtUtc = null;
+        }
+        else if (!string.IsNullOrEmpty(sub.PushPublicKey))
         {
             var innerPayload = new
             {
@@ -102,9 +185,10 @@ public class PushPayloadBuilder
                 IsGroupChat = request.IsGroupChat,
                 ServerIconUrl = payload.ServerIconUrl,
                 IsSilent = request.IsSilent,
-                Sound = effectiveSound
+                Sound = effectiveSound,
+                SentAtUtc = sentAtUtc
             };
-            var innerPayloadBytes = System.Text.Encoding.UTF8.GetBytes(JsonSerializer.Serialize(innerPayload));
+            var innerPayloadBytes = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(innerPayload));
             var (encryptedKey, nonce, ciphertext, tag) = EncryptInnerPayload(innerPayloadBytes, sub.PushPublicKey);
 
             payload.IsEncrypted = true;
@@ -118,6 +202,7 @@ public class PushPayloadBuilder
             payload.ChannelName = null;
             payload.OriginUrl = null;
             payload.ServerIconUrl = null;
+            payload.SentAtUtc = null;
         }
         else
         {
@@ -125,6 +210,7 @@ public class PushPayloadBuilder
             payload.Body = request.Body;
             payload.Url = request.Url ?? (request.Category == "calendar" ? "/planning/calendar" : "/chat");
             payload.ImageUrl = absoluteImageUrl;
+            payload.SentAtUtc = sentAtUtc;
         }
 
         return payload;

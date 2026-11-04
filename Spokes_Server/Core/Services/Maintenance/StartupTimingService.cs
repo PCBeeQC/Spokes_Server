@@ -58,6 +58,89 @@ public class StartupTimingService
     /// <summary>DIAG-TEMP: live Chat page instances in this circuit (detects remount overlap).</summary>
     public int ChatLiveInstances;
 
+    private string? _pendingRouteGate;
+    private bool _routeSettled;
+    private string? _settledRouteName;
+    private long? _routeSettledTimestampMs;
+
+    public bool HasPendingRouteGate
+    {
+        get
+        {
+            lock (_lock)
+            {
+                return !_routeSettled && !string.IsNullOrEmpty(_pendingRouteGate);
+            }
+        }
+    }
+
+    public bool IsRouteSettled
+    {
+        get
+        {
+            lock (_lock)
+            {
+                return _routeSettled;
+            }
+        }
+    }
+
+    public string? SettledRouteName
+    {
+        get
+        {
+            lock (_lock)
+            {
+                return _settledRouteName;
+            }
+        }
+    }
+
+    public long? RouteSettledTimestampMs
+    {
+        get
+        {
+            lock (_lock)
+            {
+                return _routeSettledTimestampMs;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Signals that the active landing page still has asynchronous loading state (e.g. dashboard query or device vault check)
+    /// that must complete before Click-to-Usable TTI is declared settled.
+    /// </summary>
+    public void RegisterPendingRouteGate(string routeName)
+    {
+        lock (_lock)
+        {
+            if (_routeSettled) return;
+            _pendingRouteGate = routeName;
+        }
+        Add($"Server: Route Gate Pending ({routeName})");
+    }
+
+    /// <summary>
+    /// Marks the initial landing route as usable/settled once its blocking loading state has cleared.
+    /// Returns true only on the first settle transition for this circuit.
+    /// </summary>
+    public bool TryMarkRouteSettled(string routeName)
+    {
+        var ts = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        lock (_lock)
+        {
+            if (_routeSettled) return false;
+            _routeSettled = true;
+            _pendingRouteGate = null;
+            _settledRouteName = routeName;
+            _routeSettledTimestampMs = ts;
+            _timings.Add(new StartupTiming { Name = $"Server: Route Settled ({routeName})", Timestamp = ts });
+        }
+        Mark($"Server: Route Settled ({routeName})");
+        return true;
+    }
+
     public void Add(string name)
     {
         var ts = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();

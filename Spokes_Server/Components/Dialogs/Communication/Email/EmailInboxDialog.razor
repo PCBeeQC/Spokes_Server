@@ -1,0 +1,370 @@
+@using Spokes_Server.Components.Shared
+@using Spokes_Server.Core.Configuration
+@using Spokes_Server.Core.Constants
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Services.Identity
+@using Spokes_Server.Core.Services.Communication.Email
+@inject Database Db
+@inject IEmailInboxService EmailInboxService
+@inject UserService UserService
+@inject ISnackbar Snackbar
+
+<MudDialog>
+    <DialogContent>
+        <MudStack Spacing="3">
+            <MudGrid Spacing="2">
+                <MudItem xs="12" sm="6">
+                    <MudTextField @bind-Value="Inbox.Name"
+                                  Label="@Loc["Virtual Inbox Name"]"
+                                  Placeholder="e.g. Support, Sales, Billing"
+                                  Variant="Variant.Outlined"
+                                  Margin="Margin.Dense"
+                                  Required="true" />
+                </MudItem>
+                <MudItem xs="12" sm="6">
+                    <MudSelect T="string"
+                               Value="@Inbox.AccountId"
+                               ValueChanged="OnSourceAccountChanged"
+                               Label="@Loc["Source Real Inbox"]"
+                               Variant="Variant.Outlined"
+                               Margin="Margin.Dense"
+                               Required="true">
+                        @foreach (var acc in AvailableAccounts)
+                        {
+                            <MudSelectItem Value="@acc.Id">@acc.Name (@acc.EmailAddress)</MudSelectItem>
+                        }
+                    </MudSelect>
+                </MudItem>
+            </MudGrid>
+
+            <div>
+                <MudText Typo="Typo.subtitle2" Class="mb-1">@Loc["Filtered Email Addresses or @Domain"]</MudText>
+                <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-2 d-block">
+                    @Loc["Enter one or more recipient addresses (e.g. support@company.com) or domain patterns (e.g. @company.com) to filter from the selected Real Inbox."]
+                </MudText>
+                <div class="d-flex gap-2 align-center">
+                    <MudTextField @bind-Value="_newTargetAddress"
+                                  Placeholder="@Loc["e.g. support@company.com or @company.com"]"
+                                  Variant="Variant.Outlined"
+                                  Margin="Margin.Dense"
+                                  Immediate="true"
+                                  OnKeyDown="HandleAddressKeyDown" />
+                    <MudButton Variant="Variant.Outlined"
+                               Color="Color.Primary"
+                               StartIcon="@Icons.Material.Filled.Add"
+                               OnClick="AddTargetAddress">
+                        @Loc["Add"]
+                    </MudButton>
+                </div>
+
+                @if (Inbox.TargetAddresses.Count > 0)
+                {
+                    <div class="d-flex flex-wrap gap-1 mt-2">
+                        @foreach (var addr in Inbox.TargetAddresses.ToList())
+                        {
+                            <MudChip T="string"
+                                     Color="Color.Primary"
+                                     Variant="Variant.Outlined"
+                                     Size="Size.Small"
+                                     OnClose="@(() => Inbox.TargetAddresses.Remove(addr))">
+                                @addr
+                            </MudChip>
+                        }
+                    </div>
+                }
+
+                @if (_detectedAddresses.Count > 0)
+                {
+                    <div class="mt-2">
+                        <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-1 d-block">
+                            @Loc["Detected addresses in this Real Inbox (click to add):"]
+                        </MudText>
+                        <div class="d-flex flex-wrap gap-1">
+                            @foreach (var detected in _detectedAddresses.Where(d => !Inbox.TargetAddresses.Contains(d, StringComparer.OrdinalIgnoreCase)).Take(12))
+                            {
+                                <MudChip T="string"
+                                         Size="Size.Small"
+                                         Variant="Variant.Text"
+                                         Color="Color.Info"
+                                         Icon="@Icons.Material.Filled.Add"
+                                         OnClick="@(() => QuickAddAddress(detected))">
+                                    @detected
+                                </MudChip>
+                            }
+                        </div>
+                    </div>
+                }
+            </div>
+
+            <MudDivider />
+
+            <div>
+                <MudText Typo="Typo.subtitle2" Class="mb-1">@Loc["Linked Sending Identities"]</MudText>
+                <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-2 d-block">
+                    @Loc["Link one or more Sending Identities to send and reply from this Virtual Inbox."]
+                </MudText>
+
+                @if (AvailableIdentities.Count == 0)
+                {
+                    <MudAlert Severity="Severity.Info" Dense="true" Variant="Variant.Outlined">
+                        @Loc["No Sending Identities available yet. Create a Sending Identity in Email Settings to link it to this Virtual Inbox."]
+                    </MudAlert>
+                }
+                else
+                {
+                    <MudSelect T="string"
+                               MultiSelection="true"
+                               SelectedValues="_selectedIdentityIds"
+                               SelectedValuesChanged="OnSelectedIdentitiesChanged"
+                               ToStringFunc="@(id => AvailableIdentities.FirstOrDefault(x => x.Id == id)?.DisplayLabel ?? id)"
+                               Label="@Loc["Linked Sending Identities"]"
+                               Variant="Variant.Outlined"
+                               Margin="Margin.Dense">
+                        @foreach (var identity in AvailableIdentities)
+                        {
+                            <MudSelectItem T="string" Value="@identity.Id">@identity.DisplayLabel</MudSelectItem>
+                        }
+                    </MudSelect>
+
+                    @if (Inbox.LinkedIdentityIds.Count > 0)
+                    {
+                        <MudPaper Outlined="true" Class="pa-2 mt-2">
+                            <MudText Typo="Typo.caption" Color="Color.Secondary" Class="px-1 mb-1 d-block">
+                                @Loc["Default identity when composing or replying from this inbox:"]
+                            </MudText>
+                            <MudRadioGroup T="string" @bind-Value="Inbox.DefaultIdentityId" Class="d-flex flex-column">
+                                @foreach (var id in Inbox.LinkedIdentityIds.ToList())
+                                {
+                                    var identity = AvailableIdentities.FirstOrDefault(x => x.Id == id);
+                                    if (identity != null)
+                                    {
+                                        var isDefault = string.Equals(Inbox.DefaultIdentityId, identity.Id, StringComparison.OrdinalIgnoreCase);
+                                        <div class="d-flex align-center justify-space-between px-2 py-1 rounded"
+                                             style="@(isDefault ? "background-color: var(--mud-palette-action-default-hover);" : "")">
+                                            <MudRadio T="string" Value="@identity.Id" Color="Color.Primary" Dense="true">
+                                                <div class="d-flex align-center gap-2 flex-wrap">
+                                                    <MudText Typo="Typo.body2" Style="@(isDefault ? "font-weight: 600;" : "")">
+                                                        @identity.DisplayLabel
+                                                    </MudText>
+                                                    @if (isDefault)
+                                                    {
+                                                        <MudChip T="string" Size="Size.Small" Color="Color.Primary" Variant="Variant.Filled" Icon="@Icons.Material.Filled.Star">
+                                                            @Loc["Default"]
+                                                        </MudChip>
+                                                    }
+                                                </div>
+                                            </MudRadio>
+                                            <MudTooltip Text="@Loc["Unlink identity"]">
+                                                <MudIconButton Icon="@Icons.Material.Filled.Close"
+                                                               Size="Size.Small"
+                                                               Color="Color.Default"
+                                                               OnClick="@(() => UnlinkIdentity(identity.Id))" />
+                                            </MudTooltip>
+                                        </div>
+                                    }
+                                }
+                            </MudRadioGroup>
+                        </MudPaper>
+                    }
+                }
+            </div>
+
+            @if (AllowSharing)
+            {
+                <MudDivider />
+                <div>
+                    <MudText Typo="Typo.subtitle2" Class="mb-1">@Loc["Share Virtual Inbox With Users & Groups"]</MudText>
+                    <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-2 d-block">
+                        @Loc["Grant other individuals or teams access to view and reply from this Virtual Inbox."]
+                    </MudText>
+                    <UserGroupPicker Target="UserGroupPickerTarget.Both"
+                                     SelectedUserIdsList="Inbox.AllowedUserIds"
+                                     SelectedGroupIdsList="Inbox.AllowedTeamIds" />
+                </div>
+            }
+        </MudStack>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">@Loc["Cancel"]</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="Save">@Loc["Save"]</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
+    [Parameter] public EmailInbox Inbox { get; set; } = new();
+    [Parameter] public List<EmailAccount> AvailableAccounts { get; set; } = [];
+    [Parameter] public List<EmailSendingIdentity> AvailableIdentities { get; set; } = [];
+    [Parameter] public bool IsNew { get; set; }
+    [Parameter] public bool AllowSharing { get; set; } = true;
+
+    private string _newTargetAddress = string.Empty;
+    private List<string> _detectedAddresses = [];
+    private IReadOnlyCollection<string> _selectedIdentityIds = Array.Empty<string>();
+
+    protected override async Task OnInitializedAsync()
+    {
+        var currentUser = await UserService.GetEmployeeAsync();
+        if (currentUser == null || !currentUser.IsActive || currentUser.IsBanned || currentUser.IsSuspended)
+        {
+            Snackbar.Add(Loc["You do not have permission to manage Virtual Inboxes."].Value, Severity.Error);
+            MudDialog?.Cancel();
+            return;
+        }
+
+        if (Inbox.IsServerManaged)
+        {
+            if (!(currentUser.IsAdmin || currentUser.HasPermission(AppPermissions.Admin.ManageSettings)))
+            {
+                Snackbar.Add(Loc["You do not have permission to manage server Virtual Inboxes."].Value, Severity.Error);
+                MudDialog?.Cancel();
+                return;
+            }
+
+            var sourceAccounts = AvailableAccounts.Count > 0 ? AvailableAccounts : Db.EmailAccounts.GetAll();
+            AvailableAccounts = sourceAccounts
+                .Where(a => a.IsServerManaged || string.Equals(a.Id, Inbox.AccountId, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            var sourceIdentities = AvailableIdentities.Count > 0 ? AvailableIdentities : Db.EmailSendingIdentities.GetAll();
+            AvailableIdentities = sourceIdentities
+                .Where(i => i.IsServerManaged ||
+                            string.Equals(i.Id, Inbox.DefaultIdentityId, StringComparison.OrdinalIgnoreCase) ||
+                            (Inbox.LinkedIdentityIds != null && Inbox.LinkedIdentityIds.Contains(i.Id, StringComparer.OrdinalIgnoreCase)))
+                .ToList();
+        }
+        else
+        {
+            var accessibleAccounts = EmailInboxService.GetAccessibleRealInboxes(currentUser);
+            var accessibleAccountIds = accessibleAccounts.Select(a => a.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            AvailableAccounts = AvailableAccounts.Count > 0
+                ? AvailableAccounts.Where(a => accessibleAccountIds.Contains(a.Id) || string.Equals(a.Id, Inbox.AccountId, StringComparison.OrdinalIgnoreCase)).ToList()
+                : accessibleAccounts;
+
+            var permittedIdentities = EmailInboxService.GetPermittedIdentities(currentUser);
+            var permittedIdentityIds = permittedIdentities.Select(i => i.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            AvailableIdentities = AvailableIdentities.Count > 0
+                ? AvailableIdentities.Where(i => permittedIdentityIds.Contains(i.Id) ||
+                                                 string.Equals(i.Id, Inbox.DefaultIdentityId, StringComparison.OrdinalIgnoreCase) ||
+                                                 (Inbox.LinkedIdentityIds != null && Inbox.LinkedIdentityIds.Contains(i.Id, StringComparer.OrdinalIgnoreCase))).ToList()
+                : permittedIdentities;
+        }
+
+        if (string.IsNullOrEmpty(Inbox.AccountId) && AvailableAccounts.Count > 0)
+        {
+            Inbox.AccountId = AvailableAccounts[0].Id;
+        }
+
+        LoadDetectedAddresses();
+        _selectedIdentityIds = Inbox.LinkedIdentityIds.ToList();
+        if (string.IsNullOrEmpty(Inbox.DefaultIdentityId) && Inbox.LinkedIdentityIds.Count > 0)
+        {
+            Inbox.DefaultIdentityId = Inbox.LinkedIdentityIds[0];
+        }
+    }
+
+    private void OnSourceAccountChanged(string accountId)
+    {
+        Inbox.AccountId = accountId;
+        LoadDetectedAddresses();
+    }
+
+    private void LoadDetectedAddresses()
+    {
+        if (!string.IsNullOrWhiteSpace(Inbox.AccountId))
+        {
+            _detectedAddresses = EmailInboxService.GetUnmatchedAddressesForAccount(Inbox.AccountId);
+        }
+        else
+        {
+            _detectedAddresses = [];
+        }
+    }
+
+    private void QuickAddAddress(string address)
+    {
+        _newTargetAddress = address;
+        AddTargetAddress();
+    }
+
+    private void OnSelectedIdentitiesChanged(IEnumerable<string> values)
+    {
+        var list = values?.ToList() ?? [];
+        _selectedIdentityIds = list;
+        Inbox.LinkedIdentityIds = list;
+        if (!string.IsNullOrEmpty(Inbox.DefaultIdentityId) && !Inbox.LinkedIdentityIds.Contains(Inbox.DefaultIdentityId))
+        {
+            Inbox.DefaultIdentityId = Inbox.LinkedIdentityIds.FirstOrDefault();
+        }
+        else if (string.IsNullOrEmpty(Inbox.DefaultIdentityId) && Inbox.LinkedIdentityIds.Count > 0)
+        {
+            Inbox.DefaultIdentityId = Inbox.LinkedIdentityIds[0];
+        }
+    }
+
+    private void UnlinkIdentity(string identityId)
+    {
+        var updated = Inbox.LinkedIdentityIds.Where(id => !string.Equals(id, identityId, StringComparison.OrdinalIgnoreCase)).ToList();
+        OnSelectedIdentitiesChanged(updated);
+    }
+
+    private void AddTargetAddress()
+    {
+        var trimmed = _newTargetAddress?.Trim().ToLowerInvariant();
+        if (string.IsNullOrWhiteSpace(trimmed)) return;
+
+        if (!Inbox.TargetAddresses.Contains(trimmed, StringComparer.OrdinalIgnoreCase))
+        {
+            Inbox.TargetAddresses.Add(trimmed);
+            if (string.IsNullOrWhiteSpace(Inbox.Name))
+            {
+                var clean = trimmed.TrimStart('*', '@');
+                var atIdx = clean.IndexOf('@');
+                var local = atIdx > 0 ? clean[..atIdx] : clean;
+                if (!string.IsNullOrEmpty(local))
+                {
+                    Inbox.Name = char.ToUpperInvariant(local[0]) + local[1..];
+                }
+            }
+        }
+        _newTargetAddress = string.Empty;
+    }
+
+    private void HandleAddressKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter")
+        {
+            AddTargetAddress();
+        }
+    }
+
+    private void Save()
+    {
+        if (!string.IsNullOrWhiteSpace(_newTargetAddress))
+        {
+            AddTargetAddress();
+        }
+
+        if (string.IsNullOrWhiteSpace(Inbox.Name))
+        {
+            Snackbar.Add(Loc["Virtual Inbox name is required."].Value, Severity.Warning);
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(Inbox.AccountId))
+        {
+            Snackbar.Add(Loc["Please select a source Real Inbox."].Value, Severity.Warning);
+            return;
+        }
+
+        if (Inbox.TargetAddresses.Count == 0)
+        {
+            Snackbar.Add(Loc["Please add at least one filtered email address or @domain."].Value, Severity.Warning);
+            return;
+        }
+
+        MudDialog.Close(DialogResult.Ok(Inbox));
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+}

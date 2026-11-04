@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
@@ -233,6 +234,9 @@ public class ChatMessageIndexService
             existing.ReplyToId = item.ReplyToId;
             existing.PreviewText = previewText;
             existing.MentionedAlbumIds = albumIds;
+            existing.HasImages = HasImageContent(item);
+            existing.HasFiles = HasFileContent(item);
+            existing.HasLinks = HasLinkContent(item);
         }
         else
         {
@@ -247,7 +251,10 @@ public class ChatMessageIndexService
                 SearchText = item.IsEncrypted ? null : item.Content?.ToLowerInvariant(),
                 ReplyToId = item.ReplyToId,
                 PreviewText = previewText,
-                MentionedAlbumIds = albumIds
+                MentionedAlbumIds = albumIds,
+                HasImages = HasImageContent(item),
+                HasFiles = HasFileContent(item),
+                HasLinks = HasLinkContent(item)
             });
         }
         RefreshChannelPreview(item.ChannelId, cachedMsg);
@@ -437,8 +444,49 @@ public class ChatMessageIndexService
             SearchText = item.IsEncrypted ? null : item.Content?.ToLowerInvariant(),
             ReplyToId = item.ReplyToId,
             PreviewText = item.IsEncrypted ? null : ChatPreviewFormatter.FormatAndTruncatePreview(item.Content, item.Attachments, 30),
-            MentionedAlbumIds = item.MentionedAlbumIds != null && item.MentionedAlbumIds.Count > 0 ? item.MentionedAlbumIds.ToList() : []
+            MentionedAlbumIds = item.MentionedAlbumIds != null && item.MentionedAlbumIds.Count > 0 ? item.MentionedAlbumIds.ToList() : [],
+            HasImages = HasImageContent(item),
+            HasFiles = HasFileContent(item),
+            HasLinks = HasLinkContent(item)
         };
+    }
+
+    public static bool HasImageContent(ChatMessage item)
+    {
+        if (item.Attachments != null && item.Attachments.Any(a =>
+            a.ContentType?.StartsWith("image/", StringComparison.OrdinalIgnoreCase) == true ||
+            IsImageFileName(a.FileName)))
+        {
+            return true;
+        }
+
+        if (!string.IsNullOrEmpty(item.Content) &&
+            Regex.IsMatch(item.Content, @"!\[gif\]|\[gif\]", RegexOptions.IgnoreCase))
+        {
+            return true;
+        }
+
+        return false;
+    }
+
+    public static bool HasFileContent(ChatMessage item)
+    {
+        return item.Attachments != null && item.Attachments.Any(a =>
+            (a.ContentType == null || !a.ContentType.StartsWith("image/", StringComparison.OrdinalIgnoreCase)) &&
+            !IsImageFileName(a.FileName));
+    }
+
+    public static bool HasLinkContent(ChatMessage item)
+    {
+        return !string.IsNullOrEmpty(item.Content) &&
+            Regex.IsMatch(item.Content, @"https?://[^\s]+", RegexOptions.IgnoreCase);
+    }
+
+    private static bool IsImageFileName(string? fileName)
+    {
+        if (string.IsNullOrWhiteSpace(fileName)) return false;
+        var ext = Path.GetExtension(fileName).ToLowerInvariant();
+        return ext is ".png" or ".jpg" or ".jpeg" or ".gif" or ".webp" or ".svg" or ".bmp" or ".avif";
     }
 
     public void EnsureIndexBuilt(string channelId, Func<string, List<ChatMessage>> channelMessagesLoader)

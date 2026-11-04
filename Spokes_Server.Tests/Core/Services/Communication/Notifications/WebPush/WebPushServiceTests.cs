@@ -817,6 +817,149 @@ public class WebPushServiceTests : IDisposable
             var result = request.GetEffectiveBodyForDevice(hasVaultCookie);
             Assert.Equal(expected, result);
         }
+
+        [Fact]
+        public async Task SendNotificationAsync_WhenExcludedSessionIdsProvided_SkipsExcludedSessionAndDeliversToOtherDevices()
+        {
+            SetupValidVapidConfig();
+            _employees.Save(new Employee { Id = "user-multi-phone", PushNotificationsEnabled = true });
+
+            _sessions.Save(new DeviceSession
+            {
+                Id = "sess-android-focused",
+                EmployeeId = "user-multi-phone",
+                DeviceType = DeviceType.Mobile,
+                PushEnabled = true,
+                PushEndpoint = "fcm-token-android",
+                PushSubscriptionType = PushSubscriptionType.NativeRelay
+            });
+
+            _sessions.Save(new DeviceSession
+            {
+                Id = "sess-iphone-background",
+                EmployeeId = "user-multi-phone",
+                DeviceType = DeviceType.Mobile,
+                PushEnabled = true,
+                PushEndpoint = "apns-token-iphone",
+                PushSubscriptionType = PushSubscriptionType.NativeRelay
+            });
+
+            var request = new PushNotificationRequest
+            {
+                UserId = "user-multi-phone",
+                Title = "Alice",
+                Body = "Alice started a voice call",
+                Category = "call",
+                Tier = PresenceTier.All,
+                ExcludedSessionIds = new[] { "sess-android-focused" }
+            };
+
+            await _sut.SendNotificationAsync(request);
+
+            _mockHttpMessageHandler.Protected().Verify(
+                "SendAsync",
+                Times.Once(),
+                ItExpr.Is<HttpRequestMessage>(req =>
+                    req.Method == HttpMethod.Post &&
+                    ContentContains(req.Content, "apns-token-iphone", StringComparison.OrdinalIgnoreCase) &&
+                    !ContentContains(req.Content, "fcm-token-android", StringComparison.OrdinalIgnoreCase)),
+                ItExpr.IsAny<CancellationToken>()
+            );
+        }
+
+        [Fact]
+        public async Task SendNotificationAsync_WhenUserInVoiceCall_SilencesMobilePushPayload()
+        {
+            SetupValidVapidConfig();
+            var emp = new Employee { Id = "user-voice", PushNotificationsEnabled = true };
+            _employees.Save(emp);
+
+            _sessions.Save(new DeviceSession
+            {
+                Id = "sub-mobile",
+                EmployeeId = "user-voice",
+                DeviceType = DeviceType.Mobile,
+                PushEnabled = true,
+                PushEndpoint = "https://example.com/push-mobile",
+                PushSubscriptionType = PushSubscriptionType.NativeRelay
+            });
+
+            _chatState.NotifyVoiceMemberJoined("vc-1", "user-voice");
+
+            var request = new PushNotificationRequest
+            {
+                UserId = "user-voice",
+                Title = "Bob",
+                Body = "Hello during call",
+                Category = "chat",
+                Sound = "spokesnotif1.wav",
+                IsSilent = false
+            };
+
+            await _sut.SendNotificationAsync(request);
+
+            _mockHttpMessageHandler.Protected().Verify(
+                "SendAsync",
+                Times.Once(),
+                ItExpr.Is<HttpRequestMessage>(req =>
+                    req.Method == HttpMethod.Post &&
+                    ContentContains(req.Content, "\"isSilent\":true") &&
+                    ContentContains(req.Content, "\"sound\":null")),
+                ItExpr.IsAny<CancellationToken>()
+            );
+        }
+
+        [Fact]
+        public async Task SendClearNotificationAsync_DispatchesToBothMobileAndDesktopNativeRelay_WhileSkippingWebPush()
+        {
+            SetupValidVapidConfig();
+            _employees.Save(new Employee { Id = "user-clear-all", PushNotificationsEnabled = true });
+
+            _sessions.Save(new DeviceSession
+            {
+                Id = "sub-mobile-relay",
+                EmployeeId = "user-clear-all",
+                DeviceType = DeviceType.Mobile,
+                PushEnabled = true,
+                PushEndpoint = "fcm-mobile-token",
+                PushSubscriptionType = PushSubscriptionType.NativeRelay
+            });
+
+            _sessions.Save(new DeviceSession
+            {
+                Id = "sub-desktop-relay",
+                EmployeeId = "user-clear-all",
+                DeviceType = DeviceType.Desktop,
+                PushEnabled = true,
+                PushEndpoint = "fcm-desktop-token",
+                PushSubscriptionType = PushSubscriptionType.NativeRelay
+            });
+
+            _sessions.Save(new DeviceSession
+            {
+                Id = "sub-browser-webpush",
+                EmployeeId = "user-clear-all",
+                DeviceType = DeviceType.Desktop,
+                PushEnabled = true,
+                PushEndpoint = "https://example.com/webpush",
+                PushSubscriptionType = PushSubscriptionType.WebPush,
+                PushP256dh = "BM123",
+                PushAuth = "auth123"
+            });
+
+            await _sut.SendClearNotificationAsync("user-clear-all", "chan-42");
+
+            // Both Mobile AND Desktop NativeRelay sessions receive clear_notification; browser WebPush is skipped
+            _mockHttpMessageHandler.Protected().Verify(
+                "SendAsync",
+                Times.Exactly(2),
+                ItExpr.Is<HttpRequestMessage>(req =>
+                    req.Method == HttpMethod.Post &&
+                    ContentContains(req.Content, "\"category\":\"clear_notification\"", StringComparison.OrdinalIgnoreCase) &&
+                    ContentContains(req.Content, "\"threadId\":\"chan-42\"", StringComparison.OrdinalIgnoreCase)),
+                ItExpr.IsAny<CancellationToken>()
+            );
+        }
     }
 
 

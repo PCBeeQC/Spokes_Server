@@ -116,6 +116,36 @@ public class BackupDestinationCoordinatorTests : IDisposable
     }
 
     [Fact]
+    public async Task BackupDestinationCoordinator_DispatchesGitHubWhenEnabled()
+    {
+        var profile = _profiles.Get();
+        profile.Backup.GitHub.IsEnabled = true;
+        _profiles.Save(profile);
+
+        var githubProvider = new Mock<IBackupDestinationProvider>();
+        githubProvider.Setup(p => p.DestinationType).Returns(BackupDestinationType.GitHub);
+        githubProvider.Setup(p => p.UploadAsync(
+            It.IsAny<string>(),
+            It.IsAny<string>(),
+            It.IsAny<IProgress<BackupUploadProgress>?>(),
+            It.IsAny<CancellationToken>()))
+            .ReturnsAsync(BackupUploadResult.Succeeded("commit-sha-123", 4096));
+
+        var coordinator = new BackupDestinationCoordinator(new[] { githubProvider.Object }, _profiles);
+
+        var localBackup = Path.Combine(_testDir, "Spokes_Backup_20261023_040000.zip");
+        await File.WriteAllTextAsync(localBackup, "test_backup");
+
+        var results = await coordinator.DispatchUploadAsync(localBackup, Path.GetFileName(localBackup));
+
+        Assert.Single(results);
+        Assert.True(results.ContainsKey(BackupDestinationType.GitHub));
+        Assert.True(results[BackupDestinationType.GitHub].Success);
+        Assert.Equal("commit-sha-123", results[BackupDestinationType.GitHub].DestinationId);
+        Assert.Equal(RemoteUploadState.Success, coordinator.GetStatus(BackupDestinationType.GitHub).State);
+    }
+
+    [Fact]
     public async Task LocalMountBackupProvider_UploadAsync_ReportsProgress()
     {
         var profile = _profiles.Get();

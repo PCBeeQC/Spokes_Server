@@ -23,6 +23,7 @@
 }
 else
 {
+    <MudContainer MaxWidth="MaxWidth.ExtraLarge" Class="mt-4 pb-6">
     <SpokesBreadcrumbs Items="@(new (string, string?)[] { ("Projects", "projects"), (Project.DisplayName, null) })" />
 
     <MudPaper Class="pt-4 px-6 pb-2 mb-4" Outlined="true" Elevation="0">
@@ -127,6 +128,7 @@ else
         </MudTabPanel>
 
     </MudTabs>
+    </MudContainer>
 }
 
 @code {

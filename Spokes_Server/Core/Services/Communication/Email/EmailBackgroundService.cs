@@ -9,8 +9,8 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Spokes_Server.Core.Data.Repositories.Communication;
-using Spokes_Server.Core.Data.Repositories.HR;
-using Spokes_Server.Core.Models.HR;
+using Spokes_Server.Core.Data.Repositories.Core;
+using Spokes_Server.Core.Models.Communication;
 
 namespace Spokes_Server.Core.Services.Communication.Email;
 
@@ -23,18 +23,17 @@ public class EmailBackgroundService : BackgroundService
     private readonly ILogger<EmailBackgroundService> _logger;
     private readonly EmailIdleService _idleService;
 
-    // Track which employees already have IDLE running
     private readonly HashSet<string> _idleStarted = new();
 
-    private readonly Channel<(string EmployeeId, string FolderPath)> _idleSyncChannel =
-        Channel.CreateBounded<(string EmployeeId, string FolderPath)>(new BoundedChannelOptions(MaxChannelCapacity)
+    private readonly Channel<(string AccountId, string FolderPath)> _idleSyncChannel =
+        Channel.CreateBounded<(string AccountId, string FolderPath)>(new BoundedChannelOptions(MaxChannelCapacity)
         {
             FullMode = BoundedChannelFullMode.DropOldest,
             SingleReader = false,
             SingleWriter = false
         });
 
-    private readonly ConcurrentDictionary<(string EmployeeId, string FolderPath), byte> _queuedSyncs = new();
+    private readonly ConcurrentDictionary<(string AccountId, string FolderPath), byte> _queuedSyncs = new();
     private readonly CancellationTokenSource _cts = new();
     private Task[]? _workerTasks;
 
@@ -44,32 +43,31 @@ public class EmailBackgroundService : BackgroundService
         _logger = logger;
         _idleService = idleService;
 
-        // Subscribe to IDLE events — runs server-side, independent of any UI component
         _idleService.MessageReceived += OnIdleMessageReceived;
         _idleService.MessageFlagsChanged += OnIdleFlagsChanged;
     }
 
-    private void OnIdleMessageReceived(string employeeId, string folderPath, MailKit.UniqueId uid)
+    private void OnIdleMessageReceived(string accountId, string folderPath, MailKit.UniqueId uid)
     {
-        SyncFolderFromIdle(employeeId, folderPath, "new message");
+        SyncFolderFromIdle(accountId, folderPath, "new message");
     }
 
-    private void OnIdleFlagsChanged(string employeeId, string folderPath, MailKit.UniqueId uid)
+    private void OnIdleFlagsChanged(string accountId, string folderPath, MailKit.UniqueId uid)
     {
-        SyncFolderFromIdle(employeeId, folderPath, "flags change");
+        SyncFolderFromIdle(accountId, folderPath, "flags change");
     }
 
-    private void SyncFolderFromIdle(string employeeId, string folderPath, string eventName)
+    private void SyncFolderFromIdle(string accountId, string folderPath, string eventName)
     {
-        _logger.LogInformation("[EmailBG] IDLE detected {EventName} in {FolderPath} for {EmployeeId}. Enqueueing sync...", eventName, folderPath, employeeId);
+        _logger.LogInformation("[EmailBG] IDLE detected {EventName} in {FolderPath} for {AccountId}. Enqueueing sync...", eventName, folderPath, accountId);
 
-        var key = (employeeId, folderPath);
+        var key = (accountId, folderPath);
         if (_queuedSyncs.TryAdd(key, 0))
         {
             if (!_idleSyncChannel.Writer.TryWrite(key))
             {
                 _queuedSyncs.TryRemove(key, out _);
-                _logger.LogWarning("[EmailBG] IDLE sync channel is full. Dropping sync request for {EmployeeId} {FolderPath}", employeeId, folderPath);
+                _logger.LogWarning("[EmailBG] IDLE sync channel is full. Dropping sync request for {AccountId} {FolderPath}", accountId, folderPath);
             }
         }
     }
@@ -82,14 +80,14 @@ public class EmailBackgroundService : BackgroundService
             {
                 while (_idleSyncChannel.Reader.TryRead(out var item))
                 {
-                    var (employeeId, folderPath) = item;
-                    _queuedSyncs.TryRemove((employeeId, folderPath), out _);
+                    var (accountId, folderPath) = item;
+                    _queuedSyncs.TryRemove((accountId, folderPath), out _);
 
                     try
                     {
                         using var scope = _serviceProvider.CreateScope();
                         var syncService = scope.ServiceProvider.GetRequiredService<IEmailSyncService>();
-                        await syncService.SyncSingleFolderAsync(employeeId, folderPath, cancellationToken);
+                        await syncService.SyncSingleFolderAsync(accountId, folderPath, cancellationToken);
                     }
                     catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                     {
@@ -97,14 +95,13 @@ public class EmailBackgroundService : BackgroundService
                     }
                     catch (Exception ex)
                     {
-                        _logger.LogError(ex, "[EmailBG] IDLE sync failed for {EmployeeId} {FolderPath}", employeeId, folderPath);
+                        _logger.LogError(ex, "[EmailBG] IDLE sync failed for {AccountId} {FolderPath}", accountId, folderPath);
                     }
                 }
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            // Graceful shutdown
         }
         catch (Exception ex)
         {
@@ -112,10 +109,10 @@ public class EmailBackgroundService : BackgroundService
         }
     }
 
-    protected virtual List<Employee> GetSyncEmployees(EmployeeRepository repo)
+    protected virtual List<EmailAccount> GetSyncAccounts(EmailAccountRepository repo)
     {
         return repo.GetAll()
-            .Where(e => !string.IsNullOrEmpty(e.Email) && !string.IsNullOrEmpty(e.EncryptedEmailPassword))
+            .Where(a => a.Enabled && !a.IsArchived && (!string.IsNullOrEmpty(a.Username) || !string.IsNullOrEmpty(a.EmailAddress)) && !string.IsNullOrEmpty(a.EncryptedPassword))
             .ToList();
     }
 
@@ -182,20 +179,37 @@ public class EmailBackgroundService : BackgroundService
     private async Task SyncPollCycleAsync(CancellationToken effectiveToken)
     {
         using var scope = _serviceProvider.CreateScope();
-        var employeesRepo = scope.ServiceProvider.GetRequiredService<EmployeeRepository>();
+        var companyProfileRepo = scope.ServiceProvider.GetService<CompanyProfileRepository>();
+        if (string.Equals(companyProfileRepo?.Get()?.Edition, "Family", StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        var accountsRepo = scope.ServiceProvider.GetRequiredService<EmailAccountRepository>();
         var foldersRepo = scope.ServiceProvider.GetRequiredService<EmailFolderRepository>();
         var messagesRepo = scope.ServiceProvider.GetRequiredService<EmailMessageRepository>();
         var syncService = scope.ServiceProvider.GetRequiredService<IEmailSyncService>();
+        var syncStateService = scope.ServiceProvider.GetService<EmailSyncStateService>();
 
-        var employees = GetSyncEmployees(employeesRepo);
+        var accounts = GetSyncAccounts(accountsRepo);
+        var activeIds = accounts.Select(a => a.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-        foreach (var employee in employees)
+        foreach (var watchedId in _idleStarted.ToList())
+        {
+            if (!activeIds.Contains(watchedId))
+            {
+                _idleStarted.Remove(watchedId);
+                _idleService.StopWatchingAccount(watchedId);
+            }
+        }
+
+        foreach (var account in accounts)
         {
             if (effectiveToken.IsCancellationRequested) break;
 
             try
             {
-                await SyncEmployeeCycleAsync(employee, syncService, foldersRepo, messagesRepo, effectiveToken);
+                await SyncAccountCycleAsync(account, syncService, foldersRepo, messagesRepo, syncStateService, effectiveToken);
             }
             catch (OperationCanceledException) when (effectiveToken.IsCancellationRequested)
             {
@@ -203,52 +217,59 @@ public class EmailBackgroundService : BackgroundService
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error syncing email for employee {FullName}", employee.FullName);
+                _logger.LogError(ex, "Error syncing email for account {Email}", account.EmailAddress);
             }
         }
     }
 
-    private async Task SyncEmployeeCycleAsync(
-        Employee employee,
+    private async Task SyncAccountCycleAsync(
+        EmailAccount account,
         IEmailSyncService syncService,
         EmailFolderRepository foldersRepo,
         EmailMessageRepository messagesRepo,
+        EmailSyncStateService? syncStateService,
         CancellationToken cancellationToken)
     {
-        await syncService.SyncEmployeeAsync(employee.Id, cancellationToken);
+        await syncService.SyncAccountAsync(account.Id, cancellationToken);
 
-        var folders = foldersRepo.GetByEmployee(employee.Id);
-        ReconcileFolderUnreadCounts(employee.Id, folders, foldersRepo, messagesRepo);
-        EnsureIdleWatchStarted(employee, folders);
+        var folders = foldersRepo.GetByAccount(account.Id);
+        if (ReconcileFolderUnreadCounts(account.Id, folders, foldersRepo, messagesRepo))
+        {
+            syncStateService?.NotifyUnreadCountChanged(account.Id);
+        }
+        EnsureIdleWatchStarted(account, folders);
     }
 
-    private static void ReconcileFolderUnreadCounts(
-        string employeeId,
+    private static bool ReconcileFolderUnreadCounts(
+        string accountId,
         IEnumerable<EmailFolder> folders,
         EmailFolderRepository foldersRepo,
         EmailMessageRepository messagesRepo)
     {
+        bool changed = false;
         foreach (var folder in folders)
         {
-            var indexCount = messagesRepo.GetUnreadCount(employeeId, folder.Path);
+            var indexCount = messagesRepo.GetUnreadCount(accountId, folder.Path);
             if (folder.UnreadCount != indexCount)
             {
                 folder.UnreadCount = indexCount;
                 foldersRepo.Save(folder);
+                changed = true;
             }
         }
+        return changed;
     }
 
-    private void EnsureIdleWatchStarted(Employee employee, IEnumerable<EmailFolder> folders)
+    private void EnsureIdleWatchStarted(EmailAccount account, IEnumerable<EmailFolder> folders)
     {
-        if (_idleStarted.Contains(employee.Id)) return;
+        if (_idleStarted.Contains(account.Id)) return;
 
         var inbox = folders.FirstOrDefault(f => f.IsInbox);
         if (inbox == null) return;
 
-        _idleService.WatchFolder(employee.Id, inbox.Path);
-        _idleStarted.Add(employee.Id);
-        _logger.LogInformation("[EmailBG] Started IDLE watch for {FullName} on {InboxPath}", employee.FullName, inbox.Path);
+        _idleService.WatchFolder(account.Id, inbox.Path);
+        _idleStarted.Add(account.Id);
+        _logger.LogInformation("[EmailBG] Started IDLE watch for {Email} on {InboxPath}", account.EmailAddress, inbox.Path);
     }
 
     public override async Task StopAsync(CancellationToken cancellationToken)

@@ -229,7 +229,6 @@ video.livekit-screenshare::-webkit-media-controls-overlay-play-button {
         page-break-inside: avoid !important; /* Legacy support */
         display: block; /* Required for break-inside to work on most divs */
         position: relative; /* Stability fix */
-        margin-bottom: 1rem; /* Spacing between sections */
     }
 
     /* Override display: block for table elements so they don't lose their table layout */
@@ -314,7 +313,6 @@ video.livekit-screenshare::-webkit-media-controls-overlay-play-button {
         visibility: visible !important;
         border-color: #9e9e9e !important;
         border-bottom-width: 1px !important;
-        margin: 1rem 0 !important;
         opacity: 1 !important;
     }
 }
@@ -336,6 +334,322 @@ video.livekit-screenshare::-webkit-media-controls-overlay-play-button {
     .mud-dialog.mud-dialog-width-full {
         width: 100% !important;
     }
+}
+/* --- SPOKES RICH TEXT EDITOR (Shared Primitive) --- */
+.spokes-rich-text-editor {
+    position: relative;
+    margin-top: 16px;
+    margin-bottom: 8px;
+    width: 100%;
+}
+
+.spokes-rich-text-editor .editor-container {
+    border-radius: var(--mud-default-borderradius);
+    border: 1px solid var(--mud-palette-lines-default);
+    background-color: var(--mud-palette-background);
+    color: var(--mud-palette-text-primary);
+    transition: box-shadow 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+    min-height: 200px;
+    display: flex;
+    flex-direction: column;
+}
+
+.spokes-rich-text-editor:not(.spokes-rich-text-editor--borderless) .editor-container:focus-within {
+    border-color: var(--mud-palette-primary);
+    border-width: 2px;
+    margin: -1px;
+}
+
+.spokes-rich-text-editor--borderless .editor-container {
+    border: none;
+    border-radius: 0;
+    background-color: transparent;
+    min-height: 0;
+}
+
+.spokes-rich-text-editor .ql-toolbar.ql-snow {
+    border: none;
+    border-bottom: 1px solid var(--mud-palette-lines-default);
+    background-color: var(--mud-palette-surface);
+    border-top-left-radius: var(--mud-default-borderradius);
+    border-top-right-radius: var(--mud-default-borderradius);
+}
+
+.spokes-rich-text-editor--borderless .ql-toolbar.ql-snow {
+    border-radius: 0;
+}
+
+.spokes-rich-text-editor--hide-toolbar .ql-toolbar.ql-snow {
+    display: none !important;
+}
+
+.spokes-rich-text-editor .ql-container.ql-snow {
+    border: none;
+    flex-grow: 1;
+    display: flex;
+    flex-direction: column;
+}
+
+.spokes-rich-text-editor .ql-editor {
+    min-height: 150px;
+    font-family: var(--mud-typography-body1-family);
+    font-size: var(--mud-typography-body1-size);
+    font-weight: var(--mud-typography-body1-weight);
+    line-height: var(--mud-typography-body1-lineheight);
+    letter-spacing: var(--mud-typography-body1-letterspacing);
+}
+
+.spokes-rich-text-editor .ql-editor.ql-blank::before {
+    color: var(--mud-palette-text-secondary);
+    font-style: normal;
+}
+
+.spokes-rich-text-editor .ql-snow .ql-stroke {
+    stroke: var(--mud-palette-text-primary);
+}
+
+.spokes-rich-text-editor .ql-snow .ql-fill {
+    fill: var(--mud-palette-text-primary);
+}
+
+.spokes-rich-text-editor .ql-snow .ql-picker {
+    color: var(--mud-palette-text-primary);
+}
+
+.spokes-rich-text-editor .ql-snow .ql-picker-options {
+    background-color: var(--mud-palette-surface);
+    border-color: var(--mud-palette-lines-default);
+}
+
+/* --- EMAIL COMPOSER DIALOG (Unified Responsive Layout) --- */
+.email-composer-dialog {
+    --composer-px: 16px;
+    height: calc(100dvh - 64px) !important;
+    max-height: calc(100dvh - 64px) !important;
+    display: flex;
+    flex-direction: column;
+}
+
+.email-composer-dialog .mud-dialog-title {
+    padding: 10px var(--composer-px) !important;
+    border-bottom: 1px solid var(--mud-palette-lines-default);
+    flex-shrink: 0;
+}
+
+.email-composer-dialog-content {
+    display: flex;
+    flex-direction: column;
+    flex: 1 1 0;
+    min-height: 0;
+    overflow: hidden !important;
+    padding: 0 !important;
+}
+
+.email-composer-dialog .mud-dialog-actions {
+    padding: 8px var(--composer-px) !important;
+    border-top: 1px solid var(--mud-palette-lines-default);
+    flex-shrink: 0;
+}
+
+@media (max-width: 600px) {
+    .mud-dialog.email-composer-dialog {
+        --composer-px: 12px;
+        width: 100vw !important;
+        max-width: 100vw !important;
+        height: 100dvh !important;
+        max-height: 100dvh !important;
+        margin: 0 !important;
+        border-radius: 0 !important;
+    }
+
+    .email-composer-dialog .mud-dialog-title {
+        padding: max(8px, env(safe-area-inset-top)) var(--composer-px) 8px var(--composer-px) !important;
+    }
+
+    .email-composer-dialog .mud-dialog-actions {
+        padding: 6px var(--composer-px) max(6px, env(safe-area-inset-bottom)) var(--composer-px) !important;
+    }
+}
+
+.email-composer-form {
+    display: flex;
+    flex-direction: column;
+    flex: 1 1 0;
+    min-height: 0;
+}
+
+/* Flat hairline header rows & collapsed reply summary */
+.email-composer-field-row {
+    min-height: 38px;
+    padding: 2px var(--composer-px);
+    border-bottom: 1px solid var(--mud-palette-lines-default);
+}
+
+.email-composer-field-label {
+    min-width: 42px;
+    margin-right: 8px;
+    user-select: none;
+}
+
+.email-composer-flat-input .mud-input-control-input-container,
+.email-composer-flat-input .mud-input {
+    margin-top: 0 !important;
+}
+
+.email-composer-flat-input input.mud-input-slot,
+.email-composer-flat-input div.mud-input-slot {
+    padding-top: 6px !important;
+    padding-bottom: 6px !important;
+}
+
+.email-recipient-chips-wrap {
+    min-width: 0;
+    padding-top: 2px;
+    padding-bottom: 2px;
+}
+
+.email-recipient-chip {
+    max-width: 220px;
+}
+
+.email-recipient-chip .mud-chip-content {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.email-recipient-autocomplete {
+    flex: 1 1 64px;
+    min-width: 64px;
+}
+
+.email-composer-trailing-actions {
+    gap: 2px;
+}
+
+.email-composer-summary-row {
+    min-height: 38px;
+    padding: 6px var(--composer-px);
+    border-bottom: 1px solid var(--mud-palette-lines-default);
+    background-color: var(--mud-palette-surface);
+    transition: background-color 0.15s ease;
+}
+
+.email-composer-summary-row:hover {
+    background-color: var(--mud-palette-action-default-hover);
+}
+
+.email-summary-recipient {
+    font-weight: 500;
+    max-width: 48%;
+}
+
+.email-summary-count-chip {
+    height: 20px !important;
+    font-size: 0.7rem !important;
+}
+
+/* Unified scrollable compose canvas & quoted reply section */
+.email-composer-scroll-canvas {
+    display: flex;
+    flex-direction: column;
+    flex: 1 1 0;
+    min-height: 0;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+}
+
+.email-composer-dialog .spokes-rich-text-editor {
+    flex: 1 0 auto;
+    display: flex;
+    flex-direction: column;
+    margin-top: 0;
+    margin-bottom: 0;
+    overflow: visible !important;
+}
+
+.email-composer-dialog .editor-container {
+    flex: 1 0 auto;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+}
+
+.email-composer-dialog .ql-toolbar.ql-snow {
+    position: sticky;
+    top: 0;
+    z-index: 5;
+    flex-shrink: 0;
+    padding: 6px var(--composer-px);
+}
+
+@media (max-width: 600px) {
+    .email-composer-dialog .ql-toolbar.ql-snow {
+        padding: 4px var(--composer-px);
+    }
+
+    .email-composer-dialog .ql-toolbar.ql-snow .ql-formats {
+        margin-right: 8px;
+    }
+}
+
+.email-composer-dialog .ql-container.ql-snow {
+    flex: 1 0 auto;
+    display: flex;
+    flex-direction: column;
+    border: none;
+    height: auto;
+}
+
+.email-composer-dialog .ql-editor {
+    flex: 1 0 auto;
+    min-height: 140px;
+    height: auto;
+    overflow-y: visible;
+    padding: 12px var(--composer-px);
+}
+
+.email-composer-dialog .ql-editor.ql-blank::before {
+    left: var(--composer-px);
+    right: var(--composer-px);
+}
+
+.email-composer-quote-section {
+    flex-shrink: 0;
+    padding: 4px var(--composer-px) 12px var(--composer-px);
+}
+
+.email-composer-quote-toggle-row {
+    display: flex;
+    align-items: center;
+}
+
+.email-quote-pill-btn {
+    min-width: 36px !important;
+    height: 22px !important;
+    padding: 0 8px !important;
+    border-radius: 12px !important;
+}
+
+.email-reply-chain-body {
+    overflow-x: auto;
+}
+
+.email-composer-attachments-bar {
+    padding: 6px var(--composer-px);
+    border-top: 1px solid var(--mud-palette-lines-default);
+    background-color: var(--mud-palette-surface);
+    max-height: 76px;
+    overflow-y: auto;
+}
+
+.email-toolbar-toggle-active {
+    background-color: var(--mud-palette-primary-hover) !important;
+    border-radius: var(--mud-default-borderradius);
+}
+
+.email-composer-dialog .ql-overlay {
+    z-index: 1000 !important;
 }
 
 /* Employee presence indicator badge on avatars */
@@ -451,3 +765,112 @@ video.livekit-screenshare::-webkit-media-controls-overlay-play-button {
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08) !important;
     border-color: var(--mud-palette-primary-hover);
 }
+
+
+/* --- Email Theme Dividers & Utility Animations --- */
+.mud-theme-border-color {
+    border-color: var(--mud-palette-divider) !important;
+}
+
+@keyframes spin-infinite {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
+
+.spin-animation {
+    animation: spin-infinite 1s linear infinite;
+}
+
+/* --- Email Layout & Responsive Reader --- */
+.email-main-layout {
+    width: 100%;
+    height: calc(100dvh - 84px);
+    max-height: calc(100dvh - 84px);
+    min-height: 0;
+    overflow: hidden;
+}
+
+.email-sidebar-container {
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+    overflow: hidden;
+}
+
+.email-list-container {
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+    overflow: hidden;
+}
+
+.email-reader-container {
+    flex: 1;
+    min-width: 0;
+    height: 100%;
+    min-height: 0;
+    overflow: hidden;
+}
+
+.email-reader-root {
+    height: 100%;
+}
+
+.email-reader-body {
+    flex-grow: 1;
+    overflow-y: auto;
+}
+
+.email-body-content {
+    height: 100%;
+}
+
+.email-content-renderer {
+    width: 100%;
+    height: 100%;
+}
+
+/* Mobile Overrides (Stretch email to display in full, page scroll handles reading) */
+@media (max-width: 959.98px) {
+    .email-main-layout.email-mobile-reading {
+        height: auto !important;
+        max-height: none !important;
+        min-height: 100%;
+        overflow: visible !important;
+    }
+
+    .email-reader-container {
+        width: 100%;
+        height: auto !important;
+        min-height: 100%;
+        flex: none;
+    }
+
+    .email-reader-root {
+        height: auto !important;
+        min-height: 100%;
+    }
+
+    .email-reader-toolbar {
+        position: sticky;
+        top: 0;
+        z-index: 10;
+        background-color: var(--mud-palette-surface);
+    }
+
+    .email-reader-body {
+        overflow-y: visible !important;
+        height: auto !important;
+        flex-grow: 0 !important;
+        padding-bottom: 32px !important;
+    }
+
+    .email-body-content {
+        height: auto !important;
+    }
+
+    .email-content-renderer {
+        height: auto !important;
+    }
+}
+

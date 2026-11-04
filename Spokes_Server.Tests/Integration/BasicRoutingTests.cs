@@ -108,10 +108,12 @@ public class BasicRoutingTests : IClassFixture<SpokesTestWebApplicationFactory>
         var client = _factory.CreateClient();
 
         // Act
-        var response = await client.PostAsync("/spokesapi/push/offline?subscriptionId=test-sub-123", null);
+        var robotsResponse = await client.GetAsync("/robots.txt");
+        var unauthenticatedOfflineBeacon = await client.PostAsync("/spokesapi/push/offline?subscriptionId=test-sub-123", null);
 
-        // Assert
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        // Assert: /robots.txt is public, while unsigned /spokesapi/push/offline rejects unauthenticated spoofing with 403
+        Assert.Equal(HttpStatusCode.OK, robotsResponse.StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, unauthenticatedOfflineBeacon.StatusCode);
     }
 
     [Fact]
@@ -962,12 +964,34 @@ public class BasicRoutingTests : IClassFixture<SpokesTestWebApplicationFactory>
         // Delete the employee from db so virtual system-renderer has no employee in db.Employees
         db.Employees.Delete("system-renderer");
 
-        var request = new HttpRequestMessage(HttpMethod.Get, "/spokesapi/dummy-system-renderer-check");
-        request.Headers.Add("Cookie", $"Spokes_Session_v3={cookie}");
+        // 1. A regular user session cookie claiming EmployeeId = "system-renderer" WITHOUT Spokes_InternalRenderer="true"
+        // must be rejected with 401 Unauthorized (preventing ID-collision privilege spoofing).
+        var forgedRequest = new HttpRequestMessage(HttpMethod.Get, "/spokesapi/dummy-system-renderer-check");
+        forgedRequest.Headers.Add("Cookie", $"Spokes_Session_v3={cookie}");
+        var forgedResponse = await client.SendAsync(forgedRequest);
+        Assert.Equal(HttpStatusCode.Unauthorized, forgedResponse.StatusCode);
 
-        var response = await client.SendAsync(request);
-        // Must not be rejected by OnValidatePrincipal with 401
-        Assert.NotEqual(HttpStatusCode.Unauthorized, response.StatusCode);
+        // 2. An authentic RenderTokenMiddleware session carrying Spokes_InternalRenderer="true" must pass OnValidatePrincipal
+        // even though no "system-renderer" record exists in db.Employees (hitting 404 NotFound on the dummy API route, never 401).
+        var ticketStore = scope.ServiceProvider.GetRequiredService<Microsoft.AspNetCore.Authentication.Cookies.ITicketStore>();
+        var rendererIdentity = new System.Security.Claims.ClaimsIdentity(new[]
+        {
+            new System.Security.Claims.Claim("EmployeeId", "system-renderer"),
+            new System.Security.Claims.Claim("SessionId", session.Id),
+            new System.Security.Claims.Claim("Spokes_InternalRenderer", "true")
+        }, Microsoft.AspNetCore.Authentication.Cookies.CookieAuthenticationDefaults.AuthenticationScheme);
+
+        var rendererTicket = new Microsoft.AspNetCore.Authentication.AuthenticationTicket(
+            new System.Security.Claims.ClaimsPrincipal(rendererIdentity),
+            new Microsoft.AspNetCore.Authentication.AuthenticationProperties { ExpiresUtc = DateTimeOffset.UtcNow.AddMinutes(5) },
+            Microsoft.AspNetCore.Authentication.Cookies.CookieAuthenticationDefaults.AuthenticationScheme);
+
+        await ticketStore.RenewAsync("session-" + session.Id, rendererTicket);
+
+        var validRendererRequest = new HttpRequestMessage(HttpMethod.Get, "/spokesapi/dummy-system-renderer-check");
+        validRendererRequest.Headers.Add("Cookie", $"Spokes_Session_v3={cookie}");
+        var validRendererResponse = await client.SendAsync(validRendererRequest);
+        Assert.Equal(HttpStatusCode.NotFound, validRendererResponse.StatusCode);
     }
 
     [Fact]
@@ -1737,6 +1761,150 @@ public class BasicRoutingTests : IClassFixture<SpokesTestWebApplicationFactory>
         var json = await response.Content.ReadAsStringAsync();
         Assert.Contains("Regression Server Corp", json);
         Assert.Contains("spokes_version", json);
+    }
+
+    [Fact]
+    public async Task BannedEmployee_AfterSetUserBanState_RedirectsRootToStaticSsrBannedScreen_BlocksApis_AndExcludesMobileBootstrap()
+    {
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<Spokes_Server.Aggregate.Database>();
+        var userService = scope.ServiceProvider.GetRequiredService<Spokes_Server.Core.Services.Identity.UserService>();
+
+        var employee = new Spokes_Server.Core.Models.HR.Employee
+        {
+            Id = "emp_ban_e2e_" + Guid.NewGuid().ToString("N"),
+            FirstName = "Banned",
+            LastName = "Member",
+            Email = "banned.e2e@spokes.test",
+            IsActive = true,
+            Permissions = [Spokes_Server.Core.Constants.AppPermissions.Chat.Use]
+        };
+        db.Employees.Save(employee);
+
+        var rawToken = "tok_ban_e2e_" + Guid.NewGuid().ToString("N");
+        var hash = Convert.ToBase64String(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(rawToken)));
+        var session = new Spokes_Server.Core.Models.Core.DeviceSession
+        {
+            Id = "sess_ban_e2e_" + Guid.NewGuid().ToString("N"),
+            EmployeeId = employee.Id,
+            TokenHash = hash,
+            IdToken = "preserved.oidc.id_token",
+            DeviceId = "dev_ban_e2e_1",
+            ExpiresAt = DateTime.UtcNow.AddDays(30)
+        };
+        db.DeviceSessions.Save(session);
+
+        var client = _factory.CreateClient(new WebApplicationFactoryClientOptions { AllowAutoRedirect = false });
+
+        // 1. Bootstrap authentic Spokes_Session_v3 cookie prior to ban
+        var bootstrapRes = await client.PostAsync("/sso/login/mobile-bootstrap", new FormUrlEncodedContent(new[]
+        {
+            new KeyValuePair<string, string>("refreshToken", rawToken),
+            new KeyValuePair<string, string>("deviceId", "dev_ban_e2e_1"),
+            new KeyValuePair<string, string>("returnUrl", "/")
+        }));
+        var sessionCookie = ExtractCookieValue(bootstrapRes, "Spokes_Session_v3");
+        Assert.NotEmpty(sessionCookie);
+
+        // 2. Ban employee via UserService (same path called by MemberProfileDialog & Moderation)
+        userService.SetUserBanState(employee.Id, isBanned: true);
+
+        var quarantinedSession = db.DeviceSessions.GetById(session.Id);
+        Assert.NotNull(quarantinedSession);
+        Assert.Null(quarantinedSession!.RevokedAt);
+        Assert.Equal(string.Empty, quarantinedSession.TokenHash);
+        Assert.Equal("preserved.oidc.id_token", quarantinedSession.IdToken);
+
+        // 3. Navigating to "/" redirects directly to "/banned" (NOT /sso/login or Casdoor logout loop)
+        var rootReq = new HttpRequestMessage(HttpMethod.Get, "/");
+        rootReq.Headers.Add("Cookie", $"Spokes_Session_v3={sessionCookie}; Spokes_Refresh={rawToken}");
+        var rootRes = await client.SendAsync(rootReq);
+        Assert.Equal(HttpStatusCode.Redirect, rootRes.StatusCode);
+        Assert.Equal("/banned", rootRes.Headers.Location?.OriginalString);
+
+        // 4. Following "/banned" renders 200 OK Static SSR Banned Account screen with Sign Out form (no /_blazor prewarm)
+        var bannedReq = new HttpRequestMessage(HttpMethod.Get, "/banned");
+        bannedReq.Headers.Add("Cookie", $"Spokes_Session_v3={sessionCookie}");
+        var bannedRes = await client.SendAsync(bannedReq);
+        Assert.Equal(HttpStatusCode.OK, bannedRes.StatusCode);
+        var bannedHtml = await bannedRes.Content.ReadAsStringAsync();
+        Assert.Contains("Account Banned", bannedHtml);
+        Assert.Contains("action=\"/logout\"", bannedHtml);
+        Assert.DoesNotContain("prewarmBlazorSocket", bannedHtml);
+
+        // 5. Protected API and silent refresh endpoints reject the banned session with 401 Unauthorized
+        var apiReq = new HttpRequestMessage(HttpMethod.Get, "/spokesapi/push/status");
+        apiReq.Headers.Add("Cookie", $"Spokes_Session_v3={sessionCookie}");
+        var apiRes = await client.SendAsync(apiReq);
+        Assert.Equal(HttpStatusCode.Unauthorized, apiRes.StatusCode);
+
+        var refreshContent = new StringContent(
+            System.Text.Json.JsonSerializer.Serialize(new { refreshToken = rawToken, deviceId = "dev_ban_e2e_1" }),
+            System.Text.Encoding.UTF8,
+            "application/json");
+        var refreshRes = await client.PostAsync("/spokesapi/auth/refresh", refreshContent);
+        Assert.Equal(HttpStatusCode.Unauthorized, refreshRes.StatusCode);
+
+        // 6. Capacitor mobile requests to /banned never get hijacked by the unauthenticated mobile-bootstrap splash interceptor
+        var mobileBannedReq = new HttpRequestMessage(HttpMethod.Get, "/banned?client=mobile");
+        mobileBannedReq.Headers.Add("User-Agent", "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) Capacitor");
+        var mobileBannedRes = await client.SendAsync(mobileBannedReq);
+        if (mobileBannedRes.StatusCode == HttpStatusCode.OK)
+        {
+            var mobileBody = await mobileBannedRes.Content.ReadAsStringAsync();
+            Assert.DoesNotContain("/sso/login/mobile-bootstrap", mobileBody);
+        }
+    }
+
+    [Fact]
+    public async Task ApiRequest_WithStaleBearerHeaderAndValidSessionCookie_FallsBackToCookieAuth()
+    {
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<Spokes_Server.Aggregate.Database>();
+
+        var employee = new Spokes_Server.Core.Models.HR.Employee
+        {
+            Id = "emp_bearer_fallback_" + Guid.NewGuid().ToString("N"),
+            FirstName = "Bearer",
+            LastName = "Fallback",
+            IsActive = true
+        };
+        db.Employees.Save(employee);
+
+        var rawToken = "tok_bearer_fallback_" + Guid.NewGuid().ToString("N");
+        using var sha256 = System.Security.Cryptography.SHA256.Create();
+        var hash = Convert.ToBase64String(sha256.ComputeHash(System.Text.Encoding.UTF8.GetBytes(rawToken)));
+
+        var session = new Spokes_Server.Core.Models.Core.DeviceSession
+        {
+            Id = "sess_bearer_fallback_" + Guid.NewGuid().ToString("N"),
+            EmployeeId = employee.Id,
+            TokenHash = hash,
+            DeviceId = "android_fallback_device_1",
+            ExpiresAt = DateTime.UtcNow.AddDays(30)
+        };
+        db.DeviceSessions.Save(session);
+
+        var client = _factory.CreateClient(new WebApplicationFactoryClientOptions { AllowAutoRedirect = false });
+
+        // Bootstrap authentic Spokes_Session_v3 cookie
+        var bootstrapRes = await client.PostAsync("/sso/login/mobile-bootstrap", new FormUrlEncodedContent(new[]
+        {
+            new KeyValuePair<string, string>("refreshToken", rawToken),
+            new KeyValuePair<string, string>("deviceId", "android_fallback_device_1"),
+            new KeyValuePair<string, string>("returnUrl", "/")
+        }));
+        var sessionCookie = ExtractCookieValue(bootstrapRes, "Spokes_Session_v3");
+        Assert.NotEmpty(sessionCookie);
+
+        // Send API request with a stale/superseded Bearer token AND the valid Spokes_Session_v3 cookie
+        var apiReq = new HttpRequestMessage(HttpMethod.Get, "/spokesapi/push/status");
+        apiReq.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", "stale_superseded_refresh_token");
+        apiReq.Headers.Add("X-Device-Id", "android_fallback_device_1");
+        apiReq.Headers.Add("Cookie", $"Spokes_Session_v3={sessionCookie}");
+
+        var apiRes = await client.SendAsync(apiReq);
+        Assert.Equal(HttpStatusCode.OK, apiRes.StatusCode);
     }
 
     private static string ExtractCookieValue(HttpResponseMessage response, string cookieName)

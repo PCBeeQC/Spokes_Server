@@ -5,6 +5,7 @@ public static class NotificationCategories
     public const string Chat = "chat";
     public const string Call = "call";
     public const string Calendar = "calendar";
+    public const string Email = "email";
 }
 
 public class NotificationCategoryDefinition
@@ -16,4 +17,5 @@ public class NotificationCategoryDefinition
     public string DefaultSoundId { get; init; } = "spokes_default";
     public string DefaultSoundFileName { get; init; } = "spokesnotif1.wav";
     public int SortOrder { get; init; }
+    public bool IsBusinessOnly { get; init; }
 }

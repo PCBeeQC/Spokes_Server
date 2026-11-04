@@ -5,6 +5,7 @@
 @inject IDialogService DialogService
 @inject Database Db
 @inject ISnackbar Snackbar
+@inject IStringLocalizer<AppResources> Loc
 
 <MudCard Outlined="true" Class="mt-4" Style="max-width: 600px; background-color: var(--mud-palette-background-grey);">
     @if (_event != null)
@@ -20,17 +21,17 @@
                 <MudText Typo="Typo.body2">
                     @if (_event.IsAllDay)
                     {
-                        @_event.Start.ToShortDateString() <span> - All Day</span>
+                        @_event.Start.ToShortDateString() <span> - @Loc["All Day"]</span>
                     }
                     else
                     {
-                        @_event.Start.ToString("g") <span> to </span> @_event.End.ToString("t")
+                        @_event.Start.ToString("g") <span> @Loc["to"] </span> @_event.End.ToString("t")
                     }
                 </MudText>
             </CardHeaderContent>
             <CardHeaderActions>
                 <MudButton Color="Color.Primary" Variant="Variant.Filled" Size="Size.Small" StartIcon="@Icons.Material.Filled.Add" OnClick="AddToCalendar" Class="mt-2 text-nowrap">
-                    Add to Calendar
+                    @Loc["Add to Calendar"]
                 </MudButton>
             </CardHeaderActions>
         </MudCardHeader>
@@ -46,7 +47,7 @@
             {
                 <div class="d-flex align-center gap-2 mb-2">
                     <MudIcon Icon="@Icons.Material.Filled.Person" Size="Size.Small" Color="Color.Default" />
-                    <MudText Typo="Typo.body2">Organizer: @_organizer</MudText>
+                    <MudText Typo="Typo.body2">@Loc["Organizer"]: @_organizer</MudText>
                 </div>
             }
             @if (!string.IsNullOrWhiteSpace(_event.Description))
@@ -58,7 +59,7 @@
     else if (_hasError)
     {
         <MudCardContent>
-            <MudText Color="Color.Error" Typo="Typo.body2">Could not display calendar event details.</MudText>
+            <MudText Color="Color.Error" Typo="Typo.body2">@Loc["Could not display calendar event details."]</MudText>
         </MudCardContent>
     }
     else
@@ -72,6 +73,7 @@
 @code {
     [Parameter] public EmailAttachmentMeta Attachment { get; set; } = default!;
     [Parameter] public string MessageId { get; set; } = "";
+    [Parameter] public string? AccountId { get; set; }
     [Parameter] public string EmployeeId { get; set; } = "";
 
     private CalendarEvent? _event;
@@ -81,7 +83,8 @@
 
     protected override async Task OnParametersSetAsync()
     {
-        if (Attachment == null || string.IsNullOrEmpty(EmployeeId)) return;
+        var effectiveAccountId = !string.IsNullOrEmpty(AccountId) ? AccountId : EmployeeId;
+        if (Attachment == null || string.IsNullOrEmpty(effectiveAccountId)) return;
         if (Attachment.Id == _lastAttachmentId) return;
         
         _lastAttachmentId = Attachment.Id;
@@ -91,7 +94,7 @@
 
         try
         {
-            var path = CacheMaintenance.GetAttachmentPath(EmployeeId, MessageId, Attachment.Id);
+            var path = CacheMaintenance.GetAttachmentPath(effectiveAccountId, MessageId, Attachment.Id);
             if (File.Exists(path))
             {
                 var icsContent = await File.ReadAllTextAsync(path);
@@ -99,7 +102,7 @@
 
                 if (eventData != null)
                 {
-                    _event = IcsParser.ToCalendarEvent(eventData, EmployeeId);
+                    _event = IcsParser.ToCalendarEvent(eventData, !string.IsNullOrEmpty(EmployeeId) ? EmployeeId : effectiveAccountId);
                     _organizer = eventData.Organizer;
                 }
                 else
@@ -130,13 +133,13 @@
             CloseButton = true,
             CloseOnEscapeKey = true
         };
-        var dialog = await DialogService.ShowAsync<CalendarEventDialog>("New Event", parameters, options);
+        var dialog = await DialogService.ShowAsync<CalendarEventDialog>(Loc["New Event"], parameters, options);
         var result = await dialog.Result;
 
         if (result != null && !result.Canceled && result.Data is CalendarEvent resultEvent)
         {
             Db.CalendarEvents.Save(resultEvent);
-            Snackbar.Add("Event added to calendar", Severity.Success);
+            Snackbar.Add(Loc["Event added to calendar"], Severity.Success);
         }
     }
 }

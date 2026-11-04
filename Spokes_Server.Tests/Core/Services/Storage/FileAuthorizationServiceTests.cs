@@ -77,6 +77,7 @@ public class FileAuthorizationServiceTests : TestDataTestBase
     [Fact]
     public void ResolveAlbumKey_WhenTokenKeyProvided_ReturnsTokenKeyImmediately()
     {
+        _albums.Save(new Album { Id = "alb1", OwnerId = "user1", IsEncrypted = true, EncryptedAlbumKeys = new Dictionary<string, string> { { "user1", "encrypted_album_key" } } });
         var result = _service.ResolveAlbumKey("alb1", new Employee { Id = "user1" }, "custom_token_key");
         Assert.True(result.IsSuccess);
         Assert.Equal("custom_token_key", result.EncryptionKey);
@@ -98,7 +99,7 @@ public class FileAuthorizationServiceTests : TestDataTestBase
     {
         var album = new Album
         {
-            Id = "alb_enc",
+            Id = "alb_enc", OwnerId = "user1",
             IsEncrypted = true,
             EncryptedAlbumKeys = new Dictionary<string, string> { { "user1", "encrypted_album_key" } }
         };
@@ -120,7 +121,7 @@ public class FileAuthorizationServiceTests : TestDataTestBase
 
         var album = new Album
         {
-            Id = "alb_enc_locked",
+            Id = "alb_enc_locked", OwnerId = "user1",
             IsEncrypted = true,
             EncryptedAlbumKeys = new Dictionary<string, string> { { "user1", "encrypted_key" } }
         };
@@ -135,6 +136,7 @@ public class FileAuthorizationServiceTests : TestDataTestBase
     public void ResolveChannelKey_WhenTokenKeyProvided_ReturnsTokenKey()
     {
         var user = new Employee { Id = "user1" };
+        _channels.Save(new ChatChannel { Id = "chan1", IsEncrypted = true, EncryptedChannelKeys = new Dictionary<string, string> { { "user1", "enc_chan_key" } } });
         var result = _service.ResolveChannelKey("chan1", user, "token_key");
 
         Assert.True(result.IsSuccess);
@@ -230,7 +232,7 @@ public class FileAuthorizationServiceTests : TestDataTestBase
     {
         var album = new Album
         {
-            Id = "alb_down",
+            Id = "alb_down", OwnerId = "user1",
             IsEncrypted = true,
             EncryptedAlbumKeys = new Dictionary<string, string> { { "user1", "enc_alb_key" } }
         };
@@ -255,7 +257,7 @@ public class FileAuthorizationServiceTests : TestDataTestBase
     {
         var album = new Album
         {
-            Id = "alb_resolve_test",
+            Id = "alb_resolve_test", OwnerId = "emp_1",
             IsEncrypted = true,
             EncryptedAlbumKeys = new Dictionary<string, string> { { "emp_1", "enc_album_key" } }
         };

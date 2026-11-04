@@ -14,6 +14,8 @@ using Spokes_Server.Core.Models.Projects;
 using Spokes_Server.Core.Services;
 using Spokes_Server.Core.Services.Accounting;
 using Spokes_Server.Core.Services.Communication;
+using Spokes_Server.Core.Services.Communication.Chat;
+using Spokes_Server.Core.Services.Communication.Email;
 using Spokes_Server.Core.Services.Projects;
 using Spokes_Server.Core.Services.Storage;
 
@@ -765,47 +767,72 @@ public class FileAccessProvidersTests : IDisposable
         #region TempFileAccessProvider Tests
 
         [Fact]
-        public void TempFileAccessProvider_ReturnsTrueForActiveEmployee()
+        public void TempFileAccessProvider_CanAccess_AlwaysReturnsFalse()
         {
             var provider = new TempFileAccessProvider();
-            var employee = new Employee { Id = "emp1", IsActive = true, IsSuspended = false, IsBanned = false };
+            var admin = new Employee { Id = "admin1", IsAdmin = true, IsActive = true, IsSuspended = false, IsBanned = false };
+            var employee = new Employee
+            {
+                Id = "emp1",
+                IsActive = true,
+                Permissions = new List<string> { AppPermissions.Projects.Edit }
+            };
 
-            var result = provider.CanAccess(employee, Guid.NewGuid().ToString());
-            Assert.True(result);
+            Assert.False(provider.CanAccess(admin, Guid.NewGuid().ToString()));
+            Assert.False(provider.CanAccess(employee, Guid.NewGuid().ToString()));
+            Assert.False(provider.CanAccess(null!, Guid.NewGuid().ToString()));
+        }
+
+        [Theory]
+        [InlineData(AppPermissions.Admin.ManageSettings)]
+        [InlineData(AppPermissions.Projects.Create)]
+        [InlineData(AppPermissions.Projects.Edit)]
+        [InlineData(AppPermissions.BusinessDocuments.View)]
+        public void TempFileAccessProvider_CanUpload_ReturnsTrueForAuthorizedPermission(string permission)
+        {
+            var provider = new TempFileAccessProvider();
+            var employee = new Employee
+            {
+                Id = "emp1",
+                IsActive = true,
+                IsSuspended = false,
+                IsBanned = false,
+                Permissions = new List<string> { permission }
+            };
+
+            Assert.True(provider.CanUpload(employee, "ctx-1"));
+        }
+
+        [Fact]
+        public void TempFileAccessProvider_CanUpload_ReturnsTrueForAdmin_AndFalseWithoutEligiblePermission()
+        {
+            var provider = new TempFileAccessProvider();
+            var admin = new Employee { Id = "admin1", IsAdmin = true, IsActive = true };
+            var unprivileged = new Employee { Id = "emp1", IsActive = true, Permissions = new List<string> { AppPermissions.Chat.Use } };
+
+            Assert.True(provider.CanUpload(admin, "ctx-1"));
+            Assert.False(provider.CanUpload(unprivileged, "ctx-1"));
+            Assert.False(provider.CanUpload(null!, "ctx-1"));
         }
 
         [Theory]
         [InlineData(false, false, false)] // Inactive
-        [InlineData(true, true, false)]  // Suspended
-        [InlineData(true, false, true)]  // Banned
-        public void TempFileAccessProvider_ReturnsFalseForInactiveSuspendedOrBannedEmployee(bool isActive, bool isSuspended, bool isBanned)
+        [InlineData(true, true, false)]   // Suspended
+        [InlineData(true, false, true)]   // Banned
+        public void TempFileAccessProvider_CanUpload_ReturnsFalseForInactiveSuspendedOrBannedEmployee(bool isActive, bool isSuspended, bool isBanned)
         {
             var provider = new TempFileAccessProvider();
-            var employee = new Employee { Id = "emp1", IsActive = isActive, IsSuspended = isSuspended, IsBanned = isBanned };
+            var employee = new Employee
+            {
+                Id = "emp1",
+                IsAdmin = true,
+                IsActive = isActive,
+                IsSuspended = isSuspended,
+                IsBanned = isBanned
+            };
 
-            var result = provider.CanAccess(employee, Guid.NewGuid().ToString());
-            Assert.False(result);
-        }
-
-        [Fact]
-        public void TempFileAccessProvider_ReturnsFalseForNullUser()
-        {
-            var provider = new TempFileAccessProvider();
-            var result = provider.CanAccess(null!, Guid.NewGuid().ToString());
-            Assert.False(result);
-        }
-
-        [Fact]
-        public void SynchronousCanAccess_MatchesAsyncResult()
-        {
-            var provider = new TempFileAccessProvider();
-            var employee = new Employee { Id = "emp1", IsActive = true, IsSuspended = false, IsBanned = false };
-            Assert.True(provider.CanAccess(employee, "ctx-1"));
-            Assert.True(((IFileAccessProvider)provider).CanAccess(employee, "ctx-1"));
-
-            var inactive = new Employee { Id = "emp2", IsActive = false };
-            Assert.False(provider.CanAccess(inactive, "ctx-1"));
-            Assert.False(((IFileAccessProvider)provider).CanAccess(inactive, "ctx-1"));
+            Assert.False(provider.CanAccess(employee, Guid.NewGuid().ToString()));
+            Assert.False(provider.CanUpload(employee, Guid.NewGuid().ToString()));
         }
 
         #endregion
@@ -813,23 +840,31 @@ public class FileAccessProvidersTests : IDisposable
         #region EmailFileAccessProvider Tests
 
         [Fact]
-        public void EmailFileAccessProvider_ReturnsTrueForOwner()
+        public void EmailFileAccessProvider_RequiresAccountAndMessageScopingForNonBillInbox_AndNeverAllowsUploads()
         {
             var provider = new EmailFileAccessProvider();
             var employee = new Employee { Id = "emp1", IsActive = true, IsSuspended = false, IsBanned = false, IsAdmin = false };
 
-            Assert.True(provider.CanAccess(employee, "emp1"));
-            Assert.True(provider.CanUpload(employee, "emp1"));
+            // Bare accountId without ":messageId" must be rejected for non-bill-inbox reads
+            Assert.False(provider.CanAccess(employee, "emp1"));
+            Assert.False(provider.CanAccess(employee, "emp1:"));
+            Assert.False(provider.CanAccess(employee, ":msg1"));
+
+            // Scoped "accountId:messageId" succeeds for owner, while CanUpload is always false
+            Assert.True(provider.CanAccess(employee, "emp1:msg1"));
+            Assert.False(provider.CanUpload(employee, "emp1:msg1"));
+            Assert.False(provider.CanUpload(employee, "emp1"));
         }
 
         [Fact]
-        public void EmailFileAccessProvider_ReturnsTrueForAdmin()
+        public void EmailFileAccessProvider_ReturnsTrueForAdminWithScopedContext_AndFalseForUpload()
         {
             var provider = new EmailFileAccessProvider();
             var admin = new Employee { Id = "admin1", IsActive = true, IsSuspended = false, IsBanned = false, IsAdmin = true };
 
-            Assert.True(provider.CanAccess(admin, "emp2"));
-            Assert.True(provider.CanUpload(admin, "emp2"));
+            Assert.False(provider.CanAccess(admin, "emp2"));
+            Assert.True(provider.CanAccess(admin, "emp2:msg42"));
+            Assert.False(provider.CanUpload(admin, "emp2:msg42"));
         }
 
         [Fact]
@@ -838,21 +873,45 @@ public class FileAccessProvidersTests : IDisposable
             var provider = new EmailFileAccessProvider();
             var employee = new Employee { Id = "emp1", IsActive = true, IsSuspended = false, IsBanned = false, IsAdmin = false };
 
-            Assert.False(provider.CanAccess(employee, "emp2"));
-            Assert.False(provider.CanUpload(employee, "emp2"));
+            Assert.False(provider.CanAccess(employee, "emp2:msg1"));
+            Assert.False(provider.CanUpload(employee, "emp2:msg1"));
+        }
+
+        [Fact]
+        public void EmailFileAccessProvider_DelegatesScopedMessageCheckToEmailInboxService()
+        {
+            var mockInboxService = new Mock<IEmailInboxService>();
+            var employee = new Employee { Id = "emp_vi", IsActive = true };
+            mockInboxService.Setup(s => s.CanUserAccessEmailMessage(employee, "acct_shared", "msg_allowed")).Returns(true);
+            mockInboxService.Setup(s => s.CanUserAccessEmailMessage(employee, "acct_shared", "msg_other_vi")).Returns(false);
+
+            var provider = new EmailFileAccessProvider(mockInboxService.Object);
+
+            Assert.False(provider.CanAccess(employee, "acct_shared"));
+            Assert.True(provider.CanAccess(employee, "acct_shared:msg_allowed"));
+            Assert.False(provider.CanAccess(employee, "acct_shared:msg_other_vi"));
         }
 
         [Theory]
         [InlineData(false, false, false)] // Inactive
-        [InlineData(true, true, false)]  // Suspended
-        [InlineData(true, false, true)]  // Banned
-        public void EmailFileAccessProvider_ReturnsFalseForInactiveSuspendedOrBannedEmployee(bool isActive, bool isSuspended, bool isBanned)
+        [InlineData(true, false, true)]   // Banned
+        public void EmailFileAccessProvider_ReturnsFalseForInactiveOrBannedEmployee(bool isActive, bool isSuspended, bool isBanned)
         {
             var provider = new EmailFileAccessProvider();
             var employee = new Employee { Id = "emp1", IsActive = isActive, IsSuspended = isSuspended, IsBanned = isBanned };
 
-            Assert.False(provider.CanAccess(employee, "emp1"));
-            Assert.False(provider.CanUpload(employee, "emp1"));
+            Assert.False(provider.CanAccess(employee, "emp1:msg1"));
+            Assert.False(provider.CanUpload(employee, "emp1:msg1"));
+        }
+
+        [Fact]
+        public void EmailFileAccessProvider_AllowsReadOnlyForSuspendedEmployee()
+        {
+            var provider = new EmailFileAccessProvider();
+            var employee = new Employee { Id = "emp1", IsActive = true, IsSuspended = true, IsBanned = false };
+
+            Assert.True(provider.CanAccess(employee, "emp1:msg1"));
+            Assert.False(provider.CanUpload(employee, "emp1:msg1"));
         }
 
         [Fact]
@@ -861,7 +920,7 @@ public class FileAccessProvidersTests : IDisposable
             var provider = new EmailFileAccessProvider();
             var employee = new Employee { Id = "emp1", IsActive = true };
 
-            Assert.False(provider.CanAccess(null!, "emp1"));
+            Assert.False(provider.CanAccess(null!, "emp1:msg1"));
             Assert.False(provider.CanAccess(employee, null!));
             Assert.False(provider.CanAccess(employee, ""));
             Assert.False(provider.CanAccess(employee, "   "));
@@ -886,7 +945,8 @@ public class FileAccessProvidersTests : IDisposable
             };
 
             Assert.True(provider.CanAccess(employee, CompanyBillInboxConstants.SystemEmployeeId));
-            Assert.True(provider.CanUpload(employee, CompanyBillInboxConstants.SystemEmployeeId));
+            Assert.True(provider.CanAccess(employee, $"{CompanyBillInboxConstants.SystemEmployeeId}:bill_msg_1"));
+            Assert.False(provider.CanUpload(employee, CompanyBillInboxConstants.SystemEmployeeId));
         }
 
         [Fact]
@@ -904,8 +964,8 @@ public class FileAccessProvidersTests : IDisposable
             };
 
             // Cannot access another employee's private email attachments
-            Assert.False(provider.CanAccess(employee, "other-emp"));
-            Assert.False(provider.CanUpload(employee, "other-emp"));
+            Assert.False(provider.CanAccess(employee, "other-emp:msg1"));
+            Assert.False(provider.CanUpload(employee, "other-emp:msg1"));
         }
 
         [Fact]
@@ -928,84 +988,209 @@ public class FileAccessProvidersTests : IDisposable
 
         #endregion
 
-        #region Status Guard Consistency Tests Across Providers
+        #region Status Guard & Read/Upload Separation Tests Across Providers
 
         [Theory]
         [InlineData(false, false, false)] // Inactive
-        [InlineData(true, true, false)]  // Suspended
-        [InlineData(true, false, true)]  // Banned
-        public void AvatarFileAccessProvider_DeniesInactiveSuspendedOrBannedUser(bool isActive, bool isSuspended, bool isBanned)
+        [InlineData(true, false, true)]   // Banned
+        public void AllProviders_DenyInactiveOrBannedUsersForBothReadAndUpload(bool isActive, bool isSuspended, bool isBanned)
         {
-            var provider = new AvatarFileAccessProvider();
-            var admin = new Employee { Id = "u1", IsAdmin = true, IsActive = isActive, IsSuspended = isSuspended, IsBanned = isBanned };
+            _albums.Save(new Album { Id = "alb-status", OwnerId = "u1" });
+            _projects.Save(new Project { Id = "proj-status", AccessPolicy = ProjectAccessPolicy.Public });
+            _expenseReports.Save(new ExpenseReport { Id = "exp-status", EmployeeId = "u1" });
+            _channels.Save(new ChatChannel { Id = "chan-status", ChannelType = ChatChannelType.General });
 
-            Assert.False(provider.CanAccess(admin, "u1"));
-            Assert.False(provider.CanUpload(admin, "u1"));
+            var mockChatAccess = new Mock<IChatChannelAccessService>();
+            mockChatAccess.Setup(s => s.GetChannelsForUser("u1")).Returns(new List<ChatChannel> { new() { Id = "chan-status" } });
+
+            var user = new Employee { Id = "u1", IsAdmin = true, IsActive = isActive, IsSuspended = isSuspended, IsBanned = isBanned };
+
+            var avatar = new AvatarFileAccessProvider();
+            var sig = new SignatureFileAccessProvider();
+            var expense = new ExpenseFileAccessProvider(_expenseReports);
+            var bill = new BillFileAccessProvider();
+            var recurring = new RecurringCostFileAccessProvider();
+            var album = new AlbumFileAccessProvider(_albums, mockChatAccess.Object);
+            var chat = new ChatFileAccessProvider(mockChatAccess.Object, _channels);
+            var proj = new ProjectFileAccessProvider(_projects, _teams);
+            var note = new ProjectNoteFileAccessProvider(_projects, _teams);
+
+            Assert.False(avatar.CanAccess(user, "u1"));
+            Assert.False(avatar.CanUpload(user, "u1"));
+            Assert.False(sig.CanAccess(user, "u1"));
+            Assert.False(sig.CanUpload(user, "u1"));
+            Assert.False(expense.CanAccess(user, "exp-status"));
+            Assert.False(expense.CanUpload(user, "exp-status"));
+            Assert.False(bill.CanAccess(user, "any-bill"));
+            Assert.False(bill.CanUpload(user, "any-bill"));
+            Assert.False(recurring.CanAccess(user, "any-cost"));
+            Assert.False(recurring.CanUpload(user, "any-cost"));
+            Assert.False(album.CanAccess(user, "alb-status"));
+            Assert.False(album.CanUpload(user, "alb-status"));
+            Assert.False(chat.CanAccess(user, "chan-status"));
+            Assert.False(chat.CanUpload(user, "chan-status"));
+            Assert.False(proj.CanAccess(user, "proj-status"));
+            Assert.False(proj.CanUpload(user, "proj-status"));
+            Assert.False(note.CanAccess(user, "proj-status"));
+            Assert.False(note.CanUpload(user, "proj-status"));
         }
 
-        [Theory]
-        [InlineData(false, false, false)]
-        [InlineData(true, true, false)]
-        [InlineData(true, false, true)]
-        public void SignatureFileAccessProvider_DeniesInactiveSuspendedOrBannedUser(bool isActive, bool isSuspended, bool isBanned)
+        [Fact]
+        public void AllReadableProviders_AllowSuspendedUserForRead_AndDenySuspendedUserForUpload()
         {
-            var provider = new SignatureFileAccessProvider();
-            var admin = new Employee { Id = "u1", IsAdmin = true, IsActive = isActive, IsSuspended = isSuspended, IsBanned = isBanned };
+            _albums.Save(new Album { Id = "alb-susp", OwnerId = "u_susp" });
+            _projects.Save(new Project { Id = "proj-susp", AccessPolicy = ProjectAccessPolicy.Public });
+            _expenseReports.Save(new ExpenseReport { Id = "exp-susp", EmployeeId = "u_susp" });
+            _channels.Save(new ChatChannel { Id = "chan-susp", ChannelType = ChatChannelType.General });
 
-            Assert.False(provider.CanAccess(admin, "u1"));
-            Assert.False(provider.CanUpload(admin, "u1"));
+            var mockChatAccess = new Mock<IChatChannelAccessService>();
+            mockChatAccess.Setup(s => s.GetChannelsForUser("u_susp")).Returns(new List<ChatChannel> { new() { Id = "chan-susp" } });
+
+            var suspendedUser = new Employee
+            {
+                Id = "u_susp",
+                IsActive = true,
+                IsSuspended = true,
+                IsBanned = false,
+                Permissions = new List<string>
+                {
+                    AppPermissions.Projects.View,
+                    AppPermissions.Projects.Edit,
+                    AppPermissions.Finance.AccessAccounting,
+                    AppPermissions.Finance.AccessExpenses,
+                    AppPermissions.Purchases.ManageBills
+                }
+            };
+
+            var avatar = new AvatarFileAccessProvider();
+            var sig = new SignatureFileAccessProvider();
+            var expense = new ExpenseFileAccessProvider(_expenseReports);
+            var bill = new BillFileAccessProvider();
+            var recurring = new RecurringCostFileAccessProvider();
+            var album = new AlbumFileAccessProvider(_albums, mockChatAccess.Object);
+            var chat = new ChatFileAccessProvider(mockChatAccess.Object, _channels);
+            var proj = new ProjectFileAccessProvider(_projects, _teams);
+            var note = new ProjectNoteFileAccessProvider(_projects, _teams);
+
+            Assert.True(avatar.CanAccess(suspendedUser, "u_susp"));
+            Assert.False(avatar.CanUpload(suspendedUser, "u_susp"));
+
+            Assert.True(sig.CanAccess(suspendedUser, "u_susp"));
+            Assert.False(sig.CanUpload(suspendedUser, "u_susp"));
+
+            Assert.True(expense.CanAccess(suspendedUser, "exp-susp"));
+            Assert.False(expense.CanUpload(suspendedUser, "exp-susp"));
+
+            Assert.True(bill.CanAccess(suspendedUser, "any-bill"));
+            Assert.False(bill.CanUpload(suspendedUser, "any-bill"));
+
+            Assert.True(recurring.CanAccess(suspendedUser, "any-cost"));
+            Assert.False(recurring.CanUpload(suspendedUser, "any-cost"));
+
+            Assert.True(album.CanAccess(suspendedUser, "alb-susp"));
+            Assert.False(album.CanUpload(suspendedUser, "alb-susp"));
+
+            Assert.True(chat.CanAccess(suspendedUser, "chan-susp"));
+            Assert.False(chat.CanUpload(suspendedUser, "chan-susp"));
+
+            Assert.True(proj.CanAccess(suspendedUser, "proj-susp"));
+            Assert.False(proj.CanUpload(suspendedUser, "proj-susp"));
+
+            Assert.True(note.CanAccess(suspendedUser, "proj-susp"));
+            Assert.False(note.CanUpload(suspendedUser, "proj-susp"));
         }
 
-        [Theory]
-        [InlineData(false, false, false)]
-        [InlineData(true, true, false)]
-        [InlineData(true, false, true)]
-        public void ExpenseFileAccessProvider_DeniesInactiveSuspendedOrBannedUser(bool isActive, bool isSuspended, bool isBanned)
+        [Fact]
+        public void ChatFileAccessProvider_CanUpload_EnforcesChannelPostPermissionAndBlocksArchivedOrAnnouncementReadOnly()
         {
-            var provider = new ExpenseFileAccessProvider(_expenseReports);
-            var admin = new Employee { Id = "u1", IsAdmin = true, IsActive = isActive, IsSuspended = isSuspended, IsBanned = isBanned };
+            var normalChannel = new ChatChannel { Id = "c-normal", ChannelType = ChatChannelType.General };
+            var archivedChannel = new ChatChannel { Id = "c-archived", ChannelType = ChatChannelType.General, IsArchived = true };
+            var announceChannel = new ChatChannel
+            {
+                Id = "c-announce",
+                ChannelType = ChatChannelType.General,
+                IsAnnouncementOnly = true,
+                AllowedPostUserIds = new List<string> { "u-poster" }
+            };
+            _channels.Save(normalChannel);
+            _channels.Save(archivedChannel);
+            _channels.Save(announceChannel);
 
-            Assert.False(provider.CanAccess(admin, "any-report"));
+            var mockChatAccess = new Mock<IChatChannelAccessService>();
+            mockChatAccess.Setup(s => s.GetChannelsForUser(It.IsAny<string>()))
+                .Returns(new List<ChatChannel> { normalChannel, archivedChannel, announceChannel });
+
+            var provider = new ChatFileAccessProvider(mockChatAccess.Object, _channels);
+            var regularMember = new Employee { Id = "u-reader", IsActive = true };
+            var allowedPoster = new Employee { Id = "u-poster", IsActive = true };
+
+            Assert.True(provider.CanUpload(regularMember, "c-normal"));
+            Assert.False(provider.CanUpload(regularMember, "c-archived"));
+            Assert.False(provider.CanUpload(regularMember, "c-announce"));
+            Assert.True(provider.CanUpload(allowedPoster, "c-announce"));
         }
 
-        [Theory]
-        [InlineData(false, false, false)]
-        [InlineData(true, true, false)]
-        [InlineData(true, false, true)]
-        public void BillFileAccessProvider_DeniesInactiveSuspendedOrBannedUser(bool isActive, bool isSuspended, bool isBanned)
+        [Fact]
+        public void BillFileAccessProvider_CanUpload_AllowsOnlyAccountingManageBillsOrAdmin_DeniesReadOnlyViewers()
         {
             var provider = new BillFileAccessProvider();
-            var admin = new Employee { Id = "u1", IsAdmin = true, IsActive = isActive, IsSuspended = isSuspended, IsBanned = isBanned };
 
-            Assert.False(provider.CanAccess(admin, "any-bill"));
+            Assert.True(provider.CanUpload(new Employee { Id = "u1", IsActive = true, IsAdmin = true }, "b1"));
+            Assert.True(provider.CanUpload(new Employee { Id = "u2", IsActive = true, Permissions = [AppPermissions.Finance.AccessAccounting] }, "b1"));
+            Assert.True(provider.CanUpload(new Employee { Id = "u3", IsActive = true, Permissions = [AppPermissions.Purchases.ManageBills] }, "b1"));
+
+            Assert.False(provider.CanUpload(new Employee { Id = "u4", IsActive = true, Permissions = [AppPermissions.Purchases.ViewBills] }, "b1"));
+            Assert.False(provider.CanUpload(new Employee { Id = "u5", IsActive = true, Permissions = [AppPermissions.Purchases.ApproveBills] }, "b1"));
+            Assert.False(provider.CanUpload(new Employee { Id = "u6", IsActive = true, Permissions = [AppPermissions.Purchases.ViewPOs] }, "b1"));
         }
 
-        [Theory]
-        [InlineData(false, false, false)]
-        [InlineData(true, true, false)]
-        [InlineData(true, false, true)]
-        public void RecurringCostFileAccessProvider_DeniesInactiveSuspendedOrBannedUser(bool isActive, bool isSuspended, bool isBanned)
+        [Fact]
+        public void ExpenseFileAccessProvider_CanUpload_RequiresDraftReportForOwnerWithAccessExpenses_OrAccounting()
         {
-            var provider = new RecurringCostFileAccessProvider();
-            var admin = new Employee { Id = "u1", IsAdmin = true, IsActive = isActive, IsSuspended = isSuspended, IsBanned = isBanned };
+            var provider = new ExpenseFileAccessProvider(_expenseReports);
+            _expenseReports.Save(new ExpenseReport { Id = "exp-draft", EmployeeId = "u-owner" });
+            _expenseReports.Save(new ExpenseReport { Id = "exp-submitted", EmployeeId = "u-owner", DateSubmitted = DateTime.UtcNow });
 
-            Assert.False(provider.CanAccess(admin, "any-cost"));
+            var ownerWithPerm = new Employee { Id = "u-owner", IsActive = true, Permissions = [AppPermissions.Finance.AccessExpenses] };
+            var ownerWithoutPerm = new Employee { Id = "u-owner", IsActive = true, Permissions = [] };
+            var otherWithPerm = new Employee { Id = "u-other", IsActive = true, Permissions = [AppPermissions.Finance.AccessExpenses] };
+            var financeUser = new Employee { Id = "u-fin", IsActive = true, Permissions = [AppPermissions.Finance.AccessAccounting] };
+
+            Assert.True(provider.CanUpload(ownerWithPerm, "exp-draft"));
+            Assert.False(provider.CanUpload(ownerWithPerm, "exp-submitted"));
+            Assert.False(provider.CanUpload(ownerWithoutPerm, "exp-draft"));
+            Assert.False(provider.CanUpload(otherWithPerm, "exp-draft"));
+            Assert.False(provider.CanUpload(ownerWithPerm, "exp-missing"));
+
+            Assert.True(provider.CanUpload(financeUser, "exp-submitted"));
+            Assert.False(provider.CanUpload(financeUser, "exp-missing"));
         }
 
-        [Theory]
-        [InlineData(false, false, false)]
-        [InlineData(true, true, false)]
-        [InlineData(true, false, true)]
-        public void AlbumFileAccessProvider_DeniesInactiveSuspendedOrBannedOwner(bool isActive, bool isSuspended, bool isBanned)
+        [Fact]
+        public void AvatarSignatureAndProjectProviders_CanUpload_EnforceWriteAuthorization()
         {
-            var album = new Album { Id = "alb-1", OwnerId = "u1" };
-            _albums.Save(album);
+            var avatar = new AvatarFileAccessProvider();
+            var sig = new SignatureFileAccessProvider();
+            var proj = new ProjectFileAccessProvider(_projects, _teams);
+            var note = new ProjectNoteFileAccessProvider(_projects, _teams);
 
-            var provider = new AlbumFileAccessProvider(_albums, new Mock<IChatChannelAccessService>().Object);
-            var user = new Employee { Id = "u1", IsActive = isActive, IsSuspended = isSuspended, IsBanned = isBanned };
+            _projects.Save(new Project { Id = "p-rw", AccessPolicy = ProjectAccessPolicy.Public });
 
-            Assert.False(provider.CanAccess(user, "alb-1"));
-            Assert.False(provider.CanUpload(user, "alb-1"));
+            var user = new Employee { Id = "u1", IsActive = true, Permissions = [AppPermissions.Projects.View, AppPermissions.Finance.AccessAccounting] };
+            var editor = new Employee { Id = "u2", IsActive = true, Permissions = [AppPermissions.Projects.View, AppPermissions.Projects.Edit] };
+
+            Assert.True(avatar.CanUpload(user, "u1"));
+            Assert.False(avatar.CanUpload(user, "u2"));
+
+            Assert.True(sig.CanUpload(user, "u1"));
+            // Finance user can READ u2's signature for PDFs, but CANNOT upload/overwrite u2's signature
+            Assert.True(sig.CanAccess(user, "u2"));
+            Assert.False(sig.CanUpload(user, "u2"));
+
+            Assert.False(proj.CanUpload(user, "p-rw"));
+            Assert.True(proj.CanUpload(editor, "p-rw"));
+            Assert.False(note.CanUpload(user, "p-rw"));
+            Assert.True(note.CanUpload(editor, "p-rw"));
         }
 
         #endregion

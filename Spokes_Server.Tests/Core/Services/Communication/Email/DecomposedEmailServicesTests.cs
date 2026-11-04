@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
@@ -11,10 +10,7 @@ using Xunit;
 using Spokes_Server.Core.Data;
 using Spokes_Server.Core.Data.Repositories.Communication;
 using Spokes_Server.Core.Data.Repositories.Core;
-using Spokes_Server.Core.Data.Repositories.HR;
 using Spokes_Server.Core.Models.Communication;
-using Spokes_Server.Core.Models.Core;
-using Spokes_Server.Core.Models.HR;
 using Spokes_Server.Core.Services.Communication;
 using Spokes_Server.Core.Services.Communication.Email;
 
@@ -26,7 +22,8 @@ public class DecomposedEmailServicesTests : IDisposable
     private readonly IConfiguration _config;
     private readonly DiskPersistenceService _persistence;
 
-    private readonly EmployeeRepository _employees;
+    private readonly EmailAccountRepository _emailAccounts;
+    private readonly EmailSendingIdentityRepository _identities;
     private readonly CompanyProfileRepository _companyProfile;
     private readonly EmailFolderRepository _emailFolders;
     private readonly EmailMessageRepository _emailMessages;
@@ -50,7 +47,8 @@ public class DecomposedEmailServicesTests : IDisposable
 
         _persistence = new DiskPersistenceService(new Mock<ILogger<DiskPersistenceService>>().Object);
 
-        _employees = new EmployeeRepository(_persistence, _config);
+        _emailAccounts = new EmailAccountRepository(_persistence, _config);
+        _identities = new EmailSendingIdentityRepository(_persistence, _config);
         _companyProfile = new CompanyProfileRepository(_persistence, _config);
         _emailFolders = new EmailFolderRepository(_persistence, _config);
         _emailMessages = new EmailMessageRepository(_persistence, _config);
@@ -60,13 +58,13 @@ public class DecomposedEmailServicesTests : IDisposable
 
         var mockNotificationRouting = new Mock<INotificationRoutingService>();
 
-        _cacheMaintenance = new EmailCacheMaintenanceService(_employees, _emailFolders, _emailMessages, _syncStateService, _config);
-        _draftService = new EmailDraftService(_employees, _emailFolders, _emailMessages, _cacheMaintenance);
-        _deliveryService = new EmailDeliveryService(_employees, _companyProfile, _emailFolders, _encryptionService, _cacheMaintenance);
-        _folderService = new EmailFolderService(_employees, _companyProfile, _emailFolders, _emailMessages, _encryptionService);
-        _messageLifecycleService = new EmailMessageLifecycleService(_employees, _companyProfile, _emailFolders, _emailMessages, _encryptionService, _syncStateService, _cacheMaintenance);
+        _cacheMaintenance = new EmailCacheMaintenanceService(_emailFolders, _emailMessages, _syncStateService, _config);
+        _draftService = new EmailDraftService(_emailFolders, _emailMessages, _cacheMaintenance, _emailAccounts, _identities);
+        _deliveryService = new EmailDeliveryService(_companyProfile, _emailFolders, _encryptionService, _cacheMaintenance, _emailMessages, _identities, null, _emailAccounts);
+        _folderService = new EmailFolderService(_companyProfile, _emailFolders, _emailMessages, _encryptionService, _emailAccounts);
+        _messageLifecycleService = new EmailMessageLifecycleService(_companyProfile, _emailFolders, _emailMessages, _encryptionService, _syncStateService, _cacheMaintenance, _emailAccounts);
         _syncService = new EmailSyncService(
-            _employees, _companyProfile, _emailFolders, _emailMessages, _encryptionService,
+            _emailAccounts, _companyProfile, _emailFolders, _emailMessages, _encryptionService,
             _syncStateService, mockNotificationRouting.Object, _draftService, _cacheMaintenance);
     }
 
@@ -80,32 +78,19 @@ public class DecomposedEmailServicesTests : IDisposable
     }
 
     [Fact]
-    public async Task EmailCacheMaintenanceService_Signature_SaveAndGet()
-    {
-        var empId = "emp_sig_test";
-        var html = "<p>Best regards,<br>Alice</p>";
-
-        await _cacheMaintenance.SaveSignatureAsync(empId, html);
-        var retrieved = await _cacheMaintenance.GetSignatureAsync(empId);
-
-        Assert.Equal(html, retrieved);
-    }
-
-    [Fact]
     public async Task EmailDraftService_SaveAndRetrieveDraft()
     {
-        var emp = new Employee
+        var acc = new EmailAccount
         {
-            Id = "emp_draft_test",
-            Email = "alice@example.com",
-            FirstName = "Alice",
-            LastName = "Smith"
+            Id = "acc_draft_test",
+            EmailAddress = "alice@example.com",
+            Name = "Alice Smith"
         };
-        _employees.Save(emp);
+        _emailAccounts.Save(acc);
 
         var draftId = await _draftService.SaveDraftAsync(new SaveDraftRequest
         {
-            EmployeeId = emp.Id,
+            AccountId = acc.Id,
             To = "bob@example.com",
             Subject = "Project Update",
             Body = "<p>Draft body content</p>"
@@ -134,13 +119,13 @@ public class DecomposedEmailServicesTests : IDisposable
         var msg = new EmailMessage
         {
             Id = "msg_sync_test",
-            EmployeeId = "emp1",
+            AccountId = "acc1",
             FolderPath = "INBOX",
             Subject = "Test Message"
         };
         _emailMessages.Save(msg);
 
-        var retrievedPartitioned = await _messageLifecycleService.GetMessageAsync(msg.EmployeeId, msg.Id);
+        var retrievedPartitioned = await _messageLifecycleService.GetMessageAsync(msg.AccountId, msg.Id);
         Assert.NotNull(retrievedPartitioned);
         Assert.Equal("Test Message", retrievedPartitioned.Subject);
     }
@@ -148,21 +133,20 @@ public class DecomposedEmailServicesTests : IDisposable
     [Fact]
     public async Task EmailDraftService_SaveDraftAsync_WithEmailAttachments_SavesAttachmentsOnDiskAndDraft()
     {
-        var emp = new Employee
+        var acc = new EmailAccount
         {
-            Id = "emp_draft_with_att",
-            Email = "carol@example.com",
-            FirstName = "Carol",
-            LastName = "Danvers"
+            Id = "acc_draft_with_att",
+            EmailAddress = "carol@example.com",
+            Name = "Carol Danvers"
         };
-        _employees.Save(emp);
+        _emailAccounts.Save(acc);
 
         var attachment1 = EmailAttachment.FromBytes("report.pdf", System.Text.Encoding.UTF8.GetBytes("pdf-content"), "application/pdf");
         var attachment2 = EmailAttachment.FromStream("notes.txt", new MemoryStream(System.Text.Encoding.UTF8.GetBytes("notes-content")), "text/plain");
 
         var draftId = await _draftService.SaveDraftAsync(new SaveDraftRequest
         {
-            EmployeeId = emp.Id,
+            AccountId = acc.Id,
             To = "dave@example.com",
             Subject = "Draft With Attachments",
             Body = "<p>Please see attachments</p>",
@@ -176,12 +160,12 @@ public class DecomposedEmailServicesTests : IDisposable
         Assert.Equal(2, savedDraft.Attachments.Count);
 
         var attMeta1 = savedDraft.Attachments.First(a => a.FileName == "report.pdf");
-        var attPath1 = _cacheMaintenance.GetAttachmentPath(emp.Id, draftId, attMeta1.Id);
+        var attPath1 = _cacheMaintenance.GetAttachmentPath(acc.Id, draftId, attMeta1.Id);
         Assert.True(File.Exists(attPath1));
         Assert.Equal("pdf-content", await File.ReadAllTextAsync(attPath1));
 
         var attMeta2 = savedDraft.Attachments.First(a => a.FileName == "notes.txt");
-        var attPath2 = _cacheMaintenance.GetAttachmentPath(emp.Id, draftId, attMeta2.Id);
+        var attPath2 = _cacheMaintenance.GetAttachmentPath(acc.Id, draftId, attMeta2.Id);
         Assert.True(File.Exists(attPath2));
         Assert.Equal("notes-content", await File.ReadAllTextAsync(attPath2));
     }
@@ -217,23 +201,23 @@ public class DecomposedEmailServicesTests : IDisposable
         var mockCache = new Mock<IEmailCacheMaintenanceService>();
         mockCache.Setup(c => c.GetAttachmentPath(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()))
             .Returns(Path.Combine(_testDataDir, "dummy_att.dat"));
-        var draftServiceWithMock = new EmailDraftService(_employees, _emailFolders, _emailMessages, mockCache.Object);
+        var draftServiceWithMock = new EmailDraftService(_emailFolders, _emailMessages, mockCache.Object, _emailAccounts, _identities);
 
-        var emp = new Employee { Id = "emp_mock_test", Email = "mock@example.com" };
-        _employees.Save(emp);
+        var acc = new EmailAccount { Id = "acc_mock_test", EmailAddress = "mock@example.com" };
+        _emailAccounts.Save(acc);
 
         var draftMsg = new EmailMessage
         {
             Id = "draft_with_att",
-            EmployeeId = emp.Id,
+            AccountId = acc.Id,
             FolderPath = "LocalDrafts",
             Attachments = [new EmailAttachmentMeta { Id = "att1", FileName = "file.txt" }]
         };
         _emailMessages.Save(draftMsg);
 
-        await draftServiceWithMock.RemoveDraftAttachmentAsync(emp.Id, draftMsg.Id, "att1");
+        await draftServiceWithMock.RemoveDraftAttachmentAsync(acc.Id, draftMsg.Id, "att1");
 
-        mockCache.Verify(c => c.GetAttachmentPath(emp.Id, draftMsg.Id, "att1"), Times.Once);
+        mockCache.Verify(c => c.GetAttachmentPath(acc.Id, draftMsg.Id, "att1"), Times.Once);
     }
 
     [Fact]
@@ -242,48 +226,48 @@ public class DecomposedEmailServicesTests : IDisposable
         var mockCache = new Mock<IEmailCacheMaintenanceService>();
 
         var lifecycleServiceWithMock = new EmailMessageLifecycleService(
-            _employees, _companyProfile, _emailFolders, _emailMessages,
-            _encryptionService, _syncStateService, mockCache.Object);
+            _companyProfile, _emailFolders, _emailMessages,
+            _encryptionService, _syncStateService, mockCache.Object, _emailAccounts);
 
-        var emp = new Employee { Id = "emp_seam_test", Email = "seam@example.com" };
-        _employees.Save(emp);
+        var acc = new EmailAccount { Id = "acc_seam_test", EmailAddress = "seam@example.com" };
+        _emailAccounts.Save(acc);
 
         var msg = new EmailMessage
         {
             Id = "msg_to_delete",
-            EmployeeId = emp.Id,
+            AccountId = acc.Id,
             FolderPath = "INBOX"
         };
         _emailMessages.Save(msg);
 
-        await lifecycleServiceWithMock.DeleteMessageAsync(emp.Id, msg.Id);
+        await lifecycleServiceWithMock.DeleteMessageAsync(acc.Id, msg.Id);
 
-        mockCache.Verify(c => c.DeleteLocalMessageFilesAsync(emp.Id, msg.Id), Times.Once);
+        mockCache.Verify(c => c.DeleteLocalMessageFilesAsync(acc.Id, msg.Id), Times.Once);
     }
 
     [Fact]
     public async Task EmailMessageLifecycleService_MarkMessageReadAndFlagged_UpdatesRecord()
     {
-        var emp = new Employee { Id = "emp_lifecycle_1", Email = "life@example.com" };
-        _employees.Save(emp);
+        var acc = new EmailAccount { Id = "acc_lifecycle_1", EmailAddress = "life@example.com" };
+        _emailAccounts.Save(acc);
 
         var msg = new EmailMessage
         {
             Id = "msg_lifecycle_read",
-            EmployeeId = emp.Id,
+            AccountId = acc.Id,
             FolderPath = "INBOX",
             IsRead = false,
             IsFlagged = false
         };
         _emailMessages.Save(msg);
 
-        await _messageLifecycleService.MarkMessageReadAsync(emp.Id, msg.Id, true);
-        var readMsg = _emailMessages.GetById(emp.Id, msg.Id);
+        await _messageLifecycleService.MarkMessageReadAsync(acc.Id, msg.Id, true);
+        var readMsg = _emailMessages.GetById(acc.Id, msg.Id);
         Assert.NotNull(readMsg);
         Assert.True(readMsg.IsRead);
 
-        await _messageLifecycleService.MarkMessageFlaggedAsync(emp.Id, msg.Id, true);
-        var flaggedMsg = _emailMessages.GetById(emp.Id, msg.Id);
+        await _messageLifecycleService.MarkMessageFlaggedAsync(acc.Id, msg.Id, true);
+        var flaggedMsg = _emailMessages.GetById(acc.Id, msg.Id);
         Assert.NotNull(flaggedMsg);
         Assert.True(flaggedMsg.IsFlagged);
     }
@@ -291,17 +275,17 @@ public class DecomposedEmailServicesTests : IDisposable
     [Fact]
     public async Task EmailFolderService_WhenNoServerConfigured_ReturnsNullGracefully()
     {
-        var emp = new Employee { Id = "emp_folder_test", Email = "folder@example.com" };
-        _employees.Save(emp);
+        var acc = new EmailAccount { Id = "acc_folder_test", EmailAddress = "folder@example.com" };
+        _emailAccounts.Save(acc);
 
-        var created = await _folderService.CreateFolderAsync(emp.Id, "", "TestFolder");
+        var created = await _folderService.CreateFolderAsync(acc.Id, "", "TestFolder");
         Assert.False(created.IsSuccess);
         Assert.Null(created.Value);
 
-        var deleted = await _folderService.DeleteFolderAsync(emp.Id, "NonExistentFolder");
+        var deleted = await _folderService.DeleteFolderAsync(acc.Id, "NonExistentFolder");
         Assert.False(deleted.IsSuccess);
 
-        var renamed = await _folderService.RenameFolderAsync(emp.Id, "OldFolder", "NewFolder");
+        var renamed = await _folderService.RenameFolderAsync(acc.Id, "OldFolder", "NewFolder");
         Assert.False(renamed.IsSuccess);
     }
 }

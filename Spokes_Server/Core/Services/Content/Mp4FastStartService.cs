@@ -1,4 +1,4 @@
-namespace Spokes_Server.Core.Services.Content;
+﻿namespace Spokes_Server.Core.Services.Content;
 
 using System;
 using System.Buffers.Binary;
@@ -137,9 +137,9 @@ public class Mp4FastStartService : IMp4FastStartService
             }
 
             // 2. Read moov box bytes
-            if (moovBox.TotalSize > 50 * 1024 * 1024) // Sanity limit 50MB for moov metadata
+            if (moovBox.TotalSize > 50 * 1024 * 1024 || moovBox.TotalSize > streamLength - moovBox.Offset) // Sanity limit 50MB and stream bounds check
             {
-                _logger?.LogWarning("moov atom exceeds 50MB sanity limit ({Size} bytes), skipping relocation", moovBox.TotalSize);
+                _logger?.LogWarning("moov atom exceeds 50MB sanity limit or stream bounds ({Size} bytes), skipping relocation", moovBox.TotalSize);
                 return false;
             }
 

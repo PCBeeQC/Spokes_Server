@@ -267,7 +267,7 @@
                         </div>
                     }
 
-                    @if (_currentZoom > 1.0 && !IsDualPortrait)
+                    @if (_currentZoom > MinZoom && !IsDualPortrait)
                     {
                         <div style="position: absolute; top: 8px; right: 8px; z-index: 10;">
                             <MudChip T="string" Color="Color.Primary" Size="Size.Small" OnClose="ResetZoom">
@@ -283,11 +283,11 @@
                     <div class="d-flex align-center justify-space-between px-3 py-1" style="background: rgba(0,0,0,0.4); border-top: 1px solid rgba(255,255,255,0.08);">
                         <MudText Typo="Typo.caption" Color="Color.Secondary">@Loc["Zoom on TV:"]</MudText>
                         <div class="d-flex align-center gap-1">
-                            <MudIconButton Icon="@Icons.Material.Filled.Remove" Size="Size.Small" Disabled="@(_currentZoom <= 1.0)" OnClick="ZoomOut" />
+                            <MudIconButton Icon="@Icons.Material.Filled.Remove" Size="Size.Small" Disabled="@(_currentZoom <= MinZoom)" OnClick="ZoomOut" />
                             <MudButton Variant="Variant.Text" Size="Size.Small" OnClick="ResetZoom" Style="min-width: 48px; font-size: 0.8rem;">
                                 @($"{Math.Round(_currentZoom * 100)}%")
                             </MudButton>
-                            <MudIconButton Icon="@Icons.Material.Filled.Add" Size="Size.Small" Disabled="@(_currentZoom >= 3.0)" OnClick="ZoomIn" />
+                            <MudIconButton Icon="@Icons.Material.Filled.Add" Size="Size.Small" Disabled="@(_currentZoom >= MaxZoom)" OnClick="ZoomIn" />
                         </div>
                     </div>
                 }
@@ -349,11 +349,16 @@
 
     private Album? _album;
     private Employee? _currentUser;
+    private bool _authorized;
     private List<AlbumMedia> _mediaItems = [];
     private int _currentIndex = 0;
     private string? _cachedPlainAlbumKey;
 
-    private double _currentZoom = 1.0;
+    private const double MinZoom = 1.0;
+    private const double MaxZoom = 10.0;
+    private const double ZoomStep = 0.5;
+
+    private double _currentZoom = MinZoom;
     private double _panX = 0;
     private double _panY = 0;
 
@@ -384,7 +389,7 @@
 
     private string GetWrapperCursorStyle()
     {
-        if (_currentZoom <= 1.0 || IsDualPortrait) return string.Empty;
+        if (_currentZoom <= MinZoom || IsDualPortrait) return string.Empty;
         return "touch-action: none; cursor: grab;";
     }
 
@@ -436,39 +441,60 @@
         });
     }
 
+    private bool IsAuthorizedSessionOwner(out SlideshowSession? session)
+    {
+        session = SessionService.GetSessionById(SessionId);
+        return _authorized &&
+               _currentUser != null &&
+               session != null &&
+               string.Equals(session.HostUserId, _currentUser.Id, StringComparison.OrdinalIgnoreCase) &&
+               string.Equals(session.AlbumId, AlbumId, StringComparison.OrdinalIgnoreCase);
+    }
+
     protected override async Task OnInitializedAsync()
     {
         _currentUser = await UserService.GetEmployeeAsync();
+        var session = SessionService.GetSessionById(SessionId);
+
+        if (_currentUser == null ||
+            session == null ||
+            !string.Equals(session.HostUserId, _currentUser.Id, StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(session.AlbumId, AlbumId, StringComparison.OrdinalIgnoreCase) ||
+            !AlbumService.CanUserViewAlbum(AlbumId, _currentUser.Id))
+        {
+            _authorized = false;
+            Nav.NavigateTo("/albums");
+            return;
+        }
+
+        _authorized = true;
+        _sessionTvSecret = session.TvSecret;
         _album = Db.Albums.GetById(AlbumId);
 
         if (_album != null)
         {
             _mediaItems = _album.Media;
-            if (_album.IsEncrypted && _currentUser != null)
+            if (_album.IsEncrypted)
             {
                 var privateKey = KeystoreService.IsUnlocked ? KeystoreService.GetPrivateKey() : null;
                 _cachedPlainAlbumKey = AlbumService.GetPlainAlbumKey(_album, _currentUser.Id, privateKey);
             }
         }
 
-        var session = SessionService.GetSessionById(SessionId);
-        if (session != null)
+        _currentIndex = session.CurrentIndex;
+        if (_currentIndex >= 0 && _currentIndex < _mediaItems.Count)
         {
-            _currentIndex = session.CurrentIndex;
-            if (_currentIndex >= 0 && _currentIndex < _mediaItems.Count)
+            var dur = _mediaItems[_currentIndex].DurationSeconds;
+            if (dur.HasValue)
             {
-                var dur = _mediaItems[_currentIndex].DurationSeconds;
-                if (dur.HasValue)
-                {
-                    _videoDuration = dur.Value;
-                }
+                _videoDuration = dur.Value;
             }
-            if (session.FileBridge == null && _album != null && _currentUser != null)
-            {
-                var allowedMedia = _album.Media.ToDictionary(m => m.Id, m => System.IO.Path.GetFileName(m.FilePath));
-                var bridge = new UserScopedSlideshowBridge(ServiceProvider, _currentUser, _album.Id, _cachedPlainAlbumKey, allowedMedia);
-                SessionService.AttachBridge(session.SessionId, bridge);
-            }
+        }
+        if (session.FileBridge == null && _album != null)
+        {
+            var allowedMedia = _album.Media.ToDictionary(m => m.Id, m => System.IO.Path.GetFileName(m.FilePath));
+            var bridge = new UserScopedSlideshowBridge(ServiceProvider, _currentUser, _album.Id, _cachedPlainAlbumKey, allowedMedia);
+            SessionService.AttachBridge(session.SessionId, bridge);
         }
     }
 
@@ -501,9 +527,10 @@
 
     private async Task JumpToSlide(int index)
     {
+        if (!IsAuthorizedSessionOwner(out var session)) return;
         if (index < 0 || index >= _mediaItems.Count) return;
         _currentIndex = index;
-        _currentZoom = 1.0;
+        _currentZoom = MinZoom;
         _panX = 0;
         _panY = 0;
         _videoCurrentTime = 0;
@@ -515,7 +542,6 @@
 
         SessionService.UpdateCurrentIndex(SessionId, index);
         SessionService.NotifySlideChanged(SessionId, index);
-        var session = SessionService.GetSessionById(SessionId);
         if (session != null && !string.IsNullOrEmpty(session.TvConnectionId))
         {
             await HubContext.Clients.Client(session.TvConnectionId).SendAsync("SlideChanged", index);
@@ -538,7 +564,7 @@
 
     private void ClampPan()
     {
-        if (_currentZoom <= 1.0)
+        if (_currentZoom <= MinZoom)
         {
             _panX = 0;
             _panY = 0;
@@ -560,7 +586,7 @@
 
     private async Task ZoomIn()
     {
-        _currentZoom = Math.Min(3.0, _currentZoom + 0.35);
+        _currentZoom = Math.Min(MaxZoom, Math.Round((_currentZoom + ZoomStep) * 100.0) / 100.0);
         ClampPan();
         await UpdateJsZoomState();
         await BroadcastZoom();
@@ -568,10 +594,10 @@
 
     private async Task ZoomOut()
     {
-        _currentZoom = Math.Max(1.0, _currentZoom - 0.35);
-        if (_currentZoom <= 1.0)
+        _currentZoom = Math.Max(MinZoom, Math.Round((_currentZoom - ZoomStep) * 100.0) / 100.0);
+        if (_currentZoom <= MinZoom)
         {
-            _currentZoom = 1.0;
+            _currentZoom = MinZoom;
             _panX = 0;
             _panY = 0;
         }
@@ -585,7 +611,7 @@
 
     private async Task ResetZoom()
     {
-        _currentZoom = 1.0;
+        _currentZoom = MinZoom;
         _panX = 0;
         _panY = 0;
         await UpdateJsZoomState();
@@ -594,8 +620,8 @@
 
     private async Task BroadcastZoom(bool isPanning = false)
     {
+        if (!IsAuthorizedSessionOwner(out var session)) return;
         SessionService.NotifyZoomUpdated(SessionId, _currentZoom, _panX, _panY, isPanning);
-        var session = SessionService.GetSessionById(SessionId);
         if (session != null && !string.IsNullOrEmpty(session.TvConnectionId))
         {
             await HubContext.Clients.Client(session.TvConnectionId).SendAsync("ZoomUpdated", _currentZoom, _panX, _panY, isPanning);
@@ -652,8 +678,8 @@
 
     private async Task BroadcastVideo()
     {
+        if (!IsAuthorizedSessionOwner(out var session)) return;
         SessionService.NotifyVideoControlUpdated(SessionId, _isVideoPlaying, _videoCurrentTime, _isVideoMuted, _isVideoLooping);
-        var session = SessionService.GetSessionById(SessionId);
         if (session != null && !string.IsNullOrEmpty(session.TvConnectionId))
         {
             await HubContext.Clients.Client(session.TvConnectionId).SendAsync("VideoControlUpdated", _isVideoPlaying, _videoCurrentTime, _isVideoMuted, _isVideoLooping);
@@ -709,6 +735,12 @@
 
     private async Task Disconnect()
     {
+        if (!IsAuthorizedSessionOwner(out var session))
+        {
+            Nav.NavigateTo("/albums");
+            return;
+        }
+
         try
         {
             await JS.InvokeVoidAsync("spokesCast.endCastSession");
@@ -721,7 +753,6 @@
         }
         catch { }
 
-        var session = SessionService.GetSessionById(SessionId);
         if (session != null && !string.IsNullOrEmpty(session.TvConnectionId))
         {
             await HubContext.Clients.Client(session.TvConnectionId).SendAsync("SessionEnded");
@@ -730,16 +761,19 @@
         Nav.NavigateTo($"/albums/{AlbumId}");
     }
 
+    private string? _sessionTvSecret;
+
     private string GetMediaUrl(AlbumMedia media, bool thumb = false)
     {
-        return thumb 
-            ? $"/spokesapi/slideshow/{SessionId}/media/{media.Id}/thumb" 
+        string baseUrl = thumb
+            ? $"/spokesapi/slideshow/{SessionId}/media/{media.Id}/thumb"
             : $"/spokesapi/slideshow/{SessionId}/media/{media.Id}";
+        return SlideshowSessionService.AppendSecretQuery(baseUrl, _sessionTvSecret);
     }
 
     private string GetZoomStyle()
     {
-        if (Math.Abs(_currentZoom - 1.0) < 0.01) return string.Empty;
+        if (Math.Abs(_currentZoom - MinZoom) < 0.01) return string.Empty;
         var scaleStr = _currentZoom.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture);
         var xStr = _panX.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture);
         var yStr = _panY.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture);

@@ -15,6 +15,7 @@ using Spokes_Server.Core.Configuration;
 using Spokes_Server.Core.Constants;
 using Spokes_Server.Core.Data.Repositories.Core;
 using Spokes_Server.Core.Services.Licensing;
+using Spokes_Server.Core.Services.Security;
 
 namespace Spokes_Server.Core.Services.Maintenance.Destinations;
 
@@ -25,6 +26,7 @@ public class GoogleDriveBackupProvider : IBackupDestinationProvider
     private readonly LicenseValidationService _licenseValidation;
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly IConfiguration _configuration;
+    private readonly EncryptionService _encryptionService;
     private readonly ILogger<GoogleDriveBackupProvider>? _logger;
 
     public BackupDestinationType DestinationType => BackupDestinationType.GoogleDrive;
@@ -35,13 +37,15 @@ public class GoogleDriveBackupProvider : IBackupDestinationProvider
         LicenseValidationService licenseValidation,
         IHttpClientFactory httpClientFactory,
         IConfiguration configuration,
-        ILogger<GoogleDriveBackupProvider>? logger = null)
+        ILogger<GoogleDriveBackupProvider>? logger = null,
+        EncryptionService? encryptionService = null)
     {
         _profiles = profiles;
         _serverConfigs = serverConfigs;
         _licenseValidation = licenseValidation;
         _httpClientFactory = httpClientFactory;
         _configuration = configuration;
+        _encryptionService = encryptionService ?? profiles?.EncryptionService ?? new EncryptionService(configuration);
         _logger = logger;
     }
 
@@ -112,7 +116,9 @@ public class GoogleDriveBackupProvider : IBackupDestinationProvider
             ServerFingerprint = fingerprint,
             LicensePayload = profile?.LicensePayload,
             TrialTicket = ticket,
-            RefreshToken = config.RefreshToken
+            RefreshToken = string.IsNullOrEmpty(config.RefreshToken)
+                ? string.Empty
+                : (_encryptionService.TryDecrypt(config.RefreshToken, out var decryptedToken) ? decryptedToken : config.RefreshToken)
         };
 
         using var request = new HttpRequestMessage(HttpMethod.Post, relayUrl)

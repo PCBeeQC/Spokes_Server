@@ -1,4 +1,5 @@
 using System.IO.Compression;
+using System.Security.Cryptography;
 using Spokes_Server.Core.Models.Core;
 using Spokes_Server.Core.Data.Repositories.Core;
 using Spokes_Server.Core.Services.Logging;
@@ -13,6 +14,46 @@ namespace Spokes_Server.Core.Services.Maintenance;
 
 public class BackupService : BackgroundService
 {
+    private static readonly HashSet<string> PrimarySpokesRootMarkers = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Settings",
+        "keys",
+        "Global",
+        "Employees",
+        "Teams",
+        "CalendarEvents",
+        "HourBankAdjustments",
+        "WeeklyPlans",
+        "DeviceSessions",
+        "OpenIdAccounts",
+        "PushSubscriptions",
+        "Projects",
+        "ProjectGroups",
+        "Boards",
+        "BoardCards",
+        "Bills",
+        "CommissionLedgerRecords",
+        "EmployerContributions",
+        "Expenses",
+        "Invoices",
+        "Purchases",
+        "RecurringExpenses",
+        "Albums",
+        "Polls",
+        "chat",
+        "chat-categories",
+        "clientstates",
+        "physical-voice-rooms",
+        "PublicContacts",
+        "Communication",
+        "EmailAccounts",
+        "EmailInboxes",
+        "EmailSendingIdentities",
+        "Uploads",
+        "Attachments",
+        "casdoor"
+    };
+
     private readonly ILogger<BackupService> _logger;
     private readonly CompanyProfileRepository _companyProfiles;
     private readonly IConfiguration _config;
@@ -106,12 +147,77 @@ public class BackupService : BackgroundService
         _logger = logger;
         _companyProfiles = companyProfiles;
         _config = config;
-        _dataPath = config["DataPath"] ?? "Data";
+        _dataPath = config?["DataPath"] ?? "Data";
         _persistence = persistence;
         _db = db;
         _encryption = encryption ?? new BackupEncryptionService();
         _destinationCoordinator = destinationCoordinator;
         _systemLog = systemLog;
+
+        PurgeLeftoverStaging();
+    }
+
+    private void PurgeLeftoverStaging()
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(_dataPath)) return;
+
+            var backupDir = Path.Combine(_dataPath, "Backups");
+            if (!Directory.Exists(backupDir)) return;
+
+            var stagingBase = Path.Combine(backupDir, ".staging");
+            if (Directory.Exists(stagingBase))
+            {
+                Directory.Delete(stagingBase, recursive: true);
+            }
+
+            foreach (var leftoverTmp in Directory.GetFiles(backupDir, "*.tmp.zip", SearchOption.TopDirectoryOnly))
+            {
+                try { File.Delete(leftoverTmp); } catch { }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(ex, "Failed to purge leftover backup staging directories on startup");
+        }
+    }
+
+    private string? ResolveMasterPassword(CompanyProfile? profile, string? explicitBackupPassword = null)
+    {
+        if (!string.IsNullOrWhiteSpace(explicitBackupPassword))
+        {
+            return explicitBackupPassword;
+        }
+
+        return _config["SPOKES_MASTER_PASSWORD"]
+            ?? Environment.GetEnvironmentVariable("SPOKES_MASTER_PASSWORD")
+            ?? profile?.PublicChannelMasterPassword;
+    }
+
+    private static bool IsCompletedBackupArchive(FileInfo f)
+    {
+        if (f.Name.StartsWith(".", StringComparison.Ordinal)) return false;
+        if (f.Name.EndsWith(".tmp.zip", StringComparison.OrdinalIgnoreCase)) return false;
+        if (f.Name.EndsWith(".tmp", StringComparison.OrdinalIgnoreCase)) return false;
+        return f.Extension.Equals(".zip", StringComparison.OrdinalIgnoreCase) ||
+               f.Extension.Equals(".spkbackup", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static void CreateRestrictedStagingDirectory(string dirPath, ILogger logger)
+    {
+        Directory.CreateDirectory(dirPath);
+        if (OperatingSystem.IsLinux())
+        {
+            try
+            {
+                File.SetUnixFileMode(dirPath, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "Failed to apply restrictive Unix permissions on staging directory: {Dir}", dirPath);
+            }
+        }
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -165,117 +271,114 @@ public class BackupService : BackgroundService
             }
 
             var profile = _companyProfiles.Get();
+            bool encrypt = profile?.Backup.EncryptBackupsWithMasterPassword ?? false;
+            string? masterPassword = null;
+
+            // Validate SPOKES_MASTER_PASSWORD BEFORE creating tempZipPath so no plaintext .tmp.zip is ever written when misconfigured
+            if (encrypt)
+            {
+                if (_encryption == null)
+                {
+                    throw new InvalidOperationException("Cannot encrypt backup: BackupEncryptionService is unavailable.");
+                }
+
+                masterPassword = ResolveMasterPassword(profile);
+                if (string.IsNullOrWhiteSpace(masterPassword))
+                {
+                    throw new InvalidOperationException("Cannot encrypt backup: SPOKES_MASTER_PASSWORD is not configured in the server environment.");
+                }
+            }
+
             var backupDir = Path.Combine(_dataPath, "Backups");
             Directory.CreateDirectory(backupDir);
 
             var timestamp = DateTime.UtcNow.ToString("yyyy-MM-dd_HHmmss");
             var prefix = isManual ? "Spokes_Backup_Manual_" : "Spokes_Backup_";
 
-            bool encrypt = (profile?.Backup.EncryptBackupsWithMasterPassword ?? false) && _encryption != null;
             var extension = encrypt ? ".spkbackup" : ".zip";
             var finalBackupPath = Path.Combine(backupDir, $"{prefix}{timestamp}{extension}");
             var tempZipPath = Path.Combine(backupDir, $"{prefix}{timestamp}.tmp.zip");
 
             // Scan candidate files to determine total bytes and file count
-            var dataDir = new DirectoryInfo(_dataPath);
-            var candidateFiles = new List<(FileInfo File, string ZipEntryName)>();
-            long totalUncompressedBytes = 0;
-
-            if (dataDir.Exists)
-            {
-                foreach (var file in dataDir.GetFiles("*", SearchOption.AllDirectories))
-                {
-                    // Skip the Backups folder and temp files
-                    var relativePath = Path.GetRelativePath(_dataPath, file.FullName);
-                    if (relativePath.StartsWith("Backups", StringComparison.OrdinalIgnoreCase))
-                        continue;
-                    if (file.Extension.Equals(".tmp", StringComparison.OrdinalIgnoreCase))
-                        continue;
-
-                    var zipEntryName = relativePath.Replace('\\', '/');
-
-                    if (profile != null && !profile.BackupEmployeeEmails)
-                    {
-                        if (zipEntryName.StartsWith("Employees/", StringComparison.OrdinalIgnoreCase) &&
-                            zipEntryName.Contains("/Email/", StringComparison.OrdinalIgnoreCase))
-                        {
-                            continue;
-                        }
-                    }
-
-                    candidateFiles.Add((file, zipEntryName));
-                    totalUncompressedBytes += file.Length;
-                }
-            }
+            var (candidateFiles, totalUncompressedBytes) = BackupFileScanner.ScanCandidateFiles(
+                _dataPath,
+                profile?.BackupEmployeeEmails ?? false);
 
             int totalFiles = candidateFiles.Count;
             ReportProgress(LocalBackupStage.Archiving, 0, totalUncompressedBytes, 0, totalFiles);
 
-            // Create the zip, streaming entries and reporting progress
-            await Task.Run(async () =>
+            try
             {
-                using var zip = ZipFile.Open(tempZipPath, ZipArchiveMode.Create);
-                long bytesProcessed = 0;
-                int filesProcessed = 0;
-                var buffer = new byte[81920];
-
-                foreach (var (file, zipEntryName) in candidateFiles)
+                // Create the zip, streaming entries and reporting progress
+                await Task.Run(async () =>
                 {
-                    var entry = zip.CreateEntry(zipEntryName, CompressionLevel.Optimal);
-                    try
+                    using var zip = ZipFile.Open(tempZipPath, ZipArchiveMode.Create);
+                    long bytesProcessed = 0;
+                    int filesProcessed = 0;
+                    var buffer = new byte[81920];
+
+                    foreach (var (file, zipEntryName) in candidateFiles)
                     {
-                        using var fileStream = new FileStream(file.FullName, FileMode.Open, FileAccess.Read, FileShare.ReadWrite, 81920, useAsync: true);
-                        using var entryStream = entry.Open();
-                        int bytesRead;
-                        while ((bytesRead = await fileStream.ReadAsync(buffer)) > 0)
+                        var entry = zip.CreateEntry(zipEntryName, CompressionLevel.Optimal);
+                        try
                         {
-                            await entryStream.WriteAsync(buffer.AsMemory(0, bytesRead));
-                            bytesProcessed += bytesRead;
-                            ReportProgress(LocalBackupStage.Archiving, bytesProcessed, totalUncompressedBytes, filesProcessed, totalFiles, zipEntryName);
+                            using var fileStream = new FileStream(file.FullName, FileMode.Open, FileAccess.Read, FileShare.ReadWrite, 81920, useAsync: true);
+                            using var entryStream = entry.Open();
+                            int bytesRead;
+                            while ((bytesRead = await fileStream.ReadAsync(buffer)) > 0)
+                            {
+                                await entryStream.WriteAsync(buffer.AsMemory(0, bytesRead));
+                                bytesProcessed += bytesRead;
+                                ReportProgress(LocalBackupStage.Archiving, bytesProcessed, totalUncompressedBytes, filesProcessed, totalFiles, zipEntryName);
+                            }
                         }
+                        catch (FileNotFoundException)
+                        {
+                            // File was removed concurrently between pre-scan and zip, continue gracefully
+                        }
+
+                        filesProcessed++;
+                        ReportProgress(LocalBackupStage.Archiving, bytesProcessed, totalUncompressedBytes, filesProcessed, totalFiles, zipEntryName);
                     }
-                    catch (FileNotFoundException)
-                    {
-                        // File was removed concurrently between pre-scan and zip, continue gracefully
-                    }
-
-                    filesProcessed++;
-                    ReportProgress(LocalBackupStage.Archiving, bytesProcessed, totalUncompressedBytes, filesProcessed, totalFiles, zipEntryName);
-                }
-            });
-
-            if (encrypt)
-            {
-                var masterPassword = _config["SPOKES_MASTER_PASSWORD"]
-                    ?? Environment.GetEnvironmentVariable("SPOKES_MASTER_PASSWORD")
-                    ?? profile?.PublicChannelMasterPassword;
-
-                if (string.IsNullOrEmpty(masterPassword))
-                {
-                    throw new InvalidOperationException("Cannot encrypt backup: SPOKES_MASTER_PASSWORD is not configured in the server environment.");
-                }
-
-                var zipFileInfo = new FileInfo(tempZipPath);
-                long totalZipBytes = zipFileInfo.Length;
-                ReportProgress(LocalBackupStage.Encrypting, 0, totalZipBytes, 0, 0);
-
-                var encProgress = new Progress<long>(bytesEncrypted =>
-                {
-                    ReportProgress(LocalBackupStage.Encrypting, bytesEncrypted, totalZipBytes, 0, 0);
                 });
 
-                await using (var input = File.OpenRead(tempZipPath))
-                await using (var output = File.Create(finalBackupPath))
+                if (encrypt)
                 {
-                    await _encryption!.EncryptBackupAsync(input, output, masterPassword, encProgress);
-                }
+                    var zipFileInfo = new FileInfo(tempZipPath);
+                    long totalZipBytes = zipFileInfo.Length;
+                    ReportProgress(LocalBackupStage.Encrypting, 0, totalZipBytes, 0, 0);
 
-                try { File.Delete(tempZipPath); } catch { }
+                    var encProgress = new Progress<long>(bytesEncrypted =>
+                    {
+                        ReportProgress(LocalBackupStage.Encrypting, bytesEncrypted, totalZipBytes, 0, 0);
+                    });
+
+                    await using (var input = File.OpenRead(tempZipPath))
+                    await using (var output = File.Create(finalBackupPath))
+                    {
+                        await _encryption!.EncryptBackupAsync(input, output, masterPassword!, encProgress);
+                    }
+                }
+                else
+                {
+                    // Atomic move
+                    File.Move(tempZipPath, finalBackupPath, overwrite: true);
+                }
             }
-            else
+            catch
             {
-                // Atomic move
-                File.Move(tempZipPath, finalBackupPath, overwrite: true);
+                if (encrypt && File.Exists(finalBackupPath))
+                {
+                    try { File.Delete(finalBackupPath); } catch { }
+                }
+                throw;
+            }
+            finally
+            {
+                if (File.Exists(tempZipPath))
+                {
+                    try { File.Delete(tempZipPath); } catch { }
+                }
             }
 
             ReportProgress(LocalBackupStage.Finalizing, totalUncompressedBytes, totalUncompressedBytes, totalFiles, totalFiles);
@@ -349,9 +452,9 @@ public class BackupService : BackgroundService
         try
         {
             var backups = new DirectoryInfo(backupDir)
-                .GetFiles("Spokes_Backup_*.*")
+                .GetFiles("Spokes_Backup_*.*", SearchOption.TopDirectoryOnly)
                 .Where(f => !f.Name.Contains("_Manual_", StringComparison.OrdinalIgnoreCase))
-                .Where(f => f.Extension.Equals(".zip", StringComparison.OrdinalIgnoreCase) || f.Extension.Equals(".spkbackup", StringComparison.OrdinalIgnoreCase))
+                .Where(IsCompletedBackupArchive)
                 .OrderByDescending(f => f.CreationTimeUtc)
                 .ToList();
 
@@ -379,8 +482,8 @@ public class BackupService : BackgroundService
             return [];
 
         return new DirectoryInfo(backupDir)
-            .GetFiles("Spokes_Backup_*.*")
-            .Where(f => f.Extension.Equals(".zip", StringComparison.OrdinalIgnoreCase) || f.Extension.Equals(".spkbackup", StringComparison.OrdinalIgnoreCase))
+            .GetFiles("Spokes_Backup_*.*", SearchOption.TopDirectoryOnly)
+            .Where(IsCompletedBackupArchive)
             .OrderByDescending(f => f.CreationTimeUtc)
             .Select(f => new BackupFileInfo
             {
@@ -398,9 +501,12 @@ public class BackupService : BackgroundService
 
         var backupDir = Path.GetFullPath(Path.Combine(_dataPath, "Backups"));
         if (!backupDir.EndsWith(Path.DirectorySeparatorChar)) backupDir += Path.DirectorySeparatorChar;
+        var stagingDir = Path.Combine(backupDir, ".staging") + Path.DirectorySeparatorChar;
 
         var fullPath = Path.GetFullPath(filePath);
-        if (File.Exists(fullPath) && fullPath.StartsWith(backupDir, StringComparison.OrdinalIgnoreCase))
+        if (File.Exists(fullPath) &&
+            fullPath.StartsWith(backupDir, StringComparison.OrdinalIgnoreCase) &&
+            !fullPath.StartsWith(stagingDir, StringComparison.OrdinalIgnoreCase))
         {
             File.Delete(fullPath);
             _systemLog?.LogInfo("Backup", $"Deleted backup: {Path.GetFileName(fullPath)}");
@@ -413,19 +519,39 @@ public class BackupService : BackgroundService
 
         var backupDir = Path.GetFullPath(Path.Combine(_dataPath, "Backups"));
         if (!backupDir.EndsWith(Path.DirectorySeparatorChar)) backupDir += Path.DirectorySeparatorChar;
+        var stagingDir = Path.Combine(backupDir, ".staging") + Path.DirectorySeparatorChar;
 
         var fullPath = Path.GetFullPath(filePath);
-        if (File.Exists(fullPath) && fullPath.StartsWith(backupDir, StringComparison.OrdinalIgnoreCase))
+        if (File.Exists(fullPath) &&
+            fullPath.StartsWith(backupDir, StringComparison.OrdinalIgnoreCase) &&
+            !fullPath.StartsWith(stagingDir, StringComparison.OrdinalIgnoreCase) &&
+            !fullPath.EndsWith(".tmp.zip", StringComparison.OrdinalIgnoreCase))
         {
             return await File.ReadAllBytesAsync(fullPath);
         }
         return null;
     }
 
-    public virtual Task<BackupRestoreResult> RestoreBackupAsync(string filePath, ILogger? logger, CancellationToken cancellationToken)
-        => RestoreBackupAsync(filePath, logger, cancellationToken, null);
+    public string CreateRestoreUploadStagingPath(string extension = ".spkbackup")
+    {
+        var stagingRootDir = Path.GetFullPath(Path.Combine(_dataPath, "Backups", ".staging"));
+        CreateRestrictedStagingDirectory(stagingRootDir, _logger);
+        var safeExt = string.IsNullOrWhiteSpace(extension) ? ".spkbackup" : (extension.StartsWith('.') ? extension : "." + extension);
+        return Path.Combine(stagingRootDir, $"spokes_restore_{Guid.NewGuid():N}{safeExt}");
+    }
 
-    public virtual async Task<BackupRestoreResult> RestoreBackupAsync(string filePath, ILogger? logger = null, CancellationToken cancellationToken = default, IProgress<BackupRestoreProgress>? progress = null)
+    public virtual Task<BackupRestoreResult> RestoreBackupAsync(string filePath, ILogger? logger, CancellationToken cancellationToken)
+        => RestoreBackupAsync(filePath, logger, cancellationToken, null, null);
+
+    public virtual Task<BackupRestoreResult> RestoreBackupAsync(string filePath, ILogger? logger = null, CancellationToken cancellationToken = default, IProgress<BackupRestoreProgress>? progress = null)
+        => RestoreBackupAsync(filePath, logger, cancellationToken, progress, null);
+
+    public virtual async Task<BackupRestoreResult> RestoreBackupAsync(
+        string filePath,
+        ILogger? logger,
+        CancellationToken cancellationToken,
+        IProgress<BackupRestoreProgress>? progress,
+        string? backupPassword)
     {
         var targetLogger = logger ?? _logger;
 
@@ -444,6 +570,7 @@ public class BackupService : BackgroundService
             fullDataPath += Path.DirectorySeparatorChar;
         }
 
+        var stagingRootDir = Path.GetFullPath(Path.Combine(_dataPath, "Backups", ".staging"));
         string effectiveZipPath = fullFilePath;
         string? tempDecryptedZip = null;
 
@@ -467,23 +594,27 @@ public class BackupService : BackgroundService
                     return BackupRestoreResult.Failed("Cannot restore encrypted backup: BackupEncryptionService is unavailable.");
                 }
 
-                var masterPassword = _config["SPOKES_MASTER_PASSWORD"]
-                    ?? Environment.GetEnvironmentVariable("SPOKES_MASTER_PASSWORD")
-                    ?? _companyProfiles.Get()?.PublicChannelMasterPassword;
-
-                if (string.IsNullOrEmpty(masterPassword))
+                var masterPassword = ResolveMasterPassword(_companyProfiles.Get(), backupPassword);
+                if (string.IsNullOrWhiteSpace(masterPassword))
                 {
                     return BackupRestoreResult.Failed("Cannot restore encrypted backup: SPOKES_MASTER_PASSWORD is not configured in the server environment.");
                 }
 
                 progress?.Report(new BackupRestoreProgress("Decrypting encrypted backup...", 15));
 
-                tempDecryptedZip = Path.Combine(Path.GetTempPath(), $"spokes_decrypted_{Guid.NewGuid():N}.zip");
+                CreateRestrictedStagingDirectory(stagingRootDir, targetLogger);
+                tempDecryptedZip = Path.Combine(stagingRootDir, $"spokes_decrypted_{Guid.NewGuid():N}.zip");
                 await using (var input = File.OpenRead(fullFilePath))
                 await using (var output = File.Create(tempDecryptedZip))
                 {
                     await _encryption.DecryptBackupAsync(input, output, masterPassword, cancellationToken);
                 }
+
+                if (OperatingSystem.IsLinux())
+                {
+                    try { File.SetUnixFileMode(tempDecryptedZip, UnixFileMode.UserRead | UnixFileMode.UserWrite); } catch { }
+                }
+
                 effectiveZipPath = tempDecryptedZip;
             }
 
@@ -495,6 +626,13 @@ public class BackupService : BackgroundService
                 using var zip = ZipFile.OpenRead(effectiveZipPath);
                 foreach (var entry in zip.Entries)
                 {
+                    // Reject Unix symlink entries (S_IFLNK = 0xA000 in upper 16 bits of ExternalAttributes)
+                    if (((entry.ExternalAttributes >> 16) & 0xF000) == 0xA000)
+                    {
+                        targetLogger.LogError("RestoreBackupAsync failed: zip entry '{Entry}' is a symbolic link", entry.FullName);
+                        return BackupRestoreResult.Failed("Backup archive contains prohibited symbolic link entries.", exception: new IOException("Backup archive contains prohibited symbolic link entries."));
+                    }
+
                     var safeEntryName = entry.FullName.Replace('\\', Path.DirectorySeparatorChar).Replace('/', Path.DirectorySeparatorChar);
                     var destinationPath = Path.GetFullPath(Path.Combine(fullDataPath, safeEntryName));
 
@@ -516,7 +654,8 @@ public class BackupService : BackgroundService
                 return BackupRestoreResult.Failed(ex.Message, exception: ex);
             }
 
-            var stagingDir = Path.Combine(Path.GetTempPath(), $"spokes_restore_{Guid.NewGuid():N}");
+            CreateRestrictedStagingDirectory(stagingRootDir, targetLogger);
+            var stagingDir = Path.Combine(stagingRootDir, Guid.NewGuid().ToString("N"));
             var fullStagingPath = Path.GetFullPath(stagingDir);
             if (!fullStagingPath.EndsWith(Path.DirectorySeparatorChar))
             {
@@ -525,7 +664,7 @@ public class BackupService : BackgroundService
 
             try
             {
-                Directory.CreateDirectory(fullStagingPath);
+                CreateRestrictedStagingDirectory(stagingDir, targetLogger);
 
                 // 2. Extract backup entries into staging directory first
                 using (var zip = ZipFile.OpenRead(effectiveZipPath))
@@ -566,8 +705,26 @@ public class BackupService : BackgroundService
                         }
 
                         extractedCount++;
-                        int extractPct = 30 + (totalEntries > 0 ? (int)(extractedCount * 50.0 / totalEntries) : 40);
+                        int extractPct = 30 + (totalEntries > 0 ? (int)(extractedCount * 45.0 / totalEntries) : 35);
                         progress?.Report(new BackupRestoreProgress("Extracting backup files...", extractPct, safeEntryName));
+                    }
+                }
+
+                // 2b. Unwrap GitHub zipball top-level directory (e.g. "owner-repo-sha/" + optional "TargetFolder/")
+                var stagingRootWithoutTrailingSep = fullStagingPath.TrimEnd(Path.DirectorySeparatorChar);
+                var configuredGitHubFolder = _companyProfiles.Get()?.Backup.GitHub.TargetFolder;
+                var effectiveStagingRoot = ResolveEffectiveBackupStagingRoot(stagingRootWithoutTrailingSep, configuredGitHubFolder);
+                if (!effectiveStagingRoot.StartsWith(stagingRootWithoutTrailingSep, StringComparison.OrdinalIgnoreCase))
+                {
+                    effectiveStagingRoot = stagingRootWithoutTrailingSep;
+                }
+
+                if (!string.Equals(effectiveStagingRoot, stagingRootWithoutTrailingSep, StringComparison.OrdinalIgnoreCase))
+                {
+                    var bootstrapGitKeep = Path.Combine(effectiveStagingRoot, ".gitkeep");
+                    if (File.Exists(bootstrapGitKeep))
+                    {
+                        try { File.Delete(bootstrapGitKeep); } catch { }
                     }
                 }
 
@@ -603,7 +760,7 @@ public class BackupService : BackgroundService
                 }
 
                 // 4. Copy staged files and directories to the destination data directory
-                CopyExtractedDirectory(fullStagingPath, fullDataPath, targetLogger);
+                CopyExtractedDirectory(effectiveStagingRoot, fullDataPath, targetLogger);
 
                 // 5. Reload Database
                 progress?.Report(new BackupRestoreProgress("Reloading database & services...", 95));
@@ -654,8 +811,171 @@ public class BackupService : BackgroundService
             {
                 try { File.Delete(tempDecryptedZip); } catch { }
             }
+
+            try
+            {
+                if (Directory.Exists(stagingRootDir) && !Directory.EnumerateFileSystemEntries(stagingRootDir).Any())
+                {
+                    Directory.Delete(stagingRootDir, recursive: false);
+                }
+            }
+            catch { }
         }
     }
+
+    internal static string ResolveEffectiveBackupStagingRoot(string stagingRoot, string? configuredGitHubTargetFolder = null)
+    {
+        var fullRoot = Path.GetFullPath(stagingRoot);
+        if (!Directory.Exists(fullRoot))
+        {
+            return fullRoot;
+        }
+
+        // Standard backup archive: root already contains Spokes data folders or direct files
+        if (HasPrimarySpokesMarkers(fullRoot))
+        {
+            return fullRoot;
+        }
+
+        var rootFiles = Directory.GetFiles(fullRoot)
+            .Where(f => !IsIgnorableWrapperFile(Path.GetFileName(f)))
+            .ToArray();
+        if (rootFiles.Length > 0)
+        {
+            return fullRoot;
+        }
+
+        var topDirs = Directory.GetDirectories(fullRoot);
+        if (topDirs.Length != 1)
+        {
+            return fullRoot;
+        }
+
+        // Unwrap GitHub zipball top-level wrapper directory (e.g. "owner-repo-sha/")
+        var repoRoot = topDirs[0];
+        if (HasPrimarySpokesMarkers(repoRoot))
+        {
+            return repoRoot;
+        }
+
+        // Check configured TargetFolder first if provided
+        var cleanTargetFolder = GitHubBackupProvider.NormalizeTargetFolder(configuredGitHubTargetFolder);
+        if (!string.IsNullOrEmpty(cleanTargetFolder))
+        {
+            var candidateTarget = Path.GetFullPath(Path.Combine(repoRoot, cleanTargetFolder.Replace('/', Path.DirectorySeparatorChar)));
+            if (candidateTarget.StartsWith(fullRoot + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) &&
+                Directory.Exists(candidateTarget))
+            {
+                return candidateTarget;
+            }
+        }
+
+        // Walk down single-child TargetFolder chain (e.g. "spokes-backups/" or "backups/prod/")
+        var current = repoRoot;
+        for (int depth = 0; depth < 8; depth++)
+        {
+            if (HasPrimarySpokesMarkers(current))
+            {
+                return current;
+            }
+
+            var files = Directory.GetFiles(current)
+                .Where(f => !IsIgnorableWrapperFile(Path.GetFileName(f)))
+                .ToArray();
+            var subDirs = Directory.GetDirectories(current);
+
+            if (files.Length > 0 || subDirs.Length != 1)
+            {
+                break;
+            }
+
+            var nextDir = subDirs[0];
+            if (Path.GetFileName(nextDir).Equals("Data", StringComparison.OrdinalIgnoreCase) &&
+                !HasPrimarySpokesMarkers(nextDir))
+            {
+                break;
+            }
+
+            current = nextDir;
+        }
+
+        if (HasPrimarySpokesMarkers(current))
+        {
+            return current;
+        }
+
+        // Fallback when repository also contains sibling files/folders (e.g. README.md) alongside TargetFolder:
+        // locate a unique directory under repoRoot containing Spokes core markers (Settings/company.json, Settings/system_config.json, or keys/).
+        var matchingRoots = FindCandidateSpokesRootsBreadthFirst(repoRoot, maxDepth: 5);
+        if (matchingRoots.Count == 1)
+        {
+            return matchingRoots[0];
+        }
+
+        return current;
+    }
+
+    private static List<string> FindCandidateSpokesRootsBreadthFirst(string startDir, int maxDepth)
+    {
+        var matches = new List<string>();
+        var queue = new Queue<(string Dir, int Depth)>();
+        queue.Enqueue((startDir, 0));
+
+        while (queue.Count > 0)
+        {
+            var (dir, depth) = queue.Dequeue();
+            if (depth > 0 && HasStrongSpokesRootMarker(dir))
+            {
+                matches.Add(dir);
+                continue; // Do not descend into an identified Spokes root
+            }
+
+            if (depth >= maxDepth) continue;
+
+            foreach (var subDir in Directory.GetDirectories(dir))
+            {
+                queue.Enqueue((subDir, depth + 1));
+            }
+        }
+
+        return matches;
+    }
+
+    private static bool HasStrongSpokesRootMarker(string dir)
+    {
+        if (File.Exists(Path.Combine(dir, "Settings", "company.json")) ||
+            File.Exists(Path.Combine(dir, "Settings", "system_config.json")) ||
+            File.Exists(Path.Combine(dir, "Global", "ServerConfig.json")) ||
+            Directory.Exists(Path.Combine(dir, "keys")))
+        {
+            return true;
+        }
+
+        return HasPrimarySpokesMarkers(dir);
+    }
+
+    private static bool HasPrimarySpokesMarkers(string dir)
+    {
+        if (File.Exists(Path.Combine(dir, "casdoor.enabled")))
+        {
+            return true;
+        }
+
+        foreach (var subDir in Directory.GetDirectories(dir))
+        {
+            var name = Path.GetFileName(subDir);
+            if (PrimarySpokesRootMarkers.Contains(name))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsIgnorableWrapperFile(string fileName) =>
+        fileName.Equals(".gitkeep", StringComparison.OrdinalIgnoreCase) ||
+        fileName.Equals(".DS_Store", StringComparison.OrdinalIgnoreCase);
 
     private async Task<bool> SyncAndRestartRestoredCasdoorAsync(
         string fullDataPath,

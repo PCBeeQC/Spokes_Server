@@ -30,9 +30,10 @@
 }
 else
 {
+    <MudContainer MaxWidth="MaxWidth.Large" Class="py-4 pb-8">
     @if (Quote != null)
     {
-        <PageTitle>@(Project?.Client?.BusinessName is { Length: > 0 } clientName ? $"{Template?.Label_Quote ?? "Quote"} {Quote.QuoteNumber} - {clientName}" : $"{Template?.Label_Quote ?? "Quote"} {Quote.QuoteNumber}")</PageTitle>
+        <PageTitle>@(Project?.Client?.BusinessName is { Length: > 0 } clientName ? $"{Template.Label_Quote} {Quote.QuoteNumber} - {clientName}" : $"{Template.Label_Quote} {Quote.QuoteNumber}")</PageTitle>
     }
     <style>
         .markdown-content h1,
@@ -84,7 +85,7 @@ else
             <MudButton StartIcon="@Icons.Material.Filled.ArrowBack" OnClick="GoBack">Back to Project</MudButton>
         </div>
         <div class="d-flex align-center gap-2 flex-wrap">
-            <MudSelect T="string" Value="@Quote.Status" ValueChanged="UpdateStatusAsync" Dense="true" Margin="Margin.Dense"
+            <MudSelect T="string" Value="@Quote.Status" ValueChanged="UpdateStatusAsync" Disabled="@(!_canEditQuote)" Dense="true" Margin="Margin.Dense"
                 Variant="Variant.Outlined" Style="width: 180px; min-width: 180px; flex-shrink: 0;">
                 <MudSelectItem Value="@(QuoteStatus.Draft)">Draft</MudSelectItem>
                 <MudSelectItem Value="@(QuoteStatus.Final)">Final</MudSelectItem>
@@ -92,7 +93,7 @@ else
                 <MudSelectItem Value="@(QuoteStatus.Rejected)">Rejected</MudSelectItem>
             </MudSelect>
             <MudDivider Vertical="true" FlexItem="true" Class="mx-1" />
-            @if (Quote.Status == QuoteStatus.Draft)
+            @if (_canEditQuote && Quote.Status == QuoteStatus.Draft)
             {
                 <MudButton Variant="Variant.Outlined" Color="Color.Error" StartIcon="@Icons.Material.Filled.Delete"
                     OnClick="DeleteQuote">Delete</MudButton>
@@ -103,12 +104,18 @@ else
             {
                 <MudButton Variant="Variant.Outlined" Color="Color.Info" StartIcon="@Icons.Material.Filled.OpenInNew"
                     OnClick="OpenPdf">Open PDF</MudButton>
-                <MudButton Variant="Variant.Outlined" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Email"
-                    OnClick="SendByEmail">Send by Email</MudButton>
+                @if (_canEditQuote)
+                {
+                    <MudButton Variant="Variant.Outlined" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Email"
+                        OnClick="SendByEmail">Send by Email</MudButton>
+                }
             }
-            <MudButton Variant="Variant.Outlined" Color="Color.Secondary" StartIcon="@Icons.Material.Filled.ContentCopy"
-                OnClick="DuplicateQuote">Duplicate</MudButton>
-            @if (Quote.Status == QuoteStatus.Draft)
+            @if (_canEditQuote)
+            {
+                <MudButton Variant="Variant.Outlined" Color="Color.Secondary" StartIcon="@Icons.Material.Filled.ContentCopy"
+                    OnClick="DuplicateQuote">Duplicate</MudButton>
+            }
+            @if (_canEditQuote && Quote.Status == QuoteStatus.Draft)
             {
                 <MudButton Variant="Variant.Outlined" Color="Color.Warning" StartIcon="@Icons.Material.Filled.Edit"
                     OnClick="EditQuote">Edit</MudButton>
@@ -159,7 +166,7 @@ else
                     <MudText Typo="Typo.h3" Style="@($"color: {Profile.PrimaryColor}; margin-bottom: 0.25rem;")">
                         @Template.Label_Quote</MudText>
                     <MudText Typo="Typo.h6" Style="@($"color: {Profile.SecondaryColor};")">#@Quote.QuoteNumber</MudText>
-                    <MudText Class="mb-1">@Template.Label_Date: @Quote.Date.ToString(!string.IsNullOrEmpty(Template?.DateFormat) ? Template.DateFormat : "yyyy-MM-dd")</MudText>
+                    <MudText Class="mb-1">@Template.Label_Date: @Quote.Date.ToString(!string.IsNullOrEmpty(Template.DateFormat) ? Template.DateFormat : "yyyy-MM-dd")</MudText>
                     @if (!string.IsNullOrEmpty(Project?.ProjectNumber))
                     {
                         <MudText Class="mb-1">@Template.Label_ProjectNumber @Project?.ProjectNumber</MudText>
@@ -231,7 +238,7 @@ else
                 @if (!string.IsNullOrEmpty(Quote.ScopeOfWork))
                 {
                     <div class="allow-break">
-                        <MudText Typo="Typo.h5" Class="mt-10 mb-4 keep-together keep-with-next"
+                        <MudText Typo="Typo.h5" Class="mt-6 mb-4 keep-together keep-with-next"
                                  Style="@($"color: {Profile.PrimaryColor}; border-bottom: 2px solid {Profile.PrimaryColor}; display: inline-block;")">
                             @Template.Label_ScopeOfWork
                         </MudText>
@@ -245,7 +252,7 @@ else
             @if (!string.IsNullOrEmpty(Quote.ScopeOfWork) && string.IsNullOrEmpty(Quote.MainImageBase64))
             {
                 <div class="allow-break">
-                    <MudText Typo="Typo.h5" Class="mt-10 mb-4 keep-together keep-with-next"
+                    <MudText Typo="Typo.h5" Class="mt-6 mb-4 keep-together keep-with-next"
                         Style="@($"color: {Profile.PrimaryColor}; border-bottom: 2px solid {Profile.PrimaryColor}; display: inline-block;")">
                         @Template.Label_ScopeOfWork
                     </MudText>
@@ -256,7 +263,7 @@ else
             }
 
             <div class="allow-break">
-                <MudText Typo="Typo.h5" Class="mt-10 mb-4 keep-together keep-with-next"
+                <MudText Typo="Typo.h5" Class="mt-6 mb-4 keep-together keep-with-next"
                     Style="@($"color: {Profile.PrimaryColor}; border-bottom: 2px solid {Profile.PrimaryColor}; display: inline-block;")">
                     @Template.Label_PricingBreakdown
                 </MudText>
@@ -264,6 +271,7 @@ else
                 <table class="mud-table-root allow-break" style="width: 100%; border-collapse: collapse; table-layout: fixed;">
                     <thead class="keep-together keep-with-next repeat-on-break">
                         <tr class="mud-table-row">
+                            <th class="mud-table-cell" style="text-align: left; font-weight: bold; padding: 12px 8px 12px 16px; border-bottom: 1px solid var(--mud-palette-table-lines); width: 40px; white-space: nowrap;">@(!string.IsNullOrEmpty(Template.Label_ItemNumber) ? Template.Label_ItemNumber : "#")</th>
                             <th class="mud-table-cell" style="text-align: left; font-weight: bold; padding: 12px 16px; border-bottom: 1px solid var(--mud-palette-table-lines); word-wrap: break-word;">@Template.Label_Description</th>
                             <th class="mud-table-cell" style="text-align: right; font-weight: bold; padding: 12px 16px; border-bottom: 1px solid var(--mud-palette-table-lines); width: 80px;">@Template.Label_Quantity</th>
                             <th class="mud-table-cell" style="text-align: right; font-weight: bold; padding: 12px 16px; border-bottom: 1px solid var(--mud-palette-table-lines); width: 100px;">@Template.Label_Price</th>
@@ -276,6 +284,7 @@ else
                         {
                             var rowClass = rowIndex % 2 == 1 ? "background-color: rgba(0,0,0,0.02);" : "";
                             <tr class="mud-table-row keep-together" style="@rowClass">
+                                <td class="mud-table-cell" style="padding: 12px 8px 12px 16px; border-bottom: 1px solid var(--mud-palette-table-lines); width: 40px; white-space: nowrap;">@(rowIndex + 1)</td>
                                 @if (item is QuoteLaborItem labor)
                                 {
                                     <td class="mud-table-cell" style="padding: 12px 16px; border-bottom: 1px solid var(--mud-palette-table-lines);">@GetTranslatedTaskName(labor)</td>
@@ -431,9 +440,10 @@ else
 
             @if (!string.IsNullOrEmpty(Quote.TermsAndConditions))
             {
-                var termsBreakClass = Template?.TermsStartOnNewPage == true ? "mb-10 force-break" : "mb-10 allow-break";
+                var shouldForceBreak = Quote.TermsStartOnNewPage || Template.TermsStartOnNewPage;
+                var termsBreakClass = shouldForceBreak ? "mb-10 force-break allow-break" : "mb-10 allow-break";
                 <div class="@termsBreakClass">
-                    <MudText Typo="Typo.h6" Class="mb-2 keep-together keep-with-next" Style="@($"color: {Profile.PrimaryColor}; font-weight: bold;")">
+                    <MudText Typo="Typo.h6" Class="@($"mt-6 mb-4 keep-together keep-with-next {(shouldForceBreak ? "force-break" : "")}")" Style="@($"color: {Profile.PrimaryColor}; font-weight: bold;")">
                         @Template.Label_TermsAndConditions</MudText>
                     <div class="markdown-content allow-break" style="font-size: 0.85rem; color: #444;">
                         @RenderMarkdown(Quote.TermsAndConditions)
@@ -469,6 +479,7 @@ else
             }
         </div>
     </MudPaper>
+    </MudContainer>
 }
 
 @code {
@@ -483,6 +494,7 @@ else
     private string ProjectManagerEmail = "";
 
     private bool _isAdmin;
+    private bool _canEditQuote;
 
     private const int PageHeight = 940;
     private bool _needsPagination;
@@ -544,17 +556,25 @@ else
         {
             Logger.LogInformation("Initializing QuoteViewer for Quote {QuoteId}", QuoteId);
 
-            _isAdmin = await UserService.IsAdminAsync();
+            var emp = await UserService.GetEmployeeAsync();
+            _isAdmin = emp?.IsAdmin ?? false;
+            _canEditQuote = emp != null && (emp.IsAdmin || emp.HasPermission(AppPermissions.Projects.Edit) || emp.HasPermission(AppPermissions.Finance.AccessAccounting));
 
             Project = Db.Projects.GetById(ProjectId);
             
-            if (Project != null && !await UserService.CanViewProjectAsync(Project))
+            if (Project == null || !await UserService.CanViewProjectAsync(Project))
             {
                 Nav.NavigateTo("/projects");
                 return;
             }
 
             Quote = Db.Quotes.GetByProject(ProjectId).FirstOrDefault(q => q.Id == QuoteId);
+            if (Quote == null || !string.Equals(Quote.ProjectId, ProjectId, StringComparison.OrdinalIgnoreCase))
+            {
+                Quote = null;
+                Nav.NavigateTo($"/projects/{ProjectId}?tab=quote");
+                return;
+            }
             Profile = Db.CompanyProfile.Get();
 
             if (Project == null) Logger.LogWarning("Project not found: {ProjectId}", ProjectId);
@@ -615,14 +635,15 @@ else
             labor.SubTaskId,
             workType,
             Template?.TaskTranslationLanguage,
-            separator: " : ");
+            separator: " : ",
+            note: labor.Note);
     }
 
     private async Task UpdateStatusAsync(string newStatus)
     {
         try
         {
-            if (Quote == null) return;
+            if (Quote == null || !_canEditQuote) return;
 
             // Admin-only revert from Final to Draft
             if (Quote.Status == QuoteStatus.Final && newStatus == QuoteStatus.Draft && !_isAdmin)
@@ -674,7 +695,7 @@ else
 
     private async Task EditQuote()
     {
-        if (Quote == null) return;
+        if (Quote == null || !_canEditQuote) return;
         try
         {
             var parameters = new DialogParameters { ["Quote"] = Quote, ["ProjectId"] = ProjectId };
@@ -732,7 +753,7 @@ else
 
     private async Task DuplicateQuote()
     {
-        if (Quote == null) return;
+        if (Quote == null || !_canEditQuote) return;
         var result = await DialogService.ShowMessageBoxAsync("Duplicate Quote", "Are you sure you want to create a copy of this quote?", yesText: "Duplicate", cancelText: "Cancel");
         if (result != true) return;
 
@@ -766,6 +787,7 @@ else
 
     private async Task DeleteQuote()
     {
+        if (Quote == null || !_canEditQuote) return;
         var result = await DialogService.ShowMessageBoxAsync("Delete Quote", "Are you sure you want to delete this draft quote?", yesText: "Delete", cancelText: "Cancel");
         if (result != true) return;
 
@@ -826,7 +848,7 @@ else
             }
         };
 
-        var options = new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true };
+        var options = new DialogOptions { MaxWidth = MaxWidth.Large, FullWidth = true, CloseButton = true, CloseOnEscapeKey = true };
         await DialogService.ShowAsync<EmailComposer>("Send Email", parameters, options);
     }
 

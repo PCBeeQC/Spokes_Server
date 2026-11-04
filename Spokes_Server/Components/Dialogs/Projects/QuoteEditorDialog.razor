@@ -5,6 +5,7 @@
 @using Spokes_Server.Core.Data
 @inject ISnackbar Snackbar
 @inject Database Db
+@inject IDialogService DialogService
 
 <MudDialog>
     <DialogContent>
@@ -46,28 +47,32 @@
                     <MudText Typo="Typo.h6" Color="Color.Primary" Class="mt-2">Time / Labor</MudText>
                     <MudTable Items="@Quote.LaborItems" Dense="true" Hover="true" Elevation="0">
                         <HeaderContent>
-                            <MudTh>Task</MudTh>
-                            <MudTh Style="width: 100px;">Rate ($/h)</MudTh>
-                            <MudTh Style="width: 100px;">Hours</MudTh>
-                            <MudTh Style="width: 130px;">Total</MudTh>
-                            <MudTh Style="width: 140px;"></MudTh>
+                            <MudTh Style="width: 24%; min-width: 200px;">Task</MudTh>
+                            <MudTh Style="width: 38%; min-width: 300px;">Sub-Task</MudTh>
+                            <MudTh Style="width: 38%; min-width: 300px;">Note</MudTh>
+                            <MudTh Style="width: 125px; min-width: 125px; white-space: nowrap;">Rate ($/h)</MudTh>
+                            <MudTh Style="width: 80px; min-width: 80px;">Hours</MudTh>
+                            <MudTh Style="width: 110px;">Total</MudTh>
+                            <MudTh Style="width: 120px;"></MudTh>
                         </HeaderContent>
                         <RowTemplate>
+                            <WorkTypeSubTaskSelector WorkTypes="@WorkTypes"
+                                                     WorkTypeId="@context.WorkTypeId"
+                                                     SubTaskId="@context.SubTaskId"
+                                                     OnSelectionChanged="@(sel => UpdateLaborSelection(context, sel.WorkTypeId, sel.SubTaskId))"
+                                                     Layout="WorkTypeSelectorLayout.TableCells"
+                                                     Variant="Variant.Text"
+                                                     UsePlaceholder="true"
+                                                     Underline="false" />
                             <MudTd>
-                                <WorkTypeSubTaskSelector WorkTypes="@WorkTypes"
-                                                         WorkTypeId="@context.WorkTypeId"
-                                                         SubTaskId="@context.SubTaskId"
-                                                         OnSelectionChanged="@(sel => UpdateLaborSelection(context, sel.WorkTypeId, sel.SubTaskId))"
-                                                         Layout="WorkTypeSelectorLayout.Grid"
-                                                         Variant="Variant.Text"
-                                                         Underline="false" />
+                                <MudTextField @bind-Value="context.Note" Margin="Margin.Dense" Placeholder="Note..." Underline="false" />
                             </MudTd>
                             <MudTd>
-                                <MudNumericField Value="@context.Rate" ValueChanged="@((decimal v) => UpdateLaborRate(context, v))" Format="N2" Margin="Margin.Dense"
+                                <MudNumericField Value="@context.Rate" ValueChanged="@((decimal v) => UpdateLaborRate(context, v))" Format="0.##" Margin="Margin.Dense"
                                     HideSpinButtons="true" />
                             </MudTd>
                             <MudTd>
-                                <MudNumericField Value="@context.Hours" ValueChanged="@((decimal v) => UpdateLaborHours(context, v))" Format="N1" Margin="Margin.Dense"
+                                <MudNumericField Value="@context.Hours" ValueChanged="@((decimal v) => UpdateLaborHours(context, v))" Format="0.##" Margin="Margin.Dense"
                                     HideSpinButtons="true" />
                             </MudTd>
                             <MudTd>@context.Total.ToString("C")</MudTd>
@@ -83,7 +88,7 @@
                             </MudTd>
                         </RowTemplate>
                         <FooterContent>
-                            <MudTd colspan="5">
+                            <MudTd colspan="7">
                                 <MudButton StartIcon="@Icons.Material.Filled.Add" OnClick="AddLabor" Size="Size.Small">
                                     Add Time Row</MudButton>
                             </MudTd>
@@ -114,22 +119,22 @@
                             </MudTd>
                             <MudTd>
                                 <MudNumericField Value="@context.UnitCost"
-                                    ValueChanged="@((decimal v) => UpdateItemCost(context, v))" Format="N2"
+                                    ValueChanged="@((decimal v) => UpdateItemCost(context, v))" Format="0.##"
                                     Margin="Margin.Dense" HideSpinButtons="true" />
                             </MudTd>
                             <MudTd>
                                 <MudNumericField Value="@context.MarkupPercentage"
-                                    ValueChanged="@((decimal v) => UpdateItemMarkup(context, v))" Format="N2"
+                                    ValueChanged="@((decimal v) => UpdateItemMarkup(context, v))" Format="0.##"
                                     Margin="Margin.Dense" HideSpinButtons="true" />
                             </MudTd>
                             <MudTd>
                                 <MudNumericField Value="@context.UnitPrice"
-                                    ValueChanged="@((decimal v) => UpdateItemPrice(context, v))" Format="N2"
+                                    ValueChanged="@((decimal v) => UpdateItemPrice(context, v))" Format="0.##"
                                     Margin="Margin.Dense" HideSpinButtons="true" ReadOnly="true" Disabled="true" />
                             </MudTd>
                             <MudTd>
                                 <MudNumericField Value="@context.Quantity"
-                                    ValueChanged="@((decimal v) => UpdateItemQty(context, v))" Format="N0"
+                                    ValueChanged="@((decimal v) => UpdateItemQty(context, v))" Format="0.##"
                                     Margin="Margin.Dense" HideSpinButtons="true" />
                             </MudTd>
                             <MudTd>@context.Total.ToString("C")</MudTd>
@@ -175,7 +180,7 @@
                                 <div class="d-flex gap-4" style="min-width: 200px; justify-content: space-between;">
                                     <MudText>Tax Rate:</MudText>
                                     <div style="width: 100px;">
-                                        <MudNumericField Value="@(Quote.TaxRate * 100)" ValueChanged="@((decimal v) => UpdateTaxRate(v / 100))" Format="N3" Margin="Margin.Dense" HideSpinButtons="true" Adornment="Adornment.End" AdornmentIcon="@Icons.Material.Filled.Percent" />
+                                        <MudNumericField Value="@(Quote.TaxRate * 100)" ValueChanged="@((decimal v) => UpdateTaxRate(v / 100))" Format="0.###" Margin="Margin.Dense" HideSpinButtons="true" Adornment="Adornment.End" AdornmentIcon="@Icons.Material.Filled.Percent" />
                                     </div>
                                 </div>
                                 <div class="d-flex gap-4" style="min-width: 200px; justify-content: space-between;">
@@ -228,7 +233,7 @@
                             </MudTd>
                             <MudTd>
                                 <MudNumericField Value="@context.Percentage"
-                                    ValueChanged="@((decimal v) => UpdateTermPercent(context, v))" Format="N0"
+                                    ValueChanged="@((decimal v) => UpdateTermPercent(context, v))" Format="0.##"
                                     Margin="Margin.Dense" HideSpinButtons="true" Adornment="Adornment.End"
                                     AdornmentText="%" />
                             </MudTd>
@@ -379,6 +384,21 @@
                 </MudTabPanel>
 
                 <MudTabPanel Text="Terms & Conditions" Icon="@Icons.Material.Filled.Gavel">
+                    <div class="d-flex align-center justify-space-between mb-3 gap-4 flex-wrap">
+                        <MudSwitch @bind-Value="Quote.TermsStartOnNewPage" Color="Color.Primary"
+                            Label="Force section to start on a new page" />
+                        <div style="min-width: 260px;">
+                            <MudSelect T="string" Label="Load from Preset" Variant="Variant.Outlined" Margin="Margin.Dense"
+                                       Dense="true" Value="_selectedPresetToApply" ValueChanged="ApplyPresetToQuote"
+                                       HelperText="One-way copy into this quote" Clearable="false">
+                                <MudSelectItem T="string" Value="@("")">-- Select Preset to Copy --</MudSelectItem>
+                                @foreach (var preset in AvailableTermsPresets)
+                                {
+                                    <MudSelectItem T="string" Value="@preset.Id">@preset.Name</MudSelectItem>
+                                }
+                            </MudSelect>
+                        </div>
+                    </div>
                     <Spokes_Server.Components.Shared.MarkdownEditor @bind-Value="Quote.TermsAndConditions" />
                 </MudTabPanel>
             </MudTabs>
@@ -400,11 +420,14 @@
     private List<DocumentTemplate> Templates = [];
     private Project? Project;
     private RateCard? ProjectRateCard;
+    private List<TermsAndConditions> AvailableTermsPresets = [];
+    private string _selectedPresetToApply = "";
 
     protected override void OnInitialized()
     {
         Project = Db.Projects.GetById(ProjectId);
         Templates = Db.DocumentTemplates.GetAll();
+        AvailableTermsPresets = Db.TermsAndConditions.GetAll().OrderBy(t => t.Name).ToList();
 
         WorkTypes = Db.WorkTypes.GetAll().Where(x => x.IsActive).OrderBy(x => x.Name).ToList();
 
@@ -634,6 +657,27 @@
                 FileService.CleanTempContext(parts[1]);
             }
         }
+    }
+
+    private async Task ApplyPresetToQuote(string presetId)
+    {
+        if (string.IsNullOrEmpty(presetId)) return;
+        var preset = Db.TermsAndConditions.GetById(presetId);
+        if (preset == null) return;
+
+        if (!string.IsNullOrWhiteSpace(Quote.TermsAndConditions))
+        {
+            var confirm = await DialogService.ShowMessageBoxAsync(
+                "Overwrite Terms & Conditions?",
+                "Applying this preset will overwrite the terms and conditions on this quote. Do you want to continue?",
+                yesText: "Overwrite", cancelText: "Cancel");
+            if (confirm != true) return;
+        }
+
+        Quote.TermsAndConditions = preset.Content;
+        Snackbar.Add($"Copied '{preset.Name}' terms into quote", Severity.Info);
+        _selectedPresetToApply = "";
+        StateHasChanged();
     }
 
     private void Cancel() => MudDialog.Cancel();

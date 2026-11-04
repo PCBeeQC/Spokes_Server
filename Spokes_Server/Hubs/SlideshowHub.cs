@@ -55,24 +55,38 @@ public class SlideshowHub : Hub
     }
 
     /// <summary>
-    /// Called by a TV or external display upon opening /slideshow/pair.
+    /// Called by a TV or external display upon opening /slideshow/pair or Cast Receiver.
     /// Generates a random, rate-limited pairing code and binds the TV connection.
     /// </summary>
     [AllowAnonymous]
     public async Task<SlideshowSession> RequestPairingCode()
     {
-        var session = _sessionService.CreateSession(Context.ConnectionId);
+        string? creatorIp = Context.Features?
+            .Get<Microsoft.AspNetCore.Http.Connections.Features.IHttpContextFeature>()?
+            .HttpContext?.Connection.RemoteIpAddress?.ToString();
+
+        SlideshowSession session;
+        try
+        {
+            session = _sessionService.CreateSession(Context.ConnectionId, SlideshowDisplayKind.SignalRCastReceiver, creatorIp);
+        }
+        catch (InvalidOperationException ex)
+        {
+            throw new HubException(ex.Message);
+        }
+
         await Groups.AddToGroupAsync(Context.ConnectionId, $"session_{session.SessionId}");
         return session;
     }
 
     /// <summary>
     /// Rebinds a TV connection after automatic reconnect without disturbing the paired presentation session.
+    /// Requires the per-session TvSecret capability token issued during RequestPairingCode.
     /// </summary>
     [AllowAnonymous]
-    public async Task<bool> RebindTvConnection(string sessionId)
+    public async Task<bool> RebindTvConnection(string sessionId, string tvSecret)
     {
-        if (!_sessionService.RebindTvConnection(sessionId, Context.ConnectionId))
+        if (!_sessionService.RebindTvConnection(sessionId, Context.ConnectionId, tvSecret))
         {
             return false;
         }
@@ -132,7 +146,7 @@ public class SlideshowHub : Hub
 
         foreach (var media in album.Media)
         {
-            string url = $"/spokesapi/slideshow/{session.SessionId}/media/{media.Id}";
+            string baseUrl = $"/spokesapi/slideshow/{session.SessionId}/media/{media.Id}";
 
             var uploader = allEmployees.FirstOrDefault(e => e.Id == media.AddedByUserId);
             string uploaderName = uploader != null ? $"{uploader.FirstName} {uploader.LastName}".Trim() : string.Empty;
@@ -141,8 +155,8 @@ public class SlideshowHub : Hub
             {
                 Id = media.Id,
                 FileName = media.FileName,
-                Url = url,
-                ThumbnailUrl = $"{url}/thumb",
+                Url = SlideshowSessionService.AppendSecretQuery(baseUrl, session.TvSecret),
+                ThumbnailUrl = SlideshowSessionService.AppendSecretQuery($"{baseUrl}/thumb", session.TvSecret),
                 ContentType = media.ContentType,
                 ImageWidth = media.ImageWidth,
                 ImageHeight = media.ImageHeight,
@@ -232,7 +246,7 @@ public class SlideshowHub : Hub
     public async Task ReportTvVideoDuration(string sessionId, double duration)
     {
         var session = _sessionService.GetSessionById(sessionId);
-        if (session != null && session.TvConnectionId == Context.ConnectionId)
+        if (session != null && !string.IsNullOrEmpty(session.TvConnectionId) && session.TvConnectionId == Context.ConnectionId)
         {
             _sessionService.NotifyTvVideoDurationKnown(sessionId, duration);
             if (!string.IsNullOrEmpty(session.HostConnectionId))
@@ -249,7 +263,7 @@ public class SlideshowHub : Hub
     public async Task ReportTvVideoTime(string sessionId, double currentTime, bool isPlaying, double duration)
     {
         var session = _sessionService.GetSessionById(sessionId);
-        if (session != null && session.TvConnectionId == Context.ConnectionId)
+        if (session != null && !string.IsNullOrEmpty(session.TvConnectionId) && session.TvConnectionId == Context.ConnectionId)
         {
             _sessionService.NotifyTvVideoTimeUpdated(sessionId, currentTime, isPlaying, duration);
             if (!string.IsNullOrEmpty(session.HostConnectionId))
@@ -266,7 +280,7 @@ public class SlideshowHub : Hub
     public async Task ReportTvVideoEnded(string sessionId)
     {
         var session = _sessionService.GetSessionById(sessionId);
-        if (session != null && session.TvConnectionId == Context.ConnectionId)
+        if (session != null && !string.IsNullOrEmpty(session.TvConnectionId) && session.TvConnectionId == Context.ConnectionId)
         {
             _sessionService.NotifyTvVideoEnded(sessionId);
             if (!string.IsNullOrEmpty(session.HostConnectionId))
@@ -284,10 +298,27 @@ public class SlideshowHub : Hub
         var session = _sessionService.GetSessionById(sessionId);
         if (session != null)
         {
-            if (session.HostConnectionId == Context.ConnectionId || session.TvConnectionId == Context.ConnectionId)
+            var callerEmployee = GetCurrentEmployee();
+            bool isHostUser = callerEmployee != null && !string.IsNullOrEmpty(session.HostUserId) &&
+                              string.Equals(callerEmployee.Id, session.HostUserId, StringComparison.OrdinalIgnoreCase);
+
+            bool isHostConn = !string.IsNullOrEmpty(session.HostConnectionId) &&
+                              !string.IsNullOrEmpty(Context.ConnectionId) &&
+                              session.HostConnectionId == Context.ConnectionId;
+            bool isTvConn = !string.IsNullOrEmpty(session.TvConnectionId) &&
+                            !string.IsNullOrEmpty(Context.ConnectionId) &&
+                            session.TvConnectionId == Context.ConnectionId;
+
+            if (isHostConn || isTvConn || isHostUser)
             {
-                await Clients.Client(session.TvConnectionId).SendAsync("SessionEnded");
-                await Clients.Client(session.HostConnectionId).SendAsync("SessionEnded");
+                if (!string.IsNullOrEmpty(session.TvConnectionId))
+                {
+                    await Clients.Client(session.TvConnectionId).SendAsync("SessionEnded");
+                }
+                if (!string.IsNullOrEmpty(session.HostConnectionId))
+                {
+                    await Clients.Client(session.HostConnectionId).SendAsync("SessionEnded");
+                }
                 _sessionService.EndSession(sessionId);
             }
         }
@@ -313,6 +344,11 @@ public class SlideshowHub : Hub
 
     private Employee? GetCurrentEmployee()
     {
-        return Context.User == null ? null : _userService.GetEmployee(Context.User);
+        var emp = Context.User == null ? null : _userService.GetEmployee(Context.User);
+        if (emp == null || !emp.IsActive || emp.IsSuspended || emp.IsBanned)
+        {
+            return null;
+        }
+        return emp;
     }
 }

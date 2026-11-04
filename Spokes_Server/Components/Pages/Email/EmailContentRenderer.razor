@@ -1,18 +1,26 @@
 @inject IJSRuntime JSRuntime
 @inject IDialogService DialogService
 @inject ILogger<EmailContentRenderer> Logger
+@inject IStringLocalizer<AppResources> Loc
 @implements IAsyncDisposable
 
-<div @ref="_container" class="email-content-renderer" style="width: 100%; height: 100%;"></div>
+<div @ref="_container" class="email-content-renderer"></div>
 
 @code {
     [Parameter] public string HtmlContent { get; set; } = "";
+    [Parameter] public bool AllowRemoteImages { get; set; }
+    [Parameter] public string ThemeMode { get; set; } = "auto";
+    [Parameter] public EventCallback<bool> OnRemoteImagesBlocked { get; set; }
 
     private ElementReference _container;
     private IJSObjectReference? _module;
     private DotNetObjectReference<EmailContentRenderer>? _dotNetHelper;
 
     private bool _initialized;
+    private string? _lastRenderedHtml;
+    private bool? _lastRenderedAllowRemoteImages;
+    private string? _lastRenderedThemeMode;
+    private bool? _lastBlockedState;
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
@@ -33,14 +41,33 @@
 
         if (_initialized && _module != null && _dotNetHelper != null)
         {
-            try
+            if (_lastRenderedHtml != HtmlContent ||
+                _lastRenderedAllowRemoteImages != AllowRemoteImages ||
+                _lastRenderedThemeMode != ThemeMode)
             {
-                await _module.InvokeVoidAsync("renderContent", _container, HtmlContent, _dotNetHelper);
+                _lastRenderedHtml = HtmlContent;
+                _lastRenderedAllowRemoteImages = AllowRemoteImages;
+                _lastRenderedThemeMode = ThemeMode;
+                try
+                {
+                    await _module.InvokeVoidAsync("renderContent", _container, HtmlContent, _dotNetHelper, AllowRemoteImages, ThemeMode);
+                }
+                catch (Exception ex)
+                {
+                    Logger.LogError(ex, "Error rendering email content.");
+                }
             }
-            catch (Exception ex)
-            {
-                Logger.LogError(ex, "Error rendering email content.");
-            }
+        }
+    }
+
+    [JSInvokable]
+    public async Task NotifyRemoteImagesBlocked(bool blocked)
+    {
+        if (_lastBlockedState == blocked) return;
+        _lastBlockedState = blocked;
+        if (OnRemoteImagesBlocked.HasDelegate)
+        {
+            await OnRemoteImagesBlocked.InvokeAsync(blocked);
         }
     }
 
@@ -50,14 +77,15 @@
         if (!Uri.TryCreate(url, UriKind.Absolute, out var parsedUri) || 
             (parsedUri.Scheme != Uri.UriSchemeHttp && parsedUri.Scheme != Uri.UriSchemeHttps))
         {
-            await DialogService.ShowMessageBoxAsync("Security Warning", "This link was blocked for security reasons.", yesText: "OK");
+            await DialogService.ShowMessageBoxAsync(Loc["Security Warning"], Loc["This link was blocked for security reasons."], yesText: Loc["OK"]);
             return;
         }
 
         var encodedUrl = System.Net.WebUtility.HtmlEncode(url);
-        var result = await DialogService.ShowMessageBoxAsync("External Link", 
-            (MarkupString)$"Do you really want to go to <br/><a href='{encodedUrl}' target='_blank' rel='noopener noreferrer' style='word-break: break-all;'>{encodedUrl}</a>?", 
-            yesText: "Yes", cancelText: "No");
+        var promptText = Loc["Do you really want to go to"].Value;
+        var result = await DialogService.ShowMessageBoxAsync(Loc["External Link"], 
+            (MarkupString)$"{promptText}<br/><a href='{encodedUrl}' target='_blank' rel='noopener noreferrer' style='word-break: break-all;'>{encodedUrl}</a>?", 
+            yesText: Loc["Yes"], cancelText: Loc["No"]);
 
         if (result == true)
         {
@@ -69,6 +97,15 @@
     {
         if (_module != null)
         {
+            try
+            {
+                await _module.InvokeVoidAsync("cleanupContent", _container);
+            }
+            catch
+            {
+                // Ignored - DOM cleanup
+            }
+
             try
             {
                 await _module.DisposeAsync();

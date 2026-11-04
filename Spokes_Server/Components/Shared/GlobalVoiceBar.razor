@@ -43,14 +43,25 @@
                     <MudText Typo="Typo.body2" Class="d-none d-sm-block">- @VoiceService.ActiveSpeakers.Count @Loc["speaking"]</MudText>
                 </div>
                 <div class="d-flex gap-2 align-center">
-                    <MudIconButton Icon="@(VoiceService.IsMuted ? Icons.Material.Filled.MicOff : Icons.Material.Filled.Mic)" 
-                                   Color="@(VoiceService.IsMuted ? Color.Error : Color.Success)" 
-                                   OnClick="() => VoiceService.ToggleMuteAsync()" Size="Size.Small"
-                                   title="@(VoiceService.IsMuted ? Loc["Unmute"] : Loc["Mute"])" />
-                    <MudIconButton Icon="@(VoiceService.IsVideoOn ? Icons.Material.Filled.Videocam : Icons.Material.Filled.VideocamOff)" 
-                                   Color="@(VoiceService.IsVideoOn ? Color.Success : Color.Inherit)" 
-                                   OnClick="() => VoiceService.ToggleVideoAsync(VoiceUiState.MaxVideoSendQuality, VoiceUiState.MaxVideoSendFps, VoiceUiState.ActiveCameraDeviceId)" Size="Size.Small"
-                                   title="@(VoiceService.IsVideoOn ? Loc["Turn off Video"] : Loc["Turn on Video"])" />
+                    <MudTooltip Text="@GetMuteTooltipText()">
+                        <MudIconButton Icon="@(VoiceService.IsMuted ? Icons.Material.Filled.MicOff : Icons.Material.Filled.Mic)" 
+                                       Color="@(VoiceService.IsMuted ? Color.Error : Color.Success)" 
+                                       OnClick="() => VoiceService.ToggleMuteAsync()" Size="Size.Small"
+                                       title="@GetMuteTooltipText()" />
+                    </MudTooltip>
+                    @if (VoiceService.IsTogglingVideo)
+                    {
+                        <div class="d-flex align-center justify-center" style="width: 34px; height: 34px;" title="@(VoiceService.IsVideoOn ? Loc["Turn off Video"] : Loc["Turn on Video"])">
+                            <MudProgressCircular Size="Size.Small" Color="Color.Inherit" Indeterminate="true" Style="width: 18px; height: 18px;" />
+                        </div>
+                    }
+                    else
+                    {
+                        <MudIconButton Icon="@(VoiceService.IsVideoOn ? Icons.Material.Filled.Videocam : Icons.Material.Filled.VideocamOff)" 
+                                       Color="@(VoiceService.IsVideoOn ? Color.Success : Color.Inherit)" 
+                                       OnClick="() => VoiceService.ToggleVideoAsync(VoiceUiState.MaxVideoSendQuality, VoiceUiState.MaxVideoSendFps, VoiceUiState.ActiveCameraDeviceId)" Size="Size.Small"
+                                       title="@(VoiceService.IsVideoOn ? Loc["Turn off Video"] : Loc["Turn on Video"])" />
+                    }
 
                     <MudIconButton Class="d-none d-sm-inline-flex"
                                    Icon="@(VoiceService.IsScreenSharing ? Icons.Material.Filled.ScreenShare : Icons.Material.Filled.StopScreenShare)" 
@@ -277,8 +288,18 @@
         InvokeAsync(StateHasChanged);
     }
 
+    private string GetMuteTooltipText() =>
+        VoiceService.IsHardwareMuted && !VoiceService.IsSoftwareMuted
+            ? Loc["Muted by hardware switch"].Value
+            : (VoiceService.IsMuted ? Loc["Unmute"].Value : Loc["Mute"].Value);
+
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
+        if (firstRender)
+        {
+            _ = PrewarmVoiceContextAsync();
+        }
+
         if (VoiceService.RequiresIntegrityCheck)
         {
             await VoiceService.VerifyServerStateIntegrityAsync();
@@ -287,6 +308,26 @@
         if (VoiceService.IsInVoiceCall && VoiceService.IsIOS && !_hasCheckedIosViPrompt)
         {
             await CheckIosVoiceIsolationPromptAsync();
+        }
+    }
+
+    private async Task PrewarmVoiceContextAsync()
+    {
+        try
+        {
+            var identityTask = string.IsNullOrWhiteSpace(VoiceService.CurrentDeviceId)
+                ? VoiceService.GetOrCreatePhysicalDeviceIdentityAsync()
+                : Task.CompletedTask;
+            var settingsTask = !VoiceUiState.HasLoadedVoiceSettings
+                ? VoiceUiState.LoadDeviceVoiceSettingsAsync()
+                : Task.CompletedTask;
+            await Task.WhenAll(identityTask, settingsTask);
+        }
+        catch (JSDisconnectedException) { }
+        catch (TaskCanceledException) { }
+        catch (Exception ex)
+        {
+            Logger.LogDebug(ex, "PrewarmVoiceContextAsync skipped.");
         }
     }
 
@@ -333,19 +374,9 @@
     private async Task OnQualityChanged(string newQuality)
     {
         VoiceUiState.MaxVideoSendQuality = newQuality;
-        // If already broadcasting, toggle off then back on to apply new preset
         if (VoiceService.IsVideoOn)
         {
-            _isChangingVideo = true;
-            try
-            {
-                await VoiceService.ToggleVideoAsync();
-                await VoiceService.ToggleVideoAsync(VoiceUiState.MaxVideoSendQuality, VoiceUiState.MaxVideoSendFps, VoiceUiState.ActiveCameraDeviceId);
-            }
-            finally
-            {
-                _isChangingVideo = false;
-            }
+            await VoiceService.UpdateVideoSettingsAsync(VoiceUiState.MaxVideoSendQuality, VoiceUiState.MaxVideoSendFps, VoiceUiState.ActiveCameraDeviceId);
         }
     }
 
@@ -354,16 +385,7 @@
         VoiceUiState.MaxVideoSendFps = newFps;
         if (VoiceService.IsVideoOn)
         {
-            _isChangingVideo = true;
-            try
-            {
-                await VoiceService.ToggleVideoAsync();
-                await VoiceService.ToggleVideoAsync(VoiceUiState.MaxVideoSendQuality, VoiceUiState.MaxVideoSendFps, VoiceUiState.ActiveCameraDeviceId);
-            }
-            finally
-            {
-                _isChangingVideo = false;
-            }
+            await VoiceService.UpdateVideoSettingsAsync(VoiceUiState.MaxVideoSendQuality, VoiceUiState.MaxVideoSendFps, VoiceUiState.ActiveCameraDeviceId);
         }
     }
 

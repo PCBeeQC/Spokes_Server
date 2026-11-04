@@ -65,7 +65,7 @@
                 @BizLoc["Pre-Flight Validation Warnings"] (@_validationResult.Warnings.Count)
             </MudText>
             <MudText Typo="Typo.caption" Class="mb-1">
-                @BizLoc["Click any payable row below to review or adjust its tax breakdown, invoice number, or GL account:"]
+                @BizLoc["Adjust GL accounts, Sage Vendor/Customer names, or tax breakdowns directly inline below (changes are remembered automatically for future exports), or click a row to open its full editor:"]
             </MudText>
             <ul style="margin: 0; padding-left: 20px; font-size: 13px;">
                 @foreach (var w in _validationResult.Warnings.Take(6))
@@ -145,12 +145,13 @@ else if (_validationResult.Errors.Count == 0 && (FilteredInvoices.Count > 0 || F
     <!-- CLIENT INVOICES (Sales) -->
     <MudTabPanel Text="@($"{BizLoc["Client Invoices"]} ({FilteredInvoices.Count})")" Icon="@Icons.Material.Filled.AttachMoney">
         <MudTable T="Invoice" Items="@FilteredInvoices" MultiSelection="true" @bind-SelectedItems="_selectedInvoices"
-                  Dense="true" Hover="true" Striped="true" Elevation="0">
+                  OnRowClick="OnInvoiceRowClick" RowStyle="cursor: pointer;" Dense="true" Hover="true" Striped="true" Elevation="0">
             <HeaderContent>
                 <MudTh>@BizLoc["Invoice #"]</MudTh>
                 <MudTh>@BizLoc["Date"]</MudTh>
-                <MudTh>@BizLoc["Due Date"]</MudTh>
                 <MudTh>@BizLoc["Client"]</MudTh>
+                <MudTh Style="min-width: 210px;">@BizLoc["Sage Customer"]</MudTh>
+                <MudTh Style="min-width: 220px;">@BizLoc["Revenue GL"]</MudTh>
                 <MudTh>@BizLoc["SubTotal"]</MudTh>
                 <MudTh>@BizLoc["TPS (5%)"]</MudTh>
                 <MudTh>@BizLoc["TVQ (9.975%)"]</MudTh>
@@ -161,8 +162,33 @@ else if (_validationResult.Errors.Count == 0 && (FilteredInvoices.Count > 0 || F
             <RowTemplate Context="inv">
                 <MudTd><b>@inv.InvoiceNumber</b></MudTd>
                 <MudTd>@inv.Date.ToShortDateString()</MudTd>
-                <MudTd>@inv.DueDate.ToShortDateString()</MudTd>
                 <MudTd>@GetClientName(inv)</MudTd>
+                <MudTd>
+                    <div @onclick:stopPropagation="true">
+                        <MudAutocomplete T="string"
+                                         Value="@GetInvoiceSageCustomer(inv)"
+                                         ValueChanged="@(val => OnInvoiceCustomerChanged(inv, val))"
+                                         SearchFunc="@SearchSageCustomerNames"
+                                         CoerceText="false"
+                                         CoerceValue="true"
+                                         Margin="Margin.Dense"
+                                         Dense="true"
+                                         Variant="Variant.Outlined"
+                                         Placeholder="@BizLoc["Sage Customer Name"]" />
+                    </div>
+                </MudTd>
+                <MudTd>
+                    <div @onclick:stopPropagation="true">
+                        <SageGlAccountSelect Value="@GetInvoiceGl(inv)"
+                                             ValueChanged="@(val => OnInvoiceGlChanged(inv, val))"
+                                             Label=""
+                                             CategoryFilter="Revenue"
+                                             Accounts="@_config.ImportedAccounts"
+                                             Margin="Margin.Dense"
+                                             Dense="true"
+                                             Clearable="false" />
+                    </div>
+                </MudTd>
                 <MudTd>@inv.SubTotal.ToString("C2")</MudTd>
                 <MudTd>@inv.TpsAmount.ToString("C2")</MudTd>
                 <MudTd>@inv.TvqAmount.ToString("C2")</MudTd>
@@ -197,12 +223,13 @@ else if (_validationResult.Errors.Count == 0 && (FilteredInvoices.Count > 0 || F
                 <MudTh>@BizLoc["Stream"]</MudTh>
                 <MudTh>@BizLoc["Invoice / Ref #"]</MudTh>
                 <MudTh>@BizLoc["Date"]</MudTh>
-                <MudTh>@BizLoc["Vendor / Payee"]</MudTh>
-                <MudTh>@BizLoc["GL / Item"]</MudTh>
+                <MudTh Style="min-width: 210px;">@BizLoc["Sage Vendor / Payee"]</MudTh>
+                <MudTh Style="min-width: 220px;">@BizLoc["Expense GL"]</MudTh>
                 <MudTh>@BizLoc["SubTotal"]</MudTh>
                 <MudTh>@BizLoc["TPS (5%)"]</MudTh>
                 <MudTh>@BizLoc["TVQ (9.975%)"]</MudTh>
                 <MudTh>@BizLoc["Total"]</MudTh>
+                <MudTh>@BizLoc["Actions"]</MudTh>
                 <MudTh>@BizLoc["Status"]</MudTh>
                 <MudTh>@BizLoc["Sage Export Status"]</MudTh>
             </HeaderContent>
@@ -214,14 +241,60 @@ else if (_validationResult.Errors.Count == 0 && (FilteredInvoices.Count > 0 || F
                 </MudTd>
                 <MudTd><b>@payable.InvoiceOrReferenceNumber</b></MudTd>
                 <MudTd>@payable.Date.ToShortDateString()</MudTd>
-                <MudTd>@payable.VendorName</MudTd>
                 <MudTd>
-                    <MudText Typo="Typo.caption">@GetPayableGlPreview(payable)</MudText>
+                    <div @onclick:stopPropagation="true">
+                        <MudAutocomplete T="string"
+                                         Value="@GetPayableSageVendor(payable)"
+                                         ValueChanged="@(val => OnPayableVendorChanged(payable, val))"
+                                         SearchFunc="@SearchSageVendorNames"
+                                         CoerceText="false"
+                                         CoerceValue="true"
+                                         Margin="Margin.Dense"
+                                         Dense="true"
+                                         Variant="Variant.Outlined"
+                                         Placeholder="@BizLoc["Sage Vendor Name"]" />
+                    </div>
+                </MudTd>
+                <MudTd>
+                    <div @onclick:stopPropagation="true">
+                        <SageGlAccountSelect Value="@GetPayableGl(payable)"
+                                             ValueChanged="@(val => OnPayableGlChanged(payable, val))"
+                                             Label=""
+                                             CategoryFilter="Expense"
+                                             Accounts="@_config.ImportedAccounts"
+                                             Margin="Margin.Dense"
+                                             Dense="true"
+                                             Clearable="false" />
+                    </div>
                 </MudTd>
                 <MudTd>@payable.SubTotal.ToString("C2")</MudTd>
                 <MudTd>@payable.TpsAmount.ToString("C2")</MudTd>
                 <MudTd>@payable.TvqAmount.ToString("C2")</MudTd>
                 <MudTd><b>@payable.TotalAmount.ToString("C2")</b></MudTd>
+                <MudTd>
+                    <div @onclick:stopPropagation="true" class="d-flex align-center gap-1">
+                        @if (payable.SourceType != SagePayableSourceType.Commission)
+                        {
+                            <MudMenu Icon="@Icons.Material.Filled.Calculate" Size="Size.Small" Dense="true"
+                                     Color="@(payable.IsTaxExempt ? Color.Info : Color.Default)"
+                                      AriaLabel="@BizLoc["Quick Tax Adjustment"]">
+                                <MudMenuItem Icon="@Icons.Material.Filled.ReceiptLong"
+                                             OnClick="@(() => ApplyStandardTaxToPayable(payable))">
+                                    @BizLoc["Recalculate Standard QC Tax (5% + 9.975%)"]
+                                </MudMenuItem>
+                                <MudMenuItem Icon="@Icons.Material.Filled.MoneyOffCsred"
+                                             OnClick="@(() => MarkPayableTaxExempt(payable))">
+                                    @BizLoc["Mark Tax-Exempt (0% Tax)"]
+                                </MudMenuItem>
+                                <MudDivider />
+                                <MudMenuItem Icon="@Icons.Material.Filled.Edit"
+                                             OnClick="@(() => OpenPayableEditor(payable))">
+                                    @BizLoc["Open Full Editor..."]
+                                </MudMenuItem>
+                            </MudMenu>
+                        }
+                    </div>
+                </MudTd>
                 <MudTd><MudChip T="string" Size="Size.Small" Color="Color.Default">@payable.Status</MudChip></MudTd>
                 <MudTd>
                     @if (payable.ExportedToSageAt.HasValue)
@@ -251,6 +324,7 @@ else if (_validationResult.Errors.Count == 0 && (FilteredInvoices.Count > 0 || F
     private bool _includeExported = false;
     private SagePayableSourceType? _payableSourceFilter = null;
 
+    private Sage50ExportConfig _config = new();
     private List<Invoice> _allInvoices = [];
     private List<SagePayableExportItem> _allPayables = [];
     private HashSet<Invoice> _selectedInvoices = [];
@@ -264,6 +338,8 @@ else if (_validationResult.Errors.Count == 0 && (FilteredInvoices.Count > 0 || F
 
     private void LoadData()
     {
+        _config = Db.CompanyProfile.GetAccounting().SageSettings ?? new Sage50ExportConfig();
+
         _allInvoices = Db.Invoices.GetAll()
             .Where(inv => inv.Status != InvoiceStatus.Draft && inv.Status != InvoiceStatus.Void)
             .ToList();
@@ -329,8 +405,8 @@ else if (_validationResult.Errors.Count == 0 && (FilteredInvoices.Count > 0 || F
 
     private void RunValidation()
     {
-        var config = Db.CompanyProfile.GetAccounting().SageSettings ?? new Sage50ExportConfig();
-        _validationResult = SageExportService.ValidateForExport(FilteredInvoices, FilteredPayables, config);
+        _config = Db.CompanyProfile.GetAccounting().SageSettings ?? new Sage50ExportConfig();
+        _validationResult = SageExportService.ValidateForExport(FilteredInvoices, FilteredPayables, _config);
     }
 
     private string GetClientName(Invoice inv)
@@ -339,6 +415,113 @@ else if (_validationResult.Errors.Count == 0 && (FilteredInvoices.Count > 0 || F
         return !string.IsNullOrWhiteSpace(client?.BusinessName)
             ? client.BusinessName
             : BizLoc["Unknown"].Value;
+    }
+
+    private string GetInvoiceSageCustomer(Invoice inv)
+    {
+        var client = SageExportService.ResolveClientForInvoice(inv);
+        return SageExportService.ResolveSageCustomerName(client, _config);
+    }
+
+    private string GetInvoiceGl(Invoice inv)
+    {
+        return SageExportService.ResolveInvoiceGlAccount(inv, _config);
+    }
+
+    private string GetPayableSageVendor(SagePayableExportItem payable)
+    {
+        var supplierInfo = !string.IsNullOrWhiteSpace(payable.SupplierId) ? Db.Suppliers.GetById(payable.SupplierId)?.ContactInfo : null;
+        return SageExportService.ResolveSageVendorName(payable.VendorName, supplierInfo, _config);
+    }
+
+    private string GetPayableGl(SagePayableExportItem payable)
+    {
+        return SageExportService.ResolvePayableGlAccount(payable, _config);
+    }
+
+    private Task<IEnumerable<string>> SearchSageCustomerNames(string value, CancellationToken token)
+    {
+        var names = _config.ImportedCustomers
+            .Select(c => c.Name)
+            .Concat(Db.Projects.GetAll().Select(p => p.Client?.BusinessName))
+            .Concat(Db.ProjectGroups.GetAll().Select(g => g.Client?.BusinessName))
+            .Where(n => !string.IsNullOrWhiteSpace(n))
+            .Select(n => n!)
+            .Distinct(StringComparer.OrdinalIgnoreCase);
+
+        if (!string.IsNullOrWhiteSpace(value))
+        {
+            names = names.Where(n => n.Contains(value.Trim(), StringComparison.OrdinalIgnoreCase));
+        }
+
+        return Task.FromResult<IEnumerable<string>>(names.OrderBy(n => n).Take(40).ToList());
+    }
+
+    private Task<IEnumerable<string>> SearchSageVendorNames(string value, CancellationToken token)
+    {
+        var names = _config.ImportedVendors
+            .Select(v => v.Name)
+            .Concat(Db.Suppliers.GetAll().Select(s => s.Name))
+            .Where(n => !string.IsNullOrWhiteSpace(n))
+            .Distinct(StringComparer.OrdinalIgnoreCase);
+
+        if (!string.IsNullOrWhiteSpace(value))
+        {
+            names = names.Where(n => n.Contains(value.Trim(), StringComparison.OrdinalIgnoreCase));
+        }
+
+        return Task.FromResult<IEnumerable<string>>(names.OrderBy(n => n).Take(40).ToList());
+    }
+
+    private void OnInvoiceCustomerChanged(Invoice inv, string? newSageCustomer)
+    {
+        if (string.IsNullOrWhiteSpace(newSageCustomer)) return;
+        SageExportService.AssignInvoiceGlAndCustomer(inv, glAccountCode: null, sageCustomerName: newSageCustomer, rememberForClient: true);
+        Snackbar.Add(BizLoc["Saved Sage Customer mapping and remembered for client."].Value, Severity.Success);
+        LoadData();
+    }
+
+    private void OnInvoiceGlChanged(Invoice inv, string? newGl)
+    {
+        if (string.IsNullOrWhiteSpace(newGl)) return;
+        SageExportService.AssignInvoiceGlAndCustomer(inv, glAccountCode: newGl, sageCustomerName: null, rememberForClient: true);
+        Snackbar.Add($"{BizLoc["Saved Revenue GL"].Value} ({newGl}) {BizLoc["and remembered default for client."].Value}", Severity.Success);
+        LoadData();
+    }
+
+    private void OnPayableVendorChanged(SagePayableExportItem payable, string? newVendor)
+    {
+        if (string.IsNullOrWhiteSpace(newVendor)) return;
+        SageExportService.AssignPayableGlAndVendor(payable, glAccountCode: null, sageVendorName: newVendor, rememberForVendor: true);
+        Snackbar.Add(BizLoc["Saved Sage Vendor mapping and remembered default."].Value, Severity.Success);
+        LoadData();
+    }
+
+    private void OnPayableGlChanged(SagePayableExportItem payable, string? newGl)
+    {
+        if (string.IsNullOrWhiteSpace(newGl)) return;
+        SageExportService.AssignPayableGlAndVendor(payable, glAccountCode: newGl, sageVendorName: null, rememberForVendor: true);
+        Snackbar.Add($"{BizLoc["Saved Expense GL"].Value} ({newGl}) {BizLoc["and remembered default for vendor."].Value}", Severity.Success);
+        LoadData();
+    }
+
+    private void ApplyStandardTaxToPayable(SagePayableExportItem payable)
+    {
+        var total = payable.TotalAmount;
+        var subTotal = Math.Round(total / 1.14975m, 2);
+        var tps = Math.Round(subTotal * 0.05m, 2);
+        var tvq = Math.Round(total - subTotal - tps, 2);
+
+        SageExportService.UpdatePayableTaxBreakdown(payable, isTaxExempt: false, subTotal: subTotal, tpsAmount: tps, tvqAmount: tvq);
+        Snackbar.Add(BizLoc["Updated tax breakdown to standard QC taxes (5% TPS + 9.975% TVQ)."].Value, Severity.Success);
+        LoadData();
+    }
+
+    private void MarkPayableTaxExempt(SagePayableExportItem payable)
+    {
+        SageExportService.UpdatePayableTaxBreakdown(payable, isTaxExempt: true, subTotal: payable.TotalAmount, tpsAmount: 0m, tvqAmount: 0m);
+        Snackbar.Add(BizLoc["Marked payable as tax-exempt (0% tax)."].Value, Severity.Info);
+        LoadData();
     }
 
     private string GetSourceLabel(SagePayableSourceType type) => type switch
@@ -359,25 +542,29 @@ else if (_validationResult.Errors.Count == 0 && (FilteredInvoices.Count > 0 || F
         _ => Color.Default
     };
 
-    private string GetPayableGlPreview(SagePayableExportItem payable)
+    private async Task OnInvoiceRowClick(TableRowClickEventArgs<Invoice> args)
     {
-        if (!string.IsNullOrWhiteSpace(payable.GlAccountCode))
-            return payable.GlAccountCode;
-        var config = Db.CompanyProfile.GetAccounting().SageSettings ?? new Sage50ExportConfig();
-        return payable.SourceType switch
+        var inv = args.Item;
+        if (inv == null) return;
+
+        var parameters = new DialogParameters<InvoiceMasterDialog> { { x => x.Invoice, inv } };
+        var options = new DialogOptions { MaxWidth = MaxWidth.Large, FullWidth = true, CloseButton = true };
+        var dialog = await DialogService.ShowAsync<InvoiceMasterDialog>(BizLoc["Edit Client Invoice"].Value, parameters, options);
+        var res = await dialog.Result;
+        if (res != null && !res.Canceled)
         {
-            SagePayableSourceType.RecurringBill => config.DefaultRecurringExpenseGl,
-            SagePayableSourceType.ExpenseReport => config.DefaultEmployeeExpenseGl,
-            SagePayableSourceType.Commission => config.DefaultCommissionGl,
-            _ => config.DefaultExpenseGl
-        };
+            LoadData();
+        }
     }
 
     private async Task OnPayableRowClick(TableRowClickEventArgs<SagePayableExportItem> args)
     {
-        var item = args.Item;
-        if (item == null) return;
+        if (args.Item == null) return;
+        await OpenPayableEditor(args.Item);
+    }
 
+    private async Task OpenPayableEditor(SagePayableExportItem item)
+    {
         if (item.SourceType == SagePayableSourceType.SupplierBill)
         {
             var bill = item.UnderlyingEntity as Bill ?? Db.Bills.GetById(item.Id);

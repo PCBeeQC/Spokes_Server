@@ -29,6 +29,7 @@
     {
         if (firstRender && !string.IsNullOrEmpty(ImageBase64))
         {
+            await JS.InvokeVoidAsync("window.ensureCropperScriptsLoaded");
             // Give the DOM a tiny bit of time to render the image
             await Task.Delay(50);
             await JS.InvokeVoidAsync("window.initCropper", _imgId);

@@ -225,4 +225,41 @@ public class TimesheetSearchHelperTests
             "Programming", "General", "st-gen", workType, "fr");
         Assert.Equal("Programmation : Général", frFormatted);
     }
+
+    [Fact]
+    public void FormatTaskAndSubTask_WithNote_AppendsNoteInParentheses()
+    {
+        Assert.Equal("Development : General (Urgent hotfix)", TimesheetSearchHelper.FormatTaskAndSubTask("Development", "General", note: "Urgent hotfix"));
+        Assert.Equal("Development (Urgent hotfix)", TimesheetSearchHelper.FormatTaskAndSubTask("Development", "", note: "Urgent hotfix"));
+        Assert.Equal("Development : General", TimesheetSearchHelper.FormatTaskAndSubTask("Development", "General", note: "   "));
+        Assert.Equal("Development : General", TimesheetSearchHelper.FormatTaskAndSubTask("Development", "General", note: null));
+    }
+
+    [Fact]
+    public void FormatTranslatedTaskAndSubTask_WithNote_AppendsNoteInParentheses()
+    {
+        var workType = new WorkType
+        {
+            Id = "wt-prog",
+            Name = "Programming",
+            NameTranslations = new Dictionary<string, string> { ["fr"] = "Programmation" },
+            SubTasks = new List<SubTask>
+            {
+                new SubTask
+                {
+                    Id = "st-gen",
+                    Name = "General",
+                    NameTranslations = new Dictionary<string, string> { ["fr"] = "Général" }
+                }
+            }
+        };
+
+        var enFormatted = TimesheetSearchHelper.FormatTranslatedTaskAndSubTask(
+            "Programming", "General", "st-gen", workType, null, note: "Feature A");
+        Assert.Equal("Programming : General (Feature A)", enFormatted);
+
+        var frFormatted = TimesheetSearchHelper.FormatTranslatedTaskAndSubTask(
+            "Programming", "General", "st-gen", workType, "fr", note: "Feature A");
+        Assert.Equal("Programmation : Général (Feature A)", frFormatted);
+    }
 }

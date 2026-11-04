@@ -19,7 +19,7 @@ public class EmailMessageRepositoryTests : RepositoryTestFixture<EmailMessageRep
     {
         var msg = new EmailMessage
         {
-            EmployeeId = "emp1",
+            AccountId = "emp1",
             FolderPath = "Inbox",
             UniqueId = 123,
             Id = "msg1",
@@ -38,7 +38,7 @@ public class EmailMessageRepositoryTests : RepositoryTestFixture<EmailMessageRep
     {
         var msg = new EmailMessage
         {
-            EmployeeId = "emp2",
+            AccountId = "emp2",
             FolderPath = "Sent",
             UniqueId = 456,
             Id = "msg2"
@@ -69,7 +69,7 @@ public class EmailMessageRepositoryTests : RepositoryTestFixture<EmailMessageRep
     {
         var msg = new EmailMessage
         {
-            EmployeeId = "emp1",
+            AccountId = "emp1",
             FolderPath = "Inbox",
             UniqueId = 123,
             Id = "msg1",
@@ -91,8 +91,8 @@ public class EmailMessageRepositoryTests : RepositoryTestFixture<EmailMessageRep
     [Fact]
     public async Task SearchAsync_WithMatches_ReturnsResults()
     {
-        var msg1 = new EmailMessage { EmployeeId = "emp1", FolderPath = "Inbox", UniqueId = 1, Id = "m1", Subject = "Hello World" };
-        var msg2 = new EmailMessage { EmployeeId = "emp1", FolderPath = "Inbox", UniqueId = 2, Id = "m2", Subject = "Goodbye" };
+        var msg1 = new EmailMessage { AccountId = "emp1", FolderPath = "Inbox", UniqueId = 1, Id = "m1", Subject = "Hello World" };
+        var msg2 = new EmailMessage { AccountId = "emp1", FolderPath = "Inbox", UniqueId = 2, Id = "m2", Subject = "Goodbye" };
 
         _repo.Save(msg1);
         _repo.Save(msg2);
@@ -116,7 +116,7 @@ public class EmailMessageRepositoryTests : RepositoryTestFixture<EmailMessageRep
         var msg = new EmailMessage
         {
             Id = "single-del",
-            EmployeeId = "emp-del",
+            AccountId = "emp-del",
             FolderPath = "Inbox",
             UniqueId = 999,
             Subject = "Test single arg delete"
@@ -126,7 +126,7 @@ public class EmailMessageRepositoryTests : RepositoryTestFixture<EmailMessageRep
 
         Assert.NotNull(_repo.GetById("emp-del", "single-del"));
 
-        // Single-argument Delete should resolve employeeId from cache or index and delete
+        // Single-argument Delete should resolve accountId from cache or index and delete
         _repo.Delete("single-del");
         _writer.FlushAll();
 
@@ -141,7 +141,7 @@ public class EmailMessageRepositoryTests : RepositoryTestFixture<EmailMessageRep
         var msg = new EmailMessage
         {
             Id = "rename-msg",
-            EmployeeId = "emp-rename",
+            AccountId = "emp-rename",
             FolderPath = "OldFolder",
             UniqueId = 101,
             Subject = "Folder rename test"
@@ -166,7 +166,7 @@ public class EmailMessageRepositoryTests : RepositoryTestFixture<EmailMessageRep
         var msg1 = new EmailMessage
         {
             Id = "g-msg1",
-            EmployeeId = "emp-global",
+            AccountId = "emp-global",
             FolderPath = "Inbox",
             UniqueId = 201,
             GlobalMessageId = "GLOBAL-XYZ"
@@ -174,7 +174,7 @@ public class EmailMessageRepositoryTests : RepositoryTestFixture<EmailMessageRep
         var msg2 = new EmailMessage
         {
             Id = "g-msg2",
-            EmployeeId = "emp-global",
+            AccountId = "emp-global",
             FolderPath = "Archive",
             UniqueId = 202,
             GlobalMessageId = "GLOBAL-XYZ"
@@ -192,8 +192,8 @@ public class EmailMessageRepositoryTests : RepositoryTestFixture<EmailMessageRep
     [Fact]
     public void GetByFolder_And_GetUidsByFolder_ReturnsMessages()
     {
-        var msg1 = new EmailMessage { Id = "u1", EmployeeId = "emp-uids", FolderPath = "FolderA", UniqueId = 10 };
-        var msg2 = new EmailMessage { Id = "u2", EmployeeId = "emp-uids", FolderPath = "FolderA", UniqueId = 20 };
+        var msg1 = new EmailMessage { Id = "u1", AccountId = "emp-uids", FolderPath = "FolderA", UniqueId = 10 };
+        var msg2 = new EmailMessage { Id = "u2", AccountId = "emp-uids", FolderPath = "FolderA", UniqueId = 20 };
         _repo.Save(msg1);
         _repo.Save(msg2);
 
@@ -213,9 +213,9 @@ public class EmailMessageRepositoryTests : RepositoryTestFixture<EmailMessageRep
     public void GetByFolderRecent_And_GetByFolderBeforeDate_ReturnsOrderedMessages()
     {
         var date = new DateTime(2026, 1, 15, 12, 0, 0, DateTimeKind.Utc);
-        var m1 = new EmailMessage { Id = "m-old", EmployeeId = "emp-dates", FolderPath = "Inbox", UniqueId = 1, Date = date.AddHours(-5) };
-        var m2 = new EmailMessage { Id = "m-mid", EmployeeId = "emp-dates", FolderPath = "Inbox", UniqueId = 2, Date = date };
-        var m3 = new EmailMessage { Id = "m-new", EmployeeId = "emp-dates", FolderPath = "Inbox", UniqueId = 3, Date = date.AddHours(5) };
+        var m1 = new EmailMessage { Id = "m-old", AccountId = "emp-dates", FolderPath = "Inbox", UniqueId = 1, Date = date.AddHours(-5) };
+        var m2 = new EmailMessage { Id = "m-mid", AccountId = "emp-dates", FolderPath = "Inbox", UniqueId = 2, Date = date };
+        var m3 = new EmailMessage { Id = "m-new", AccountId = "emp-dates", FolderPath = "Inbox", UniqueId = 3, Date = date.AddHours(5) };
 
         _repo.Save(m1);
         _repo.Save(m2);
@@ -234,7 +234,7 @@ public class EmailMessageRepositoryTests : RepositoryTestFixture<EmailMessageRep
     [Fact]
     public void GetIdByUid_ReturnsCorrectMessageId()
     {
-        var msg = new EmailMessage { Id = "target-id", EmployeeId = "emp-uid-find", FolderPath = "Inbox", UniqueId = 999 };
+        var msg = new EmailMessage { Id = "target-id", AccountId = "emp-uid-find", FolderPath = "Inbox", UniqueId = 999 };
         _repo.Save(msg);
 
         var foundId = _repo.GetIdByUid("emp-uid-find", "Inbox", 999);
@@ -259,7 +259,7 @@ public class EmailMessageRepositoryTests : RepositoryTestFixture<EmailMessageRep
     [Fact]
     public void TryUpdateFlags_ReturnsFalseWhenFlagsUnchangedOrNotFound()
     {
-        var msg = new EmailMessage { Id = "flag-msg", EmployeeId = "emp-flags", FolderPath = "Inbox", UniqueId = 333, IsRead = true, IsFlagged = false };
+        var msg = new EmailMessage { Id = "flag-msg", AccountId = "emp-flags", FolderPath = "Inbox", UniqueId = 333, IsRead = true, IsFlagged = false };
         _repo.Save(msg);
 
         // Attempting to set identical flags should return false
@@ -277,7 +277,7 @@ public class EmailMessageRepositoryTests : RepositoryTestFixture<EmailMessageRep
         var msg = new EmailMessage
         {
             Id = "uncached-msg",
-            EmployeeId = "emp-uncached",
+            AccountId = "emp-uncached",
             FolderPath = "Inbox",
             UniqueId = 555,
             Subject = "Uncached load test"
@@ -289,21 +289,21 @@ public class EmailMessageRepositoryTests : RepositoryTestFixture<EmailMessageRep
         _repo.Clear();
         _repo.LoadFromDisk();
 
-        // GetById without employeeId should locate via index and load from disk
+        // GetById without accountId should locate via index and load from disk
         var loaded = _repo.GetById("uncached-msg");
         Assert.NotNull(loaded);
         Assert.Equal("uncached-msg", loaded!.Id);
         Assert.Equal("Uncached load test", loaded.Subject);
-        Assert.Equal("emp-uncached", loaded.EmployeeId);
+        Assert.Equal("emp-uncached", loaded.AccountId);
     }
 
     [Fact]
-    public void GetById_WithEmployeeId_LoadsFromDisk()
+    public void GetById_WithAccountId_LoadsFromDisk()
     {
         var msg = new EmailMessage
         {
             Id = "emp-scoped-msg",
-            EmployeeId = "emp-scoped",
+            AccountId = "emp-scoped",
             FolderPath = "Sent",
             UniqueId = 777,
             Subject = "Scoped load test"
@@ -320,22 +320,22 @@ public class EmailMessageRepositoryTests : RepositoryTestFixture<EmailMessageRep
     }
 
     [Fact]
-    public void GetAllForEmployee_ReturnsAllMessagesForEmployee()
+    public void GetAllForAccount_ReturnsAllMessagesForAccount()
     {
-        var msg1 = new EmailMessage { Id = "all-1", EmployeeId = "emp-all", FolderPath = "Inbox", UniqueId = 1, Subject = "Sub1" };
-        var msg2 = new EmailMessage { Id = "all-2", EmployeeId = "emp-all", FolderPath = "Sent", UniqueId = 2, Subject = "Sub2" };
-        var otherMsg = new EmailMessage { Id = "other-1", EmployeeId = "emp-other", FolderPath = "Inbox", UniqueId = 1, Subject = "SubOther" };
+        var msg1 = new EmailMessage { Id = "all-1", AccountId = "emp-all", FolderPath = "Inbox", UniqueId = 1, Subject = "Sub1" };
+        var msg2 = new EmailMessage { Id = "all-2", AccountId = "emp-all", FolderPath = "Sent", UniqueId = 2, Subject = "Sub2" };
+        var otherMsg = new EmailMessage { Id = "other-1", AccountId = "emp-other", FolderPath = "Inbox", UniqueId = 1, Subject = "SubOther" };
 
         _repo.Save(msg1);
         _repo.Save(msg2);
         _repo.Save(otherMsg);
         _writer.FlushAll();
 
-        var employeeMessages = _repo.GetAllForEmployee("emp-all");
-        Assert.Equal(2, employeeMessages.Count);
-        Assert.Contains(employeeMessages, m => m.Id == "all-1");
-        Assert.Contains(employeeMessages, m => m.Id == "all-2");
-        Assert.DoesNotContain(employeeMessages, m => m.Id == "other-1");
+        var accountMessages = _repo.GetAllForAccount("emp-all");
+        Assert.Equal(2, accountMessages.Count);
+        Assert.Contains(accountMessages, m => m.Id == "all-1");
+        Assert.Contains(accountMessages, m => m.Id == "all-2");
+        Assert.DoesNotContain(accountMessages, m => m.Id == "other-1");
     }
 
     [Fact]
@@ -344,7 +344,7 @@ public class EmailMessageRepositoryTests : RepositoryTestFixture<EmailMessageRep
         var msg = new EmailMessage
         {
             Id = "uncached-del",
-            EmployeeId = "emp-del-index",
+            AccountId = "emp-del-index",
             FolderPath = "Inbox",
             UniqueId = 888,
             Subject = "Uncached delete test"
@@ -355,7 +355,7 @@ public class EmailMessageRepositoryTests : RepositoryTestFixture<EmailMessageRep
         _repo.Clear();
         _repo.LoadFromDisk();
 
-        // Delete without employeeId should resolve from index and remove file
+        // Delete without accountId should resolve from index and remove file
         _repo.Delete("uncached-del");
         _writer.FlushAll();
 
@@ -364,10 +364,10 @@ public class EmailMessageRepositoryTests : RepositoryTestFixture<EmailMessageRep
     }
 
     [Fact]
-    public void GetAll_ReturnsAllMessagesAcrossEmployees_EvenWhenCacheCleared()
+    public void GetAll_ReturnsAllMessagesAcrossAccounts_EvenWhenCacheCleared()
     {
-        var msg1 = new EmailMessage { Id = "getall-1", EmployeeId = "emp-getall-1", FolderPath = "Inbox", UniqueId = 1, Subject = "Sub1" };
-        var msg2 = new EmailMessage { Id = "getall-2", EmployeeId = "emp-getall-2", FolderPath = "Inbox", UniqueId = 2, Subject = "Sub2" };
+        var msg1 = new EmailMessage { Id = "getall-1", AccountId = "emp-getall-1", FolderPath = "Inbox", UniqueId = 1, Subject = "Sub1" };
+        var msg2 = new EmailMessage { Id = "getall-2", AccountId = "emp-getall-2", FolderPath = "Inbox", UniqueId = 2, Subject = "Sub2" };
 
         _repo.Save(msg1);
         _repo.Save(msg2);
@@ -391,8 +391,8 @@ public class EmailMessageRepositoryTests : RepositoryTestFixture<EmailMessageRep
     [Fact]
     public void GetNextLocalUid_WithExistingMessages_ReturnsMaxPlusOne()
     {
-        _repo.Save(new EmailMessage { EmployeeId = "emp_seq", FolderPath = "Trash", Id = "m1", UniqueId = 10 });
-        _repo.Save(new EmailMessage { EmployeeId = "emp_seq", FolderPath = "Trash", Id = "m2", UniqueId = 25 });
+        _repo.Save(new EmailMessage { AccountId = "emp_seq", FolderPath = "Trash", Id = "m1", UniqueId = 10 });
+        _repo.Save(new EmailMessage { AccountId = "emp_seq", FolderPath = "Trash", Id = "m2", UniqueId = 25 });
 
         var uid = _repo.GetNextLocalUid("emp_seq", "Trash");
         Assert.Equal(26u, uid);
@@ -401,9 +401,9 @@ public class EmailMessageRepositoryTests : RepositoryTestFixture<EmailMessageRep
     [Fact]
     public void GetNextLocalUid_IgnoresLegacySentinelUids()
     {
-        _repo.Save(new EmailMessage { EmployeeId = "emp_seq", FolderPath = "Trash", Id = "m1", UniqueId = 15 });
+        _repo.Save(new EmailMessage { AccountId = "emp_seq", FolderPath = "Trash", Id = "m1", UniqueId = 15 });
         // Legacy sentinel UID
-        _repo.Save(new EmailMessage { EmployeeId = "emp_seq", FolderPath = "Trash", Id = "m_legacy", UniqueId = uint.MaxValue - 500 });
+        _repo.Save(new EmailMessage { AccountId = "emp_seq", FolderPath = "Trash", Id = "m_legacy", UniqueId = uint.MaxValue - 500 });
 
         var uid = _repo.GetNextLocalUid("emp_seq", "Trash");
         Assert.Equal(16u, uid);
@@ -413,9 +413,9 @@ public class EmailMessageRepositoryTests : RepositoryTestFixture<EmailMessageRep
     public void GetUnreadByFolderRecent_ReturnsOnlyUnreadMessages_OrderedByDateDescending()
     {
         var now = DateTimeOffset.UtcNow;
-        _repo.Save(new EmailMessage { EmployeeId = "emp_unread", FolderPath = "INBOX", Id = "msg_read", UniqueId = 1, IsRead = true, Date = now.AddMinutes(-10), Subject = "Read Email" });
-        _repo.Save(new EmailMessage { EmployeeId = "emp_unread", FolderPath = "INBOX", Id = "msg_unread1", UniqueId = 2, IsRead = false, Date = now.AddMinutes(-5), Subject = "Older Unread" });
-        _repo.Save(new EmailMessage { EmployeeId = "emp_unread", FolderPath = "INBOX", Id = "msg_unread2", UniqueId = 3, IsRead = false, Date = now, Subject = "Newer Unread" });
+        _repo.Save(new EmailMessage { AccountId = "emp_unread", FolderPath = "INBOX", Id = "msg_read", UniqueId = 1, IsRead = true, Date = now.AddMinutes(-10), Subject = "Read Email" });
+        _repo.Save(new EmailMessage { AccountId = "emp_unread", FolderPath = "INBOX", Id = "msg_unread1", UniqueId = 2, IsRead = false, Date = now.AddMinutes(-5), Subject = "Older Unread" });
+        _repo.Save(new EmailMessage { AccountId = "emp_unread", FolderPath = "INBOX", Id = "msg_unread2", UniqueId = 3, IsRead = false, Date = now, Subject = "Newer Unread" });
 
         var results = _repo.GetUnreadByFolderRecent("emp_unread", "INBOX", 10);
 
@@ -427,8 +427,8 @@ public class EmailMessageRepositoryTests : RepositoryTestFixture<EmailMessageRep
     [Fact]
     public void GetUnreadByFolderRecent_ReturnsEmpty_WhenAllMessagesAreRead()
     {
-        _repo.Save(new EmailMessage { EmployeeId = "emp_allread", FolderPath = "INBOX", Id = "m1", UniqueId = 1, IsRead = true, Subject = "Read 1" });
-        _repo.Save(new EmailMessage { EmployeeId = "emp_allread", FolderPath = "INBOX", Id = "m2", UniqueId = 2, IsRead = true, Subject = "Read 2" });
+        _repo.Save(new EmailMessage { AccountId = "emp_allread", FolderPath = "INBOX", Id = "m1", UniqueId = 1, IsRead = true, Subject = "Read 1" });
+        _repo.Save(new EmailMessage { AccountId = "emp_allread", FolderPath = "INBOX", Id = "m2", UniqueId = 2, IsRead = true, Subject = "Read 2" });
 
         var results = _repo.GetUnreadByFolderRecent("emp_allread", "INBOX", 10);
 
@@ -436,32 +436,31 @@ public class EmailMessageRepositoryTests : RepositoryTestFixture<EmailMessageRep
     }
 
     [Fact]
-    public void GetByUniqueId_ReturnsCorrectMessage_WithoutScanningOtherEmployees()
+    public void GetByUniqueId_ReturnsCorrectMessage_WithoutScanningOtherAccounts()
     {
-        _repo.Save(new EmailMessage { EmployeeId = "emp_a", FolderPath = "INBOX", Id = "msg_a", UniqueId = 777, Subject = "Emp A Message" });
-        _repo.Save(new EmailMessage { EmployeeId = "emp_b", FolderPath = "INBOX", Id = "msg_b", UniqueId = 777, Subject = "Emp B Message" });
+        _repo.Save(new EmailMessage { AccountId = "emp_a", FolderPath = "INBOX", Id = "msg_a", UniqueId = 777, Subject = "Emp A Message" });
+        _repo.Save(new EmailMessage { AccountId = "emp_b", FolderPath = "INBOX", Id = "msg_b", UniqueId = 777, Subject = "Emp B Message" });
 
         var msgA = _repo.GetByUniqueId("emp_a", 777);
         Assert.NotNull(msgA);
         Assert.Equal("msg_a", msgA.Id);
-        Assert.Equal("emp_a", msgA.EmployeeId);
+        Assert.Equal("emp_a", msgA.AccountId);
 
         var msgB = _repo.GetByUniqueId("emp_b", 777);
         Assert.NotNull(msgB);
         Assert.Equal("msg_b", msgB.Id);
-        Assert.Equal("emp_b", msgB.EmployeeId);
+        Assert.Equal("emp_b", msgB.AccountId);
 
         var msgC = _repo.GetByUniqueId("emp_c", 777);
         Assert.Null(msgC);
     }
 
     [Fact]
-    public void GetAllForEmployee_WhenEmployeeHasNoMessages_ReturnsEmptyImmediately()
+    public void GetAllForAccount_WhenAccountHasNoMessages_ReturnsEmptyImmediately()
     {
-        _repo.Save(new EmailMessage { EmployeeId = "emp_other", FolderPath = "INBOX", Id = "m_other", UniqueId = 123, Subject = "Other" });
+        _repo.Save(new EmailMessage { AccountId = "emp_other", FolderPath = "INBOX", Id = "m_other", UniqueId = 123, Subject = "Other" });
 
-        var results = _repo.GetAllForEmployee("system_company_bills");
+        var results = _repo.GetAllForAccount("system_company_bills");
         Assert.Empty(results);
     }
 }
-

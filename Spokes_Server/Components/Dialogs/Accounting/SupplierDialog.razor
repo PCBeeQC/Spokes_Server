@@ -38,6 +38,28 @@
                         <MudItem xs="6">
                             <MudTextField @bind-Value="Supplier.ContactInfo.BusinessAddressZip" Label="Zip / Postal Code" />
                         </MudItem>
+
+                        <MudItem xs="12">
+                            <MudDivider Class="my-2" />
+                            <MudText Typo="Typo.subtitle2">@BizLoc["Accounting Defaults (Sage 50)"]</MudText>
+                        </MudItem>
+
+                        <MudItem xs="12" sm="6">
+                            <SageGlAccountSelect @bind-Value="Supplier.ContactInfo.DefaultGlAccountCode"
+                                                 Label="@BizLoc["Default Expense GL Account"]"
+                                                 Placeholder="@BizLoc["Inherit Company Default"]"
+                                                 Clearable="true" />
+                        </MudItem>
+                        <MudItem xs="12" sm="6">
+                            <MudAutocomplete T="string"
+                                             @bind-Value="Supplier.ContactInfo.SageReferenceName"
+                                             SearchFunc="@SearchSageVendors"
+                                             CoerceText="false"
+                                             CoerceValue="true"
+                                             Clearable="true"
+                                             Label="@BizLoc["Sage 50 Vendor Name (Optional)"]"
+                                             Placeholder="@Supplier.ContactInfo.BusinessName" />
+                        </MudItem>
                     </MudGrid>
                 </MudTabPanel>
 
@@ -93,6 +115,21 @@
 
     private MudForm form = default!;
     private bool success;
+
+    private Task<IEnumerable<string>> SearchSageVendors(string? value, CancellationToken ct)
+    {
+        var vendors = Db.CompanyProfile.GetAccounting().SageSettings?.ImportedVendors
+            .Select(v => v.Name)
+            .Where(n => !string.IsNullOrWhiteSpace(n))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(n => n)
+            .ToList() ?? [];
+
+        if (string.IsNullOrWhiteSpace(value))
+            return Task.FromResult<IEnumerable<string>>(vendors);
+
+        return Task.FromResult(vendors.Where(v => v.Contains(value.Trim(), StringComparison.OrdinalIgnoreCase)));
+    }
 
     private async Task AddContact()
     {

@@ -1,96 +1,211 @@
 @using Spokes_Server.Components.Dialogs
+@using Spokes_Server.Components.Dialogs.Communication.Email
+@using Spokes_Server.Components.Shared
+@using Spokes_Server.Core.Configuration
+@using Spokes_Server.Core.Constants
+@using Spokes_Server.Core.Models.Communication
 @using Spokes_Server.Core.Services.Communication.Email
 @inject UserService UserService
 @inject IDialogService _dialogService
 @inject IEmailFolderService FolderService
+@inject IEmailSyncService EmailSyncService
+@inject Database Db
 @inject ISnackbar Snackbar
+@inject IStringLocalizer<AppResources> Loc
 
 <style>
     .folder-actions {
         visibility: hidden;
     }
-    .mud-treeview-item-content:hover .folder-actions {
+    .mud-treeview-item-content:hover .folder-actions,
+    .inbox-nav-item:hover .folder-actions {
         visibility: visible;
     }
-    .email-folder-selected > .mud-treeview-item-content {
-        background-color: var(--mud-palette-primary-hover);
-        border-radius: 8px;
+    .email-folder-selected > .mud-treeview-item-content,
+    .email-nav-selected {
+        background-color: var(--mud-palette-primary-hover) !important;
+        border-radius: 6px;
+    }
+    .inbox-nav-item {
+        border-radius: 6px;
+        height: 44px;
+        min-height: 44px;
+        max-height: 44px;
+        overflow: hidden;
+        transition: background-color 0.15s ease;
+    }
+    .inbox-nav-item:hover {
+        background-color: var(--mud-palette-action-default-hover);
     }
 </style>
 
-<MudPaper Width="100%" Elevation="0" Class="d-flex flex-column border-r mud-theme-border-color custom-scrollbar"
-    Style="flex: none; height: 100%;">
-    <div class="pa-4 d-flex align-center gap-2">
-        <MudIcon Icon="@Icons.Material.Filled.Email" Color="Color.Primary" />
-        <MudText Typo="Typo.h6" Color="Color.Primary"><b>Messages</b></MudText>
+<MudPaper Width="100%" Elevation="0" Class="d-flex flex-column border-r custom-scrollbar"
+          Style="flex: none; height: 100%; overflow-y: auto; border-color: var(--mud-palette-divider);">
+    <!-- Top Header & Compose Button -->
+    <div class="pa-3 d-flex flex-column gap-2" style="border-bottom: 1px solid var(--mud-palette-divider);">
+        <MudButton Variant="Variant.Filled"
+                   Color="Color.Primary"
+                   FullWidth="true"
+                   StartIcon="@Icons.Material.Filled.Edit"
+                   Class="rounded-lg py-2"
+                   OnClick="OnCompose">
+            @Loc["Compose"]
+        </MudButton>
     </div>
 
-    <MudButton Variant="Variant.Outlined" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Edit" Class="mx-4 mt-n2 mb-2"
-        OnClick="OnCompose">
-        Compose
-    </MudButton>
-
-    <MudTreeView Hover="true" Width="100%" Class="px-2" T="EmailFolder" Items="TreeItems" SelectedValue="SelectedFolder" SelectedValueChanged="HandleFolderSelected">
-        <ItemTemplate Context="treeItem">
-            <MudTreeViewItem @bind-Expanded="@treeItem.Expanded" Items="@treeItem.Children" Value="@treeItem.Value" Class="@($"my-1{(treeItem.Value?.Id == SelectedFolderId ? " email-folder-selected" : "")}")">  
-                <Content>
-                    <MudIcon Icon="@treeItem.Icon" Class="ml-0 mr-2" Color="@Color.Default" />
-                    <MudText>@treeItem.Text</MudText>
-                    <MudSpacer></MudSpacer>
-                    @if (treeItem.Value is { } folder)
-                    {
-                        <div class="folder-actions" @onclick:stopPropagation="true">
-                            <MudMenu Icon="@Icons.Material.Filled.MoreVert" Size="Size.Small" Dense="true" AnchorOrigin="Origin.BottomRight" TransformOrigin="Origin.TopRight" ListClass="pa-0">
-                                <MudMenuItem Icon="@Icons.Material.Filled.CreateNewFolder" OnClick="@(() => CreateSubfolder(folder))">New Subfolder</MudMenuItem>
-                                @if (!folder.IsInbox && !folder.IsSent && !folder.IsTrash && !folder.IsDrafts && !folder.IsArchive && !folder.IsJunk)
-                                {
-                                    <MudMenuItem Icon="@Icons.Material.Filled.DriveFileRenameOutline" OnClick="@(() => RenameFolder(folder))">Rename</MudMenuItem>
-                                    <MudMenuItem Icon="@Icons.Material.Filled.Delete" IconColor="Color.Error" OnClick="@(() => DeleteFolder(folder))">Delete</MudMenuItem>
-                                }
-                            </MudMenu>
-                        </div>
-                        @if (folder.UnreadCount > 0 && !folder.IsDrafts)
-                        {
-                            <MudChip Color="Color.Warning" Size="Size.Small" Class="ml-1">@folder.UnreadCount</MudChip>
-                        }
-                    }
-                </Content>
-            </MudTreeViewItem>
-        </ItemTemplate>
-    </MudTreeView>
-
-    
-
-
-    <div class="pa-2 d-flex flex-column mt-auto">
-        <!-- Local Drafts Folder (Pinned at Bottom) -->
-        <MudButton Variant="Variant.Text" Color="Color.Default" FullWidth="true" Class="justify-start mt-1"
-                   StartIcon="@Icons.Material.Filled.CreateNewFolder" OnClick="CreateRootFolder">
-            New Folder
-        </MudButton>
-        
-        @{
-            var localDrafts = Folders.FirstOrDefault(f => f.Path == "LocalDrafts");
-            if (localDrafts != null)
+    <div class="px-2 py-2 d-flex flex-column gap-1 flex-grow-1 overflow-y-auto">
+        <!-- ==================== CATEGORY 1: INBOXES ==================== -->
+        <div class="d-flex align-center justify-space-between px-2 py-1 rounded cursor-pointer"
+             @onclick="@(() => _inboxesExpanded = !_inboxesExpanded)">
+            <div class="d-flex align-center gap-1">
+                <MudIcon Icon="@(_inboxesExpanded ? Icons.Material.Filled.KeyboardArrowDown : Icons.Material.Filled.KeyboardArrowRight)"
+                         Size="Size.Small" Color="Color.Secondary" />
+                <MudText Typo="Typo.overline" Color="Color.Secondary" Style="font-weight: 700; letter-spacing: 0.5px; line-height: 1.2;">
+                    @Loc["Inboxes"]
+                </MudText>
+                @if (!_inboxesExpanded && AllInboxesUnreadCount > 0)
+                {
+                    <NotificationBadge Count="@AllInboxesUnreadCount" Class="ml-1" />
+                }
+            </div>
+            @if (CanConnectRealInboxes || CanCreateVirtualInboxes)
             {
-                <MudButton Variant="Variant.Text" Color="Color.Default" FullWidth="true" Class="justify-start mt-1"
-                           StartIcon="@Icons.Material.Filled.Drafts" OnClick="@(() => OnSelectFolder.InvokeAsync(localDrafts))">
-                    Local Drafts
+                <div @onclick:stopPropagation="true">
+                    <MudMenu Icon="@Icons.Material.Filled.Add" Size="Size.Small" Dense="true" Color="Color.Primary"
+                             AnchorOrigin="Origin.BottomRight" TransformOrigin="Origin.TopRight">
+                        @if (CanConnectRealInboxes)
+                        {
+                            <MudMenuItem Icon="@Icons.Material.Filled.AddLink" OnClick="ConnectNewAccount">
+                                @Loc["Connect Real Inbox (IMAP)"]
+                            </MudMenuItem>
+                        }
+                        @if (CanCreateVirtualInboxes)
+                        {
+                            <MudMenuItem Icon="@Icons.Material.Filled.AlternateEmail" Disabled="@(!Accounts.Any())" OnClick="CreateNewInbox">
+                                @Loc["New Virtual Inbox"]
+                            </MudMenuItem>
+                        }
+                    </MudMenu>
+                </div>
+            }
+        </div>
+
+        @if (_inboxesExpanded)
+        {
+            <!-- Unified All Inboxes -->
+            <div class="@($"px-2 d-flex align-center cursor-pointer inbox-nav-item {(SelectedNodeKey == "all-inboxes" ? "email-nav-selected" : "")}")"
+                 @onclick="@(() => SelectUnifiedView("all-inboxes"))">
+                <MudIcon Icon="@Icons.Material.Filled.AllInbox" Color="Color.Primary" Size="Size.Small" Class="mr-2 flex-shrink-0" />
+                <MudText Typo="Typo.body2" Class="flex-grow-1 text-truncate" Style="@((AllInboxesUnreadCount > 0 ? "font-weight: 600; " : "") + "white-space: nowrap; overflow: hidden; text-overflow: ellipsis;")">
+                    @Loc["All Inboxes"]
+                </MudText>
+                @if (AllInboxesUnreadCount > 0)
+                {
+                    <NotificationBadge Count="@AllInboxesUnreadCount" Class="ml-1 flex-shrink-0" />
+                }
+            </div>
+
+            <!-- Real Inboxes -->
+            @foreach (var account in Accounts)
+            {
+                var nodeKey = $"real:{account.Id}";
+                var unread = RealInboxUnreadCounts.TryGetValue(account.Id, out var c) ? c : 0;
+                <div class="@($"px-2 d-flex align-center cursor-pointer inbox-nav-item {(SelectedNodeKey == nodeKey ? "email-nav-selected" : "")}")"
+                     @onclick="@(() => OnSelectRealInbox.InvokeAsync(account))">
+                    <MudIcon Icon="@Icons.Material.Filled.Mail"
+                             Size="Size.Small"
+                             Color="Color.Primary"
+                             Class="mr-2 flex-shrink-0"
+                             Style="@(!string.IsNullOrEmpty(account.Color) ? $"color: {account.Color};" : "")" />
+                    <div class="d-flex flex-column justify-center flex-grow-1" style="min-width: 0; overflow: hidden;">
+                        <MudText Typo="Typo.body2" Class="text-truncate" Style="@((unread > 0 ? "font-weight: 600; " : "") + "line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;")">
+                            @account.Name
+                        </MudText>
+                        @if (!string.IsNullOrWhiteSpace(account.EmailAddress) && !string.Equals(account.Name, account.EmailAddress, StringComparison.OrdinalIgnoreCase))
+                        {
+                            <MudText Typo="Typo.caption" Color="Color.Default" Class="text-truncate" Style="font-size: 0.7rem; line-height: 1.15; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                                @account.EmailAddress
+                            </MudText>
+                        }
+                    </div>
+                    <EmailFolderMenu AccountId="@account.Id"
+                                     AccountName="@account.Name"
+                                     Folders="Folders"
+                                     SelectedFolder="SelectedFolder"
+                                     SelectedNodeKey="@SelectedNodeKey"
+                                     OnSelectFolder="HandleFolderSelected"
+                                     OnFoldersChanged="OnFoldersChanged" />
+                    @if (unread > 0)
+                    {
+                        <NotificationBadge Count="@unread" Class="ml-1 flex-shrink-0" />
+                    }
+                </div>
+            }
+
+            <!-- Virtual Inboxes -->
+            @foreach (var inbox in Inboxes)
+            {
+                var nodeKey = $"inbox:{inbox.Id}";
+                var unread = InboxUnreadCounts.TryGetValue(inbox.Id, out var c) ? c : 0;
+                <div class="@($"px-2 d-flex align-center cursor-pointer inbox-nav-item {(SelectedNodeKey == nodeKey ? "email-nav-selected" : "")}")"
+                     @onclick="@(() => OnSelectInbox.InvokeAsync(inbox))">
+                    <MudIcon Icon="@Icons.Material.Filled.AlternateEmail"
+                             Size="Size.Small"
+                             Color="Color.Primary"
+                             Class="mr-2 flex-shrink-0"
+                             Style="@(!string.IsNullOrEmpty(inbox.Color) ? $"color: {inbox.Color};" : "")" />
+                    <div class="d-flex flex-column justify-center flex-grow-1" style="min-width: 0; overflow: hidden;">
+                        <MudText Typo="Typo.body2" Class="text-truncate" Style="@((unread > 0 ? "font-weight: 600; " : "") + "line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;")">
+                            @inbox.Name
+                        </MudText>
+                        @if (inbox.TargetAddresses.Any())
+                        {
+                            <MudText Typo="Typo.caption" Color="Color.Default" Class="text-truncate" Style="font-size: 0.7rem; line-height: 1.15; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                                @string.Join(", ", inbox.TargetAddresses)
+                            </MudText>
+                        }
+                    </div>
+                    @if (unread > 0)
+                    {
+                        <NotificationBadge Count="@unread" Class="ml-1 flex-shrink-0" />
+                    }
+                </div>
+            }
+
+            @if (!Accounts.Any() && !Inboxes.Any() && CanConnectRealInboxes)
+            {
+                <MudButton Variant="Variant.Outlined"
+                           Color="Color.Primary"
+                           Size="Size.Small"
+                           StartIcon="@Icons.Material.Filled.AddLink"
+                           OnClick="ConnectNewAccount"
+                           Class="mx-2 my-1">
+                    @Loc["Connect Real Inbox"]
                 </MudButton>
             }
         }
-        <MudDivider Class="my-2" />
+    </div>
 
-        <MudButton Variant="Variant.Text" Color="Color.Default" FullWidth="true" Class="justify-start mt-1"
-            StartIcon="@Icons.Material.Filled.Settings" OnClick="OpenSettings">
-            Email Settings
+    <div class="pa-2 d-flex flex-column mt-auto border-t" style="border-color: var(--mud-palette-divider);">
+        <MudButton Variant="Variant.Text" Color="Color.Default" FullWidth="true" Class="justify-start"
+                   StartIcon="@Icons.Material.Filled.Settings" OnClick="OpenSettings">
+            @Loc["Email Settings"]
         </MudButton>
     </div>
 </MudPaper>
 
 @code {
+    [Parameter] public List<EmailInbox> Inboxes { get; set; } = [];
+    [Parameter] public Dictionary<string, int> InboxUnreadCounts { get; set; } = new();
+    [Parameter] public Dictionary<string, int> RealInboxUnreadCounts { get; set; } = new();
+    [Parameter] public int AllInboxesUnreadCount { get; set; }
+    [Parameter] public List<EmailAccount> Accounts { get; set; } = [];
     [Parameter] public List<EmailFolder> Folders { get; set; } = [];
+    [Parameter] public string? SelectedNodeKey { get; set; }
     [Parameter] public string? SelectedFolderId { get; set; }
+    [Parameter] public EventCallback<string> OnSelectView { get; set; }
+    [Parameter] public EventCallback<EmailAccount> OnSelectRealInbox { get; set; }
+    [Parameter] public EventCallback<EmailInbox> OnSelectInbox { get; set; }
     [Parameter] public EventCallback<EmailFolder> OnSelectFolder { get; set; }
     [Parameter] public EventCallback OnCompose { get; set; }
     [Parameter] public EventCallback OnRepairAttachments { get; set; }
@@ -98,17 +213,35 @@
     [Parameter] public bool IsRepairing { get; set; }
 
     private EmailFolder? SelectedFolder { get; set; }
-    private List<TreeItemData<EmailFolder>> TreeItems = [];
-    
+    private Employee? _currentEmployee;
+    private EmailServerSettings _emailSettings = new();
+
+    private bool _inboxesExpanded = true;
+
+    private bool IsEmployeeEligible => _currentEmployee is { IsActive: true, IsBanned: false, IsSuspended: false };
+    private bool IsAdminUser => _currentEmployee != null && (_currentEmployee.IsAdmin || _currentEmployee.HasPermission(AppPermissions.Admin.ManageSettings));
+    private bool CanConnectRealInboxes => IsEmployeeEligible && (IsAdminUser || _emailSettings.AllowUsersToConnectRealInboxes);
+    private bool CanCreateVirtualInboxes => IsEmployeeEligible && (IsAdminUser || _emailSettings.AllowUsersToCreateVirtualInboxes);
+    private bool CanShareEntities => IsEmployeeEligible && (IsAdminUser || _emailSettings.AllowUsersToShareEmailEntities);
+    private bool CanManageServers => IsEmployeeEligible && (IsAdminUser || _emailSettings.AllowUsersToManageServers);
+
+    protected override async Task OnInitializedAsync()
+    {
+        _currentEmployee = await UserService.GetEmployeeAsync();
+        _emailSettings = Db.CompanyProfile.Get()?.EmailSettings ?? new();
+    }
+
     protected override void OnParametersSet()
     {
-        if (Folders != null)
-        {
-            var filtered = Folders.Where(f => f.Path != "LocalDrafts").ToList();
-            TreeItems = BuildTree(filtered);
-            
-            SelectedFolder = Folders.FirstOrDefault(f => f.Id == SelectedFolderId);
-        }
+        _emailSettings = Db.CompanyProfile.Get()?.EmailSettings ?? new();
+        var activeKey = SelectedNodeKey ?? SelectedFolderId;
+        SelectedFolder = Folders?.FirstOrDefault(f => f.Id == activeKey);
+    }
+
+    private Task SelectUnifiedView(string viewKey)
+    {
+        SelectedFolder = null;
+        return OnSelectView.InvokeAsync(viewKey);
     }
 
     private void HandleFolderSelected(EmailFolder folder)
@@ -117,63 +250,6 @@
         if (OnSelectFolder.HasDelegate && folder != null)
         {
             OnSelectFolder.InvokeAsync(folder);
-        }
-    }
-
-    private List<TreeItemData<EmailFolder>> BuildTree(List<EmailFolder> folders)
-    {
-        // Build a set of all known folder paths so we can detect true root folders
-        var allPaths = new HashSet<string>(folders.Select(f => f.Path));
-        
-        // Root folders = those whose ParentPath is empty/null OR whose ParentPath 
-        // doesn't correspond to any actual folder (e.g. IMAP namespace prefix)
-        var roots = folders.Where(f => 
-            string.IsNullOrEmpty(f.ParentPath) || !allPaths.Contains(f.ParentPath)
-        ).OrderByDescending(f => f.IsInbox).ThenBy(f => f.Name).ToList();
-
-        return roots.Select(r => BuildNode(r, folders)).ToList();
-    }
-
-    private TreeItemData<EmailFolder> BuildNode(EmailFolder folder, List<EmailFolder> allFolders)
-    {
-        var children = allFolders.Where(f => f.ParentPath == folder.Path)
-            .OrderBy(f => f.Name).ToList();
-        
-        return new EmailFolderTreeItem(folder)
-        {
-            Text = folder.Name,
-            Icon = GetFolderIcon(folder),
-            Expanded = true,
-            Number = (folder.UnreadCount > 0 && !folder.IsDrafts) ? folder.UnreadCount : null,
-            Children = children.Select(c => BuildNode(c, allFolders)).ToList()
-        };
-    }
-
-    public class EmailFolderTreeItem : TreeItemData<EmailFolder>
-    {
-        public int? Number { get; set; }
-
-        public EmailFolderTreeItem(EmailFolder folder) : base(folder) { }
-    }
-
-    private static string GetFolderIcon(EmailFolder folder) =>
-        folder.IsInbox ? Icons.Material.Filled.Inbox :
-        folder.IsSent ? Icons.Material.Filled.Send :
-        folder.IsTrash ? Icons.Material.Filled.Delete :
-        folder.IsDrafts ? Icons.Material.Filled.Drafts :
-        folder.IsArchive ? Icons.Material.Filled.Inventory2 :
-        folder.IsJunk ? Icons.Material.Filled.Report :
-        Icons.Material.Filled.Folder;
-
-    private string _currentEmployeeId = "";
-    private Employee? _currentEmployee;
-
-    protected override async Task OnInitializedAsync()
-    {
-        _currentEmployee = await UserService.GetEmployeeAsync();
-        if (_currentEmployee != null)
-        {
-            _currentEmployeeId = _currentEmployee.Id;
         }
     }
 
@@ -186,97 +262,69 @@
             { "OnRepairAttachments", OnRepairAttachments },
             { "IsRepairing", IsRepairing }
         };
-        var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Medium, FullWidth = true };
-        var dialog = await _dialogService.ShowAsync<EmailSettingsDialog>("Email Settings", parameters, options);
+        var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Large, FullWidth = true };
+        var dialog = await _dialogService.ShowAsync<EmailSettingsDialog>(Loc["Email Settings"], parameters, options);
         await dialog.Result;
+        if (OnFoldersChanged.HasDelegate) await OnFoldersChanged.InvokeAsync();
     }
 
-    private async Task CreateRootFolder()
+    private async Task CreateNewInbox()
     {
-        var parameters = new DialogParameters { ["SubmitText"] = "Create" };
-        var dialog = await _dialogService.ShowAsync<FolderManageDialog>("New Folder", parameters);
-        var result = await dialog.Result;
-
-        if (result is { Canceled: false, Data: string name })
+        if (_currentEmployee == null || !CanCreateVirtualInboxes) return;
+        var inbox = new EmailInbox
         {
-            var createResult = await FolderService.CreateFolderAsync(_currentEmployeeId, "", name);
-            if (createResult.IsSuccess && createResult.Value != null)
+            OwnerEmployeeId = _currentEmployee.Id,
+            AccountId = Accounts.FirstOrDefault()?.Id ?? "",
+            SortOrder = Inboxes.Count
+        };
+        var parameters = new DialogParameters<EmailInboxDialog>
+        {
+            { x => x.Inbox, inbox },
+            { x => x.AvailableAccounts, Accounts },
+            { x => x.IsNew, true },
+            { x => x.AllowSharing, CanShareEntities }
+        };
+        var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Medium, FullWidth = true };
+        var dialog = await _dialogService.ShowAsync<EmailInboxDialog>(Loc["New Virtual Inbox"], parameters, options);
+        var result = await dialog.Result;
+        if (result is { Canceled: false, Data: EmailInbox saved })
+        {
+            Db.EmailInboxes.Save(saved);
+            if (OnFoldersChanged.HasDelegate)
             {
-                Snackbar.Add($"Folder '{name}' created.", Severity.Success);
-                if (OnFoldersChanged.HasDelegate) await OnFoldersChanged.InvokeAsync();
-            }
-            else
-            {
-                Snackbar.Add(createResult.ErrorMessage ?? "Failed to create folder.", Severity.Error);
+                await OnFoldersChanged.InvokeAsync();
             }
         }
     }
 
-    private async Task CreateSubfolder(EmailFolder? parentFolder)
+    private async Task ConnectNewAccount()
     {
-        if (parentFolder == null) return;
-        var parameters = new DialogParameters { ["SubmitText"] = "Create" };
-        var dialog = await _dialogService.ShowAsync<FolderManageDialog>($"New subfolder in {parentFolder.Name}", parameters);
+        if (_currentEmployee == null || !CanConnectRealInboxes) return;
+        var account = new EmailAccount
+        {
+            OwnerEmployeeId = _currentEmployee.Id,
+            EmailAddress = Accounts.Count == 0 ? (_currentEmployee.Email ?? string.Empty) : string.Empty,
+            SortOrder = Accounts.Count
+        };
+        var parameters = new DialogParameters<EmailAccountDialog>
+        {
+            { x => x.Account, account },
+            { x => x.IsNew, true },
+            { x => x.AllowSharing, CanShareEntities },
+            { x => x.AllowCustomServer, CanManageServers },
+            { x => x.CurrentUserId, _currentEmployee.Id },
+            { x => x.IsAdmin, IsAdminUser }
+        };
+        var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Small, FullWidth = true };
+        var dialog = await _dialogService.ShowAsync<EmailAccountDialog>(Loc["Connect Real Inbox (IMAP)"], parameters, options);
         var result = await dialog.Result;
-        
-        if (result is { Canceled: false, Data: string name })
+        if (result is { Canceled: false, Data: EmailAccount savedAccount })
         {
-            var createResult = await FolderService.CreateFolderAsync(_currentEmployeeId, parentFolder.Path, name);
-            if (createResult.IsSuccess && createResult.Value != null)
+            _ = EmailSyncService.SyncAccountAsync(savedAccount.Id);
+            if (OnFoldersChanged.HasDelegate)
             {
-                Snackbar.Add($"Folder '{name}' created.", Severity.Success);
-                if (OnFoldersChanged.HasDelegate) await OnFoldersChanged.InvokeAsync();
-            }
-            else
-            {
-                Snackbar.Add(createResult.ErrorMessage ?? "Failed to create folder.", Severity.Error);
-            }
-        }
-    }
-
-    private async Task RenameFolder(EmailFolder? folder)
-    {
-        if (folder == null) return;
-        var parameters = new DialogParameters { ["CurrentFolderName"] = folder.Name, ["SubmitText"] = "Rename" };
-        var dialog = await _dialogService.ShowAsync<FolderManageDialog>($"Rename {folder.Name}", parameters);
-        var result = await dialog.Result;
-        
-        if (result is { Canceled: false, Data: string name } && name != folder.Name)
-        {
-            var renameResult = await FolderService.RenameFolderAsync(_currentEmployeeId, folder.Path, name);
-            if (renameResult.IsSuccess)
-            {
-                Snackbar.Add($"Folder renamed to '{name}'.", Severity.Success);
-                if (OnFoldersChanged.HasDelegate) await OnFoldersChanged.InvokeAsync();
-            }
-            else
-            {
-                Snackbar.Add(renameResult.ErrorMessage ?? "Failed to rename folder.", Severity.Error);
-            }
-        }
-    }
-
-    private async Task DeleteFolder(EmailFolder? folder)
-    {
-        if (folder == null) return;
-        bool? result = await _dialogService.ShowMessageBoxAsync(
-            "Delete Folder",
-            $"Are you sure you want to delete '{folder.Name}' and all its contents? This cannot be undone.",
-            yesText: "Delete", cancelText: "Cancel");
-
-        if (result == true)
-        {
-            var deleteResult = await FolderService.DeleteFolderAsync(_currentEmployeeId, folder.Path);
-            if (deleteResult.IsSuccess)
-            {
-                Snackbar.Add("Folder deleted.", Severity.Success);
-                if (OnFoldersChanged.HasDelegate) await OnFoldersChanged.InvokeAsync();
-            }
-            else
-            {
-                Snackbar.Add(deleteResult.ErrorMessage ?? "Failed to delete folder.", Severity.Error);
+                await OnFoldersChanged.InvokeAsync();
             }
         }
     }
 }
-

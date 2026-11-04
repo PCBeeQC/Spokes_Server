@@ -1,0 +1,81 @@
+@using Spokes_Server.Core.Models.Documents
+@using Spokes_Server.Core.Data.Repositories.Documents
+@using Spokes_Server.Components.Shared
+@using Spokes_Server.Resources
+@using Microsoft.Extensions.Localization
+@inject Database Db
+@inject ISnackbar Snackbar
+@inject IStringLocalizer<BusinessResources> BizLoc
+@inject IStringLocalizer<AppResources> Loc
+
+<MudDialog>
+    <TitleContent>
+        <MudText Typo="Typo.h6">
+            <MudIcon Icon="@(IsNew ? Icons.Material.Filled.Add : Icons.Material.Filled.Edit)" Class="mr-3 mb-n1" />
+            @(IsNew ? BizLoc["New Terms & Conditions"] : string.Format(BizLoc["Edit {0}"].Value, Item.Name))
+        </MudText>
+    </TitleContent>
+    <DialogContent>
+        <MudForm @ref="form">
+            <MudTextField @bind-Value="Item.Name" Label="@Loc["Name"]" Required="true"
+                RequiredError="@BizLoc["Name is required."]" Placeholder="e.g. Standard 30-Day Quote Terms"
+                Variant="Variant.Outlined" Margin="Margin.Dense" Class="mb-4" />
+
+            <div class="d-flex align-center justify-space-between mb-2">
+                <MudText Typo="Typo.subtitle2">@BizLoc["Content"]</MudText>
+                <MudSwitch @bind-Value="Item.IsDefault" Label="@BizLoc["Default"]" Color="Color.Primary" />
+            </div>
+
+            <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-2 d-block">
+                @BizLoc["Type @ to see available context tags for dynamic client/company content."]
+            </MudText>
+
+            <MarkdownEditor @bind-Value="Item.Content" AvailableTags="ContextTagRegistry.GetAvailableTags()" />
+        </MudForm>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">@Loc["Cancel"]</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="Save">@Loc["Save"]</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
+    [Parameter] public TermsAndConditions Item { get; set; } = new();
+    [Parameter] public bool IsNew { get; set; }
+
+    private MudForm form = default!;
+
+    private void Cancel() => MudDialog.Cancel();
+
+    private async Task Save()
+    {
+        await form.ValidateAsync();
+        if (string.IsNullOrWhiteSpace(Item.Name))
+        {
+            Snackbar.Add(BizLoc["Name is required."], Severity.Warning);
+            return;
+        }
+
+        try
+        {
+            if (Item.IsDefault)
+            {
+                foreach (var other in Db.TermsAndConditions.GetAll().Where(t => t.Id != Item.Id && t.IsDefault))
+                {
+                    other.IsDefault = false;
+                    Db.TermsAndConditions.Save(other);
+                }
+            }
+
+            Item.UpdatedAt = DateTime.UtcNow;
+            Db.TermsAndConditions.Save(Item);
+            Snackbar.Add(BizLoc["Terms & Conditions saved successfully."], Severity.Success);
+            MudDialog.Close(DialogResult.Ok(Item));
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Error saving terms: {ex.Message}", Severity.Error);
+        }
+    }
+}

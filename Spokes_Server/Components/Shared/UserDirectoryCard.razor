@@ -42,11 +42,7 @@
                 {
                     <div class="d-flex align-center mt-2">
                         @{
-                            var hasConnection = PresenceState.HasActiveConnection(Employee.Id);
-                            var isAway = PresenceState.IsGloballyAway(Employee.Id);
-                            var hasDesktopActive = PresenceState.HasActiveDesktopConnection(Employee.Id) && !PresenceState.IsUserAwayFromDesktop(Employee.Id);
-                            var hasCapacitorMobile = PresenceState.IsOnlineOnCapacitorMobile(Employee.Id);
-                            var isMobileOnlineOnly = Employee.IsActive && !hasDesktopActive && hasCapacitorMobile;
+                            var presence = PresenceState.GetUserPresenceBadge(Employee.Id);
                             var lastSeen = PresenceState.GetLastSeen(Employee.Id);
                             
                             string lastSeenText = Loc["Offline"].Value;
@@ -57,17 +53,17 @@
                                 lastSeenText = Loc["Inactive"].Value;
                                 dotColor = "var(--mud-palette-action-disabled)";
                             }
-                            else if (isMobileOnlineOnly)
+                            else if (presence == UserPresenceBadge.OnlineMobile)
                             {
                                 lastSeenText = Loc["Online on Mobile"].Value;
                                 dotColor = "var(--mud-palette-success)";
                             }
-                            else if (hasConnection && !isAway)
+                            else if (presence == UserPresenceBadge.OnlineDesktop)
                             {
                                 lastSeenText = Loc["Online"].Value;
                                 dotColor = "var(--mud-palette-success)";
                             }
-                            else if (isAway)
+                            else if (presence == UserPresenceBadge.Away)
                             {
                                 lastSeenText = Loc["Away"].Value;
                                 dotColor = "var(--mud-palette-warning)";
@@ -77,7 +73,7 @@
                                 lastSeenText = PresenceStateService.FormatLastSeen(lastSeen);
                             }
                         }
-                        @if (isMobileOnlineOnly)
+                        @if (Employee.IsActive && presence == UserPresenceBadge.OnlineMobile)
                         {
                             <MudIcon Icon="@Icons.Material.Filled.Smartphone" Color="Color.Success" Size="Size.Small" Style="font-size: 14px; margin-right: 4px;" />
                         }

@@ -9,7 +9,7 @@
                 <MudIcon Icon="@Icons.Material.Filled.Warning" Color="Color.Error" Style="font-size: 64px;" Class="mb-4" />
                 <MudText Typo="Typo.h5" GutterBottom="true">@Loc["Restore Backup?"]</MudText>
                 <MudText Typo="Typo.body1" Class="mb-4">
-                    @((MarkupString)string.Format(Loc["Are you sure you want to restore from <b>{0}</b>?"].Value, EffectiveBackupName))
+                    @((MarkupString)string.Format(Loc["Are you sure you want to restore from <b>{0}</b>?"].Value, System.Net.WebUtility.HtmlEncode(EffectiveBackupName)))
                 </MudText>
                 @if (ExistingBackup != null)
                 {
@@ -94,7 +94,8 @@
                 CurrentState = State.Uploading;
                 StateHasChanged();
 
-                targetFilePath = Path.Combine(Path.GetTempPath(), $"spokes_restore_{Guid.NewGuid():N}.spkbackup");
+                var uploadExt = Path.GetExtension(File.Name);
+                targetFilePath = BackupSvc.CreateRestoreUploadStagingPath(string.IsNullOrWhiteSpace(uploadExt) ? ".spkbackup" : uploadExt);
                 isTempFile = true;
 
                 await using (var fs = new FileStream(targetFilePath, FileMode.Create, FileAccess.Write, FileShare.None, 81920, useAsync: true))

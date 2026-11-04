@@ -40,7 +40,6 @@ public class DeviceSessionTests
         Assert.Equal(PushSubscriptionType.WebPush, session.PushSubscriptionType);
         Assert.Equal(string.Empty, session.PushPublicKey);
         Assert.False(session.PushEnabled);
-        Assert.False(session.IsIdleDetectionEnabled);
         Assert.Null(session.PushSubscribedAt);
         Assert.Equal(DeviceType.Desktop, session.DeviceType);
         Assert.Equal(string.Empty, session.DeviceName);
@@ -95,7 +94,6 @@ public class DeviceSessionTests
             PushSubscriptionType = PushSubscriptionType.NativeRelay,
             PushPublicKey = "rsa-public-key-blob",
             PushEnabled = true,
-            IsIdleDetectionEnabled = true,
             PushSubscribedAt = pushSubscribed,
             DeviceType = DeviceType.Mobile,
             DeviceName = "Personal iPhone",
@@ -121,7 +119,6 @@ public class DeviceSessionTests
         Assert.Equal(PushSubscriptionType.NativeRelay, session.PushSubscriptionType);
         Assert.Equal("rsa-public-key-blob", session.PushPublicKey);
         Assert.True(session.PushEnabled);
-        Assert.True(session.IsIdleDetectionEnabled);
         Assert.Equal(pushSubscribed, session.PushSubscribedAt);
         Assert.Equal(DeviceType.Mobile, session.DeviceType);
         Assert.Equal("Personal iPhone", session.DeviceName);
@@ -244,5 +241,31 @@ public class DeviceSessionTests
         Assert.Equal(2, all.Length);
         Assert.Contains(DeviceType.Desktop, all);
         Assert.Contains(DeviceType.Mobile, all);
+    }
+
+    [Fact]
+    public void DeviceSession_DeserializesLegacyJsonWithRemovedIsIdleDetectionEnabledProperty()
+    {
+        const string legacyJson = """
+            {
+              "Id": "legacy-sess-1",
+              "EmployeeId": "emp-1",
+              "DeviceType": "Desktop",
+              "DeviceName": "Work PC",
+              "PushEndpoint": "https://push.example.com/v1/legacy",
+              "PushEnabled": true,
+              "IsIdleDetectionEnabled": true
+            }
+            """;
+
+        var session = System.Text.Json.JsonSerializer.Deserialize<DeviceSession>(legacyJson);
+
+        Assert.NotNull(session);
+        Assert.Equal("legacy-sess-1", session.Id);
+        Assert.Equal("emp-1", session.EmployeeId);
+        Assert.Equal(DeviceType.Desktop, session.DeviceType);
+        Assert.Equal("Work PC", session.DeviceName);
+        Assert.True(session.PushEnabled);
+        Assert.True(session.HasPush);
     }
 }

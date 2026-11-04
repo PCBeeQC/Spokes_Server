@@ -1,0 +1,259 @@
+@using Spokes_Server.Components.Shared
+@using Spokes_Server.Core.Configuration
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Services.Identity
+@using Spokes_Server.Core.Services.Communication.Email
+@using Spokes_Server.Core.Services.Security
+@inject Database Db
+@inject EncryptionService EncryptionService
+@inject IEmailInboxService EmailInboxService
+@inject UserService UserService
+@inject ISnackbar Snackbar
+
+<MudDialog>
+    <DialogContent>
+        <MudStack Spacing="3">
+            <MudGrid Spacing="2">
+                <MudItem xs="12" sm="6">
+                    <MudTextField @bind-Value="Identity.DisplayName"
+                                  Label="@Loc["Sender Display Name"]"
+                                  Placeholder="e.g. Support Team or Mats Dallaire"
+                                  Variant="Variant.Outlined"
+                                  Margin="Margin.Dense"
+                                  Required="true" />
+                </MudItem>
+                <MudItem xs="12" sm="6">
+                    <MudSelect T="string"
+                               Value="@(Identity.SendingServerConfigId ?? string.Empty)"
+                               ValueChanged="OnSendingServerChanged"
+                               Label="@Loc["Outgoing Server (SMTP)"]"
+                               Variant="Variant.Outlined"
+                               Margin="Margin.Dense">
+                        @foreach (var server in _sendingServers)
+                        {
+                            <MudSelectItem Value="@server.Id">
+                                @server.Name @(!string.IsNullOrWhiteSpace(server.Domain) ? $"(@{server.Domain})" : $"({server.Host})")
+                            </MudSelectItem>
+                        }
+                        @if (AllowCustomServer)
+                        {
+                            <MudSelectItem Value="@string.Empty">@Loc["Custom SMTP Server"]</MudSelectItem>
+                        }
+                    </MudSelect>
+                </MudItem>
+            </MudGrid>
+
+            @if (SelectedServer != null && !string.IsNullOrWhiteSpace(SelectedServer.Domain))
+            {
+                <MudTextField @bind-Value="Identity.Username"
+                              Label="@Loc["Username"]"
+                              Placeholder="support"
+                              Adornment="Adornment.End"
+                              AdornmentText="@($"@{SelectedServer.Domain}")"
+                              Variant="Variant.Outlined"
+                              Margin="Margin.Dense"
+                              Required="true"
+                              HelperText="@($"{Loc["Full Sending Address:"].Value} {PreviewEmailAddress}")" />
+            }
+            else
+            {
+                <MudGrid Spacing="2">
+                    <MudItem xs="12" sm="6">
+                        <MudTextField @bind-Value="Identity.Username"
+                                      Label="@Loc["Username (Before @)"]"
+                                      Placeholder="support"
+                                      Variant="Variant.Outlined"
+                                      Margin="Margin.Dense"
+                                      Required="true" />
+                    </MudItem>
+                    <MudItem xs="12" sm="6">
+                        <MudTextField @bind-Value="Identity.Domain"
+                                      Label="@Loc["Sending Domain"]"
+                                      Placeholder="example.com"
+                                      Adornment="Adornment.Start"
+                                      AdornmentText="@("@")"
+                                      Variant="Variant.Outlined"
+                                      Margin="Margin.Dense"
+                                      Required="true" />
+                    </MudItem>
+                </MudGrid>
+            }
+
+            @if (SelectedServer == null)
+            {
+                <MudGrid Spacing="2">
+                    <MudItem xs="12" sm="6">
+                        <MudTextField @bind-Value="Identity.CustomSmtpHost"
+                                      Label="@Loc["SMTP Host"]"
+                                      Placeholder="smtp.example.com"
+                                      Variant="Variant.Outlined"
+                                      Margin="Margin.Dense"
+                                      Required="true" />
+                    </MudItem>
+                    <MudItem xs="6" sm="3">
+                        <MudNumericField @bind-Value="Identity.CustomSmtpPort"
+                                         Label="@Loc["Port"]"
+                                         Variant="Variant.Outlined"
+                                         Margin="Margin.Dense" />
+                    </MudItem>
+                    <MudItem xs="6" sm="3" Class="d-flex align-center">
+                        <MudSwitch @bind-Value="Identity.CustomSmtpSsl"
+                                   Color="Color.Primary"
+                                   Label="@Loc["SSL / TLS"]" />
+                    </MudItem>
+                </MudGrid>
+            }
+
+            @if (SelectedServer == null || !SelectedServer.UseSharedCredentials)
+            {
+                <MudGrid Spacing="2">
+                    <MudItem xs="12" sm="6">
+                        <MudTextField @bind-Value="Identity.CustomSmtpUsername"
+                                      Label="@Loc["SMTP Username"]"
+                                      Placeholder="@Loc["Leave blank if same as email address"]"
+                                      Variant="Variant.Outlined"
+                                      Margin="Margin.Dense" />
+                    </MudItem>
+                    <MudItem xs="12" sm="6">
+                        <MudTextField @bind-Value="_plainSmtpPassword"
+                                      Label="@(!string.IsNullOrEmpty(Identity.EncryptedCustomSmtpPassword) ? Loc["SMTP Password (Saved - enter to change)"].Value : Loc["SMTP Password"].Value)"
+                                      Placeholder="@(!string.IsNullOrEmpty(Identity.EncryptedCustomSmtpPassword) ? "••••••••" : "")"
+                                      InputType="InputType.Password"
+                                      Variant="Variant.Outlined"
+                                      Margin="Margin.Dense"
+                                      HelperText="@Loc["Encrypted with server master password before storage"]" />
+                    </MudItem>
+                </MudGrid>
+            }
+
+            <div>
+                <MudText Typo="Typo.subtitle2" Class="mb-1">@Loc["Email Signature"]</MudText>
+                <SpokesRichTextEditor @bind-Value="Identity.SignatureHtml" />
+            </div>
+
+            @if (AllowSharing)
+            {
+                <MudDivider />
+                <div>
+                    <MudText Typo="Typo.subtitle2" Class="mb-1">@Loc["Share Identity With Users & Groups"]</MudText>
+                    <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-2 d-block">
+                        @Loc["Grant other individuals or teams permission to send emails from this identity."]
+                    </MudText>
+                    <UserGroupPicker Target="UserGroupPickerTarget.Both"
+                                     SelectedUserIdsList="Identity.AllowedUserIds"
+                                     SelectedGroupIdsList="Identity.AllowedTeamIds" />
+                </div>
+            }
+        </MudStack>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">@Loc["Cancel"]</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="Save">@Loc["Save"]</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
+    [Parameter] public EmailSendingIdentity Identity { get; set; } = new();
+    [Parameter] public bool IsNew { get; set; }
+    [Parameter] public bool AllowSharing { get; set; } = true;
+    [Parameter] public bool AllowCustomServer { get; set; } = true;
+    [Parameter] public string? CurrentUserId { get; set; }
+    [Parameter] public bool IsAdmin { get; set; }
+
+    private List<SendingServerConfig> _sendingServers = [];
+    private string _plainSmtpPassword = string.Empty;
+
+    private SendingServerConfig? SelectedServer =>
+        !string.IsNullOrEmpty(Identity.SendingServerConfigId)
+            ? _sendingServers.FirstOrDefault(s => s.Id == Identity.SendingServerConfigId)
+            : null;
+
+    private string PreviewEmailAddress
+    {
+        get
+        {
+            var dom = SelectedServer != null && !string.IsNullOrWhiteSpace(SelectedServer.Domain)
+                ? SelectedServer.Domain
+                : Identity.Domain;
+            var user = string.IsNullOrWhiteSpace(Identity.Username) ? "username" : Identity.Username.Trim();
+            return !string.IsNullOrWhiteSpace(dom) ? $"{user}@{dom.Trim().TrimStart('@')}" : user;
+        }
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        var currentUser = await UserService.GetEmployeeAsync();
+        var userId = CurrentUserId ?? currentUser?.Id ?? Identity.OwnerEmployeeId ?? string.Empty;
+        var isAdmin = IsAdmin || (currentUser?.IsAdmin ?? false);
+        var userTeamIds = EmailInboxService.GetUserTeamIds(userId);
+        _sendingServers = (Db.CompanyProfile.GetEmailSettings().SendingServers ?? [])
+            .Where(s => s.CanUserAccess(userId, userTeamIds, isAdmin))
+            .ToList();
+        if (string.IsNullOrEmpty(Identity.SendingServerConfigId) && _sendingServers.Count > 0 && string.IsNullOrEmpty(Identity.CustomSmtpHost))
+        {
+            Identity.SendingServerConfigId = _sendingServers[0].Id;
+            if (!string.IsNullOrWhiteSpace(_sendingServers[0].Domain))
+            {
+                Identity.Domain = _sendingServers[0].Domain;
+            }
+        }
+        if (Identity.CustomSmtpPort <= 0)
+        {
+            Identity.CustomSmtpPort = 587;
+        }
+    }
+
+    private void OnSendingServerChanged(string serverId)
+    {
+        Identity.SendingServerConfigId = serverId ?? string.Empty;
+        var server = SelectedServer;
+        if (server != null && !string.IsNullOrWhiteSpace(server.Domain))
+        {
+            Identity.Domain = server.Domain.Trim().TrimStart('@');
+        }
+    }
+
+    private void Save()
+    {
+        var server = SelectedServer;
+        if (server != null && !string.IsNullOrWhiteSpace(server.Domain))
+        {
+            Identity.Domain = server.Domain.Trim().TrimStart('@');
+        }
+        else
+        {
+            Identity.Domain = Identity.Domain?.Trim().TrimStart('@') ?? string.Empty;
+        }
+
+        if (!string.IsNullOrWhiteSpace(Identity.Username) && Identity.Username.Contains('@'))
+        {
+            var parts = Identity.Username.Split('@', 2);
+            Identity.Username = parts[0].Trim();
+            if (string.IsNullOrWhiteSpace(Identity.Domain))
+            {
+                Identity.Domain = parts[1].Trim();
+            }
+        }
+
+        if (string.IsNullOrWhiteSpace(Identity.Username) || !Identity.EmailAddress.Contains('@'))
+        {
+            Snackbar.Add(Loc["A valid username and sending domain are required."].Value, Severity.Warning);
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(Identity.DisplayName))
+        {
+            Identity.DisplayName = Identity.EmailAddress;
+        }
+
+        if (!string.IsNullOrWhiteSpace(_plainSmtpPassword))
+        {
+            Identity.EncryptedCustomSmtpPassword = EncryptionService.Encrypt(_plainSmtpPassword);
+        }
+
+        MudDialog.Close(DialogResult.Ok(Identity));
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+}

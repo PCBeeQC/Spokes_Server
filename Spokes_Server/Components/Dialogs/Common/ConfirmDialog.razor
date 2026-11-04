@@ -3,8 +3,17 @@
         <MudText>@(ContentText == "Are you sure?" ? Loc["Are you sure?"].Value : ContentText)</MudText>
     </DialogContent>
     <DialogActions>
-        <MudButton OnClick="Cancel">@Loc["Cancel"]</MudButton>
-        <MudButton Color="@Color" Variant="Variant.Filled" OnClick="Submit">@(ButtonText == "Confirm" ? Loc["Confirm"].Value : ButtonText)</MudButton>
+        <MudButton OnClick="Cancel" Disabled="_isProcessing">@(string.IsNullOrWhiteSpace(CancelText) ? Loc["Cancel"].Value : CancelText)</MudButton>
+        <MudButton Color="@Color"
+                   Variant="Variant.Filled"
+                   Disabled="_isProcessing"
+                   OnClick="SubmitAsync">
+            @if (_isProcessing)
+            {
+                <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="ms-n1 me-2" />
+            }
+            <span>@(ButtonText == "Confirm" ? Loc["Confirm"].Value : ButtonText)</span>
+        </MudButton>
     </DialogActions>
 </MudDialog>
 
@@ -13,8 +22,38 @@
 
     [Parameter] public string ContentText { get; set; } = "Are you sure?";
     [Parameter] public string ButtonText { get; set; } = "Confirm";
+    [Parameter] public string? CancelText { get; set; }
     [Parameter] public Color Color { get; set; } = Color.Primary;
+    [Parameter] public Func<Task>? OnConfirmAsync { get; set; }
 
-    private void Cancel() => MudDialog.Cancel();
-    private void Submit() => MudDialog.Close(DialogResult.Ok(true));
+    private bool _isProcessing;
+
+    private void Cancel()
+    {
+        if (_isProcessing) return;
+        MudDialog.Cancel();
+    }
+
+    private async Task SubmitAsync()
+    {
+        if (_isProcessing) return;
+
+        if (OnConfirmAsync != null)
+        {
+            _isProcessing = true;
+            StateHasChanged();
+            await Task.Yield();
+
+            try
+            {
+                await OnConfirmAsync();
+            }
+            finally
+            {
+                _isProcessing = false;
+            }
+        }
+
+        MudDialog.Close(DialogResult.Ok(true));
+    }
 }

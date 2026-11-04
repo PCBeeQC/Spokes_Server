@@ -8,7 +8,9 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Spokes_Server.Core.Data.Repositories.Communication;
 using Spokes_Server.Core.Data.Repositories.HR;
+using Spokes_Server.Core.Models.Communication.Notifications;
 using Spokes_Server.Core.Models.Core;
+using Spokes_Server.Core.Models.HR;
 using Spokes_Server.Core.Services.Communication.Notifications.WebPush;
 using Spokes_Server.Core.Services.Communication.Presence;
 using Spokes_Server.Core.Services.Logging;
@@ -68,6 +70,8 @@ public class NotificationQueueBackgroundService : BackgroundService
         using var scope = _serviceProvider.CreateScope();
         var employees = scope.ServiceProvider.GetRequiredService<EmployeeRepository>();
         var webPush = scope.ServiceProvider.GetRequiredService<IWebPushService>();
+        var readStates = scope.ServiceProvider.GetService<ChatReadStateRepository>();
+        var emailMessages = scope.ServiceProvider.GetService<EmailMessageRepository>();
 
         foreach (var userId in userIds)
         {
@@ -83,8 +87,34 @@ public class NotificationQueueBackgroundService : BackgroundService
                 continue; // Still outside schedule
 
             // Schedule is now active — lease all due notifications
-            var queued = _queue.LeaseDueNotifications(userId, TimeSpan.FromMinutes(2));
-            if (queued.Count == 0) continue;
+            var leased = _queue.LeaseDueNotifications(userId, TimeSpan.FromMinutes(2));
+            if (leased.Count == 0) continue;
+
+            // Prune items that were already read or expired while queued during quiet hours
+            var alreadyHandledIds = new List<Guid>();
+            var queued = new List<QueuedNotification>(leased.Count);
+            foreach (var item in leased)
+            {
+                if (IsQueuedItemAlreadyReadOrExpired(item, employee, readStates, emailMessages))
+                {
+                    alreadyHandledIds.Add(item.Id);
+                }
+                else
+                {
+                    queued.Add(item);
+                }
+            }
+
+            if (alreadyHandledIds.Count > 0)
+            {
+                _queue.AcknowledgeDelivery(userId, alreadyHandledIds);
+            }
+
+            if (queued.Count == 0)
+            {
+                _logger.LogDebug("All {Count} queued notifications for user {UserId} were already read during quiet hours", alreadyHandledIds.Count, userId);
+                continue;
+            }
 
             _logger.LogInformation("Flushing {Count} queued notifications for user {UserId}", queued.Count, userId);
 
@@ -137,6 +167,76 @@ public class NotificationQueueBackgroundService : BackgroundService
         }
     }
 
+    private static bool IsQueuedItemAlreadyReadOrExpired(
+        QueuedNotification item,
+        Employee employee,
+        ChatReadStateRepository? readStates,
+        EmailMessageRepository? emailMessages)
+    {
+        if (string.Equals(item.Category, NotificationCategories.Call, StringComparison.OrdinalIgnoreCase))
+        {
+            var sentAt = item.SentAtUtc == default ? item.QueuedAtUtc : item.SentAtUtc;
+            if (DateTime.UtcNow - sentAt > TimeSpan.FromSeconds(PushPayloadBuilder.CallTtlSeconds))
+            {
+                return true;
+            }
+        }
+
+        bool isEmail = string.Equals(item.Category, NotificationCategories.Email, StringComparison.OrdinalIgnoreCase) ||
+                       (item.Url != null && item.Url.StartsWith("/email", StringComparison.OrdinalIgnoreCase));
+        if (isEmail)
+        {
+            var sentAt = item.SentAtUtc == default ? item.QueuedAtUtc : item.SentAtUtc;
+            if (employee.LastEmailVisitedAt.HasValue && sentAt <= employee.LastEmailVisitedAt.Value.UtcDateTime)
+            {
+                return true;
+            }
+
+            if (emailMessages != null && !string.IsNullOrEmpty(item.Url))
+            {
+                var segments = item.Url.Split('/', StringSplitOptions.RemoveEmptyEntries);
+                if (segments.Length >= 3 && string.Equals(segments[0], "email", StringComparison.OrdinalIgnoreCase))
+                {
+                    var messageId = segments[2];
+                    var email = emailMessages.GetByIdOrLoad(employee.Id, messageId) ?? emailMessages.GetById(messageId);
+                    if (email != null && email.IsRead)
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        bool isChat = string.Equals(item.Category, NotificationCategories.Chat, StringComparison.OrdinalIgnoreCase) ||
+                      (item.Url != null && item.Url.StartsWith("/chat", StringComparison.OrdinalIgnoreCase));
+        if (isChat && readStates != null)
+        {
+            string? channelId = !string.IsNullOrEmpty(item.ThreadId) ? item.ThreadId : null;
+            if (string.IsNullOrEmpty(channelId) && !string.IsNullOrEmpty(item.Url))
+            {
+                var segments = item.Url.Split('/', StringSplitOptions.RemoveEmptyEntries);
+                if (segments.Length >= 2 && string.Equals(segments[0], "chat", StringComparison.OrdinalIgnoreCase))
+                {
+                    channelId = segments[1];
+                }
+            }
+
+            if (!string.IsNullOrEmpty(channelId))
+            {
+                var lastReadAt = readStates.GetLastReadAt(employee.Id, channelId);
+                var sentAt = item.SentAtUtc == default ? item.QueuedAtUtc : item.SentAtUtc;
+                if (lastReadAt > DateTime.MinValue && sentAt <= lastReadAt)
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
     private async Task FlushDelayedMobileNotificationsAsync()
     {
         var matured = _queue.LeaseMaturedMobilePushes(TimeSpan.FromMinutes(2));
@@ -170,7 +270,8 @@ public class NotificationQueueBackgroundService : BackgroundService
                 }
                 else if (item.Type == "Email")
                 {
-                    var email = emailMessages.GetByIdOrLoad(item.UserId, item.MessageId);
+                    var accountId = !string.IsNullOrEmpty(item.ChannelId) && item.ChannelId != "email" ? item.ChannelId : item.UserId;
+                    var email = emailMessages.GetByIdOrLoad(accountId, item.MessageId) ?? emailMessages.GetById(item.MessageId);
                     if (email == null || email.IsRead)
                     {
                         _queue.AcknowledgeMobilePushDelivery(item.Id);

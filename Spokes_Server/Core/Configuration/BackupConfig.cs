@@ -23,6 +23,9 @@ public class BackupConfig
     private GoogleDriveDestinationConfig _googleDrive = new();
     public GoogleDriveDestinationConfig GoogleDrive { get => _googleDrive ??= new(); set => _googleDrive = value ?? new(); }
 
+    private GitHubDestinationConfig _gitHub = new();
+    public GitHubDestinationConfig GitHub { get => _gitHub ??= new(); set => _gitHub = value ?? new(); }
+
     private WebDavDestinationConfig _webDav = new();
     public WebDavDestinationConfig WebDav { get => _webDav ??= new(); set => _webDav = value ?? new(); }
 
@@ -59,6 +62,15 @@ public class GoogleDriveDestinationConfig
     public int RetentionCount { get; set; } = 5;
 }
 
+public class GitHubDestinationConfig
+{
+    public bool IsEnabled { get; set; }
+    public string PersonalAccessToken { get; set; } = string.Empty;
+    public string Repository { get; set; } = string.Empty; // e.g. "owner/repo"
+    public string TargetFolder { get; set; } = string.Empty;
+    public string? AccountUsername { get; set; }
+}
+
 public class WebDavDestinationConfig
 {
     public bool IsEnabled { get; set; }
@@ -77,4 +89,5 @@ public class SftpDestinationConfig
     public string Password { get; set; } = string.Empty;
     public string RemotePath { get; set; } = "/backups";
     public int RetentionCount { get; set; } = 5;
+    public string TrustedHostKeyFingerprint { get; set; } = string.Empty;
 }

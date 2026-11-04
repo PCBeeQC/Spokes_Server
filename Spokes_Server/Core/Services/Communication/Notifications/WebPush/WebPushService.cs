@@ -15,7 +15,9 @@ using Spokes_Server.Core.Constants;
 using Spokes_Server.Core.Data.Repositories.Core;
 using Spokes_Server.Core.Data.Repositories.HR;
 using Spokes_Server.Core.Exceptions;
+using Spokes_Server.Core.Models.Communication.Notifications;
 using Spokes_Server.Core.Models.Core;
+using Spokes_Server.Core.Security;
 using Spokes_Server.Core.Services.Communication.Notifications;
 using Spokes_Server.Core.Services.Communication.Notifications.Presentation;
 using Spokes_Server.Core.Services.Communication.Notifications.Routing;
@@ -153,7 +155,7 @@ public class WebPushService : IWebPushService
             UserId = userId,
             Title = "",
             Body = "",
-            Tier = PresenceTier.MobileOnly,
+            Tier = PresenceTier.All,
             Category = "clear_notification",
             ThreadId = threadId
         }, profile, cancellationToken);
@@ -199,6 +201,12 @@ public class WebPushService : IWebPushService
     private async Task SendPushToSubscriptionsAsync(PushNotificationRequest request, CompanyProfile profile, CancellationToken cancellationToken = default)
     {
         var subscriptions = GetSubscriptionsForTier(request.UserId, request.Tier);
+        if (request.ExcludedSessionIds is { Count: > 0 })
+        {
+            var excludedSet = request.ExcludedSessionIds as ISet<string>
+                ?? new HashSet<string>(request.ExcludedSessionIds, StringComparer.Ordinal);
+            subscriptions = subscriptions.Where(s => !excludedSet.Contains(s.Id)).ToList();
+        }
         if (!subscriptions.Any())
         {
             _logger.LogDebug("No matching push subscriptions found for user {UserId}", request.UserId);
@@ -208,7 +216,7 @@ public class WebPushService : IWebPushService
         var defaultIcon = _pushTokenService.GetDefaultIconUrl(request.UserId);
         var payloadJson = _payloadBuilder.BuildWebPushPayloadJson(request, profile, defaultIcon);
 
-        var pushClient = new PushServiceClient(_httpClientFactory.CreateClient());
+        var pushClient = new PushServiceClient(_httpClientFactory.CreateClient("WebPush"));
         var vapidAuth = new VapidAuthentication(profile.VapidPublicKey, profile.VapidPrivateKey)
         {
             Subject = profile.VapidSubject
@@ -220,6 +228,8 @@ public class WebPushService : IWebPushService
 
         var rawPublicUrl = _systemConfigs.Get().ServerPublicUrl;
         string? originUrl = string.IsNullOrWhiteSpace(rawPublicUrl) ? null : rawPublicUrl.TrimEnd('/');
+        bool isUserInVoiceCall = _presenceState?.IsUserInVoiceCall(request.UserId) == true &&
+            !string.Equals(request.Category, NotificationCategories.Call, StringComparison.OrdinalIgnoreCase);
 
         var pushTasks = subscriptions.Select(async sub =>
         {
@@ -231,9 +241,14 @@ public class WebPushService : IWebPushService
                     return;
                 }
 
-                // Check device vault authorization for encrypted messages
+                // Check device vault authorization for encrypted messages and voice call sound suppression on mobile
                 var effectiveBody = request.GetEffectiveBodyForDevice(sub.HasVaultCookie);
-                var deviceRequest = (request.Body == effectiveBody)
+                bool silenceForMobileVoiceCall = isUserInVoiceCall &&
+                    string.Equals(sub.DeviceType, DeviceType.Mobile, StringComparison.OrdinalIgnoreCase);
+                bool effectiveIsSilent = request.IsSilent || silenceForMobileVoiceCall;
+                string? effectiveSound = silenceForMobileVoiceCall ? null : request.Sound;
+
+                var deviceRequest = (request.Body == effectiveBody && request.IsSilent == effectiveIsSilent && request.Sound == effectiveSound)
                     ? request
                     : new PushNotificationRequest
                     {
@@ -243,6 +258,7 @@ public class WebPushService : IWebPushService
                         Url = request.Url,
                         Icon = request.Icon,
                         Tier = request.Tier,
+                        ExcludedSessionIds = request.ExcludedSessionIds,
                         Tag = request.Tag,
                         Actions = request.Actions,
                         Category = request.Category,
@@ -251,8 +267,10 @@ public class WebPushService : IWebPushService
                         ChannelName = request.ChannelName,
                         IsGroupChat = request.IsGroupChat,
                         Badge = request.Badge,
-                        IsSilent = request.IsSilent,
-                        Sound = request.Sound,
+                        IsSilent = effectiveIsSilent,
+                        Sound = effectiveSound,
+                        SentAtUtc = request.SentAtUtc,
+                        TtlSeconds = request.TtlSeconds,
                         IsEncrypted = request.IsEncrypted,
                         MaskedBody = request.MaskedBody
                     };
@@ -271,6 +289,12 @@ public class WebPushService : IWebPushService
                 }
                 else
                 {
+                    if (!SafeExternalHttpHandler.IsSafeExternalUrl(sub.PushEndpoint, requireHttps: true))
+                    {
+                        _logger.LogWarning("Skipping WebPush delivery to unsafe endpoint on subscription {SubscriptionId}", sub.Id);
+                        return;
+                    }
+
                     var pushSubscription = new PushSubscription
                     {
                         Endpoint = sub.PushEndpoint,
@@ -285,7 +309,9 @@ public class WebPushService : IWebPushService
                         : _payloadBuilder.BuildWebPushPayloadJson(deviceRequest, profile, defaultIcon);
                     var message = new PushMessage(devicePayloadJson)
                     {
-                        Urgency = PushMessageUrgency.High
+                        Urgency = PushMessageUrgency.High,
+                        TimeToLive = _payloadBuilder.GetEffectiveTtlSeconds(deviceRequest),
+                        Topic = _payloadBuilder.GetWebPushTopic(deviceRequest)
                     };
                     await pushClient.RequestPushMessageDeliveryAsync(pushSubscription, message, vapidAuth, cancellationToken);
                     _logger.LogDebug("Push notification sent to subscription {SubscriptionId} ({DeviceType})",
@@ -358,8 +384,13 @@ public class WebPushService : IWebPushService
         }
         else
         {
+            if (!SafeExternalHttpHandler.IsSafeExternalUrl(sub.PushEndpoint, requireHttps: true))
+            {
+                throw new DomainException("Invalid push endpoint URL. Only public HTTPS push endpoints are allowed.", "INVALID_ENDPOINT");
+            }
+
             var payloadJson = _payloadBuilder.BuildWebPushPayloadJson(testRequest, profile, defaultIcon);
-            var pushClient = new PushServiceClient(_httpClientFactory.CreateClient());
+            var pushClient = new PushServiceClient(_httpClientFactory.CreateClient("WebPush"));
             var vapidAuth = new VapidAuthentication(profile.VapidPublicKey, profile.VapidPrivateKey)
             {
                 Subject = profile.VapidSubject
@@ -376,7 +407,9 @@ public class WebPushService : IWebPushService
             };
             var message = new PushMessage(payloadJson)
             {
-                Urgency = PushMessageUrgency.High
+                Urgency = PushMessageUrgency.High,
+                TimeToLive = _payloadBuilder.GetEffectiveTtlSeconds(testRequest),
+                Topic = _payloadBuilder.GetWebPushTopic(testRequest)
             };
 
             await pushClient.RequestPushMessageDeliveryAsync(pushSubscription, message, vapidAuth, cancellationToken);

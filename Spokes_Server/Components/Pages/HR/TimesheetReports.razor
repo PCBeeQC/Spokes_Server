@@ -18,6 +18,7 @@
 @inject IDialogService DialogService
 @inject NavigationManager NavManager
 @inject AuthenticationStateProvider AuthStateProvider
+@inject UserService UserService
 
 <style>
     @@media print {
@@ -94,8 +95,11 @@
                 <!-- Amount Display Dropdown -->
                 <MudMenu Label="@GetAmountModeLabel()" Variant="Variant.Outlined" Size="Size.Small" EndIcon="@Icons.Material.Filled.ArrowDropDown">
                     <MudMenuItem OnClick="@(() => SetAmountMode(AmountDisplayMode.BillableAmount))">Billable Amount ($)</MudMenuItem>
-                    <MudMenuItem OnClick="@(() => SetAmountMode(AmountDisplayMode.CostAmount))">Labor Cost ($)</MudMenuItem>
-                    <MudMenuItem OnClick="@(() => SetAmountMode(AmountDisplayMode.ProfitMargin))">Profit Margin ($)</MudMenuItem>
+                    @if (_canViewCostRates)
+                    {
+                        <MudMenuItem OnClick="@(() => SetAmountMode(AmountDisplayMode.CostAmount))">Labor Cost ($)</MudMenuItem>
+                        <MudMenuItem OnClick="@(() => SetAmountMode(AmountDisplayMode.ProfitMargin))">Profit Margin ($)</MudMenuItem>
+                    }
                     <MudMenuItem OnClick="@(() => SetAmountMode(AmountDisplayMode.HideAmounts))">Hide Financials</MudMenuItem>
                 </MudMenu>
             </MudStack>
@@ -221,6 +225,7 @@
     private DateRange _dateRange = new();
     private TimesheetReportFilterCriteria _criteria = new();
     private bool _applyRounding = false;
+    private bool _canViewCostRates = false;
     private TimeDisplayFormat _format = TimeDisplayFormat.DurationHhmm;
     private AmountDisplayMode _amountMode = AmountDisplayMode.BillableAmount;
 
@@ -244,11 +249,30 @@
             return;
         }
 
+        var currentUser = await UserService.GetEmployeeAsync();
+        _canViewCostRates = currentUser != null && (currentUser.IsAdmin ||
+                            currentUser.HasPermission(AppPermissions.Admin.ManageUsers) ||
+                            currentUser.HasPermission(AppPermissions.Finance.AccessAccounting));
+
         _companyProfile = Db.CompanyProfile.Get();
         _allEmployees = Db.Employees.GetAll();
         _allTeams = Db.Teams.GetAll();
-        _allProjects = Db.Projects.GetAll();
-        _allProjectGroups = Db.ProjectGroups.GetAll();
+
+        var allDbProjects = Db.Projects.GetAll();
+        var viewableProjects = new List<Project>();
+        foreach (var p in allDbProjects)
+        {
+            if (await UserService.CanViewProjectAsync(p))
+            {
+                viewableProjects.Add(p);
+            }
+        }
+        _allProjects = viewableProjects;
+        var allowedProjectIds = _allProjects.Select(p => p.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        _allProjectGroups = Db.ProjectGroups.GetAll()
+            .Where(g => g.ProjectIds.Any(pid => allowedProjectIds.Contains(pid)))
+            .ToList();
         _allTasks = Db.WorkTypes.GetAll();
 
         _allClients = _allProjects
@@ -275,7 +299,7 @@
         _criteria.TotalTasksCount = _allTasks.Count;
         _criteria.BillableStatus = BillableFilterStatus.All;
 
-        _allEntries = await ReportService.LoadAllEntriesAsync();
+        _allEntries = await ReportService.LoadAllEntriesAsync(_canViewCostRates, allowedProjectIds);
         ApplyFilters();
 
         _loading = false;
@@ -319,6 +343,10 @@
 
     private void SetAmountMode(AmountDisplayMode mode)
     {
+        if (!_canViewCostRates && (mode == AmountDisplayMode.CostAmount || mode == AmountDisplayMode.ProfitMargin))
+        {
+            return;
+        }
         _amountMode = mode;
     }
 

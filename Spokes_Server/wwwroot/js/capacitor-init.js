@@ -2,8 +2,12 @@
 // Native MainActivity.java / AppDelegate.swift style the status bar before WebView load.
 // Sync user theme preference once StatusBar plugin is available without 10ms timer spam during parse.
 (function fastBootStatusBar() {
+    if (typeof window._spokesHostViewActive === 'undefined') {
+        window._spokesHostViewActive = true;
+    }
     if (window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) {
         const applyStatusBar = async () => {
+            if (window._spokesHostViewActive === false) return true;
             if (window.Capacitor.Plugins && window.Capacitor.Plugins.StatusBar) {
                 let isDarkMode = true;
                 let cached = null;
@@ -34,6 +38,7 @@
 })();
 
 // Unified platform check
+window.checkIsCapacitorNative = function () { return window.isCapacitorNative(); };
 window.isCapacitorNative = function () {
     return navigator.userAgent.includes("Capacitor") || Boolean(window.Capacitor?.isNativePlatform?.());
 };
@@ -44,6 +49,7 @@ window.setCapacitorStatusBarStyle = async function (isDarkMode) {
         try {
             const valStr = isDarkMode ? 'true' : 'false';
             try { localStorage.setItem('spokes_is_dark_mode', valStr); } catch (e) {}
+            if (window._spokesHostViewActive === false) return;
             if (window.Capacitor?.Plugins?.StatusBar) {
                 // Style.DARK means light text for dark backgrounds. Style.LIGHT means dark text for light backgrounds.
                 const style = isDarkMode ? 'DARK' : 'LIGHT';
@@ -64,6 +70,7 @@ window.setCapacitorStatusBarStyle = async function (isDarkMode) {
 
 window.reapplyCapacitorStatusBarStyle = async function () {
     if (window.isCapacitorNative()) {
+        if (window._spokesHostViewActive === false) return;
         try {
             let isDarkMode = true;
             let cached = null;
@@ -86,6 +93,134 @@ window.reapplyCapacitorStatusBarStyle = async function () {
             console.error('[Capacitor-Init] Error reapplying StatusBar style:', err);
         }
     }
+};
+
+// Host-view activation primitive for pooled multi-server native sessions (Android & iOS).
+// Isolates presence focus, reconnect splash timers, and status-bar ownership per server WebView.
+window.spokesSetServerViewActive = function (isActive) {
+    const active = Boolean(isActive);
+    const changed = window._spokesHostViewActive !== active;
+    window._spokesHostViewActive = active;
+    window._spokesHostViewExplicitlyActivated = active;
+
+    if (active) {
+        window._spokesShareNavigating = false;
+        try { window.dispatchEvent(new CustomEvent('spokes:host-view-active')); } catch (e) {}
+        if (changed && window.startupDiagnostics && typeof window.startupDiagnostics.recordHostViewSwitch === 'function') {
+            try { window.startupDiagnostics.recordHostViewSwitch(window.__spokesPendingSwitchMeta || null); } catch (e) {}
+            window.__spokesPendingSwitchMeta = null;
+        }
+        if (window.spokesResume && typeof window.spokesResume.onHostViewActivated === 'function') {
+            try { window.spokesResume.onHostViewActivated(); } catch (e) {}
+        }
+        if (typeof window.reapplyCapacitorStatusBarStyle === 'function') {
+            window.reapplyCapacitorStatusBarStyle();
+        }
+        if (changed) {
+            if (typeof window.checkPendingShares === 'function') {
+                try { window.checkPendingShares(0); } catch (e) {}
+            }
+            if (typeof window.spokesCheckAppShortcuts === 'function') {
+                try { window.spokesCheckAppShortcuts(); } catch (e) {}
+            }
+        }
+    } else {
+        if (window.spokesResume && typeof window.spokesResume.onHostViewDeactivated === 'function') {
+            try { window.spokesResume.onHostViewDeactivated(); } catch (e) {}
+        }
+    }
+
+    if (changed && typeof window._forceUpdateFocusState === 'function') {
+        try { window._forceUpdateFocusState(); } catch (e) {}
+    }
+};
+
+// Unified in-circuit navigation primitive for native widgets, app shortcuts, push notifications, and server switches.
+// Preserves live Blazor circuit state (channel, scroll, drafts) when switching back to a server at "/" or same route.
+window.spokesNavigateFromNative = async function (targetRoute) {
+    if (targetRoute === null || targetRoute === undefined) return false;
+    const raw = String(targetRoute).trim();
+    if (!raw) return false;
+
+    let parsed;
+    try {
+        parsed = new URL(raw, window.location.origin);
+    } catch (e) {
+        return false;
+    }
+
+    // Cross-origin navigation delegates to native multi-server session pool
+    if (parsed.origin !== window.location.origin &&
+        parsed.origin !== 'capacitor://localhost' &&
+        parsed.origin !== 'http://localhost') {
+        if (typeof window.spokesNotifyServerSwitchAway === 'function') {
+            try { window.spokesNotifyServerSwitchAway(); } catch (e) {}
+        }
+        const fullTargetUrl = parsed.toString();
+        if (window.SpokesNative && typeof window.SpokesNative.openServer === 'function') {
+            window.SpokesNative.openServer(fullTargetUrl);
+            return true;
+        }
+        if (window.Capacitor?.Plugins?.BridgeManager?.openServer) {
+            try {
+                await window.Capacitor.Plugins.BridgeManager.openServer({ url: fullTargetUrl });
+                return true;
+            } catch (e) {}
+        }
+        window.location.href = fullTargetUrl;
+        return true;
+    }
+
+    const stripClientParam = (searchStr) => {
+        const params = new URLSearchParams(searchStr || '');
+        params.delete('client');
+        return params.toString();
+    };
+
+    const normalizePath = (p) => {
+        if (!p || p === '/') return '/';
+        return p.endsWith('/') ? p.slice(0, -1) : p;
+    };
+
+    const targetPath = normalizePath(parsed.pathname);
+    const targetQueryNoClient = stripClientParam(parsed.search);
+
+    // Tapping a server shortcut widget ("/") when already mounted on an active page of this server
+    // should simply bring the warm view forward without losing current channel, scroll, or drafts.
+    if (targetPath === '/' && !targetQueryNoClient && !parsed.hash) {
+        return false;
+    }
+
+    const currentPath = normalizePath(window.location.pathname);
+    const currentQueryNoClient = stripClientParam(window.location.search);
+    if (targetPath === currentPath && targetQueryNoClient === currentQueryNoClient && (parsed.hash || '') === (window.location.hash || '')) {
+        return false;
+    }
+
+    if (window.isCapacitorNative() && !parsed.searchParams.has('client')) {
+        parsed.searchParams.set('client', 'mobile');
+    }
+    const finalRoute = parsed.pathname + parsed.search + parsed.hash;
+
+    if (window.spokesDotNetRef && !window._blazorDisconnected) {
+        window.spokesPendingNav = finalRoute;
+        try {
+            await window.spokesDotNetRef.invokeMethodAsync('NavigateTo', finalRoute);
+            window.spokesPendingNav = null;
+            window.pendingNotificationRoute = null;
+            return true;
+        } catch (e) {
+            console.warn('[Capacitor-Init] In-circuit NavigateTo failed, queueing for circuit resume:', e);
+        }
+    }
+
+    // Circuit is still booting or reconnecting: queue route for initializeNativePushListeners / onConnectionUp / reloadNow
+    window.spokesPendingNav = finalRoute;
+    window.pendingNotificationRoute = finalRoute;
+    if (window._blazorDisconnected && window.spokesResume && typeof window.spokesResume.onHostViewActivated === 'function') {
+        try { window.spokesResume.onHostViewActivated(); } catch (e) {}
+    }
+    return true;
 };
 
 window.triggerHaptic = async function(style = 'LIGHT') {
@@ -174,6 +309,7 @@ window.initCapacitorEnv = async function () {
 
                 // Register hardware back button listener for Android
                 window._capacitorBackButtonListener = await Capacitor.Plugins.App.addListener('backButton', () => {
+                    if (window._spokesHostViewActive === false) return;
                     // 1. Close open dialogs or overlays if present
                     const openDialog = document.querySelector('.mud-dialog-container');
                     if (openDialog) {
@@ -303,24 +439,8 @@ window.initCapacitorEnv = async function () {
                                  }
                              }
                              
-                              // Same origin
-                              if (window.spokesDotNetRef) {
-                                  window.spokesPendingNav = targetUrl;
-                                  try {
-                                      await window.spokesDotNetRef.invokeMethodAsync('NavigateTo', targetUrl);
-                                      window.spokesPendingNav = null;
-                                  } catch (e) {
-                                      console.warn('[Capacitor-Init] Blazor NavigateTo invocation failed:', e);
-                                      // If the circuit was truly broken or Blazor disconnected, fallback to hard reload
-                                      if (window._blazorDisconnected || !window.spokesDotNetRef) {
-                                          await ensureCookies();
-                                          window.location.href = targetUrl;
-                                      }
-                                  }
-                              } else {
-                                  console.log('[Capacitor-Init] Blazor not fully ready, storing pendingNotificationRoute');
-                                  window.pendingNotificationRoute = targetUrl;
-                              }
+                              // Same origin: navigate in-circuit without destroying live Blazor state
+                              await window.spokesNavigateFromNative(targetUrl);
                           }
                     });
                     console.log('[Capacitor-Init] Registered native notificationActionPerformed listener successfully.');

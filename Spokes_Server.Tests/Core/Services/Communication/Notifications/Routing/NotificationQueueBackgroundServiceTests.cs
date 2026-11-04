@@ -444,4 +444,58 @@ public class NotificationQueueBackgroundServiceTests : IDisposable
         Assert.Equal(userId, _queue.DeadLetterMobileNotifications[0].UserId);
         Assert.Equal(NotificationQueueService.MaxDeliveryRetries, _queue.DeadLetterMobileNotifications[0].RetryCount);
     }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenQueuedQuietHoursNotificationsAlreadyReadOnMobile_PrunesWithoutSendingStalePush()
+    {
+        var userId = "emp-quiet-read";
+        var sentTime = new DateTime(2026, 10, 29, 23, 0, 0, DateTimeKind.Utc);
+        var readOnMobileTime = sentTime.AddMinutes(10);
+
+        var employee = new Employee
+        {
+            Id = userId,
+            NotificationScheduleEnabled = false,
+            LastEmailVisitedAt = new DateTimeOffset(readOnMobileTime, TimeSpan.Zero)
+        };
+        _serviceProvider.GetRequiredService<EmployeeRepository>().Save(employee);
+
+        var readStates = _serviceProvider.GetRequiredService<ChatReadStateRepository>();
+        readStates.Save(new ChatReadState
+        {
+            Id = ChatReadState.CreateId(userId, "chan-quiet"),
+            UserId = userId,
+            ChannelId = "chan-quiet",
+            LastReadAt = readOnMobileTime,
+            NotificationLevel = "All"
+        });
+
+        _queue.Enqueue(new QueuedNotification
+        {
+            UserId = userId,
+            Title = "Night Chat",
+            Body = "Read on phone",
+            Category = "chat",
+            ThreadId = "chan-quiet",
+            Url = "/chat/chan-quiet",
+            SentAtUtc = sentTime
+        });
+
+        _queue.Enqueue(new QueuedNotification
+        {
+            UserId = userId,
+            Title = "Night Email",
+            Body = "Visited on phone",
+            Category = "email",
+            ThreadId = $"email-{userId}",
+            Url = "/email",
+            SentAtUtc = sentTime
+        });
+
+        await _service.StartAsync(CancellationToken.None);
+        await _service.StopAsync(CancellationToken.None);
+
+        Assert.Empty(_queue.GetQueuedUserIds());
+        _webPushMock.Verify(x => x.SendNotificationDirectAsync(It.Is<PushNotificationRequest>(r => r.UserId == userId)), Times.Never);
+    }
 }

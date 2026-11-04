@@ -263,4 +263,64 @@ public class CalendarServiceTests : IDisposable
         _service.DeleteEvent("evt-notify-1");
         Assert.Equal("evt-notify-1", deletedEventId);
     }
+
+    [Fact]
+    public void RsvpToEvent_BlocksPrivateAndUnauthorizedTeamEvents_AllowsPublicAndInvitedTeamEvents()
+    {
+        var owner = new Employee { Id = "emp-owner", FirstName = "Alice", TeamId = "team-a" };
+        var teamMate = new Employee { Id = "emp-teammate", FirstName = "Bob", TeamId = "team-a" };
+        var outsider = new Employee { Id = "emp-outsider", FirstName = "Mallory", TeamId = "team-b" };
+        _db.Employees.Save(owner);
+        _db.Employees.Save(teamMate);
+        _db.Employees.Save(outsider);
+
+        var privateEvt = new CalendarEvent { Id = "evt-priv", EmployeeId = owner.Id, Title = "Private 1:1", IsCompanyWide = false };
+        var teamEvt = new CalendarEvent { Id = "evt-team", EmployeeId = owner.Id, Title = "Team A Sync", InvitedTeamIds = ["team-a"] };
+        var publicEvt = new CalendarEvent { Id = "evt-pub", EmployeeId = owner.Id, Title = "Town Hall", IsCompanyWide = true };
+        _service.SaveEvent(privateEvt);
+        _service.SaveEvent(teamEvt);
+        _service.SaveEvent(publicEvt);
+
+        // Outsider cannot RSVP to private or Team A event
+        Assert.False(_service.RsvpToEvent("evt-priv", outsider.Id).IsSuccess);
+        Assert.False(_service.RsvpToEvent("evt-team", outsider.Id).IsSuccess);
+
+        // Teammate can RSVP to Team A event, and outsider can RSVP to company-wide event
+        Assert.True(_service.RsvpToEvent("evt-team", teamMate.Id).IsSuccess);
+        Assert.True(_service.RsvpToEvent("evt-pub", outsider.Id).IsSuccess);
+    }
+
+    [Fact]
+    public void UpdateUserEventNotificationPreference_AllowsViewerToUpdateOwnPreferences_RejectsUnauthorizedUser()
+    {
+        var owner = new Employee { Id = "emp-owner-pref", FirstName = "Alice" };
+        var attendee = new Employee { Id = "emp-att-pref", FirstName = "Bob" };
+        var outsider = new Employee { Id = "emp-out-pref", FirstName = "Mallory" };
+        _db.Employees.Save(owner);
+        _db.Employees.Save(attendee);
+        _db.Employees.Save(outsider);
+
+        var evt = new CalendarEvent
+        {
+            Id = "evt-pref-1",
+            EmployeeId = owner.Id,
+            Title = "Project Review",
+            Attendees = [attendee.Id]
+        };
+        _service.SaveEvent(evt);
+
+        // Outsider cannot mutate notification preferences on a private event
+        var unauthorizedResult = _service.UpdateUserEventNotificationPreference("evt-pref-1", outsider.Id, isMuted: true);
+        Assert.False(unauthorizedResult.IsSuccess);
+
+        // Attendee can update their own mute/reminder preferences without full edit rights
+        var validResult = _service.UpdateUserEventNotificationPreference("evt-pref-1", attendee.Id, isMuted: true, receiveEventReminders: false);
+        Assert.True(validResult.IsSuccess);
+
+        var updated = _service.GetEventById("evt-pref-1");
+        Assert.NotNull(updated);
+        Assert.True(updated.UserReminderPreferences.TryGetValue(attendee.Id, out var pref));
+        Assert.True(pref!.IsMuted);
+        Assert.False(pref.ReceiveEventReminders);
+    }
 }

@@ -1,6 +1,12 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
 using System.Text.Json;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Spokes_Server.Core.Data;
 using Spokes_Server.Core.Models.Communication;
 
 namespace Spokes_Server.Core.Data.Repositories.Communication;
@@ -14,12 +20,12 @@ public class EmailFolderRepository : JsonRepository<EmailFolder>
 
     [ActivatorUtilitiesConstructor]
     public EmailFolderRepository(DiskPersistenceService writer, IConfiguration config, ILogger<EmailFolderRepository>? logger)
-        : base(writer, Path.Combine(config["DataPath"] ?? "Data", "Employees"), "EmailFolders.json", logger) // Search pattern irrelevant for custom load
+        : base(writer, Path.Combine(config["DataPath"] ?? "Data", "EmailAccounts"), "EmailFolders.json", logger)
     {
     }
 
     protected override string GetFilePath(EmailFolder item) =>
-        Path.Combine(_basePath, item.EmployeeId, "Email", "Folders", $"{item.Id}.json");
+        Path.Combine(_basePath, item.AccountId, "Folders", $"{item.Id}.json");
 
     public override void LoadFromDisk()
     {
@@ -32,11 +38,10 @@ public class EmailFolderRepository : JsonRepository<EmailFolder>
             }
 
             var tempFolders = new List<EmailFolder>();
-            // Strategy: Iterate all Employee directories, look for Email/Folders
-            var employeeDirs = Directory.GetDirectories(_basePath);
-            foreach (var employeeDir in employeeDirs)
+            var accountDirs = Directory.GetDirectories(_basePath);
+            foreach (var accountDir in accountDirs)
             {
-                var folderPath = Path.Combine(employeeDir, "Email", "Folders");
+                var folderPath = Path.Combine(accountDir, "Folders");
                 if (!Directory.Exists(folderPath)) continue;
 
                 var files = Directory.GetFiles(folderPath, "*.json");
@@ -64,6 +69,15 @@ public class EmailFolderRepository : JsonRepository<EmailFolder>
         }
     }
 
-    public virtual List<EmailFolder> GetByEmployee(string employeeId) =>
-        GetAll().Where(f => f.EmployeeId == employeeId).ToList();
+    public virtual List<EmailFolder> GetByAccount(string accountId) =>
+        GetAll().Where(f => string.Equals(f.AccountId, accountId, StringComparison.OrdinalIgnoreCase)).ToList();
+
+    public virtual void DeleteByAccount(string accountId)
+    {
+        if (string.IsNullOrWhiteSpace(accountId)) return;
+        foreach (var folder in GetByAccount(accountId))
+        {
+            Delete(folder.Id);
+        }
+    }
 }

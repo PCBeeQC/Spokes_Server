@@ -18,6 +18,7 @@
 @inject TimesheetTimerService TimerService
 @implements IDisposable
 
+<MudContainer MaxWidth="MaxWidth.ExtraLarge" Class="mt-4 pb-6">
 <MudHidden Breakpoint="Breakpoint.SmAndDown">
     <MudGrid Class="align-center mb-4">
         <MudItem xs="12" sm="4">
@@ -306,6 +307,7 @@ else
         </MudPaper>
     }
 }
+</MudContainer>
 
 @code {
     private static string FormatHours(decimal hours) => TimesheetFormatHelper.FormatHours(hours);

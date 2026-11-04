@@ -65,13 +65,21 @@ public abstract class SpokesControllerBase : ControllerBase
     {
         ArgumentNullException.ThrowIfNull(handoff);
 
+        var configuredPublicUrl = !string.IsNullOrWhiteSpace(handoff.ServerBaseUrl)
+            ? handoff.ServerBaseUrl
+            : (HttpContext?.RequestServices != null
+                ? Microsoft.Extensions.DependencyInjection.ServiceProviderServiceExtensions
+                    .GetService<Spokes_Server.Core.Data.Repositories.Core.SystemConfigRepository>(HttpContext.RequestServices)
+                    ?.Get()?.ServerPublicUrl
+                : null);
+
         return handoff.HandoffType switch
         {
             LogoutHandoffType.MobileLocalRedirect =>
-                Content(MobileSsoHelper.CreateMobileLocalLogoutPage(handoff.ServerBaseUrl ?? $"{Request.Scheme}://{Request.Host}"), "text/html"),
+                Content(MobileSsoHelper.CreateMobileLocalLogoutPage(ServerUrlResolver.GetSafeServerBaseUrl(HttpContext, configuredPublicUrl)), "text/html"),
 
             LogoutHandoffType.MobileIdpLogout =>
-                Content(MobileSsoHelper.CreateMobileLogoutPage(HttpContext, handoff.LogoutRequestId!), "text/html"),
+                Content(MobileSsoHelper.CreateMobileLogoutPage(HttpContext!, handoff.LogoutRequestId!, configuredPublicUrl), "text/html"),
 
             LogoutHandoffType.Redirect =>
                 handoff.HandledViaSignOutAsync
@@ -88,5 +96,3 @@ public abstract class SpokesControllerBase : ControllerBase
         };
     }
 }
-
-

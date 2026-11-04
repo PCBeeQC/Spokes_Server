@@ -8,6 +8,9 @@ public interface IAccountingService
     void EvaluateProjectCommissions(string projectId);
     void ProcessInvoiceStatusChange(Invoice invoice, string oldStatus, string newStatus, string? user = null);
     void RecordInvoicePayment(Invoice invoice, PaymentRecord payment, string? user = null);
+    void UpdateInvoicePayment(Invoice invoice, PaymentRecord payment, string? user = null);
+    void DeleteInvoicePayment(Invoice invoice, string paymentId, string? user = null);
+    bool HasConsumedPrepaymentCredits(Invoice invoice);
     void RecordBillPayment(Bill bill, PaymentRecord payment);
     void ApproveBill(Bill bill, string? user = null);
     void VoidBill(Bill bill, string reason, string? user = null);

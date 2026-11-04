@@ -6,6 +6,7 @@
 @using Spokes_Server.Core.Services.Communication.Chat
 @using Spokes_Server.Components.Layout
 @inject ISlideshowSessionService SessionService
+@inject IHttpContextAccessor HttpContextAccessor
 @inject NavigationManager Nav
 @inject IJSRuntime JS
 @inject ILogger<SlideshowPair> Logger
@@ -144,7 +145,19 @@
                 @Loc["Open Spokes on your phone, go to any album, and tap 'Present to TV'."]
             </MudText>
 
-            @if (!string.IsNullOrEmpty(_pairingPin))
+            @if (_directStageDenied)
+            {
+                <MudText Typo="Typo.body2" Color="Color.Warning" Class="mt-6">
+                    @Loc["This presentation stage is unavailable or has ended."]
+                </MudText>
+            }
+            else if (!string.IsNullOrEmpty(_pairingError))
+            {
+                <MudText Typo="Typo.body2" Color="Color.Warning" Class="mt-6">
+                    @_pairingError
+                </MudText>
+            }
+            else if (!string.IsNullOrEmpty(_pairingPin))
             {
                 <div class="d-flex align-center justify-center gap-2" style="flex-wrap: nowrap;">
                     <div class="pin-display">
@@ -208,8 +221,15 @@
 
 @code {
     [Parameter] public string? DirectSessionId { get; set; }
+    [SupplyParameterFromQuery(Name = "st")] public string? StageToken { get; set; }
 
     private SlideshowSession? _currentSession;
+    private bool _ownsCurrentSession;
+    private string? _ownedTvConnectionId;
+    private string? _stageCircuitToken;
+    private string? _creatorIp;
+    private bool _directStageDenied;
+    private string? _pairingError;
     private string _pairingPin = string.Empty;
     private SlideshowStagePayload? _stagePayload;
     private int _currentIndex = 0;
@@ -301,6 +321,8 @@
 
     protected override void OnInitialized()
     {
+        _creatorIp = HttpContextAccessor.HttpContext?.Connection.RemoteIpAddress?.ToString();
+
         SessionService.OnSessionStarted += HandleSessionStarted;
         SessionService.OnSlideChanged += HandleSlideChanged;
         SessionService.OnZoomUpdated += HandleZoomUpdated;
@@ -309,10 +331,11 @@
 
         if (!string.IsNullOrWhiteSpace(DirectSessionId))
         {
-            var directSession = SessionService.GetSessionById(DirectSessionId);
-            if (directSession != null)
+            if (SessionService.TryBindDirectStageCircuit(DirectSessionId, StageToken, out _stageCircuitToken, out var directSession) && directSession != null)
             {
                 _currentSession = directSession;
+                _ownsCurrentSession = true;
+                _directStageDenied = false;
                 if (directSession.StagePayload != null)
                 {
                     _stagePayload = directSession.StagePayload;
@@ -323,7 +346,9 @@
             }
             else
             {
-                CreateNewSession();
+                _currentSession = null;
+                _ownsCurrentSession = false;
+                _directStageDenied = true;
             }
         }
         else
@@ -347,7 +372,7 @@
 
     private void RegeneratePin()
     {
-        if (!IsPresenting)
+        if (!IsPresenting && string.IsNullOrWhiteSpace(DirectSessionId))
         {
             CreateNewSession();
             StateHasChanged();
@@ -356,9 +381,29 @@
 
     private void CreateNewSession()
     {
-        string connectionId = $"tv_blazor_{Guid.NewGuid():N}";
-        _currentSession = SessionService.CreateSession(connectionId);
-        _pairingPin = _currentSession.PairingPin;
+        if (_ownsCurrentSession && _currentSession is { IsPaired: false } && !string.IsNullOrEmpty(_ownedTvConnectionId))
+        {
+            SessionService.EndSessionIfStageOwner(_currentSession.SessionId, _ownedTvConnectionId, null);
+        }
+
+        _ownsCurrentSession = false;
+        _ownedTvConnectionId = null;
+        _currentSession = null;
+        _pairingPin = string.Empty;
+        _pairingError = null;
+
+        try
+        {
+            string connectionId = $"tv_blazor_{Guid.NewGuid():N}";
+            _currentSession = SessionService.CreateSession(connectionId, SlideshowDisplayKind.BlazorPinStage, _creatorIp);
+            _ownedTvConnectionId = connectionId;
+            _ownsCurrentSession = true;
+            _pairingPin = _currentSession.PairingPin;
+        }
+        catch (InvalidOperationException)
+        {
+            _pairingError = Loc["Too many active pairing screens. Please close unused tabs and try again."].Value;
+        }
     }
 
     private void HandleSessionStarted(string sessionId, SlideshowStagePayload payload)
@@ -431,6 +476,10 @@
         {
             _stagePayload = null;
             _pairingPin = string.Empty;
+            _ownsCurrentSession = false;
+            _ownedTvConnectionId = null;
+            _stageCircuitToken = null;
+            _currentSession = null;
             ResetZoom();
             _currentVideoId = null;
             _bgSlotAUrl = string.Empty;
@@ -438,7 +487,14 @@
             _bgSlotAVisible = false;
             _bgSlotBVisible = false;
             _activeBgSlot = 'A';
-            CreateNewSession();
+            if (string.IsNullOrWhiteSpace(DirectSessionId))
+            {
+                CreateNewSession();
+            }
+            else
+            {
+                _directStageDenied = true;
+            }
             StateHasChanged();
         });
     }
@@ -593,9 +649,10 @@
         _dotNetRef = null;
         try { JS.InvokeVoidAsync("spokesSlideshowVideo.cleanupTvVideo", "stage-video"); } catch { }
 
-        if (_currentSession != null)
+        if (_ownsCurrentSession && _currentSession != null)
         {
-            SessionService.EndSession(_currentSession.SessionId);
+            SessionService.EndSessionIfStageOwner(_currentSession.SessionId, _ownedTvConnectionId, _stageCircuitToken);
+            _ownsCurrentSession = false;
         }
     }
 }

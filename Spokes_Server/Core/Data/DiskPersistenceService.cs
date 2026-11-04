@@ -5,7 +5,7 @@ using Microsoft.Extensions.Logging;
 
 namespace Spokes_Server.Core.Data;
 
-public record WriteJob(string FilePath, byte[]? Data, bool IsDelete);
+public record WriteJob(string FilePath, byte[]? Data, bool IsDelete, bool IsDirectory = false);
 
 public class DiskPersistenceService : BackgroundService
 {
@@ -40,7 +40,18 @@ public class DiskPersistenceService : BackgroundService
         _queue.Writer.TryWrite(new WriteJob(path, bytes, false));
     }
 
-    public void QueueDelete(string path) => _queue.Writer.TryWrite(new WriteJob(path, null, true));
+    /// <summary>
+    /// Queues pre-serialized or encrypted raw bytes for atomic background persistence (.tmp + move).
+    /// </summary>
+    public void QueueWriteBytes(string path, byte[] data)
+    {
+        ArgumentNullException.ThrowIfNull(data);
+        _queue.Writer.TryWrite(new WriteJob(path, data, false));
+    }
+
+    public void QueueDelete(string path) => _queue.Writer.TryWrite(new WriteJob(path, null, true, false));
+
+    public void QueueDeleteDirectory(string directoryPath) => _queue.Writer.TryWrite(new WriteJob(directoryPath, null, true, true));
 
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -89,7 +100,14 @@ public class DiskPersistenceService : BackgroundService
         {
             if (job.IsDelete)
             {
-                if (File.Exists(job.FilePath)) File.Delete(job.FilePath);
+                if (job.IsDirectory)
+                {
+                    if (Directory.Exists(job.FilePath)) Directory.Delete(job.FilePath, true);
+                }
+                else
+                {
+                    if (File.Exists(job.FilePath)) File.Delete(job.FilePath);
+                }
             }
             else
             {
@@ -135,7 +153,14 @@ public class DiskPersistenceService : BackgroundService
         {
             if (job.IsDelete)
             {
-                if (File.Exists(job.FilePath)) File.Delete(job.FilePath);
+                if (job.IsDirectory)
+                {
+                    if (Directory.Exists(job.FilePath)) Directory.Delete(job.FilePath, true);
+                }
+                else
+                {
+                    if (File.Exists(job.FilePath)) File.Delete(job.FilePath);
+                }
             }
             else
             {

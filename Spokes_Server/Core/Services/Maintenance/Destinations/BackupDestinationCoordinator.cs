@@ -56,6 +56,7 @@ public class BackupDestinationCoordinator
             BackupDestinationType.LocalMount => backupConfig.SecondaryMount.IsEnabled,
             BackupDestinationType.S3 => backupConfig.S3.IsEnabled,
             BackupDestinationType.GoogleDrive => backupConfig.GoogleDrive.IsEnabled,
+            BackupDestinationType.GitHub => backupConfig.GitHub.IsEnabled,
             BackupDestinationType.WebDav => backupConfig.WebDav.IsEnabled,
             BackupDestinationType.Sftp => backupConfig.Sftp.IsEnabled,
             _ => false
@@ -200,6 +201,7 @@ public class BackupDestinationCoordinator
                 BackupDestinationType.LocalMount => backupConfig.SecondaryMount.IsEnabled,
                 BackupDestinationType.S3 => backupConfig.S3.IsEnabled,
                 BackupDestinationType.GoogleDrive => backupConfig.GoogleDrive.IsEnabled,
+                BackupDestinationType.GitHub => backupConfig.GitHub.IsEnabled,
                 BackupDestinationType.WebDav => backupConfig.WebDav.IsEnabled,
                 BackupDestinationType.Sftp => backupConfig.Sftp.IsEnabled,
                 _ => false
@@ -238,5 +240,32 @@ public class BackupDestinationCoordinator
             return await gDrive.GetRelayAuthUrlAsync(callbackUrl, cancellationToken);
         }
         return null;
+    }
+
+    public async Task<GitHubTokenVerificationResult> VerifyGitHubTokenAsync(string token, CancellationToken cancellationToken = default)
+    {
+        if (GetProvider(BackupDestinationType.GitHub) is GitHubBackupProvider gitHub)
+        {
+            return await gitHub.VerifyTokenAsync(token, cancellationToken);
+        }
+        return new GitHubTokenVerificationResult(false, null, "GitHub backup provider is not registered.");
+    }
+
+    public async Task<List<GitHubRepoItem>> ListGitHubRepositoriesAsync(string? tokenOverride = null, CancellationToken cancellationToken = default)
+    {
+        if (GetProvider(BackupDestinationType.GitHub) is GitHubBackupProvider gitHub)
+        {
+            return await gitHub.ListRepositoriesAsync(tokenOverride, cancellationToken);
+        }
+        return [];
+    }
+
+    public async Task<List<string>> ListGitHubFoldersAsync(string repository, string? tokenOverride = null, CancellationToken cancellationToken = default)
+    {
+        if (GetProvider(BackupDestinationType.GitHub) is GitHubBackupProvider gitHub)
+        {
+            return await gitHub.ListRepositoryFoldersAsync(repository, tokenOverride, cancellationToken);
+        }
+        return [];
     }
 }

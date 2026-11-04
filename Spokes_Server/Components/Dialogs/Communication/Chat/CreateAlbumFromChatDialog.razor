@@ -1,0 +1,131 @@
+@using Spokes_Server.Core.Models.Communication
+
+<MudDialog>
+    <TitleContent>
+        <div class="d-flex align-center gap-2">
+            <MudIcon Icon="@Icons.Material.Filled.PhotoLibrary" Color="Color.Primary" />
+            <MudText Typo="Typo.h6">@Loc["Organize Photos into Album"]</MudText>
+        </div>
+    </TitleContent>
+    <DialogContent>
+        <MudStack Spacing="3" Class="py-1">
+            <MudPaper Elevation="0" Outlined="true" Class="pa-3 rounded-lg d-flex align-center gap-2">
+                <MudIcon Icon="@Icons.Material.Filled.Collections" Color="Color.Primary" Size="Size.Small" />
+                <MudText Typo="Typo.body2">
+                    @string.Format(Loc["{0} photos will be moved into the album and shared in this channel."].Value, PhotoCount)
+                </MudText>
+            </MudPaper>
+
+            @if (ExistingAlbums.Count > 0)
+            {
+                <MudRadioGroup T="bool" @bind-Value="_createNew" Class="d-flex gap-4">
+                    <MudRadio Value="true" Color="Color.Primary">@Loc["Create New Album"]</MudRadio>
+                    <MudRadio Value="false" Color="Color.Primary">@Loc["Add to Existing Album"]</MudRadio>
+                </MudRadioGroup>
+            }
+
+            @if (_createNew || ExistingAlbums.Count == 0)
+            {
+                <MudTextField @bind-Value="_albumTitle"
+                              Label="@Loc["Album Title"]"
+                              Placeholder="@Loc["Enter album title..."]"
+                              Variant="Variant.Outlined"
+                              MaxLength="150"
+                              Immediate="true"
+                              Required="true"
+                              FullWidth="true"
+                              OnKeyDown="HandleKeyDown" />
+            }
+            else
+            {
+                <MudSelect T="string"
+                           @bind-Value="_selectedAlbumId"
+                           Label="@Loc["Select Album"]"
+                           Variant="Variant.Outlined"
+                           FullWidth="true">
+                    @foreach (var album in ExistingAlbums)
+                    {
+                        <MudSelectItem Value="@album.Id">
+                            @($"{album.Title} ({album.Media.Count})")
+                        </MudSelectItem>
+                    }
+                </MudSelect>
+            }
+        </MudStack>
+    </DialogContent>
+    <DialogActions>
+        <MudButton Variant="Variant.Text" OnClick="Cancel">@Loc["Cancel"]</MudButton>
+        <MudButton Variant="Variant.Filled"
+                   Color="Color.Primary"
+                   StartIcon="@Icons.Material.Filled.PhotoLibrary"
+                   Disabled="@(!CanSubmit)"
+                   OnClick="Submit">
+            @GetSubmitButtonText()
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
+
+    [Parameter] public int PhotoCount { get; set; }
+    [Parameter] public string DefaultTitle { get; set; } = string.Empty;
+    [Parameter] public List<Album> ExistingAlbums { get; set; } = [];
+    [Parameter] public bool IsPostSendConversion { get; set; }
+
+    private bool _createNew = true;
+    private string _albumTitle = string.Empty;
+    private string? _selectedAlbumId;
+
+    private bool CanSubmit => _createNew
+        ? !string.IsNullOrWhiteSpace(_albumTitle)
+        : !string.IsNullOrWhiteSpace(_selectedAlbumId);
+
+    protected override void OnInitialized()
+    {
+        _albumTitle = DefaultTitle ?? string.Empty;
+        if (ExistingAlbums.Count > 0)
+        {
+            _selectedAlbumId = ExistingAlbums[0].Id;
+        }
+    }
+
+    private string GetSubmitButtonText()
+    {
+        if (IsPostSendConversion)
+        {
+            return _createNew ? Loc["Create Album & Replace Photos"].Value : Loc["Add to Album & Replace Photos"].Value;
+        }
+
+        return _createNew ? Loc["Create & Post Album"].Value : Loc["Add & Post Album"].Value;
+    }
+
+    private void HandleKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter" && CanSubmit)
+        {
+            Submit();
+        }
+    }
+
+    private void Submit()
+    {
+        if (!CanSubmit)
+        {
+            return;
+        }
+
+        if (_createNew)
+        {
+            MudDialog.Close(DialogResult.Ok(new Result(true, _albumTitle.Trim(), null)));
+        }
+        else
+        {
+            MudDialog.Close(DialogResult.Ok(new Result(false, null, _selectedAlbumId)));
+        }
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+
+    public sealed record Result(bool CreateNew, string? NewAlbumTitle, string? ExistingAlbumId);
+}

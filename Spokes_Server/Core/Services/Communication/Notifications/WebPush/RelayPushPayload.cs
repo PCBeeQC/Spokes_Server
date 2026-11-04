@@ -1,3 +1,4 @@
+using System;
 using System.Text.Json.Serialization;
 using Spokes_Server.Core.Services.Licensing;
 
@@ -33,6 +34,12 @@ public class RelayPushPayload
     public string? ServerIconUrl { get; set; }
     public int? Badge { get; set; }
     public bool IsSilent { get; set; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? TtlSeconds { get; set; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public DateTime? SentAtUtc { get; set; }
 
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? OriginUrl { get; set; }

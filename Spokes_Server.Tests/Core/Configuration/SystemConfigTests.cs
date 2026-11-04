@@ -50,6 +50,7 @@ public class SystemConfigTests
         Assert.Equal(7881, config.LiveKitFallbackPort);
         Assert.Equal(30000, config.LiveKitUdpStartPort);
         Assert.Equal(30499, config.LiveKitUdpEndPort);
+        Assert.Equal("info", config.LiveKitLogLevel);
 
         Assert.Equal(string.Empty, config.Authority);
         Assert.Equal(string.Empty, config.ClientId);
@@ -84,6 +85,7 @@ public class SystemConfigTests
             LiveKitFallbackPort = 8080,
             LiveKitUdpStartPort = 40000,
             LiveKitUdpEndPort = 40500,
+            LiveKitLogLevel = "debug",
             Authority = "https://auth.example.com",
             ClientId = "client-id-xyz",
             ClientSecret = "client-secret-abc",
@@ -102,6 +104,7 @@ public class SystemConfigTests
         Assert.Equal(8080, config.LiveKitFallbackPort);
         Assert.Equal(40000, config.LiveKitUdpStartPort);
         Assert.Equal(40500, config.LiveKitUdpEndPort);
+        Assert.Equal("debug", config.LiveKitLogLevel);
         Assert.Equal("https://auth.example.com", config.Authority);
         Assert.Equal("client-id-xyz", config.ClientId);
         Assert.Equal("client-secret-abc", config.ClientSecret);
@@ -125,6 +128,7 @@ public class SystemConfigTests
             LiveKitFallbackPort = 9000,
             LiveKitUdpStartPort = 50000,
             LiveKitUdpEndPort = 50500,
+            LiveKitLogLevel = "warn",
             Authority = "https://idp.example.com",
             ClientId = "cid",
             ClientSecret = "csecret",
@@ -147,6 +151,7 @@ public class SystemConfigTests
         Assert.Equal(original.LiveKitFallbackPort, deserialized.LiveKitFallbackPort);
         Assert.Equal(original.LiveKitUdpStartPort, deserialized.LiveKitUdpStartPort);
         Assert.Equal(original.LiveKitUdpEndPort, deserialized.LiveKitUdpEndPort);
+        Assert.Equal(original.LiveKitLogLevel, deserialized.LiveKitLogLevel);
         Assert.Equal(original.Authority, deserialized.Authority);
         Assert.Equal(original.ClientId, deserialized.ClientId);
         Assert.Equal(original.ClientSecret, deserialized.ClientSecret);

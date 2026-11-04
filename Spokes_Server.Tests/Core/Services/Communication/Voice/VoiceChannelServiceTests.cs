@@ -127,8 +127,8 @@ public class VoiceChannelServiceTests : IDisposable
         string userName = "Alice";
 
         // Act & Assert
-        Assert.Throws<NullReferenceException>(() => 
-            _service.GenerateJoinToken(channelId, userId, userName, null));
+        Assert.Throws<NullReferenceException>(() =>
+            _service.GenerateJoinToken(channelId, userId, userName, null!));
     }
 
     [Fact]
@@ -385,5 +385,279 @@ public class VoiceChannelServiceTests : IDisposable
                 It.IsAny<Exception>(),
                 It.IsAny<Func<It.IsAnyType, Exception?, string>>()),
             Times.Once);
+    }
+
+    [Fact]
+    public async Task LeaveVoiceAsync_WhenEvictFromLiveKitIsTrue_CallsRemoveParticipantAsync()
+    {
+        var mockLiveKit = new Mock<LiveKitService>(Mock.Of<ILogger<LiveKitService>>(), null);
+        var service = new VoiceChannelService(
+            _chatState,
+            _mockRealtimeGateway.Object,
+            _messages,
+            new Mock<INotificationRoutingService>().Object,
+            _systemConfigs,
+            mockLiveKit.Object,
+            _mockLogger.Object,
+            _employees,
+            _channels,
+            _readStates);
+
+        await service.JoinVoiceAsync("chan-evict-true", "user-1");
+        await service.LeaveVoiceAsync("chan-evict-true", "user-1");
+
+        mockLiveKit.Verify(
+            x => x.RemoveParticipantAsync("chan-evict-true", "user-1", "test-api-key", "test-api-secret-which-must-be-long-enough", It.IsAny<CancellationToken>()),
+            Times.Once);
+        Assert.DoesNotContain("user-1", _chatState.GetVoiceParticipants("chan-evict-true"));
+    }
+
+    [Fact]
+    public async Task LeaveVoiceAsync_WhenEvictFromLiveKitIsFalse_SkipsRemoveParticipantAsyncAndCleansUpState()
+    {
+        var mockLiveKit = new Mock<LiveKitService>(Mock.Of<ILogger<LiveKitService>>(), null);
+        var service = new VoiceChannelService(
+            _chatState,
+            _mockRealtimeGateway.Object,
+            _messages,
+            new Mock<INotificationRoutingService>().Object,
+            _systemConfigs,
+            mockLiveKit.Object,
+            _mockLogger.Object,
+            _employees,
+            _channels,
+            _readStates);
+
+        await service.JoinVoiceAsync("chan-evict-false", "user-1");
+        await service.LeaveVoiceAsync("chan-evict-false", "user-1", evictFromLiveKit: false);
+
+        mockLiveKit.Verify(
+            x => x.RemoveParticipantAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+        Assert.DoesNotContain("user-1", _chatState.GetVoiceParticipants("chan-evict-false"));
+        _mockRealtimeGateway.Verify(g => g.SendToChannelAsync("chan-evict-false", "VoiceMemberLeft", "chan-evict-false", "user-1", default), Times.Once);
+    }
+
+    [Fact]
+    public async Task GenerateJoinToken_AndJoinVoiceAsync_WhenUnauthorized_RejectsAccess()
+    {
+        var channel = new ChatChannel { Id = "chan-priv", Name = "Private Voice", ChannelType = ChatChannelType.Direct };
+        var outsider = new Employee { Id = "user-outsider", FirstName = "Outsider" };
+        var member = new Employee { Id = "user-member", FirstName = "Member" };
+        _channels.Save(channel);
+        _employees.Save(outsider);
+        _employees.Save(member);
+
+        var mockChatAuth = new Mock<IChatAuthorizationService>();
+        mockChatAuth.Setup(a => a.CanUserAccessChannel(It.Is<ChatChannel>(c => c.Id == "chan-priv"), It.Is<Employee>(e => e.Id == "user-outsider"))).Returns(false);
+        mockChatAuth.Setup(a => a.CanUserAccessChannel(It.Is<ChatChannel>(c => c.Id == "chan-priv"), It.Is<Employee>(e => e.Id == "user-member"))).Returns(true);
+
+        var service = new VoiceChannelService(
+            _chatState,
+            _mockRealtimeGateway.Object,
+            _messages,
+            new Mock<INotificationRoutingService>().Object,
+            _systemConfigs,
+            new LiveKitService(Mock.Of<ILogger<LiveKitService>>()),
+            _mockLogger.Object,
+            _employees,
+            _channels,
+            _readStates,
+            mockChatAuth.Object);
+
+        // Unauthorized user cannot generate a LiveKit join token or join the voice channel
+        Assert.Throws<UnauthorizedAccessException>(() =>
+            service.GenerateJoinToken("chan-priv", "user-outsider", "Outsider", ""));
+
+        await service.JoinVoiceAsync("chan-priv", "user-outsider", "dev-1", "PC");
+        Assert.DoesNotContain("user-outsider", _chatState.GetVoiceParticipants("chan-priv"));
+
+        // Authorized channel member (even without a vault password) can generate a join token and join
+        var token = service.GenerateJoinToken("chan-priv", "user-member", "Member", "");
+        Assert.False(string.IsNullOrWhiteSpace(token));
+        await service.JoinVoiceAsync("chan-priv", "user-member", "dev-2", "PC");
+        Assert.Contains("user-member", _chatState.GetVoiceParticipants("chan-priv"));
+    }
+
+    [Fact]
+    public async Task GenerateJoinToken_JoinVoice_And_UpdateCallInvite_FailClosedWhenChannelOrEmployeeMissingInactiveOrBanned()
+    {
+        var activeMember = new Employee { Id = "voice-active", FirstName = "Active", IsActive = true };
+        var inactiveUser = new Employee { Id = "voice-inactive", FirstName = "Inactive", IsActive = false };
+        var bannedUser = new Employee { Id = "voice-banned", FirstName = "Banned", IsActive = true, IsBanned = true };
+        var suspendedUser = new Employee { Id = "voice-suspended", FirstName = "Suspended", IsActive = true, IsSuspended = true };
+        var outsider = new Employee { Id = "voice-outsider", FirstName = "Outsider", IsActive = true };
+        _employees.Save(activeMember);
+        _employees.Save(inactiveUser);
+        _employees.Save(bannedUser);
+        _employees.Save(suspendedUser);
+        _employees.Save(outsider);
+
+        var channel = new ChatChannel
+        {
+            Id = "chan-voice-closed",
+            Name = "Secure Voice",
+            ChannelType = ChatChannelType.Group,
+            IsEncrypted = true, // Encrypted channel must NOT require vault unlock — only CanUserAccessChannel!
+            ParticipantIds = [activeMember.Id, suspendedUser.Id]
+        };
+        _channels.Save(channel);
+
+        var invite = new ChatMessage
+        {
+            Id = "invite-closed-1",
+            ChannelId = channel.Id,
+            SenderId = activeMember.Id,
+            MessageType = "CallInvite",
+            CallStatus = CallStatus.Active,
+            Content = "Call"
+        };
+        _messages.Save(invite);
+
+        var mockChatAuth = new Mock<IChatAuthorizationService>();
+        mockChatAuth
+            .Setup(a => a.CanUserAccessChannel(
+                It.Is<ChatChannel>(c => c.Id == channel.Id),
+                It.Is<Employee>(e => e.Id == activeMember.Id || e.Id == suspendedUser.Id)))
+            .Returns(true);
+
+        var service = new VoiceChannelService(
+            _chatState,
+            _mockRealtimeGateway.Object,
+            _messages,
+            new Mock<INotificationRoutingService>().Object,
+            _systemConfigs,
+            new LiveKitService(Mock.Of<ILogger<LiveKitService>>()),
+            _mockLogger.Object,
+            _employees,
+            _channels,
+            _readStates,
+            mockChatAuth.Object);
+
+        // Missing channel -> fail closed!
+        Assert.Throws<UnauthorizedAccessException>(() =>
+            service.GenerateJoinToken("non-existent-channel", activeMember.Id, "Active", ""));
+        await service.JoinVoiceAsync("non-existent-channel", activeMember.Id);
+        Assert.Empty(_chatState.GetVoiceParticipants("non-existent-channel"));
+
+        // Missing employee -> fail closed!
+        Assert.Throws<UnauthorizedAccessException>(() =>
+            service.GenerateJoinToken(channel.Id, "non-existent-emp", "Ghost", ""));
+        await service.JoinVoiceAsync(channel.Id, "non-existent-emp");
+        Assert.DoesNotContain("non-existent-emp", _chatState.GetVoiceParticipants(channel.Id));
+
+        // Inactive or banned employee -> fail closed!
+        Assert.Throws<UnauthorizedAccessException>(() =>
+            service.GenerateJoinToken(channel.Id, inactiveUser.Id, "Inactive", ""));
+        Assert.Throws<UnauthorizedAccessException>(() =>
+            service.GenerateJoinToken(channel.Id, bannedUser.Id, "Banned", ""));
+        await service.JoinVoiceAsync(channel.Id, inactiveUser.Id, "dev-inact", "PC");
+        await service.JoinVoiceAsync(channel.Id, bannedUser.Id, "dev-ban", "PC");
+        Assert.DoesNotContain(inactiveUser.Id, _chatState.GetVoiceParticipants(channel.Id));
+        Assert.DoesNotContain(bannedUser.Id, _chatState.GetVoiceParticipants(channel.Id));
+
+        // SendCallInviteAsync rejects suspended and banned users
+        var suspendedInviteRes = await service.SendCallInviteAsync(suspendedUser.Id, channel.Id);
+        Assert.False(suspendedInviteRes.IsSuccess);
+        Assert.Equal("FORBIDDEN", suspendedInviteRes.Code);
+
+        // UpdateCallInviteStatusAsync fails closed for null/empty actorUserId, outsider, banned, inactive, or suspended users
+        await service.UpdateCallInviteStatusAsync(invite.Id, CallStatus.Declined, actorUserId: null);
+        await service.UpdateCallInviteStatusAsync(invite.Id, CallStatus.Declined, actorUserId: "");
+        await service.UpdateCallInviteStatusAsync(invite.Id, CallStatus.Declined, actorUserId: outsider.Id);
+        await service.UpdateCallInviteStatusAsync(invite.Id, CallStatus.Declined, actorUserId: bannedUser.Id);
+        await service.UpdateCallInviteStatusAsync(invite.Id, CallStatus.Declined, actorUserId: suspendedUser.Id);
+        Assert.Equal(CallStatus.Active, _messages.GetById(invite.Id)!.CallStatus);
+
+        // Authorized active member succeeds on encrypted channel with simple CanUserAccessChannel (no vault check)
+        activeMember.EncryptedPrivateKey = "personal-vault-locked";
+        _employees.Save(activeMember);
+        var encVoiceToken = service.GenerateJoinToken(channel.Id, activeMember.Id, "Active", "");
+        Assert.False(string.IsNullOrWhiteSpace(encVoiceToken));
+        await service.JoinVoiceAsync(channel.Id, activeMember.Id, "dev-ok", "PC");
+        Assert.Contains(activeMember.Id, _chatState.GetVoiceParticipants(channel.Id));
+
+        await service.UpdateCallInviteStatusAsync(invite.Id, CallStatus.Joined, actorUserId: activeMember.Id);
+        Assert.Equal(CallStatus.Joined, _messages.GetById(invite.Id)!.CallStatus);
+    }
+
+    [Fact]
+    public void GenerateCameraCompanionToken_ValidInputs_MintsJwtWithCamIdentity()
+    {
+        var token = _service.GenerateCameraCompanionToken("123", "user-1", "Alice", "http://example.com/avatar.png");
+
+        Assert.False(string.IsNullOrWhiteSpace(token));
+        var parts = token.Split('.');
+        Assert.Equal(3, parts.Length);
+
+        var payloadBase64 = parts[1].Replace('-', '+').Replace('_', '/');
+        switch (payloadBase64.Length % 4)
+        {
+            case 2: payloadBase64 += "=="; break;
+            case 3: payloadBase64 += "="; break;
+        }
+        var payloadJson = System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(payloadBase64));
+        Assert.Contains("\"sub\":\"user-1:cam\"", payloadJson);
+        Assert.Contains("\"room\":\"channel-123\"", payloadJson);
+    }
+
+    [Fact]
+    public async Task JoinVoiceAsync_WhenSecondParticipantJoins_TransitionsActiveCallInviteToJoinedAndClearsCallNotifications()
+    {
+        var channelId = "chan-call-answer";
+        var caller = new Employee { Id = "user-caller", FirstName = "Caller", IsActive = true };
+        var callee = new Employee { Id = "user-callee", FirstName = "Callee", IsActive = true };
+        _employees.Save(caller);
+        _employees.Save(callee);
+
+        var channel = new ChatChannel
+        {
+            Id = channelId,
+            Name = "Direct Call",
+            ChannelType = ChatChannelType.Direct,
+            ParticipantIds = [caller.Id, callee.Id]
+        };
+        _channels.Save(channel);
+
+        var invite = new ChatMessage
+        {
+            Id = "invite-answer-1",
+            ChannelId = channelId,
+            SenderId = caller.Id,
+            MessageType = ChatMessageType.CallInvite,
+            CallStatus = CallStatus.Active,
+            SentAt = DateTime.UtcNow
+        };
+        _messages.Save(invite);
+
+        var tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var mockRouting = new Mock<INotificationRoutingService>();
+        mockRouting
+            .Setup(r => r.ClearChannelNotificationsAsync(channelId))
+            .Callback<string>(id => tcs.TrySetResult(id))
+            .Returns(Task.CompletedTask);
+
+        var service = new VoiceChannelService(
+            _chatState,
+            _mockRealtimeGateway.Object,
+            _messages,
+            mockRouting.Object,
+            _systemConfigs,
+            new LiveKitService(Mock.Of<ILogger<LiveKitService>>()),
+            _mockLogger.Object,
+            _employees,
+            _channels,
+            _readStates);
+
+        // First participant (caller) joins -> invite remains Active so recipients keep ringing
+        await service.JoinVoiceAsync(channelId, caller.Id, "dev-1", "PC");
+        Assert.Equal(CallStatus.Active, _messages.GetById(invite.Id)!.CallStatus);
+
+        // Second participant (callee) joins -> invite transitions to Joined and clears call notifications
+        await service.JoinVoiceAsync(channelId, callee.Id, "dev-2", "Android");
+        Assert.Equal(CallStatus.Joined, _messages.GetById(invite.Id)!.CallStatus);
+
+        var clearedChannelId = await tcs.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(channelId, clearedChannelId);
     }
 }

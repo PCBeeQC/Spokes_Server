@@ -6,8 +6,10 @@ using Spokes_Server.Core.Models.HR;
 using Spokes_Server.Core.Models.Projects;
 using System.Security.Claims;
 using Spokes_Server.Core.Constants;
+using Spokes_Server.Core.Helpers;
 using Spokes_Server.Core.Middleware;
 using Spokes_Server.Core.Services.Projects;
+using Spokes_Server.Core.Services.Security;
 
 namespace Spokes_Server.Core.Services.Identity;
 
@@ -23,6 +25,7 @@ public class UserService
     private readonly OpenIdAccountRepository _openIdAccounts;
     private readonly CompanyProfileRepository? _companyProfiles;
     private readonly TeamRepository? _teams;
+    private readonly SessionService? _sessionService;
 
     // Cache the employee for the duration of the circuit/scope
     private Employee? _cachedEmployee;
@@ -30,21 +33,48 @@ public class UserService
     public UserService(
         AuthenticationStateProvider authStateProvider,
         EmployeeRepository employees,
+        OpenIdAccountRepository openIdAccounts)
+        : this(authStateProvider, employees, openIdAccounts, null, null, null)
+    {
+    }
+
+    public UserService(
+        AuthenticationStateProvider authStateProvider,
+        EmployeeRepository employees,
         OpenIdAccountRepository openIdAccounts,
-        CompanyProfileRepository? companyProfiles = null,
-        TeamRepository? teams = null)
+        CompanyProfileRepository? companyProfiles,
+        TeamRepository? teams)
+        : this(authStateProvider, employees, openIdAccounts, companyProfiles, teams, null)
+    {
+    }
+
+    public UserService(
+        AuthenticationStateProvider authStateProvider,
+        EmployeeRepository employees,
+        OpenIdAccountRepository openIdAccounts,
+        CompanyProfileRepository? companyProfiles,
+        TeamRepository? teams,
+        SessionService? sessionService)
     {
         _authStateProvider = authStateProvider ?? throw new ArgumentNullException(nameof(authStateProvider));
         _employees = employees;
         _openIdAccounts = openIdAccounts;
         _companyProfiles = companyProfiles;
         _teams = teams;
+        _sessionService = sessionService;
     }
 
 
     public virtual async Task<Employee?> GetEmployeeAsync()
     {
-        if (_cachedEmployee != null) return _cachedEmployee;
+        if (_cachedEmployee != null)
+        {
+            if (_cachedEmployee.Id != "system-renderer")
+            {
+                _cachedEmployee = _employees.GetById(_cachedEmployee.Id) ?? _cachedEmployee;
+            }
+            return _cachedEmployee;
+        }
 
         var authState = await _authStateProvider.GetAuthenticationStateAsync();
         var user = authState.User;
@@ -106,6 +136,8 @@ public class UserService
         return null;
     }
 
+    public Employee? GetCurrentUser(ClaimsPrincipal user) => GetEmployee(user);
+
     /// <summary>
     /// Looks up an employee by their OIDC Subject (sub) via OpenID account linkages.
     /// This query is strictly read-only and does not mutate repository state.
@@ -123,124 +155,296 @@ public class UserService
 
     /// <summary>
     /// Synchronizes or auto-provisions an OpenID account and its corresponding employee profile
-    /// during OIDC token validation or mobile exchange. Thread-safe to prevent race conditions during first login.
+    /// during OIDC token validation or mobile exchange. Identity binding is strictly sub -> LinkedEmployeeId
+    /// (never auto-linking to an existing Employee by email or display name).
     /// </summary>
-    public OidcProvisionResult ProvisionOrSyncOidcUser(string sub, string name, string email)
+    public OidcProvisionResult ProvisionOrSyncOidcUser(string sub, string name, string email, bool emailVerified = true)
     {
+        _ = emailVerified;
         if (string.IsNullOrEmpty(sub))
         {
             throw new ArgumentException("Subject (sub) cannot be null or empty.", nameof(sub));
         }
 
-        var openIdAccount = _openIdAccounts.GetBySub(sub);
-        var isFirstTimeLogin = openIdAccount == null;
-
-        if (openIdAccount == null)
+        lock (_authLock)
         {
-            openIdAccount = new OpenIdAccount
+            var openIdAccount = _openIdAccounts.GetBySub(sub);
+            var isFirstTimeLogin = openIdAccount == null;
+
+            if (openIdAccount == null)
             {
-                Sub = sub,
-                Name = name,
-                Email = email,
-                FirstSeenAt = DateTime.UtcNow,
-                LastLoginAt = DateTime.UtcNow
-            };
-            _openIdAccounts.Save(openIdAccount);
-        }
-        else
-        {
-            openIdAccount.LastLoginAt = DateTime.UtcNow;
-            openIdAccount.Name = name;
-            if (!string.IsNullOrEmpty(email)) openIdAccount.Email = email;
-            _openIdAccounts.Save(openIdAccount);
-        }
-
-        Employee? existingUser = null;
-        if (!string.IsNullOrEmpty(openIdAccount.LinkedEmployeeId))
-        {
-            existingUser = _employees.GetById(openIdAccount.LinkedEmployeeId);
-        }
-
-        if (existingUser == null)
-        {
-            if (!string.IsNullOrEmpty(email))
-            {
-                existingUser = _employees.GetAll().FirstOrDefault(e => string.Equals(e.Email, email, StringComparison.OrdinalIgnoreCase));
-            }
-
-            if (existingUser != null)
-            {
-                openIdAccount.LinkedEmployeeId = existingUser.Id;
+                openIdAccount = new OpenIdAccount
+                {
+                    Sub = sub,
+                    Name = name,
+                    Email = email,
+                    FirstSeenAt = DateTime.UtcNow,
+                    LastLoginAt = DateTime.UtcNow
+                };
                 _openIdAccounts.Save(openIdAccount);
             }
-        }
-
-        if (existingUser == null)
-        {
-            var profile = _companyProfiles?.Get();
-            var autoCreate = profile?.AutoCreateEmployeeOnFirstLogin ?? true;
-
-            if (autoCreate && isFirstTimeLogin)
+            else
             {
-                lock (_authLock)
+                openIdAccount.LastLoginAt = DateTime.UtcNow;
+                openIdAccount.Name = name;
+                if (!string.IsNullOrEmpty(email)) openIdAccount.Email = email;
+                _openIdAccounts.Save(openIdAccount);
+            }
+
+            Employee? existingUser = null;
+            if (!string.IsNullOrEmpty(openIdAccount.LinkedEmployeeId))
+            {
+                existingUser = _employees.GetById(openIdAccount.LinkedEmployeeId);
+            }
+
+            if (existingUser == null)
+            {
+                var profile = _companyProfiles?.Get();
+                var autoCreate = profile?.AutoCreateEmployeeOnFirstLogin ?? true;
+
+                if (autoCreate && isFirstTimeLogin)
                 {
-                    // Check again inside lock to prevent race conditions
-                    if (!string.IsNullOrEmpty(email))
+                    var parts = name.Split(' ', 2);
+                    var newEmp = new Employee
                     {
-                        existingUser = _employees.GetAll().FirstOrDefault(e => string.Equals(e.Email, email, StringComparison.OrdinalIgnoreCase));
-                    }
+                        FirstName = parts.Length > 0 ? parts[0] : name,
+                        LastName = parts.Length > 1 ? parts[1] : "",
+                        Email = email,
+                        IsActive = true,
+                        IsAdmin = !_employees.GetAll().Any(e => e.IsAdmin)
+                    };
 
-                    if (existingUser == null)
+                    if (!newEmp.IsAdmin)
                     {
-                        var parts = name.Split(' ', 2);
-                        var newEmp = new Employee
-                        {
-                            FirstName = parts.Length > 0 ? parts[0] : name,
-                            LastName = parts.Length > 1 ? parts[1] : "",
-                            Email = email,
-                            IsActive = true,
-                            IsAdmin = !_employees.GetAll().Any(e => e.IsAdmin)
-                        };
+                        var defaultGroup = profile != null && !string.IsNullOrEmpty(profile.DefaultPermissionGroupId)
+                            ? profile.PermissionGroups.FirstOrDefault(g => g.Id == profile.DefaultPermissionGroupId)
+                            : null;
 
-                        if (!newEmp.IsAdmin)
+                        if (defaultGroup != null)
                         {
-                            var defaultGroup = profile != null && !string.IsNullOrEmpty(profile.DefaultPermissionGroupId)
-                                ? profile.PermissionGroups.FirstOrDefault(g => g.Id == profile.DefaultPermissionGroupId)
-                                : null;
-
-                            if (defaultGroup != null)
-                            {
-                                newEmp.PermissionGroupId = defaultGroup.Id;
-                            }
-                            else
-                            {
-                                newEmp.Permissions.Add(AppPermissions.Chat.Use);
-                                newEmp.Permissions.Add(AppPermissions.Calendar.View);
-                            }
+                            newEmp.PermissionGroupId = defaultGroup.Id;
                         }
-
-                        _employees.Save(newEmp);
-                        existingUser = newEmp;
-
-                        openIdAccount.LinkedEmployeeId = newEmp.Id;
-                        _openIdAccounts.Save(openIdAccount);
+                        else
+                        {
+                            newEmp.Permissions.Add(AppPermissions.Chat.Use);
+                            newEmp.Permissions.Add(AppPermissions.Calendar.View);
+                        }
                     }
-                    else
-                    {
-                        // If found during lock
-                        openIdAccount.LinkedEmployeeId = existingUser.Id;
-                        _openIdAccounts.Save(openIdAccount);
-                    }
+
+                    _employees.Save(newEmp);
+                    existingUser = newEmp;
+
+                    openIdAccount.LinkedEmployeeId = newEmp.Id;
+                    _openIdAccounts.Save(openIdAccount);
                 }
             }
+            else if (string.IsNullOrEmpty(existingUser.Email) && !string.IsNullOrEmpty(email))
+            {
+                existingUser.Email = email;
+                _employees.Save(existingUser);
+            }
+
+            return new OidcProvisionResult(openIdAccount, existingUser, isFirstTimeLogin);
         }
-        else if (string.IsNullOrEmpty(existingUser.Email) && !string.IsNullOrEmpty(email))
+    }
+
+    /// <summary>
+    /// Updates the ban status of an employee and immediately quarantines all active device sessions
+    /// and circuits to /banned when banned.
+    /// </summary>
+    public void SetUserBanState(string employeeId, bool isBanned)
+    {
+        var emp = _employees.GetById(employeeId);
+        if (emp == null) return;
+
+        emp.IsBanned = isBanned;
+        _employees.Save(emp);
+
+        if (isBanned)
         {
-            existingUser.Email = email;
-            _employees.Save(existingUser);
+            _sessionService?.QuarantineUserSessionsForBan(employeeId);
+        }
+    }
+
+    /// <summary>
+    /// Updates the active status of an employee and immediately revokes all active device sessions,
+    /// file tokens, and cached keystore state when deactivated.
+    /// </summary>
+    public void SetUserActiveState(string employeeId, bool isActive)
+    {
+        var emp = _employees.GetById(employeeId);
+        if (emp == null) return;
+
+        emp.IsActive = isActive;
+        _employees.Save(emp);
+
+        if (!isActive)
+        {
+            _sessionService?.RevokeAllUserSessions(employeeId);
+        }
+    }
+
+    /// <summary>
+    /// Verifies whether the caller is allowed to manage the target employee profile.
+    /// Non-admin users with ManageUsers cannot modify or deactivate Administrator accounts.
+    /// </summary>
+    public static bool CanManageEmployeeTarget(Employee? caller, Employee? target)
+    {
+        if (caller == null || target == null) return false;
+        if (caller.IsAdmin) return true;
+        if (!caller.HasPermission(AppPermissions.Admin.ManageUsers)) return false;
+        return !target.IsAdmin;
+    }
+
+    /// <summary>
+    /// Updates the read-only suspension status of an employee.
+    /// </summary>
+    public void SetUserSuspensionState(string employeeId, bool isSuspended)
+    {
+        var emp = _employees.GetById(employeeId);
+        if (emp == null) return;
+
+        emp.IsSuspended = isSuspended;
+        _employees.Save(emp);
+    }
+
+    /// <summary>
+    /// Verifies whether a moderator or administrator can apply chat moderation actions (suspend/ban)
+    /// against the target user. Moderators and administrators are exempt from chat moderation suspension/bans.
+    /// </summary>
+    public static bool CanModerateUserTarget(Employee? caller, Employee? target)
+    {
+        if (caller is not { IsActive: true, IsSuspended: false, IsBanned: false } || target == null || target.IsSystem)
+            return false;
+
+        if (!caller.IsAdmin && !caller.HasPermission(AppPermissions.Chat.Moderator))
+            return false;
+
+        if (caller.Id == target.Id)
+            return false;
+
+        return !target.IsAdmin && !target.HasPermission(AppPermissions.Chat.Moderator);
+    }
+
+    /// <summary>
+    /// Toggles the read-only suspension state of a target user on behalf of an authorized moderator/admin.
+    /// </summary>
+    public SpokesResult<bool> ToggleModerationSuspension(string actorEmployeeId, string targetEmployeeId)
+    {
+        var actor = _employees.GetById(actorEmployeeId);
+        if (actor is not { IsActive: true, IsSuspended: false, IsBanned: false } ||
+            (!actor.IsAdmin && !actor.HasPermission(AppPermissions.Chat.Moderator)))
+        {
+            return SpokesResult<bool>.Failure("User is not authorized to perform moderation actions.", "ACCESS_DENIED");
         }
 
-        return new OidcProvisionResult(openIdAccount, existingUser, isFirstTimeLogin);
+        var target = _employees.GetById(targetEmployeeId);
+        if (target == null)
+        {
+            return SpokesResult<bool>.Failure("Target user not found.", "NOT_FOUND");
+        }
+
+        if (target.IsSystem || target.IsAdmin || target.HasPermission(AppPermissions.Chat.Moderator) || actor.Id == target.Id)
+        {
+            return SpokesResult<bool>.Failure("Cannot suspend another moderator or admin.", "FORBIDDEN_TARGET");
+        }
+
+        var newState = !target.IsSuspended;
+        SetUserSuspensionState(target.Id, newState);
+        return SpokesResult<bool>.Success(newState);
+    }
+
+    /// <summary>
+    /// Toggles the ban state of a target user on behalf of an authorized moderator/admin,
+    /// quarantining all active sessions to /banned immediately when banned.
+    /// </summary>
+    public SpokesResult<bool> ToggleModerationBan(string actorEmployeeId, string targetEmployeeId)
+    {
+        var actor = _employees.GetById(actorEmployeeId);
+        if (actor is not { IsActive: true, IsSuspended: false, IsBanned: false } ||
+            (!actor.IsAdmin && !actor.HasPermission(AppPermissions.Chat.Moderator)))
+        {
+            return SpokesResult<bool>.Failure("User is not authorized to perform moderation actions.", "ACCESS_DENIED");
+        }
+
+        var target = _employees.GetById(targetEmployeeId);
+        if (target == null)
+        {
+            return SpokesResult<bool>.Failure("Target user not found.", "NOT_FOUND");
+        }
+
+        if (target.IsSystem || target.IsAdmin || target.HasPermission(AppPermissions.Chat.Moderator) || actor.Id == target.Id)
+        {
+            return SpokesResult<bool>.Failure("Cannot ban another moderator or admin.", "FORBIDDEN_TARGET");
+        }
+
+        var newState = !target.IsBanned;
+        SetUserBanState(target.Id, newState);
+        return SpokesResult<bool>.Success(newState);
+    
+    }
+
+    /// <summary>
+    /// Returns the effective permission set held by the caller.
+    /// </summary>
+    public static HashSet<string> GetCallerEffectivePermissions(Employee? caller)
+    {
+        if (caller == null) return new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (caller.IsAdmin)
+        {
+            return AppPermissions.GetAll()
+                .SelectMany(g => g.Value)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        }
+
+        var source = caller.PermissionGroup != null
+            ? caller.PermissionGroup.Permissions
+            : caller.Permissions;
+
+        return new HashSet<string>(source ?? [], StringComparer.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Filters a requested list of permissions so a non-admin caller cannot grant permissions
+    /// they do not personally hold (while preserving permissions the target already held).
+    /// </summary>
+    public static List<string> FilterAllowedPermissions(
+        Employee? caller,
+        IEnumerable<string>? requestedPermissions,
+        IEnumerable<string>? existingTargetPermissions = null)
+    {
+        if (requestedPermissions == null) return [];
+        if (caller?.IsAdmin == true) return requestedPermissions.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+
+        var allowed = GetCallerEffectivePermissions(caller);
+        if (existingTargetPermissions != null)
+        {
+            foreach (var existing in existingTargetPermissions)
+            {
+                allowed.Add(existing);
+            }
+        }
+
+        return requestedPermissions
+            .Where(p => allowed.Contains(p))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    /// <summary>
+    /// Checks whether the caller is allowed to assign the specified permission group.
+    /// </summary>
+    public static bool CanAssignPermissionGroup(Employee? caller, PermissionGroup? group, string? currentTargetGroupId = null)
+    {
+        if (caller == null) return false;
+        if (caller.IsAdmin || group == null) return true;
+        if (!string.IsNullOrEmpty(currentTargetGroupId) && string.Equals(group.Id, currentTargetGroupId, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        var callerPerms = GetCallerEffectivePermissions(caller);
+        return (group.Permissions ?? []).All(p => callerPerms.Contains(p));
     }
 
     public async Task<bool> HasPermissionAsync(string permission)

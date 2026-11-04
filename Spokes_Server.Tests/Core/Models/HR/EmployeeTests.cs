@@ -37,12 +37,11 @@ public class EmployeeTests
         Assert.True(emp.EmailNotificationsEnabled);
         Assert.Null(emp.AvatarBase64);
         Assert.Null(emp.ProfileColor);
+        Assert.Null(emp.LandingPage);
 
         Assert.False(emp.IsAdmin);
         Assert.True(emp.IsActive);
 
-        Assert.Equal(string.Empty, emp.EncryptedEmailPassword);
-        Assert.Equal(string.Empty, emp.SignatureHtml);
 
         Assert.False(emp.IsEmailPublic);
         Assert.False(emp.UsesCustomSidebarOrder);
@@ -130,12 +129,15 @@ public class EmployeeTests
     }
 
     [Fact]
-    public void HasPermission_WithPermissionGroupIdButNoGroupLoaded_ReturnsFalse()
+    public void HasPermission_WithPermissionGroupAndGranularPermission_ReturnsTrueForBoth()
     {
         var user = new Employee { IsAdmin = false, IsActive = true, PermissionGroupId = "some-group-id" };
-        user.Permissions.Add("CanEdit"); // It should ignore this and return false
+        user.PermissionGroup = new PermissionGroup { Id = "some-group-id", Permissions = new List<string> { "CanView" } };
+        user.Permissions.Add("CanEdit");
 
-        Assert.False(user.HasPermission("CanEdit"));
+        Assert.True(user.HasPermission("CanView"));
+        Assert.True(user.HasPermission("CanEdit"));
+        Assert.False(user.HasPermission("CanDelete"));
     }
 
     [Fact]
@@ -360,5 +362,18 @@ public class EmployeeTests
         Assert.Single(categories);
         Assert.Equal("My Special Category", categories[0].Name);
         Assert.Equal("Warning", categories[0].Color);
+    }
+
+    [Fact]
+    public void Employee_LandingPage_CanBeConfigured()
+    {
+        var emp = new Employee();
+        Assert.Null(emp.LandingPage);
+
+        emp.LandingPage = "email";
+        Assert.Equal("email", emp.LandingPage);
+
+        emp.LandingPage = null;
+        Assert.Null(emp.LandingPage);
     }
 }

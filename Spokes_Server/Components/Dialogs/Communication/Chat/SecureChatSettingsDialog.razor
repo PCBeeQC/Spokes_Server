@@ -6,6 +6,8 @@
 @inject GlobalKeystoreService Keystore
 @inject ScopedKeystoreService ScopedKeystore
 @inject ChatSecurityService ChatSecurityService
+@inject FileTokenService FileTokens
+@inject UserCircuitContext CircuitContext
 @inject IJSRuntime JS
 @inject IConfiguration Config
 
@@ -191,6 +193,16 @@
 
             Employee.EncryptedPrivateKey = newEncryptedPrivate;
             Db.Employees.Save(Employee);
+
+            foreach (var otherSession in Db.DeviceSessions.GetByEmployeeId(Employee.Id))
+            {
+                if (!string.Equals(otherSession.Id, CircuitContext?.SessionId, StringComparison.Ordinal) && otherSession.HasVaultCookie)
+                {
+                    otherSession.HasVaultCookie = false;
+                    Db.DeviceSessions.Save(otherSession);
+                }
+            }
+            FileTokens.InvalidateUserEncryptedTokens(Employee.Id);
 
             ScopedKeystore.Unlock(plainPrivateKey, Employee.Id);
             Keystore.UnlockVault(Employee.Id, Employee.EncryptedPrivateKey, _newPassword, Crypto);

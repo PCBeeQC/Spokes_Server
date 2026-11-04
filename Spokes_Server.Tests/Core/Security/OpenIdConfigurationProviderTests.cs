@@ -12,6 +12,7 @@ using Xunit;
 
 namespace Spokes_Server.Tests.Core.Security;
 
+[Collection("OpenIdConfigurationCache")]
 public class OpenIdConfigurationProviderTests
 {
     [Fact]

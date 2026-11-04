@@ -1,4 +1,5 @@
 @page "/"
+@page "/home"
 @using Spokes_Server.Core.Constants
 @using System.Globalization
 @using Spokes_Server.Components.Dialogs
@@ -9,11 +10,19 @@
 @inject IDialogService DialogService
 @inject ISnackbar Snackbar
 @inject ILogger<Home> Logger
+@inject Spokes_Server.Core.Services.Maintenance.StartupTimingService StartupTimings
+@inject IJSRuntime JS
 
 <PageTitle>Home | Spokes</PageTitle>
 
 @if (!IsFriendEdition)
 {
+    @if (!IsExplicitHomeRoute && !string.IsNullOrWhiteSpace(_currentUser?.LandingPage) && _currentUser.LandingPage != "" && _currentUser.LandingPage != "/")
+    {
+        @* Instant redirection to custom landing page in progress; do not render dashboard cards *@
+    }
+    else
+    {
     <MudContainer MaxWidth="MaxWidth.Large" Class="mt-4">
         <div class="d-flex flex-column gap-4">
             <!-- Welcome Section -->
@@ -245,6 +254,7 @@
 
         </div>
     </MudContainer>
+    }
 }
 
 <style>
@@ -263,6 +273,33 @@
     private bool IsFriendEdition => Db.CompanyProfile.Get()?.Edition == "Family";
     private bool IsWeeklyPlanEnabled => Db.CompanyProfile.Get()?.TimesheetConfig?.EnableWeeklyPlan ?? true;
     private bool _isLoading = true;
+    private bool _reportedPerfSettled;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!_isLoading && !_reportedPerfSettled)
+        {
+            _reportedPerfSettled = true;
+            StartupTimings.TryMarkRouteSettled("HomeDashboard");
+            try
+            {
+                await JS.InvokeVoidAsync("startupDiagnostics.reportRouteSettled", "HomeDashboard");
+            }
+            catch
+            {
+                // Ignore disconnected circuit during teardown
+            }
+        }
+    }
+
+    private bool IsExplicitHomeRoute
+    {
+        get
+        {
+            var uri = Nav.ToBaseRelativePath(Nav.Uri).Split('?')[0].Trim('/');
+            return string.Equals(uri, "home", StringComparison.OrdinalIgnoreCase);
+        }
+    }
 
 
 
@@ -326,6 +363,13 @@
     {
         _currentUser = await UserService.GetEmployeeAsync();
         
+        if (!IsFriendEdition && !IsExplicitHomeRoute && !string.IsNullOrWhiteSpace(_currentUser?.LandingPage) && _currentUser.LandingPage != "" && _currentUser.LandingPage != "/")
+        {
+            var target = _currentUser.LandingPage.StartsWith('/') ? _currentUser.LandingPage : "/" + _currentUser.LandingPage;
+            Nav.NavigateTo(target, replace: true);
+            return;
+        }
+
         if (!IsFriendEdition)
         {
             var serverProfile = Db.CompanyProfile.Get();
@@ -349,7 +393,8 @@
 
         if (_currentUser != null && !IsFriendEdition)
         {
-            _ = LoadDashboardDataAsync();
+            StartupTimings.RegisterPendingRouteGate("HomeDashboard");
+            LoadDashboardData();
         }
         else
         {
@@ -357,21 +402,18 @@
         }
     }
 
-    private async Task LoadDashboardDataAsync()
+    private void LoadDashboardData()
     {
         try
         {
             if (_currentUser == null) return;
 
-            await Task.Run(() =>
+            LoadWeekAgenda();
+            LoadNotifications();
+            if (IsWeeklyPlanEnabled)
             {
-                LoadWeekAgenda();
-                LoadNotifications();
-                if (IsWeeklyPlanEnabled)
-                {
-                    LoadWeeklyPlan();
-                }
-            });
+                LoadWeeklyPlan();
+            }
         }
         catch (Exception ex)
         {
@@ -380,7 +422,6 @@
         finally
         {
             _isLoading = false;
-            await InvokeAsync(StateHasChanged);
         }
     }
 
@@ -602,23 +643,37 @@
             }
         }
 
-        // 2. Fetch unread emails from INBOX using in-memory index
-        if (Db.EmailMessages.GetUnreadCount(currentUser.Id, "INBOX") > 0)
+        // 2. Fetch unread emails from accessible accounts/inboxes using in-memory index
+        var userTeamIds = Db.Teams.GetAll()
+            .Where(t => t.Id == currentUser.TeamId || t.LeaderId == currentUser.Id)
+            .Select(t => t.Id)
+            .ToList();
+        var accessibleAccounts = Db.EmailAccounts.GetAccessibleForUser(currentUser.Id, userTeamIds)
+            .Select(a => a.Id)
+            .Concat(Db.EmailInboxes.GetAccessibleForUser(currentUser.Id, userTeamIds).Select(i => i.AccountId))
+            .Append(currentUser.Id)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        foreach (var accountId in accessibleAccounts)
         {
-            var topEmails = Db.EmailMessages.GetUnreadByFolderRecent(currentUser.Id, "INBOX", 5);
-            foreach (var email in topEmails)
+            if (Db.EmailMessages.GetUnreadCount(accountId, "INBOX") > 0)
             {
-                UnreadMessages.Add(new NotificationViewModel
+                var topEmails = Db.EmailMessages.GetUnreadByFolderRecent(accountId, "INBOX", 5);
+                foreach (var email in topEmails)
                 {
-                    ChannelId = "",
-                    ChannelName = email.Subject,
-                    SenderName = string.IsNullOrWhiteSpace(email.FromName) ? email.FromAddress : email.FromName,
-                    Content = string.IsNullOrWhiteSpace(email.Snippet) ? "No snippet available" : email.Snippet,
-                    SentAt = email.Date.DateTime,
-                    Type = "Email",
-                    EmailId = email.Id,
-                    FolderPath = email.FolderPath
-                });
+                    UnreadMessages.Add(new NotificationViewModel
+                    {
+                        ChannelId = "",
+                        ChannelName = email.Subject,
+                        SenderName = string.IsNullOrWhiteSpace(email.FromName) ? email.FromAddress : email.FromName,
+                        Content = string.IsNullOrWhiteSpace(email.Snippet) ? "No snippet available" : email.Snippet,
+                        SentAt = email.Date.DateTime,
+                        Type = "Email",
+                        EmailId = email.Id,
+                        FolderPath = email.FolderPath
+                    });
+                }
             }
         }
 

@@ -19,6 +19,7 @@
 @inject PresenceStateService PresenceState
 @inject UserService UserService
 @inject IUserPrivacyService PrivacyService
+@inject SessionService SessionService
 
 <div class="d-flex flex-wrap gap-4 align-center mb-6">
     <MudTextField @bind-Value="searchString" Placeholder="@Loc["Search Directory..."]" Variant="Variant.Outlined" Margin="Margin.Dense" Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search" IconSize="Size.Medium" Class="flex-grow-1" Style="max-width: 600px; background-color: var(--mud-palette-surface);" />
@@ -107,6 +108,8 @@
 
     private async Task CreateNewEmployee()
     {
+        if (!_isAdminOrManager) return;
+
         var newEmployee = new Employee { FirstName = "", LastName = "", IsActive = true };
         var allOpenIdAccounts = _currentUser?.IsAdmin == true ? Db.OpenIdAccounts.GetAll().ToList() : new List<OpenIdAccount>();
         var parameters = new DialogParameters
@@ -123,19 +126,23 @@
 
         if (result is { Canceled: false, Data: Employee createdEmp })
         {
+            if (_currentUser?.IsAdmin != true)
+            {
+                createdEmp.IsAdmin = false;
+                createdEmp.Permissions = UserService.FilterAllowedPermissions(_currentUser, createdEmp.Permissions);
+                var allGroups = Db.CompanyProfile.Get()?.PermissionGroups ?? [];
+                createdEmp.PermissionGroupIds = createdEmp.PermissionGroupIds
+                    .Where(gid => allGroups.FirstOrDefault(g => g.Id == gid) is { } grp &&
+                                  UserService.CanAssignPermissionGroup(_currentUser, grp))
+                    .ToList();
+            }
+
             Db.Employees.Save(createdEmp);
             
             if (_currentUser?.IsAdmin == true)
             {
                 foreach (var account in allOpenIdAccounts) Db.OpenIdAccounts.Save(account);
             }
-
-            _ = Task.Run(async () =>
-            {
-                using var scope = ScopeFactory.CreateScope();
-                var syncService = scope.ServiceProvider.GetRequiredService<IEmailSyncService>();
-                await syncService.SyncEmployeeAsync(createdEmp.Id);
-            });
 
             Snackbar.Add(string.Format(Loc["{0} '{1}' created"].Value, AppLabels.Employee, createdEmp.FullName), Severity.Success);
             RefreshList();
@@ -144,6 +151,12 @@
 
     private async Task OpenEditDialog(Employee emp)
     {
+        if (!UserService.CanManageEmployeeTarget(_currentUser, emp))
+        {
+            Snackbar.Add(Loc["You cannot modify or delete an Administrator account."].Value, Severity.Error);
+            return;
+        }
+
         var clone = System.Text.Json.JsonSerializer.Deserialize<Employee>(System.Text.Json.JsonSerializer.Serialize(emp));
         var allOpenIdAccounts = _currentUser?.IsAdmin == true ? Db.OpenIdAccounts.GetAll().ToList() : new List<OpenIdAccount>();
         var parameters = new DialogParameters
@@ -160,18 +173,40 @@
 
         if (result is { Canceled: false, Data: Employee updatedEmp })
         {
+            if (_currentUser?.IsAdmin != true)
+            {
+                updatedEmp.IsAdmin = false;
+                var allowed = UserService.FilterAllowedPermissions(_currentUser, updatedEmp.Permissions);
+                foreach (var existing in emp.Permissions)
+                {
+                    if (updatedEmp.Permissions.Contains(existing) && !allowed.Contains(existing, StringComparer.OrdinalIgnoreCase))
+                    {
+                        allowed.Add(existing);
+                    }
+                }
+                updatedEmp.Permissions = allowed;
+
+                var allGroups = Db.CompanyProfile.Get()?.PermissionGroups ?? [];
+                updatedEmp.PermissionGroupIds = updatedEmp.PermissionGroupIds
+                    .Where(gid => emp.PermissionGroupIds.Contains(gid) ||
+                                  (allGroups.FirstOrDefault(g => g.Id == gid) is { } grp &&
+                                   UserService.CanAssignPermissionGroup(_currentUser, grp)))
+                    .ToList();
+            }
+
             Db.Employees.Save(updatedEmp);
+            if (!updatedEmp.IsActive)
+            {
+                SessionService.RevokeAllUserSessions(updatedEmp.Id);
+            }
+            else if (updatedEmp.IsBanned)
+            {
+                SessionService.QuarantineUserSessionsForBan(updatedEmp.Id);
+            }
             if (_currentUser?.IsAdmin == true)
             {
                 foreach (var account in allOpenIdAccounts) Db.OpenIdAccounts.Save(account);
             }
-
-            _ = Task.Run(async () =>
-            {
-                using var scope = ScopeFactory.CreateScope();
-                var syncService = scope.ServiceProvider.GetRequiredService<IEmailSyncService>();
-                await syncService.SyncEmployeeAsync(updatedEmp.Id);
-            });
 
             Snackbar.Add(string.Format(Loc["{0} updated"].Value, AppLabels.Employee), Severity.Success);
             RefreshList();
@@ -189,6 +224,12 @@
 
     private async Task ConfirmDeleteEmployee(Employee emp)
     {
+        if (!UserService.CanManageEmployeeTarget(_currentUser, emp))
+        {
+            Snackbar.Add(Loc["You cannot modify or delete an Administrator account."].Value, Severity.Error);
+            return;
+        }
+
         var parameters = new DialogParameters
         {
             ["ContentText"] = string.Format(Loc["Are you sure you want to delete the {0} '{1}'? This action cannot be undone. Any OpenID accounts linked to this {0} will be unlinked."].Value, AppLabels.Employee.ToLowerInvariant(), emp.FullName),
@@ -209,11 +250,10 @@
                 Db.OpenIdAccounts.Save(account);
             }
 
+            SessionService.RevokeAllUserSessions(emp.Id);
             Db.Employees.Delete(emp.Id);
             Snackbar.Add(string.Format(Loc["{0} '{1}' deleted"].Value, AppLabels.Employee, emp.FullName), Severity.Warning);
             RefreshList();
         }
     }
 }
-
-

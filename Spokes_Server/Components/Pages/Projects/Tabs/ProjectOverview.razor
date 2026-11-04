@@ -2,9 +2,12 @@
 @using Spokes_Server.Core.Models.Projects
 @using Spokes_Server.Core.Models.Accounting
 @using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Constants
+@using Spokes_Server.Core.Services.Identity
 @using Spokes_Server.Core.Data
 @inject Database Db
 @inject NavigationManager Nav
+@inject UserService UserService
 
 <MudGrid Class="mb-6">
 
@@ -309,7 +312,10 @@
                 <MudTh>Task</MudTh>
                 <MudTh>Budget (Hrs)</MudTh>
                 <MudTh>Actual (Hrs)</MudTh>
-                <MudTh>Internal Cost</MudTh>
+                @if (_canViewCostRates)
+                {
+                    <MudTh>Internal Cost</MudTh>
+                }
                 <MudTh>Usage</MudTh>
             </HeaderContent>
             <RowTemplate>
@@ -320,7 +326,10 @@
                             @context.ActualHours.ToString("N1")
                         </MudText>
                     </MudTd>
-                    <MudTd>@context.CostIncurred.ToString("C0")</MudTd>
+                    @if (_canViewCostRates)
+                    {
+                        <MudTd>@context.CostIncurred.ToString("C0")</MudTd>
+                    }
                     <MudTd Style="width: 250px;">
                         @if (context.QuotedHours > 0)
                     {
@@ -497,9 +506,12 @@
     private bool IsLaborOverBudget => LaborRows.Sum(r => r.QuotedHours) > 0 && LaborEfficiency > 100;
     private bool HasAgingReceivables = false;
     private DateTime? OldestUnpaidInvoiceDate = null;
+    private bool _canViewCostRates = false;
 
-    protected override void OnInitialized()
+    protected override async Task OnInitializedAsync()
     {
+        var emp = await UserService.GetEmployeeAsync();
+        _canViewCostRates = emp != null && (emp.IsAdmin || emp.HasPermission(AppPermissions.Admin.ManageUsers) || emp.HasPermission(AppPermissions.Finance.AccessAccounting));
         CurrentProject = Db.Projects.GetById(ProjectId);
         AcceptedQuote = Db.Quotes.GetByProject(ProjectId).FirstOrDefault(q => q.Status == QuoteStatus.Accepted);
         LoadLabor();
@@ -644,7 +656,7 @@
                     SubTaskName = subTaskName,
                     ActualHours = actHours,
                     QuotedHours = 0, // We'll handle budget separately
-                    CostIncurred = actHours * taskDef.CostRate
+                    CostIncurred = _canViewCostRates ? (actHours * taskDef.CostRate) : 0m
                 });
         }
 

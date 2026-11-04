@@ -1,0 +1,24 @@
+@*
+    VoicePipVideoSlot — Render-once container for JS-managed PiP <video>, grid, and filmstrip elements.
+
+    After the first render places the stage DOM nodes, ShouldRender() permanently returns false.
+    This prevents Blazor's diff algorithm from stripping JS-managed classes (has-stream, spokes-pip-mirror)
+    or disrupting WebRTC playback during speaker, participant, or PiP metadata re-renders.
+*@
+
+<video id="spokes-pip-primary-video" class="voice-pip-primary-video" autoplay playsinline webkit-playsinline muted disablepictureinpicture></video>
+<video id="spokes-pip-presenter-cam-video" class="voice-pip-presenter-cam-video" autoplay playsinline webkit-playsinline muted disablepictureinpicture></video>
+<video id="spokes-pip-self-video" class="voice-pip-self-video" autoplay playsinline webkit-playsinline muted disablepictureinpicture></video>
+<div id="spokes-pip-grid-container" class="voice-pip-grid voice-pip-no-drag"></div>
+<div id="spokes-pip-filmstrip" class="voice-pip-filmstrip voice-pip-no-drag"></div>
+
+@code {
+    private bool _rendered;
+
+    protected override bool ShouldRender() => !_rendered;
+
+    protected override void OnAfterRender(bool firstRender)
+    {
+        if (firstRender) _rendered = true;
+    }
+}

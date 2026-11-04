@@ -173,19 +173,19 @@ public class MigrationServicesTests : TestDataTestBase
         Directory.CreateDirectory(legacyMessages);
         Directory.CreateDirectory(legacyBodies);
 
-        var folder = new EmailFolder { Id = "f-1", EmployeeId = empId, Name = "Inbox" };
+        var folder = new EmailFolder { Id = "f-1", AccountId = empId, Name = "Inbox" };
         File.WriteAllText(Path.Combine(legacyFolders, "f-1.json"), JsonSerializer.Serialize(folder));
 
-        var message = new EmailMessage { Id = "m-1", EmployeeId = empId, Subject = "Hello" };
+        var message = new EmailMessage { Id = "m-1", AccountId = empId, Subject = "Hello" };
         File.WriteAllText(Path.Combine(legacyMessages, "m-1.json"), JsonSerializer.Serialize(message));
         File.WriteAllText(Path.Combine(legacyBodies, "m-1.html"), "<p>Body</p>");
 
         var step = new EmailDataMigrationStep(null, _testDataDir);
         step.MigrateEmailData();
 
-        var targetFolderFile = Path.Combine(_testDataDir, "Employees", empId, "Email", "Folders", "f-1.json");
-        var targetMessageFile = Path.Combine(_testDataDir, "Employees", empId, "Email", "Messages", "m-1.json");
-        var targetBodyFile = Path.Combine(_testDataDir, "Employees", empId, "Email", "Bodies", "m-1.html");
+        var targetFolderFile = Path.Combine(_testDataDir, "EmailAccounts", empId, "Folders", "f-1.json");
+        var targetMessageFile = Path.Combine(_testDataDir, "EmailAccounts", empId, "Messages", "m-1.json");
+        var targetBodyFile = Path.Combine(_testDataDir, "EmailAccounts", empId, "Bodies", "m-1.html");
 
         Assert.True(File.Exists(targetFolderFile));
         Assert.True(File.Exists(targetMessageFile));

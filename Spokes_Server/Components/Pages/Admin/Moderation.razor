@@ -1,32 +1,108 @@
 @page "/admin/moderation"
+@inherits SpokesComponentBase
 @using Spokes_Server.Core.Constants
 @using Spokes_Server.Core.Models.Communication
 @using Spokes_Server.Core.Services.Communication.Chat
+@using Spokes_Server.Components.Dialogs.Common
 @using Spokes_Server.Components.Shared
 @using Microsoft.Extensions.Localization
 @using Spokes_Server.Resources
 @attribute [Authorize(Policy = AppPermissions.Chat.Moderator)]
-@implements IDisposable
-@inject Database Db
-@inject ChatService ChatService
+@inject IModerationReportService ModerationReports
 @inject ChatStateService ChatState
+@inject IDialogService DialogService
 @inject ISnackbar Snackbar
 @inject UserService UserService
+@inject NavigationManager Nav
 @inject IStringLocalizer<AppResources> Loc
 
 <PageTitle>@Loc["Moderation Dashboard"]</PageTitle>
 
 <MudContainer MaxWidth="MaxWidth.Large" Class="mt-8 pb-8">
-    <div class="d-flex flex-wrap justify-space-between align-center mb-6 gap-4">
+    <div class="d-flex flex-wrap justify-space-between align-center mb-4 gap-4">
         <MudText Typo="Typo.h4">@Loc["Moderation Dashboard"]</MudText>
-        <MudTextField @bind-Value="searchString" Placeholder="@Loc["Search Reports..."]" Variant="Variant.Outlined" Margin="Margin.Dense" Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search" IconSize="Size.Medium" Style="max-width: 300px; background-color: var(--mud-palette-surface);" />
+        <MudTextField T="string"
+                      Value="@_searchString"
+                      ValueChanged="OnSearchChanged"
+                      Placeholder="@Loc["Search Reports..."]"
+                      Immediate="true"
+                      Clearable="true"
+                      Variant="Variant.Outlined"
+                      Margin="Margin.Dense"
+                      Adornment="Adornment.Start"
+                      AdornmentIcon="@Icons.Material.Filled.Search"
+                      IconSize="Size.Medium"
+                      Style="max-width: 300px; background-color: var(--mud-palette-surface);" />
     </div>
+
+    <div class="d-flex flex-wrap justify-space-between align-center mb-4 gap-3">
+        <MudToggleGroup T="string"
+                        Value="@_currentTab"
+                        ValueChanged="UpdateActiveTab"
+                        Outlined="true"
+                        Delimiters="true"
+                        CheckMark="false"
+                        Class="flex-wrap">
+            <MudToggleItem Value="@("open")"
+                           Text="@string.Format(Loc["Open ({0})"].Value, _counts.Open)"
+                           UnselectedIcon="@Icons.Material.Filled.Flag"
+                           SelectedIcon="@Icons.Material.Filled.Flag" />
+            <MudToggleItem Value="@("history")"
+                           Text="@string.Format(Loc["History ({0})"].Value, _counts.History)"
+                           UnselectedIcon="@Icons.Material.Filled.History"
+                           SelectedIcon="@Icons.Material.Filled.History" />
+        </MudToggleGroup>
+
+        @if (_currentTab == "history" && _counts.History > 0)
+        {
+            <MudButton Variant="Variant.Outlined"
+                       Color="Color.Error"
+                       Size="Size.Small"
+                       StartIcon="@Icons.Material.Filled.DeleteSweep"
+                       OnClick="PromptClearHistoryAsync">
+                @Loc["Clear History"]
+            </MudButton>
+        }
+    </div>
+
+    @if (_currentTab == "history")
+    {
+        <div class="d-flex align-center flex-wrap gap-2 mb-4">
+            <MudChipSet T="string"
+                        SelectedValue="@_historyStatusFilter"
+                        SelectedValueChanged="OnHistoryFilterChanged"
+                        SelectionMode="SelectionMode.SingleSelection"
+                        CheckMark="false">
+                <MudChip T="string"
+                         Value="@("all")"
+                         Color="Color.Primary"
+                         Variant="@(_historyStatusFilter == "all" ? Variant.Filled : Variant.Outlined)"
+                         Size="Size.Small">
+                    @string.Format(Loc["All ({0})"].Value, _counts.History)
+                </MudChip>
+                <MudChip T="string"
+                         Value="@ReportedMessageStatus.Resolved"
+                         Color="Color.Success"
+                         Variant="@(_historyStatusFilter == ReportedMessageStatus.Resolved ? Variant.Filled : Variant.Outlined)"
+                         Size="Size.Small">
+                    @string.Format(Loc["Resolved ({0})"].Value, _counts.Resolved)
+                </MudChip>
+                <MudChip T="string"
+                         Value="@ReportedMessageStatus.Dismissed"
+                         Color="Color.Default"
+                         Variant="@(_historyStatusFilter == ReportedMessageStatus.Dismissed ? Variant.Filled : Variant.Outlined)"
+                         Size="Size.Small">
+                    @string.Format(Loc["Dismissed ({0})"].Value, _counts.Dismissed)
+                </MudChip>
+            </MudChipSet>
+        </div>
+    }
 
     @if (_loading)
     {
         <MudProgressLinear Indeterminate="true" Color="Color.Info" Class="my-4" />
     }
-    else if (!_reports.Any())
+    else if (_currentTab == "open" && _counts.Open == 0)
     {
         <div class="d-flex flex-column align-center justify-center pa-8 text-center" style="background: var(--mud-palette-background-grey); border-radius: 16px;">
             <MudIcon Icon="@Icons.Material.Filled.CheckCircleOutline" Size="Size.Large" Color="Color.Success" Style="font-size: 64px; opacity: 0.8;" Class="mb-4" />
@@ -34,50 +110,73 @@
             <MudText Typo="Typo.body1" Color="Color.Secondary">@Loc["There are no reported messages to review."]</MudText>
         </div>
     }
+    else if (_currentTab == "history" && GetActiveHistoryBucketCount() == 0)
+    {
+        <div class="d-flex flex-column align-center justify-center pa-8 text-center" style="background: var(--mud-palette-background-grey); border-radius: 16px;">
+            <MudIcon Icon="@Icons.Material.Filled.History" Size="Size.Large" Color="Color.Secondary" Style="font-size: 64px; opacity: 0.8;" Class="mb-4" />
+            <MudText Typo="Typo.h5" Class="mb-2">@Loc["No Moderation History"]</MudText>
+            <MudText Typo="Typo.body1" Color="Color.Secondary">@Loc["Resolved and dismissed reports will appear here."]</MudText>
+        </div>
+    }
+    else if (_filteredReports.Count == 0)
+    {
+        <div class="d-flex flex-column align-center justify-center pa-8 text-center" style="background: var(--mud-palette-background-grey); border-radius: 16px;">
+            <MudIcon Icon="@Icons.Material.Filled.SearchOff" Size="Size.Large" Color="Color.Secondary" Style="font-size: 64px; opacity: 0.8;" Class="mb-4" />
+            <MudText Typo="Typo.h5" Class="mb-2">@Loc["No matching reports"]</MudText>
+            <MudText Typo="Typo.body1" Color="Color.Secondary">@Loc["Try adjusting or clearing your search filter."]</MudText>
+        </div>
+    }
     else
     {
         <MudGrid Spacing="3">
-            @foreach (var report in _reports.Where(FilterFunc))
+            @foreach (var item in _filteredReports)
             {
+                var report = item.Report;
+                var isOpen = item.IsOpen;
                 <MudItem xs="12" sm="6" md="4">
                     <MudCard Elevation="0" Outlined="true" Class="h-100 d-flex flex-column moderation-card" Style="border-radius: 16px;">
                         <MudCardContent Class="pa-4 flex-grow-1">
                             <div class="d-flex justify-space-between align-start mb-3">
-                                <MudChip T="string" Size="Size.Small" Color="@(report.Status == ReportedMessageStatus.Open ? Color.Error : (report.Status == ReportedMessageStatus.Dismissed ? Color.Default : Color.Success))" Class="ma-0">@(report.Status == ReportedMessageStatus.Open ? Loc["Open"] : (report.Status == ReportedMessageStatus.Dismissed ? Loc["Dismissed"] : Loc["Resolved"]))</MudChip>
+                                <MudChip T="string"
+                                         Size="Size.Small"
+                                         Color="@(isOpen ? Color.Error : (string.Equals(report.Status, ReportedMessageStatus.Dismissed, StringComparison.OrdinalIgnoreCase) ? Color.Default : Color.Success))"
+                                         Class="ma-0">
+                                    @item.LocalizedStatus
+                                </MudChip>
                                 <MudText Typo="Typo.caption" Color="Color.Secondary">@report.ReportedAt.ToLocalTime().ToString("MMM dd, h:mm tt")</MudText>
                             </div>
 
-                            <MudText Typo="Typo.subtitle1" Style="font-weight: 700;" Class="mb-3">@string.Format(Loc["Reason: {0}"].Value, report.Reason)</MudText>
-                            
+                            <MudText Typo="Typo.subtitle1" Style="font-weight: 700;" Class="mb-3">@string.Format(Loc["Reason: {0}"].Value, item.LocalizedReason)</MudText>
+
                             <div class="d-flex align-center gap-2 mb-2">
-                                <EmployeeAvatar Employee="@GetEmployee(report.ReportedUserId)" Size="Size.Small" ShowPresence="false" />
+                                <EmployeeAvatar Employee="@item.ReportedUser" Size="Size.Small" ShowPresence="false" />
                                 <MudText Typo="Typo.body2" Color="Color.Secondary">
-                                    @Loc["Reported User:"] <strong style="color: var(--mud-palette-text-primary);">@GetUserName(report.ReportedUserId)</strong>
+                                    @Loc["Reported User:"] <strong style="color: var(--mud-palette-text-primary);">@item.ReportedUserName</strong>
                                 </MudText>
                             </div>
 
                             <div class="d-flex align-center gap-2 mb-4">
-                                <EmployeeAvatar Employee="@GetEmployee(report.ReporterId)" Size="Size.Small" ShowPresence="false" />
+                                <EmployeeAvatar Employee="@item.Reporter" Size="Size.Small" ShowPresence="false" />
                                 <MudText Typo="Typo.body2" Color="Color.Secondary">
-                                    @Loc["Reported By:"] <strong style="color: var(--mud-palette-text-primary);">@GetUserName(report.ReporterId)</strong>
+                                    @Loc["Reported By:"] <strong style="color: var(--mud-palette-text-primary);">@item.ReporterName</strong>
                                 </MudText>
                             </div>
 
                             <MudText Typo="Typo.subtitle2" Class="mb-1" Style="font-weight: 600; color: var(--mud-palette-text-secondary);">@Loc["Message Snapshot"]</MudText>
                             <div class="pa-3 rounded" style="background-color: var(--mud-palette-background-grey); max-height: 200px; overflow-y: auto; border: 1px solid var(--mud-palette-lines-default);">
                                 <MudText Typo="Typo.body2" Style="word-break: break-word;">
-                                    @report.SnapshotContent
+                                    @item.LocalizedSnapshotContent
                                 </MudText>
                                 @if (report.Attachments != null && report.Attachments.Any())
                                 {
                                     <div class="mt-2 d-flex flex-wrap gap-2">
                                         @foreach (var att in report.Attachments)
                                         {
-                                            if (att.ContentType.StartsWith("image/"))
+                                            if (IsSafeAttachmentUrl(att.FilePath) && att.ContentType.StartsWith("image/", StringComparison.OrdinalIgnoreCase))
                                             {
                                                 <img src="@att.FilePath" alt="@att.FileName" style="max-height: 100px; max-width: 100%; border-radius: 4px;" />
                                             }
-                                            else if (att.ContentType.StartsWith("video/"))
+                                            else if (IsSafeAttachmentUrl(att.FilePath) && att.ContentType.StartsWith("video/", StringComparison.OrdinalIgnoreCase))
                                             {
                                                 <video playsinline webkit-playsinline src="@att.FilePath" controls style="max-height: 100px; max-width: 100%; border-radius: 4px;"></video>
                                             }
@@ -89,33 +188,48 @@
                                     </div>
                                 }
                             </div>
-                            @if (report.Status != ReportedMessageStatus.Open)
+                            @if (!isOpen)
                             {
                                 <div class="mt-4 pt-3" style="border-top: 1px solid var(--mud-palette-lines-default);">
-                                    <MudText Typo="Typo.caption" Color="Color.Secondary" Style="font-weight: 600;">@Loc["RESOLUTION"]</MudText>
+                                    <div class="d-flex align-center justify-space-between">
+                                        <MudText Typo="Typo.caption" Color="Color.Secondary" Style="font-weight: 600;">@Loc["RESOLUTION"]</MudText>
+                                        @if (report.ResolvedAt.HasValue)
+                                        {
+                                            <MudText Typo="Typo.caption" Color="Color.Secondary">@report.ResolvedAt.Value.ToLocalTime().ToString("MMM dd, h:mm tt")</MudText>
+                                        }
+                                    </div>
                                     <div class="d-flex align-center justify-space-between mt-1">
-                                        <MudText Typo="Typo.body2">@Loc["Action:"] <strong>@(report.ResolutionAction == "Dismissed" ? Loc["Dismissed"] : (report.ResolutionAction == "Deleted Message" ? Loc["Deleted Message"] : report.ResolutionAction))</strong></MudText>
+                                        <MudText Typo="Typo.body2">@Loc["Action:"] <strong>@item.LocalizedResolutionAction</strong></MudText>
                                         <MudText Typo="Typo.body2">@Loc["By:"] <strong>@report.ResolvedBy</strong></MudText>
                                     </div>
                                 </div>
                             }
                         </MudCardContent>
                         <MudCardActions Class="px-4 pb-4 pt-0 justify-end gap-2 flex-wrap">
-                            @if (report.Status == ReportedMessageStatus.Open)
+                            @if (isOpen)
                             {
                                 <MudButton Size="Size.Small" Variant="Variant.Text" Color="Color.Default" OnClick="@(() => DismissReport(report))">@Loc["Dismiss"]</MudButton>
-                                <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Error" StartIcon="@Icons.Material.Filled.Delete" DropShadow="false" Style="font-weight: 600;" OnClick="@(() => DeleteMessage(report))">@Loc["Delete Message"]</MudButton>
-                                
-                                var reportedUser = Db.Employees.GetById(report.ReportedUserId);
-                                if (reportedUser != null && !(reportedUser.IsAdmin || reportedUser.HasPermission(AppPermissions.Chat.Moderator)))
+                                <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Error" StartIcon="@Icons.Material.Filled.Delete" DropShadow="false" Style="font-weight: 600;" OnClick="@(() => DeleteMessageAsync(report))">@Loc["Delete Message"]</MudButton>
+
+                                if (item.ReportedUser != null && item.CanModerateReportedUser && UserService.CanModerateUserTarget(_currentUser, item.ReportedUser))
                                 {
-                                    <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="@(reportedUser.IsSuspended ? Color.Success : Color.Warning)" OnClick="@(() => ToggleSuspend(report.ReportedUserId))">
-                                        @(reportedUser.IsSuspended ? Loc["Unsuspend User"] : Loc["Suspend User"])
+                                    <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="@(item.ReportedUser.IsSuspended ? Color.Success : Color.Warning)" OnClick="@(() => ToggleSuspend(report.ReportedUserId))">
+                                        @(item.ReportedUser.IsSuspended ? Loc["Unsuspend User"] : Loc["Suspend User"])
                                     </MudButton>
-                                    <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="@(reportedUser.IsBanned ? Color.Success : Color.Error)" OnClick="@(() => ToggleBan(report.ReportedUserId))">
-                                        @(reportedUser.IsBanned ? Loc["Unban User"] : Loc["Ban User"])
+                                    <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="@(item.ReportedUser.IsBanned ? Color.Success : Color.Error)" OnClick="@(() => ToggleBan(report.ReportedUserId))">
+                                        @(item.ReportedUser.IsBanned ? Loc["Unban User"] : Loc["Ban User"])
                                     </MudButton>
                                 }
+                            }
+                            else
+                            {
+                                <MudButton Size="Size.Small"
+                                           Variant="Variant.Text"
+                                           Color="Color.Default"
+                                           StartIcon="@Icons.Material.Filled.DeleteOutline"
+                                           OnClick="@(() => RemoveHistoryReport(report))">
+                                    @Loc["Remove"]
+                                </MudButton>
                             }
                         </MudCardActions>
                     </MudCard>
@@ -138,14 +252,31 @@
 </style>
 
 @code {
-    private List<ReportedMessage> _reports = [];
+    [SupplyParameterFromQuery] public string? Tab { get; set; }
+
+    private IReadOnlyList<ModerationReportItem> _activeBucketItems = [];
+    private IReadOnlyList<ModerationReportItem> _filteredReports = [];
+    private ModerationReportCounts _counts = new(0, 0, 0);
     private bool _loading = true;
-    private string searchString = "";
+    private string _currentTab = "open";
+    private string _historyStatusFilter = "all";
+    private string _searchString = "";
     private Employee? _currentUser;
+
+    private static bool IsSafeAttachmentUrl(string? url)
+    {
+        if (string.IsNullOrWhiteSpace(url) || url.StartsWith("//", StringComparison.Ordinal))
+            return false;
+
+        return url.StartsWith("/media/", StringComparison.OrdinalIgnoreCase) ||
+               url.StartsWith("/spokesapi/files/", StringComparison.OrdinalIgnoreCase) ||
+               url.StartsWith("/uploads/", StringComparison.OrdinalIgnoreCase);
+    }
 
     protected override async Task OnInitializedAsync()
     {
         _currentUser = await UserService.GetEmployeeAsync();
+        ApplyQueryTab();
         LoadData();
 
         if (ChatState != null)
@@ -155,67 +286,123 @@
         }
     }
 
-    private void HandleReportChanged(ReportedMessage report)
+    protected override void OnParametersSet()
     {
-        InvokeAsync(() =>
+        if (ApplyQueryTab() && !_loading)
         {
             LoadData();
-            StateHasChanged();
-        });
+        }
     }
 
-    public void Dispose()
+    private bool ApplyQueryTab()
+    {
+        if (string.IsNullOrWhiteSpace(Tab))
+            return false;
+
+        var targetTab = string.Equals(Tab.Trim(), "history", StringComparison.OrdinalIgnoreCase)
+            ? "history"
+            : "open";
+
+        if (_currentTab == targetTab)
+            return false;
+
+        _currentTab = targetTab;
+        return true;
+    }
+
+    private void UpdateActiveTab(string tabName)
+    {
+        if (string.IsNullOrWhiteSpace(tabName))
+            return;
+
+        _currentTab = string.Equals(tabName, "history", StringComparison.OrdinalIgnoreCase)
+            ? "history"
+            : "open";
+        LoadData();
+
+        if (!Nav.Uri.Contains("/admin/moderation", StringComparison.OrdinalIgnoreCase))
+            return;
+
+        try
+        {
+            Nav.NavigateTo(Nav.GetUriWithQueryParameter("tab", _currentTab), replace: true);
+        }
+        catch (NavigationException)
+        {
+        }
+    }
+
+    private void OnHistoryFilterChanged(string? selectedStatus)
+    {
+        _historyStatusFilter = string.IsNullOrWhiteSpace(selectedStatus) ? "all" : selectedStatus;
+        LoadData();
+    }
+
+    private void OnSearchChanged(string? query)
+    {
+        _searchString = query ?? string.Empty;
+        _filteredReports = ModerationReportFilterHelper.Filter(_activeBucketItems, _searchString);
+    }
+
+    private void HandleReportChanged(ReportedMessage report)
+    {
+        _ = SafeInvokeAsync(LoadData);
+    }
+
+    public override ValueTask DisposeAsync()
     {
         if (ChatState != null)
         {
             ChatState.ModerationAlertReceived -= HandleReportChanged;
             ChatState.ModerationReportUpdated -= HandleReportChanged;
         }
+
+        return base.DisposeAsync();
     }
 
     private void LoadData()
     {
-        _reports = Db.ReportedMessages.GetAll().OrderByDescending(r => r.ReportedAt).ToList();
+        _counts = ModerationReports.GetCounts();
+        var activeQueueTab = _currentTab == "history"
+            ? ModerationQueueTab.History
+            : ModerationQueueTab.Open;
+        _activeBucketItems = ModerationReports.GetReportItems(
+            activeQueueTab,
+            _historyStatusFilter,
+            searchQuery: null,
+            unknownUserLabel: Loc["Unknown"].Value,
+            localize: key => Loc[key].Value);
+        _filteredReports = ModerationReportFilterHelper.Filter(_activeBucketItems, _searchString);
         _loading = false;
     }
 
-    private Employee? GetEmployee(string? employeeId)
+    private int GetActiveHistoryBucketCount() => _historyStatusFilter switch
     {
-        if (string.IsNullOrEmpty(employeeId)) return null;
-        return Db.Employees.GetById(employeeId);
-    }
-
-    private string GetUserName(string employeeId)
-    {
-        var emp = Db.Employees.GetById(employeeId);
-        return emp != null ? emp.FullName : Loc["Unknown"].Value;
-    }
-
-    private bool FilterFunc(ReportedMessage element)
-    {
-        if (string.IsNullOrWhiteSpace(searchString))
-            return true;
-        if (element.Reason.Contains(searchString, StringComparison.OrdinalIgnoreCase))
-            return true;
-        if (element.SnapshotContent.Contains(searchString, StringComparison.OrdinalIgnoreCase))
-            return true;
-        return false;
-    }
+        ReportedMessageStatus.Resolved => _counts.Resolved,
+        ReportedMessageStatus.Dismissed => _counts.Dismissed,
+        _ => _counts.History
+    };
 
     private void DismissReport(ReportedMessage report)
     {
-        report.Status = ReportedMessageStatus.Dismissed;
-        report.ResolutionAction = "Dismissed";
-        report.ResolvedBy = _currentUser?.FullName ?? Loc["Moderator"].Value;
-        Db.ReportedMessages.Save(report);
-        ChatState.NotifyModerationReportUpdated(report);
+        if (_currentUser == null) return;
+
+        var result = ModerationReports.DismissReport(report.Id, _currentUser.Id);
+        if (!result.IsSuccess)
+        {
+            Snackbar.Add(result.ErrorMessage ?? Loc["Failed to dismiss report."].Value, Severity.Error);
+            return;
+        }
+
         Snackbar.Add(Loc["Report dismissed."].Value, Severity.Info);
         LoadData();
     }
 
-    private async Task DeleteMessage(ReportedMessage report)
+    private async Task DeleteMessageAsync(ReportedMessage report)
     {
-        var result = await ChatService.AdminDeleteMessageAsync(report.MessageId);
+        if (_currentUser == null) return;
+
+        var result = await ModerationReports.ResolveAndDeleteMessageAsync(report.Id, _currentUser.Id);
         if (!result.IsSuccess)
         {
             Snackbar.Add(result.ErrorMessage ?? Loc["Failed to delete message."].Value, Severity.Error);
@@ -223,48 +410,89 @@
         }
 
         Snackbar.Add(Loc["Message deleted globally."].Value, Severity.Success);
-        
-        report.Status = ReportedMessageStatus.Resolved;
-        report.ResolutionAction = "Deleted Message";
-        report.ResolvedBy = _currentUser?.FullName ?? Loc["Moderator"].Value;
-        report.SnapshotContent = Loc["content deleted"].Value;
-        report.Attachments.Clear();
-        Db.ReportedMessages.Save(report);
-        ChatState.NotifyModerationReportUpdated(report);
         LoadData();
+    }
+
+    private void RemoveHistoryReport(ReportedMessage report)
+    {
+        if (_currentUser == null) return;
+
+        var result = ModerationReports.DeleteHistoryReport(report.Id, _currentUser.Id);
+        if (!result.IsSuccess)
+        {
+            Snackbar.Add(result.ErrorMessage ?? Loc["Failed to remove report."].Value, Severity.Error);
+            return;
+        }
+
+        Snackbar.Add(Loc["Report removed from history."].Value, Severity.Info);
+        LoadData();
+    }
+
+    private async Task PromptClearHistoryAsync()
+    {
+        if (_currentUser == null || _counts.History == 0) return;
+
+        var parameters = new DialogParameters<ConfirmDialog>
+        {
+            { x => x.ContentText, Loc["Are you sure you want to permanently remove all resolved and dismissed reports?"].Value },
+            { x => x.ButtonText, Loc["Clear History"].Value },
+            { x => x.Color, Color.Error }
+        };
+        var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.ExtraSmall, FullWidth = true };
+        var dialog = await DialogService.ShowAsync<ConfirmDialog>(Loc["Clear Moderation History"].Value, parameters, options);
+        var dialogResult = await dialog.Result;
+
+        if (dialogResult is { Canceled: false })
+        {
+            var clearResult = ModerationReports.ClearHistory(_currentUser.Id);
+            if (!clearResult.IsSuccess)
+            {
+                Snackbar.Add(clearResult.ErrorMessage ?? Loc["Failed to clear history."].Value, Severity.Error);
+                return;
+            }
+
+            Snackbar.Add(Loc["Moderation history cleared."].Value, Severity.Success);
+            LoadData();
+        }
     }
 
     private void ToggleSuspend(string employeeId)
     {
-        var emp = Db.Employees.GetById(employeeId);
-        if (emp != null)
+        if (_currentUser == null) return;
+
+        var result = UserService.ToggleModerationSuspension(_currentUser.Id, employeeId);
+        if (!result.IsSuccess)
         {
-            if (emp.IsAdmin || emp.HasPermission(AppPermissions.Chat.Moderator))
-            {
-                Snackbar.Add(Loc["Cannot suspend another moderator or admin."].Value, Severity.Error);
-                return;
-            }
-            emp.IsSuspended = !emp.IsSuspended;
-            Db.Employees.Save(emp);
-            Snackbar.Add(emp.IsSuspended ? Loc["User suspended."].Value : Loc["User unsuspended."].Value, Severity.Success);
-            StateHasChanged();
+            Snackbar.Add(
+                result.Code == "FORBIDDEN_TARGET"
+                    ? Loc["Cannot suspend another moderator or admin."].Value
+                    : (result.ErrorMessage ?? Loc["Failed to update user status."].Value),
+                Severity.Error);
+            return;
         }
+
+        Snackbar.Add(result.Value ? Loc["User suspended."].Value : Loc["User unsuspended."].Value, Severity.Success);
+        LoadData();
+        StateHasChanged();
     }
 
     private void ToggleBan(string employeeId)
     {
-        var emp = Db.Employees.GetById(employeeId);
-        if (emp != null)
+        if (_currentUser == null) return;
+
+        var result = UserService.ToggleModerationBan(_currentUser.Id, employeeId);
+        if (!result.IsSuccess)
         {
-            if (emp.IsAdmin || emp.HasPermission(AppPermissions.Chat.Moderator))
-            {
-                Snackbar.Add(Loc["Cannot ban another moderator or admin."].Value, Severity.Error);
-                return;
-            }
-            emp.IsBanned = !emp.IsBanned;
-            Db.Employees.Save(emp);
-            Snackbar.Add(emp.IsBanned ? Loc["User banned."].Value : Loc["User unbanned."].Value, Severity.Success);
-            StateHasChanged();
+            Snackbar.Add(
+                result.Code == "FORBIDDEN_TARGET"
+                    ? Loc["Cannot ban another moderator or admin."].Value
+                    : (result.ErrorMessage ?? Loc["Failed to update user status."].Value),
+                Severity.Error);
+            return;
         }
+
+        Snackbar.Add(result.Value ? Loc["User banned."].Value : Loc["User unbanned."].Value, Severity.Success);
+        LoadData();
+        StateHasChanged();
     }
 }

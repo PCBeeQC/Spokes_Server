@@ -14,6 +14,7 @@ using Spokes_Server.Core.Middleware;
 using Spokes_Server.Core.Services.Maintenance;
 using Spokes_Server.Core.Services.Migrations;
 using Spokes_Server.Core.ReverseProxy;
+using Spokes_Server.Core.Security;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -79,7 +80,30 @@ if (args.Contains("--migrate"))
 
 // --- HTTP REQUEST PIPELINE ---
 app.UseResponseCompression();
+app.Use(async (context, next) =>
+{
+    context.Items["Spokes.RawRemoteIp"] = context.Connection.RemoteIpAddress;
+    await next();
+});
 app.UseForwardedHeaders();
+app.Use(async (context, next) =>
+{
+    var publicUrl = context.RequestServices.GetService<Spokes_Server.Core.Data.Repositories.Core.SystemConfigRepository>()?.Get()?.ServerPublicUrl;
+    if (!string.IsNullOrWhiteSpace(publicUrl) &&
+        Uri.TryCreate(publicUrl.Trim(), UriKind.Absolute, out var publicUri) &&
+        string.Equals(publicUri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
+    {
+        var rawIp = context.Items.TryGetValue("Spokes.RawRemoteIp", out var ipObj) ? ipObj as System.Net.IPAddress : context.Connection.RemoteIpAddress;
+        bool isDirectHttpLoopback = rawIp != null &&
+                                    System.Net.IPAddress.IsLoopback(rawIp) &&
+                                    !string.Equals(context.Request.Headers["X-Forwarded-Proto"].ToString(), Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase);
+        if (!isDirectHttpLoopback)
+        {
+            context.Request.Scheme = Uri.UriSchemeHttps;
+        }
+    }
+    await next();
+});
 app.UseSpokesDiagnostics();
 
 if (!app.Environment.IsDevelopment())
@@ -88,7 +112,7 @@ if (!app.Environment.IsDevelopment())
 }
 
 app.UseSpokesResponseHeaders();
-app.MapStaticAssets().AllowAnonymous();
+app.MapStaticAssets().AllowAnonymous().AllowDuringSetup();
 app.UseSpokesSetupRedirect();
 
 app.UseCors();
@@ -106,6 +130,7 @@ app.UseAntiforgery();
 app.UseSpokesMobileDraftAutoReopen();
 app.UseSpokesLocalization();
 app.UseSpokesFast404Guard();
+app.UseSpokesLandingPageRedirect();
 
 // --- ENDPOINTS MAPPING ---
 app.MapSpokesEndpoints();

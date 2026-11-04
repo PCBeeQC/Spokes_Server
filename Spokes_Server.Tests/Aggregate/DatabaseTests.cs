@@ -111,6 +111,7 @@ public class DatabaseTests : TestDataTestBase
         Assert.NotNull(_db.BoardCards);
         Assert.NotNull(_db.BoardTemplates);
         Assert.NotNull(_db.StandardDocuments);
+        Assert.NotNull(_db.TermsAndConditions);
         Assert.NotNull(_db.ProjectDocuments);
         Assert.NotNull(_db.OpenIdAccounts);
         Assert.NotNull(_db.ServerConfigs);
@@ -141,6 +142,7 @@ public class DatabaseTests : TestDataTestBase
         Assert.Same(_db.ChatChannels, _db.CommunicationContext.ChatChannels);
         Assert.Same(_db.CompanyProfile, _db.CoreContext.CompanyProfile);
         Assert.Same(_db.StandardDocuments, _db.CoreContext.StandardDocuments);
+        Assert.Same(_db.TermsAndConditions, _db.CoreContext.TermsAndConditions);
     }
 
     #endregion
@@ -420,7 +422,6 @@ public class DatabaseTests : TestDataTestBase
         string? userAgent = null,
         string? publicKey = null,
         bool isEnabled = true,
-        bool isIdleDetectionEnabled = false,
         string subscriptionType = "WebPush")
     {
         var pushDir = Path.Combine(_testDataPath, "PushSubscriptions");
@@ -440,7 +441,6 @@ public class DatabaseTests : TestDataTestBase
             UserAgent = userAgent,
             PublicKey = publicKey,
             IsEnabled = isEnabled,
-            IsIdleDetectionEnabled = isIdleDetectionEnabled,
             SubscriptionType = subscriptionType,
             CreatedAt = DateTime.UtcNow
         }));
@@ -462,7 +462,6 @@ public class DatabaseTests : TestDataTestBase
             subscriptionType: "WebPush",
             publicKey: "pub_strict",
             isEnabled: true,
-            isIdleDetectionEnabled: false,
             deviceType: "Mobile",
             deviceName: "Strict Phone",
             userAgent: "TestUA/1.0");
@@ -478,7 +477,6 @@ public class DatabaseTests : TestDataTestBase
         Assert.Equal(PushSubscriptionType.WebPush, migratedSession.PushSubscriptionType);
         Assert.Equal("pub_strict", migratedSession.PushPublicKey);
         Assert.True(migratedSession.PushEnabled);
-        Assert.False(migratedSession.IsIdleDetectionEnabled);
         Assert.Equal(DeviceType.Mobile, migratedSession.DeviceType);
         Assert.Equal("Strict Phone", migratedSession.DeviceName);
         Assert.Equal("TestUA/1.0", migratedSession.PushUserAgent);
@@ -657,8 +655,8 @@ public class DatabaseTests : TestDataTestBase
         Directory.CreateDirectory(oldMessagesDir);
         Directory.CreateDirectory(oldEmailsDir);
 
-        var folder = new EmailFolder { Id = "fld-mig-1", EmployeeId = "emp-mig", Name = "Inbox", Path = "INBOX" };
-        var message = new EmailMessage { Id = "msg-mig-1", EmployeeId = "emp-mig", UniqueId = 101, Subject = "Migrated Email", FolderPath = "INBOX" };
+        var folder = new EmailFolder { Id = "fld-mig-1", AccountId = "emp-mig", Name = "Inbox", Path = "INBOX" };
+        var message = new EmailMessage { Id = "msg-mig-1", AccountId = "emp-mig", UniqueId = 101, Subject = "Migrated Email", FolderPath = "INBOX" };
 
         File.WriteAllText(Path.Combine(oldFoldersDir, "fld-mig-1.json"), JsonSerializer.Serialize(folder));
         File.WriteAllText(Path.Combine(oldMessagesDir, "msg-mig-1.json"), JsonSerializer.Serialize(message));
@@ -667,9 +665,9 @@ public class DatabaseTests : TestDataTestBase
         RunMigrations();
 
         // Verify files moved to employee-centric folders
-        var expectedFolderFile = Path.Combine(_testDataPath, "Employees", "emp-mig", "Email", "Folders", "fld-mig-1.json");
-        var expectedMessageFile = Path.Combine(_testDataPath, "Employees", "emp-mig", "Email", "Messages", "msg-mig-1.json");
-        var expectedBodyFile = Path.Combine(_testDataPath, "Employees", "emp-mig", "Email", "Bodies", "msg-mig-1.html");
+        var expectedFolderFile = Path.Combine(_testDataPath, "EmailAccounts", "emp-mig", "Folders", "fld-mig-1.json");
+        var expectedMessageFile = Path.Combine(_testDataPath, "EmailAccounts", "emp-mig", "Messages", "msg-mig-1.json");
+        var expectedBodyFile = Path.Combine(_testDataPath, "EmailAccounts", "emp-mig", "Bodies", "msg-mig-1.html");
 
         Assert.True(File.Exists(expectedFolderFile));
         Assert.True(File.Exists(expectedMessageFile));
@@ -699,12 +697,12 @@ public class DatabaseTests : TestDataTestBase
         File.WriteAllText(Path.Combine(oldMessagesDir, "corrupt.json"), "{ invalid json");
 
         // Also valid file to ensure it proceeds
-        var folder = new EmailFolder { Id = "fld-valid", EmployeeId = "emp-valid", Name = "ValidFolder" };
+        var folder = new EmailFolder { Id = "fld-valid", AccountId = "emp-valid", Name = "ValidFolder" };
         File.WriteAllText(Path.Combine(oldFoldersDir, "fld-valid.json"), JsonSerializer.Serialize(folder));
 
         RunMigrations();
 
-        Assert.True(File.Exists(Path.Combine(_testDataPath, "Employees", "emp-valid", "Email", "Folders", "fld-valid.json")));
+        Assert.True(File.Exists(Path.Combine(_testDataPath, "EmailAccounts", "emp-valid", "Folders", "fld-valid.json")));
     }
 
     #endregion

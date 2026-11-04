@@ -1,6 +1,7 @@
-namespace Spokes_Server.Core.Models.Communication;
-
+using System;
 using Spokes_Server.Core.Data;
+
+namespace Spokes_Server.Core.Models.Communication;
 
 public class EmailFolder : IDataEntity
 {
@@ -13,7 +14,8 @@ public class EmailFolder : IDataEntity
     }
 
     public override int GetHashCode() => Id?.GetHashCode() ?? base.GetHashCode();
-    public string EmployeeId { get; set; } = string.Empty;
+
+    public string AccountId { get; set; } = string.Empty;
 
     public string Name { get; set; } = string.Empty; // Display Name (e.g. "Inbox")
     public string Path { get; set; } = string.Empty; // Full IMAP Path (e.g. "INBOX" or "Archive/2023")
@@ -26,6 +28,7 @@ public class EmailFolder : IDataEntity
     public uint NextUid { get; set; } = 1;
 
     // Standard folders identification
+    public bool IsSelectable { get; set; } = true;
     public bool IsInbox { get; set; }
     public bool IsSent { get; set; }
     public bool IsTrash { get; set; }

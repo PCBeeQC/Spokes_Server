@@ -235,11 +235,12 @@ public class DocumentPdfService : IDisposable
     private async Task GeneratePdfAsync(string baseUrl, string relativeUrl, string destinationPath, CancellationToken cancellationToken = default)
     {
         string? token = null;
+        IBrowserContext? browserContext = null;
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
             _logger.LogInformation("Generating PDF: {DestinationPath}", destinationPath);
-            token = _tokenService.CreateToken();
+            token = _tokenService.CreateToken(relativeUrl);
             var effectiveBaseUrl = ResolveEffectiveBaseUrl(baseUrl);
             var url = $"{effectiveBaseUrl}{relativeUrl}?renderToken={token}";
 
@@ -248,42 +249,45 @@ public class DocumentPdfService : IDisposable
             _logger.LogInformation("Getting browser payload...");
             var browser = await GetBrowserAsync(cancellationToken);
 
-            _logger.LogInformation("Opening new browser page...");
-            await using var page = await browser.NewPageAsync();
+            _logger.LogInformation("Creating isolated browser context and opening new page...");
+            browserContext = await browser.CreateBrowserContextAsync();
+            await using var page = await browserContext.NewPageAsync();
 
-            _logger.LogInformation("Setting extra HTTP headers...");
-            await page.SetExtraHttpHeadersAsync(new Dictionary<string, string>
+            _logger.LogInformation("Configuring desktop viewport for document pagination...");
+            // 1. Configure a desktop viewport so #printable-area (max-width: 8.5in / 816px) lays out at full width
+            await page.SetViewportAsync(new ViewPortOptions
             {
-                ["X-Spokes-Render-Token"] = token
+                Width = 1280,
+                Height = 1056
             });
 
-            _logger.LogInformation("Emulating Print Media Type...");
-            // 1. Emulate print media type so @media print CSS applies
-            await page.EmulateMediaTypeAsync(MediaType.Print);
-
             _logger.LogInformation("Navigating to URL...");
-            // 2. Navigate and wait until network is mostly idle (so fonts/images load)
+            // 2. Navigate in screen media mode (matching the interactive viewer) and wait until network is mostly idle
             await page.GoToAsync(url, new NavigationOptions
             {
                 WaitUntil = [WaitUntilNavigation.Networkidle0]
             });
 
-            // 3. Wait for Blazor Interactive Server circuit to render the printable container
+            // 3. Wait for Blazor Interactive Server circuit to render and paginate the printable container
             try
             {
-                await page.WaitForSelectorAsync("#printable-area", new WaitForSelectorOptions
+                await page.WaitForSelectorAsync("[data-paginated-for=\"printable-area\"], #printable-area[data-pagination-complete=\"true\"]", new WaitForSelectorOptions
                 {
                     Timeout = 10000
                 });
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "Timed out waiting for #printable-area on {RelativeUrl} (current page URL: {CurrentUrl})", relativeUrl, page.Url);
+                _logger.LogWarning(ex, "Timed out waiting for paginated container on {RelativeUrl} (current page URL: {CurrentUrl})", relativeUrl, page.Url);
             }
 
+            _logger.LogInformation("Emulating Print Media Type...");
+            // 4. Emulate print media type after pagination completes, identical to browser window.print()
+            await page.EmulateMediaTypeAsync(MediaType.Print);
+
             _logger.LogInformation("Waiting for layout shift completion...");
-            // 4. Give it an extra second in case there are subtle layout shifts, JS pagination, or delayed Blazor rendering
-            await Task.Delay(1000, cancellationToken);
+            // 5. Give a brief settle delay before printing
+            await Task.Delay(250, cancellationToken);
 
             // 5. Ensure the headless browser was not redirected to /access-denied, /sso/login, or /projects
             ValidateRenderedPage(page.Url, relativeUrl);
@@ -312,6 +316,18 @@ public class DocumentPdfService : IDisposable
         }
         finally
         {
+            if (browserContext != null)
+            {
+                try
+                {
+                    await browserContext.CloseAsync();
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to close isolated headless browser context");
+                }
+            }
+
             if (!string.IsNullOrEmpty(token) && _tokenService.RevokeToken(token, out var sessionId) && !string.IsNullOrEmpty(sessionId))
             {
                 try

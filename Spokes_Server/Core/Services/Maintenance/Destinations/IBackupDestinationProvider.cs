@@ -11,6 +11,7 @@ public enum BackupDestinationType
     LocalMount,
     S3,
     GoogleDrive,
+    GitHub,
     WebDav,
     Sftp
 }

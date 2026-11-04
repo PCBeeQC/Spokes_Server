@@ -1,0 +1,435 @@
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Services.Communication.Chat
+@using Spokes_Server.Components.Dialogs.HR
+@using Spokes_Server.Components.Pages.Chat
+@inject PollService PollService
+@inject ISnackbar Snackbar
+@inject TimeProvider TimeProvider
+
+<MudDialog>
+    <TitleContent>
+        <div class="d-flex align-center gap-2">
+            <MudIcon Icon="@Icons.Material.Filled.Poll" Color="Color.Primary" />
+            <MudText Typo="Typo.h6">@(IsEditMode ? Loc["Edit Poll"] : Loc["Create a Poll"])</MudText>
+        </div>
+    </TitleContent>
+    <DialogContent>
+        <MudStack Spacing="3" Class="py-1" Style="max-height: 70vh; overflow-y: auto;">
+            <MudTextField @bind-Value="_question"
+                          Label="@Loc["Question"]"
+                          Placeholder="@Loc["What question do you want to ask?"]"
+                          Variant="Variant.Outlined"
+                          MaxLength="300"
+                          Immediate="true"
+                          Required="true"
+                          FullWidth="true" />
+
+            <div>
+                <div class="d-flex align-center justify-space-between mb-2">
+                    <MudText Typo="Typo.subtitle2" Style="font-weight: 600;">@Loc["Answers"]</MudText>
+                    <MudText Typo="Typo.caption" Color="Color.Secondary">@_options.Count / 10</MudText>
+                </div>
+
+                <MudStack Spacing="2">
+                    @for (int i = 0; i < _options.Count; i++)
+                    {
+                        var index = i;
+                        var option = _options[index];
+                        <div @key="option.Id" class="d-flex align-center gap-2">
+                            <div style="position: relative;">
+                                <MudTooltip Text="@Loc["Choose Emoji"]">
+                                    <MudButton Variant="Variant.Outlined"
+                                               Color="Color.Default"
+                                               Style="min-width: 44px; width: 44px; height: 40px; padding: 0; font-size: 1.2rem;"
+                                               OnClick="@(() => ToggleOptionEmojiPicker(index))">
+                                        @if (!string.IsNullOrWhiteSpace(option.Emoji))
+                                        {
+                                            <span>@option.Emoji</span>
+                                        }
+                                        else
+                                        {
+                                            <MudIcon Icon="@Icons.Material.Outlined.EmojiEmotions" Size="Size.Small" Color="Color.Secondary" />
+                                        }
+                                    </MudButton>
+                                </MudTooltip>
+                                @if (_emojiPickerOptionIndex == index)
+                                {
+                                    <MudPopover Open="true" AnchorOrigin="Origin.BottomLeft" TransformOrigin="Origin.TopLeft" OverflowBehavior="OverflowBehavior.FlipAlways">
+                                        <div class="d-flex flex-column">
+                                            @if (!string.IsNullOrWhiteSpace(option.Emoji))
+                                            {
+                                                <div class="d-flex justify-end px-2 pt-1">
+                                                    <MudButton Size="Size.Small" Variant="Variant.Text" Color="Color.Error" OnClick="@(() => ClearOptionEmoji(index))">
+                                                        @Loc["Remove Emoji"]
+                                                    </MudButton>
+                                                </div>
+                                            }
+                                            <EmojiPicker IsOpen="true"
+                                                         DisableGifs="true"
+                                                         OnEmojiSelected="@(emoji => SelectOptionEmoji(index, emoji))"
+                                                         OnClose="@(() => _emojiPickerOptionIndex = null)"
+                                                         ContainerStyle="position: relative; margin: 0; box-shadow: none;" />
+                                        </div>
+                                    </MudPopover>
+                                }
+                            </div>
+
+                            <MudTextField @bind-Value="option.Text"
+                                          Placeholder="@string.Format(Loc["Option {0}"].Value, index + 1)"
+                                          Variant="Variant.Outlined"
+                                          Margin="Margin.Dense"
+                                          MaxLength="120"
+                                          Immediate="true"
+                                          Class="flex-grow-1" />
+
+                            @if (IsEditMode && option.VoteCount > 0)
+                            {
+                                <MudTooltip Text="@Loc["Existing votes will be preserved"]">
+                                    <MudChip T="string" Size="Size.Small" Color="Color.Info" Variant="Variant.Text">
+                                        @option.VoteCount @(option.VoteCount == 1 ? Loc["vote"].Value : Loc["votes"].Value)
+                                    </MudChip>
+                                </MudTooltip>
+                            }
+
+                            @if (_options.Count > 2)
+                            {
+                                <MudTooltip Text="@Loc["Remove option"]">
+                                    <MudIconButton Icon="@Icons.Material.Filled.Close"
+                                                   Size="Size.Small"
+                                                   Color="Color.Secondary"
+                                                   OnClick="@(() => RemoveOption(index))" />
+                                </MudTooltip>
+                            }
+                        </div>
+                    }
+                </MudStack>
+
+                @if (_options.Count < 10)
+                {
+                    <MudButton Variant="Variant.Text"
+                               Color="Color.Primary"
+                               StartIcon="@Icons.Material.Filled.Add"
+                               Size="Size.Small"
+                               Class="mt-2"
+                               OnClick="AddOption">
+                        @Loc["Add another option"]
+                    </MudButton>
+                }
+            </div>
+
+            <MudDivider />
+
+            @* Poll Ending Time (Number + Unit, matching Calendar Event Reminder UI) *@
+            <MudPaper Elevation="0" Outlined="true" Class="pa-3 rounded-lg">
+                <div class="d-flex flex-column gap-2">
+                    <div class="d-flex align-center justify-space-between flex-wrap gap-2">
+                        <div class="d-flex align-center gap-2">
+                            <MudIcon Icon="@Icons.Material.Filled.Schedule" Size="Size.Small" Color="Color.Primary" />
+                            <MudText Typo="Typo.subtitle2" Style="font-weight: 600;">@Loc["Duration"]</MudText>
+                        </div>
+                        @if (!_hasDuration)
+                        {
+                            <MudButton StartIcon="@Icons.Material.Filled.Add"
+                                       Size="Size.Small"
+                                       Variant="Variant.Text"
+                                       Color="Color.Primary"
+                                       OnClick="EnableDuration">
+                                @Loc["Set duration"]
+                            </MudButton>
+                        }
+                    </div>
+
+                    @if (!_hasDuration)
+                    {
+                        <div class="d-flex align-center gap-2 py-1">
+                            <MudIcon Icon="@Icons.Material.Filled.AllInclusive" Size="Size.Small" Color="Color.Default" />
+                            <MudText Typo="Typo.body2" Color="Color.Secondary">@Loc["No expiration"]</MudText>
+                        </div>
+                    }
+                    else
+                    {
+                        <CalendarReminderRow Reminder="@_durationReminder"
+                                             ReminderChanged="OnDurationReminderChanged"
+                                             IncludeBeforeSuffix="false"
+                                             MinValue="1"
+                                             Icon="@Icons.Material.Filled.Timer"
+                                             IconColor="Color.Primary"
+                                             RemoveTooltip="@Loc["No expiration"].Value"
+                                             OnRemove="DisableDuration" />
+                    }
+                </div>
+            </MudPaper>
+
+            <MudPaper Outlined="true" Class="pa-3 rounded-lg">
+                <MudStack Spacing="1">
+                    <MudSwitch T="bool" @bind-Value="_allowMultipleAnswers" Color="Color.Primary" Label="@Loc["Allow multiple answers"]" />
+                    <MudSwitch T="bool" @bind-Value="_allowAddOptions" Color="Color.Primary" Label="@Loc["Allow participants to add options"]" />
+                    <div class="d-flex flex-column">
+                        <MudSwitch T="bool"
+                                   @bind-Value="_isAnonymous"
+                                   Disabled="@(IsEditMode && _isAnonymous)"
+                                   Color="Color.Primary"
+                                   Label="@Loc["Anonymous voting"]" />
+                        @if (IsEditMode && _isAnonymous)
+                        {
+                            <MudText Typo="Typo.caption" Color="Color.Secondary" Class="ms-2">
+                                @Loc["Anonymous voting cannot be disabled once enabled."]
+                            </MudText>
+                        }
+                    </div>
+                </MudStack>
+            </MudPaper>
+        </MudStack>
+    </DialogContent>
+    <DialogActions>
+        <MudButton Variant="Variant.Text" OnClick="Cancel">@Loc["Cancel"]</MudButton>
+        <MudButton Variant="Variant.Filled"
+                   Color="Color.Primary"
+                   StartIcon="@(IsEditMode ? Icons.Material.Filled.Save : Icons.Material.Filled.Send)"
+                   Disabled="@(!CanSubmit)"
+                   OnClick="Submit">
+            @(IsEditMode ? Loc["Save Changes"] : Loc["Post Poll"])
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
+
+    [Parameter] public ChatPoll? Poll { get; set; }
+    [Parameter] public bool IsEditMode { get; set; }
+    [Parameter] public string ChannelId { get; set; } = string.Empty;
+    [Parameter] public string CurrentUserId { get; set; } = string.Empty;
+    [Parameter] public string? ChannelKey { get; set; }
+
+    private string _question = string.Empty;
+    private List<ChatPollOption> _options = [];
+    private bool _hasDuration = true;
+    private CalendarReminder _durationReminder = new() { Value = 24, Unit = CalendarReminderUnit.Hours };
+    private bool _durationModified;
+    private DateTime? _existingExpiresAt;
+    private bool _allowMultipleAnswers;
+    private bool _allowAddOptions;
+    private bool _isAnonymous;
+    private int? _emojiPickerOptionIndex;
+
+    private bool CanSubmit =>
+        !string.IsNullOrWhiteSpace(_question) &&
+        _options.Count(o => !string.IsNullOrWhiteSpace(o.Text)) >= 2 &&
+        (!_hasDuration || _durationReminder.Value >= 1);
+
+    protected override void OnInitialized()
+    {
+        var now = TimeProvider.GetUtcNow().UtcDateTime;
+
+        if (IsEditMode && Poll != null)
+        {
+            var decrypted = PollService.DecryptPollForDisplay(Poll, ChannelKey);
+            _question = decrypted.Question;
+            _options = decrypted.Options.Select(o => new ChatPollOption
+            {
+                Id = o.Id,
+                Text = o.Text,
+                Emoji = o.Emoji,
+                AddedByUserId = decrypted.IsAnonymous ? null : o.AddedByUserId,
+                AnonymousVoteCount = o.AnonymousVoteCount,
+                VoterIds = decrypted.IsAnonymous ? [] : o.VoterIds.ToList()
+            }).ToList();
+
+            while (_options.Count < 2)
+            {
+                _options.Add(new ChatPollOption());
+            }
+
+            _allowMultipleAnswers = decrypted.AllowMultipleAnswers;
+            _allowAddOptions = decrypted.AllowAddOptions;
+            _isAnonymous = decrypted.IsAnonymous;
+            _existingExpiresAt = decrypted.ExpiresAt;
+
+            if (decrypted.ExpiresAt.HasValue)
+            {
+                _hasDuration = true;
+                _durationReminder = BuildReminderFromRemaining(decrypted.ExpiresAt.Value - now);
+                _durationModified = false;
+            }
+            else
+            {
+                _hasDuration = false;
+                _durationModified = false;
+            }
+        }
+        else
+        {
+            _options =
+            [
+                new ChatPollOption(),
+                new ChatPollOption()
+            ];
+            _hasDuration = true;
+            _durationReminder = new CalendarReminder { Value = 24, Unit = CalendarReminderUnit.Hours };
+            _durationModified = true;
+        }
+    }
+
+    private static CalendarReminder BuildReminderFromRemaining(TimeSpan remaining)
+    {
+        if (remaining.TotalSeconds <= 0)
+        {
+            return new CalendarReminder { Value = 1, Unit = CalendarReminderUnit.Hours };
+        }
+
+        if (remaining.TotalDays >= 7 && Math.Abs(remaining.TotalDays % 7) < 0.1)
+        {
+            return new CalendarReminder { Value = Math.Max(1, (int)Math.Round(remaining.TotalDays / 7.0)), Unit = CalendarReminderUnit.Weeks };
+        }
+
+        if (remaining.TotalHours >= 24 && Math.Abs(remaining.TotalHours % 24) < 0.25)
+        {
+            return new CalendarReminder { Value = Math.Max(1, (int)Math.Round(remaining.TotalDays)), Unit = CalendarReminderUnit.Days };
+        }
+
+        if (remaining.TotalMinutes >= 60 && Math.Abs(remaining.TotalMinutes % 60) < 1)
+        {
+            return new CalendarReminder { Value = Math.Max(1, (int)Math.Round(remaining.TotalHours)), Unit = CalendarReminderUnit.Hours };
+        }
+
+        return new CalendarReminder { Value = Math.Max(1, (int)Math.Ceiling(remaining.TotalMinutes)), Unit = CalendarReminderUnit.Minutes };
+    }
+
+    private void EnableDuration()
+    {
+        _hasDuration = true;
+        _durationReminder = new CalendarReminder { Value = 24, Unit = CalendarReminderUnit.Hours };
+        _durationModified = true;
+    }
+
+    private void DisableDuration()
+    {
+        _hasDuration = false;
+        _durationModified = true;
+    }
+
+    private void OnDurationReminderChanged(CalendarReminder updated)
+    {
+        _durationReminder = updated;
+        _durationModified = true;
+    }
+
+    private void AddOption()
+    {
+        if (_options.Count < 10)
+        {
+            _options.Add(new ChatPollOption());
+        }
+    }
+
+    private void RemoveOption(int index)
+    {
+        if (_options.Count > 2 && index >= 0 && index < _options.Count)
+        {
+            if (_emojiPickerOptionIndex == index)
+            {
+                _emojiPickerOptionIndex = null;
+            }
+            _options.RemoveAt(index);
+        }
+    }
+
+    private void ToggleOptionEmojiPicker(int index)
+    {
+        _emojiPickerOptionIndex = _emojiPickerOptionIndex == index ? null : index;
+    }
+
+    private void SelectOptionEmoji(int index, string emoji)
+    {
+        if (index >= 0 && index < _options.Count)
+        {
+            _options[index].Emoji = emoji;
+        }
+        _emojiPickerOptionIndex = null;
+    }
+
+    private void ClearOptionEmoji(int index)
+    {
+        if (index >= 0 && index < _options.Count)
+        {
+            _options[index].Emoji = null;
+        }
+        _emojiPickerOptionIndex = null;
+    }
+
+    private void Submit()
+    {
+        if (!CanSubmit)
+        {
+            return;
+        }
+
+        var now = TimeProvider.GetUtcNow().UtcDateTime;
+        DateTime? expiresAt;
+        if (!_hasDuration)
+        {
+            expiresAt = null;
+        }
+        else if (IsEditMode && !_durationModified)
+        {
+            expiresAt = _existingExpiresAt;
+        }
+        else
+        {
+            expiresAt = now.Add(_durationReminder.ToTimeSpan());
+        }
+
+        if (IsEditMode && Poll != null)
+        {
+            var updated = new ChatPoll
+            {
+                Id = Poll.Id,
+                ChannelId = Poll.ChannelId,
+                CreatorId = Poll.CreatorId,
+                Question = _question.Trim(),
+                Options = _options.Where(o => !string.IsNullOrWhiteSpace(o.Text)).ToList(),
+                AllowMultipleAnswers = _allowMultipleAnswers,
+                AllowAddOptions = _allowAddOptions,
+                IsAnonymous = Poll.IsAnonymous || _isAnonymous,
+                ExpiresAt = expiresAt,
+                IsClosed = Poll.IsClosed
+            };
+
+            var result = PollService.UpdatePoll(updated, CurrentUserId, ChannelKey);
+            if (!result.IsSuccess || result.Value == null)
+            {
+                Snackbar.Add(result.ErrorMessage ?? Loc["Failed to update poll."].Value, Severity.Error);
+                return;
+            }
+
+            MudDialog.Close(DialogResult.Ok(result.Value));
+        }
+        else
+        {
+            var newPoll = new ChatPoll
+            {
+                ChannelId = ChannelId,
+                CreatorId = CurrentUserId,
+                Question = _question.Trim(),
+                Options = _options.Where(o => !string.IsNullOrWhiteSpace(o.Text)).ToList(),
+                AllowMultipleAnswers = _allowMultipleAnswers,
+                AllowAddOptions = _allowAddOptions,
+                IsAnonymous = _isAnonymous,
+                ExpiresAt = expiresAt
+            };
+
+            var result = PollService.CreatePoll(newPoll, CurrentUserId, ChannelKey);
+            if (!result.IsSuccess || result.Value == null)
+            {
+                Snackbar.Add(result.ErrorMessage ?? Loc["Failed to create poll."].Value, Severity.Error);
+                return;
+            }
+
+            MudDialog.Close(DialogResult.Ok(result.Value));
+        }
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+}

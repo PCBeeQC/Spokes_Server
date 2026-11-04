@@ -1961,5 +1961,81 @@ public class ChatHubTests : IDisposable
         Assert.Contains("not authorized", ex.Message, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public async Task SuspendedUser_CanConnectAndJoinReadableChannel_ButAllWriteHubMethodsAreBlocked()
+    {
+        var (suspendedEmp, hub) = CreateAuthenticatedHub("e_suspended_hub", "u_suspended_hub", isAdmin: true);
+        suspendedEmp.IsSuspended = true;
+        _employees.Save(suspendedEmp);
+
+        var channel = new ChatChannel
+        {
+            Id = "c_suspended_readonly",
+            ChannelType = ChatChannelType.General,
+            IsDefaultGeneral = true
+        };
+        _channels.Save(channel);
+
+        var existingMsg = new ChatMessage
+        {
+            Id = "m_suspended_own",
+            ChannelId = channel.Id,
+            SenderId = suspendedEmp.Id,
+            Content = "Posted before suspension",
+            Reactions = new List<string> { $"👍:{suspendedEmp.Id}" }
+        };
+        _messages.Save(existingMsg);
+
+        // Read-only connection and channel join succeed
+        await hub.OnConnectedAsync();
+        _mockGroups.Verify(g => g.AddToGroupAsync("test-connection", $"user_{suspendedEmp.Id}", It.IsAny<CancellationToken>()), Times.Once);
+
+        await hub.JoinChannelAsync(channel.Id);
+        _mockGroups.Verify(g => g.AddToGroupAsync("test-connection", $"channel_{channel.Id}", It.IsAny<CancellationToken>()), Times.Once);
+
+        // All write hub invocations throw HubException
+        var sendEx = await Assert.ThrowsAsync<HubException>(() => hub.SendMessageAsync(channel.Id, "Blocked write"));
+        Assert.Contains("suspended", sendEx.Message, StringComparison.OrdinalIgnoreCase);
+
+        var editEx = await Assert.ThrowsAsync<HubException>(() => hub.EditMessageAsync(existingMsg.Id, "Blocked edit"));
+        Assert.Contains("suspended", editEx.Message, StringComparison.OrdinalIgnoreCase);
+
+        var delEx = await Assert.ThrowsAsync<HubException>(() => hub.DeleteMessageAsync(existingMsg.Id));
+        Assert.Contains("suspended", delEx.Message, StringComparison.OrdinalIgnoreCase);
+
+        var addReactEx = await Assert.ThrowsAsync<HubException>(() => hub.AddReactionAsync(existingMsg.Id, "🔥"));
+        Assert.Contains("suspended", addReactEx.Message, StringComparison.OrdinalIgnoreCase);
+
+        var remReactEx = await Assert.ThrowsAsync<HubException>(() => hub.RemoveReactionAsync(existingMsg.Id, "👍"));
+        Assert.Contains("suspended", remReactEx.Message, StringComparison.OrdinalIgnoreCase);
+
+        // Typing indicators are silently suppressed without broadcasting
+        await hub.StartTypingAsync(channel.Id);
+        await hub.StopTypingAsync(channel.Id);
+        _mockClientProxy.Verify(c => c.SendCoreAsync("UserTyping", It.IsAny<object[]>(), It.IsAny<CancellationToken>()), Times.Never);
+        _mockClientProxy.Verify(c => c.SendCoreAsync("UserStoppedTyping", It.IsAny<object[]>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task BannedUser_CannotConnectToUserGroupOrJoinChannels()
+    {
+        var (bannedEmp, hub) = CreateAuthenticatedHub("e_banned_hub", "u_banned_hub", isAdmin: true);
+        bannedEmp.IsBanned = true;
+        _employees.Save(bannedEmp);
+
+        var channel = new ChatChannel
+        {
+            Id = "c_banned_check",
+            ChannelType = ChatChannelType.General,
+            IsDefaultGeneral = true
+        };
+        _channels.Save(channel);
+
+        await hub.OnConnectedAsync();
+        _mockGroups.Verify(g => g.AddToGroupAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+
+        await Assert.ThrowsAsync<HubException>(() => hub.JoinChannelAsync(channel.Id));
+    }
+
     #endregion
 }

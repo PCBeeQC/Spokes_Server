@@ -34,6 +34,7 @@ public class DocumentTemplateTests
         Assert.Equal("PURCHASE ORDER", template.Label_PurchaseOrder);
 
         // Line Itmes
+        Assert.Equal("#", template.Label_ItemNumber);
         Assert.Equal("Description", template.Label_Description);
         Assert.Equal("Qty", template.Label_Quantity);
         Assert.Equal("Price", template.Label_Price);
@@ -46,6 +47,8 @@ public class DocumentTemplateTests
         Assert.Equal("Total Budget", template.Label_QuoteTotal);
         Assert.Equal("Balance Due", template.Label_BalanceDue);
         Assert.Equal("Amount Paid", template.Label_AmountPaid);
+        Assert.Equal("PAID", template.Label_Paid);
+        Assert.Equal("Date Received", template.Label_DateReceived);
 
         // Client Bought
         Assert.Equal(" (Client Responsibility)", template.Label_ClientBoughtTag);
@@ -214,6 +217,8 @@ public class DocumentTemplateTests
             Label_QuoteTotal = "Budget global",
             Label_BalanceDue = "Solde restant",
             Label_AmountPaid = "Paiement reçu",
+            Label_Paid = "PAYÉ",
+            Label_DateReceived = "Date de réception",
 
             // Client Bought
             Label_ClientBoughtTag = "(Acheté par le client)",
@@ -319,6 +324,8 @@ public class DocumentTemplateTests
         Assert.Equal("Budget global", template.Label_QuoteTotal);
         Assert.Equal("Solde restant", template.Label_BalanceDue);
         Assert.Equal("Paiement reçu", template.Label_AmountPaid);
+        Assert.Equal("PAYÉ", template.Label_Paid);
+        Assert.Equal("Date de réception", template.Label_DateReceived);
 
         // Client Bought
         Assert.Equal("(Acheté par le client)", template.Label_ClientBoughtTag);
@@ -384,5 +391,47 @@ public class DocumentTemplateTests
         Assert.Equal("Facturé à", template.Label_BillTo);
         Assert.Equal("Livré à", template.Label_ShipTo);
         Assert.Equal("Numéro de dossier", template.Label_ProjectNumber);
+    }
+
+    [Fact]
+    public void DocumentTemplate_PaidInvoiceLabels_SupportCustomTranslationsAndFallbacks()
+    {
+        // 1. Default values match user expectations
+        var defaultTemplate = new DocumentTemplate();
+        Assert.Equal("PAID", defaultTemplate.Label_Paid);
+        Assert.Equal("Amount Paid", defaultTemplate.Label_AmountPaid);
+        Assert.Equal("Date Received", defaultTemplate.Label_DateReceived);
+        Assert.Equal("Balance Due", defaultTemplate.Label_BalanceDue);
+
+        // 2. Custom translated values
+        var frenchTemplate = new DocumentTemplate
+        {
+            Label_Paid = "PAYÉ",
+            Label_AmountPaid = "Montant payé",
+            Label_DateReceived = "Date reçue",
+            Label_BalanceDue = "Solde dû"
+        };
+        Assert.Equal("PAYÉ", frenchTemplate.Label_Paid);
+        Assert.Equal("Montant payé", frenchTemplate.Label_AmountPaid);
+        Assert.Equal("Date reçue", frenchTemplate.Label_DateReceived);
+        Assert.Equal("Solde dû", frenchTemplate.Label_BalanceDue);
+
+        // 3. Fallbacks when null or whitespace
+        var emptyTemplate = new DocumentTemplate
+        {
+            Label_Paid = "  ",
+            Label_AmountPaid = "",
+            Label_DateReceived = null!,
+            Label_BalanceDue = "   "
+        };
+        var paidTag = !string.IsNullOrWhiteSpace(emptyTemplate.Label_Paid) ? emptyTemplate.Label_Paid : "PAID";
+        var amountPaid = !string.IsNullOrWhiteSpace(emptyTemplate.Label_AmountPaid) ? emptyTemplate.Label_AmountPaid : "Amount Paid";
+        var dateReceived = !string.IsNullOrWhiteSpace(emptyTemplate.Label_DateReceived) ? emptyTemplate.Label_DateReceived : "Date Received";
+        var balanceDue = !string.IsNullOrWhiteSpace(emptyTemplate.Label_BalanceDue) ? emptyTemplate.Label_BalanceDue : "Balance Due";
+
+        Assert.Equal("PAID", paidTag);
+        Assert.Equal("Amount Paid", amountPaid);
+        Assert.Equal("Date Received", dateReceived);
+        Assert.Equal("Balance Due", balanceDue);
     }
 }

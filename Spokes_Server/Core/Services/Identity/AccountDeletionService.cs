@@ -21,6 +21,8 @@ public class AccountDeletionService
     private readonly AccountingContext? _accounting;
     private readonly PresenceStateService _presenceState;
     private readonly SessionService? _sessionService;
+    private readonly GlobalKeystoreService? _globalKeystore;
+    private readonly FileTokenService? _fileTokenService;
     private readonly string _dataPath;
     private readonly ILogger<AccountDeletionService>? _logger;
 
@@ -33,7 +35,9 @@ public class AccountDeletionService
         PresenceStateService presenceState,
         SessionService? sessionService = null,
         ILogger<AccountDeletionService>? logger = null,
-        AccountingContext? accounting = null)
+        AccountingContext? accounting = null,
+        GlobalKeystoreService? globalKeystore = null,
+        FileTokenService? fileTokenService = null)
     {
         _hr = hr;
         _core = core;
@@ -42,6 +46,8 @@ public class AccountDeletionService
         _accounting = accounting;
         _presenceState = presenceState;
         _sessionService = sessionService;
+        _globalKeystore = globalKeystore;
+        _fileTokenService = fileTokenService;
         _dataPath = config["DataPath"] ?? "Data";
         _logger = logger;
     }
@@ -82,9 +88,12 @@ public class AccountDeletionService
             throw;
         }
 
-        // 2. Revoke Access & Devices
+        // 2. Revoke Access, Vault Keys & Devices
         try
         {
+            _globalKeystore?.LockVault(employeeId);
+            _fileTokenService?.InvalidateUserEncryptedTokens(employeeId);
+
             var sessions = _core.DeviceSessions.GetAll().Where(s => s.EmployeeId == employeeId).ToList();
             foreach (var session in sessions)
             {
@@ -93,6 +102,7 @@ public class AccountDeletionService
                     // Keep the current session briefly for the final logout redirect, 
                     // but anonymize it and mark it revoked.
                     session.EmployeeId = SystemDeletedUserId;
+                    session.HasVaultCookie = false;
                     session.RevokedAt = DateTime.UtcNow;
                     _core.DeviceSessions.Save(session);
                 }
@@ -228,25 +238,90 @@ public class AccountDeletionService
             _logger?.LogError(ex, "Error reparenting reported messages for employee {EmployeeId}", employeeId);
         }
 
+        try
+        {
+            if (_communication.ChatPolls != null)
+            {
+                var polls = _communication.ChatPolls.GetAll().ToList();
+                foreach (var poll in polls)
+                {
+                    var modified = false;
+                    if (poll.CreatorId == employeeId)
+                    {
+                        poll.CreatorId = SystemDeletedUserId;
+                        modified = true;
+                    }
+                    foreach (var opt in poll.Options)
+                    {
+                        if (opt.AddedByUserId == employeeId)
+                        {
+                            opt.AddedByUserId = SystemDeletedUserId;
+                            modified = true;
+                        }
+                        if (opt.VoterIds.Remove(employeeId))
+                        {
+                            modified = true;
+                        }
+                    }
+                    if (modified)
+                    {
+                        _communication.ChatPolls.Save(poll);
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogError(ex, "Error anonymizing chat polls for employee {EmployeeId}", employeeId);
+        }
+
         // 6. Hard-delete Private Data
         try
         {
-            var folders = _communication.EmailFolders.GetAll().Where(f => f.EmployeeId == employeeId).ToList();
-            foreach (var folder in folders) _communication.EmailFolders.Delete(folder.Id);
-        }
-        catch (Exception ex)
-        {
-            _logger?.LogError(ex, "Error deleting email folders for employee {EmployeeId}", employeeId);
-        }
+            foreach (var account in _communication.EmailAccounts.GetAll().ToList())
+            {
+                if (account.OwnerEmployeeId == employeeId && account.AllowedUserIds.Count == 0 && account.AllowedTeamIds.Count == 0)
+                {
+                    _communication.EmailFolders.DeleteByAccount(account.Id);
+                    _communication.EmailMessages.DeleteByAccount(account.Id);
+                    _communication.EmailAccounts.Delete(account.Id);
+                }
+                else if (account.AllowedUserIds.Remove(employeeId))
+                {
+                    _communication.EmailAccounts.Save(account);
+                }
+            }
 
-        try
-        {
-            var emails = _communication.EmailMessages.GetAllForEmployee(employeeId);
-            foreach (var email in emails) _communication.EmailMessages.Delete(email.EmployeeId, email.Id);
+            _communication.EmailFolders.DeleteByAccount(employeeId);
+            _communication.EmailMessages.DeleteByAccount(employeeId);
+
+            foreach (var inbox in _communication.EmailInboxes.GetAll().ToList())
+            {
+                if (inbox.OwnerEmployeeId == employeeId && inbox.AllowedUserIds.Count == 0 && inbox.AllowedTeamIds.Count == 0)
+                {
+                    _communication.EmailInboxes.Delete(inbox.Id);
+                }
+                else if (inbox.AllowedUserIds.Remove(employeeId))
+                {
+                    _communication.EmailInboxes.Save(inbox);
+                }
+            }
+
+            foreach (var identity in _communication.EmailSendingIdentities.GetAll().ToList())
+            {
+                if (identity.OwnerEmployeeId == employeeId && identity.AllowedUserIds.Count == 0 && identity.AllowedTeamIds.Count == 0)
+                {
+                    _communication.EmailSendingIdentities.Delete(identity.Id);
+                }
+                else if (identity.AllowedUserIds.Remove(employeeId))
+                {
+                    _communication.EmailSendingIdentities.Save(identity);
+                }
+            }
         }
         catch (Exception ex)
         {
-            _logger?.LogError(ex, "Error deleting email messages for employee {EmployeeId}", employeeId);
+            _logger?.LogError(ex, "Error deleting email accounts/folders/messages for employee {EmployeeId}", employeeId);
         }
 
         try

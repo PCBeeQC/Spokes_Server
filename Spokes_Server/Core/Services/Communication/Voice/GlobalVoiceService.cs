@@ -19,6 +19,7 @@ public class GlobalVoiceService : IAsyncDisposable
     private readonly ChatStateService _chatState;
     private readonly ILogger<GlobalVoiceService> _logger;
     private readonly IVoiceDeviceService _deviceService;
+    private readonly PhysicalVoiceRoomService? _physicalRoomService;
     private int _clientLogCount;
     private DateTime _lastClientLogReset = DateTime.UtcNow;
 
@@ -34,14 +35,24 @@ public class GlobalVoiceService : IAsyncDisposable
     public event Action<double>? OnMasterVolumeChanged;
     public event Action<string, double>? OnParticipantVolumeChanged;
     public event Action<VoiceUserSettings>? OnVoiceSettingsUpdated;
+    public event Action? OnHardwareMuteBlockedUnmute;
+    public event Action<bool>? OnOsPipStateChangedEvent;
+    public event Action<bool>? OnNativeMobilePipChangedEvent;
+    public event Action<string>? OnNativeCallActionReceived;
+    public event Action<string?>? OnPipFocusChangedEvent;
 
     public bool IsInVoiceCall { get; private set; }
     public bool IsConnecting { get; private set; }
     public bool RequiresIntegrityCheck { get; private set; }
     public string? CurrentChannelId { get; private set; }
     public string? CurrentUserId { get; private set; }
+    public string CurrentDeviceId { get; private set; } = string.Empty;
+    public string CurrentDeviceName { get; private set; } = string.Empty;
+    public bool IsSoftwareMuted { get; private set; }
+    public bool IsHardwareMuted { get; private set; }
     public bool IsMuted { get; private set; }
     public bool IsVideoOn { get; private set; }
+    public bool IsTogglingVideo { get; private set; }
     public bool IsScreenSharing { get; private set; }
     public string CurrentNoiseSuppression { get; private set; } = "webrtc";
 
@@ -54,23 +65,40 @@ public class GlobalVoiceService : IAsyncDisposable
     public ConcurrentHashSet<string> MutedParticipants { get; } = new();
     public ConcurrentHashSet<string> RemoteScreenAudioParticipants { get; } = new();
     public ConcurrentHashSet<string> MutedRemoteScreenAudioParticipants { get; } = new();
+    public ConcurrentHashSet<string> ActiveCameraParticipants { get; } = new();
+    public ConcurrentHashSet<string> ActiveScreenShareParticipants { get; } = new();
+
+    public bool HasAnyActiveVideoOrScreen =>
+        IsVideoOn || IsScreenSharing || ActiveCameraParticipants.Count > 0 || ActiveScreenShareParticipants.Count > 0;
 
     public GlobalVoiceService(
         IVoiceJsInteropService jsInterop,
         VoiceChannelService voiceChannelService,
         ChatStateService chatState,
         ILogger<GlobalVoiceService> logger,
-        IVoiceDeviceService? deviceService = null)
+        IVoiceDeviceService? deviceService = null,
+        PhysicalVoiceRoomService? physicalRoomService = null)
     {
         _jsInterop = jsInterop ?? throw new ArgumentNullException(nameof(jsInterop));
         _voiceChannelService = voiceChannelService ?? throw new ArgumentNullException(nameof(voiceChannelService));
         _chatState = chatState ?? throw new ArgumentNullException(nameof(chatState));
         _logger = logger ?? NullLogger<GlobalVoiceService>.Instance;
         _deviceService = deviceService ?? new VoiceDeviceService(_jsInterop, _logger);
+        _physicalRoomService = physicalRoomService;
 
         _chatState.VoiceMemberJoined += OnServerVoiceMemberJoined;
         _chatState.VoiceMemberLeft += OnServerVoiceMemberLeft;
         _chatState.VoiceUserMutedChanged += OnServerVoiceUserMutedChanged;
+        _chatState.PhysicalRoomsChanged += OnServerPhysicalRoomsChanged;
+    }
+
+    private void OnServerPhysicalRoomsChanged()
+    {
+        if (IsInVoiceCall)
+        {
+            _ = RefreshPhysicalRoomStateAsync();
+            NotifyStateChanged();
+        }
     }
 
     private void OnServerVoiceUserMutedChanged(string channelId, string userId, bool isMuted)
@@ -86,12 +114,18 @@ public class GlobalVoiceService : IAsyncDisposable
         }
     }
 
+    private static bool IsSyntheticParticipantIdentity(string? identity) =>
+        !string.IsNullOrEmpty(identity) &&
+        (identity.StartsWith("bot:", StringComparison.OrdinalIgnoreCase) ||
+         identity.EndsWith(":cam", StringComparison.OrdinalIgnoreCase));
+
     private void OnServerVoiceMemberJoined(string channelId, string userId)
     {
-        if (IsInVoiceCall && CurrentChannelId == channelId && !string.IsNullOrEmpty(userId) && userId != CurrentUserId && !userId.StartsWith("bot:", StringComparison.OrdinalIgnoreCase))
+        if (IsInVoiceCall && CurrentChannelId == channelId && !string.IsNullOrEmpty(userId) && userId != CurrentUserId && !IsSyntheticParticipantIdentity(userId))
         {
             if (CallParticipants.Add(userId))
             {
+                _ = RefreshPhysicalRoomStateAsync();
                 NotifyStateChanged();
             }
         }
@@ -106,12 +140,79 @@ public class GlobalVoiceService : IAsyncDisposable
                 bool removed = CallParticipants.Remove(userId);
                 ActiveSpeakers.Remove(userId);
                 MutedParticipants.Remove(userId);
+                ActiveCameraParticipants.Remove(userId);
+                ActiveScreenShareParticipants.Remove(userId);
                 _deviceService.RemoveParticipantVideo(userId);
                 if (removed)
                 {
+                    _ = RefreshPhysicalRoomStateAsync();
                     NotifyStateChanged();
                 }
             }
+        }
+    }
+
+    public async Task<(string DeviceId, string DeviceName)> GetOrCreatePhysicalDeviceIdentityAsync()
+    {
+        if (!string.IsNullOrWhiteSpace(CurrentDeviceId))
+        {
+            return (CurrentDeviceId, CurrentDeviceName);
+        }
+
+        try
+        {
+            if (!_jsInterop.IsModuleLoaded)
+            {
+                await InitializeModuleAsync();
+            }
+
+            var identity = await _jsInterop.GetOrCreatePhysicalDeviceIdentityAsync();
+            if (identity != null && !string.IsNullOrWhiteSpace(identity.DeviceId))
+            {
+                CurrentDeviceId = identity.DeviceId;
+                CurrentDeviceName = string.IsNullOrWhiteSpace(identity.DeviceName) ? "This Device" : identity.DeviceName;
+                return (CurrentDeviceId, CurrentDeviceName);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Failed to query physical device identity from JS interop");
+        }
+
+        return (CurrentDeviceId, CurrentDeviceName);
+    }
+
+    public async Task RefreshPhysicalRoomStateAsync()
+    {
+        if (!IsInVoiceCall || string.IsNullOrEmpty(CurrentChannelId) || string.IsNullOrEmpty(CurrentUserId) || !_jsInterop.IsModuleLoaded || _physicalRoomService == null)
+        {
+            return;
+        }
+
+        try
+        {
+            var activeGroups = _physicalRoomService.GetActiveCoLocatedRoomGroups(CurrentChannelId);
+            var coLocatedUserIds = activeGroups.Values
+                .SelectMany(g => g.ActiveUserIds)
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
+
+            string[] mutedRoommates = Array.Empty<string>();
+            if (!string.IsNullOrWhiteSpace(CurrentDeviceId))
+            {
+                var myEnrollment = _physicalRoomService.GetEnrollment(CurrentUserId, CurrentDeviceId);
+                if (myEnrollment != null && myEnrollment.MuteUsersInMyRoom)
+                {
+                    mutedRoommates = _physicalRoomService.GetActiveRoommatesInChannel(CurrentChannelId, CurrentUserId, CurrentDeviceId)
+                        .ToArray();
+                }
+            }
+
+            await _jsInterop.SyncPhysicalRoomStateAsync(coLocatedUserIds, mutedRoommates);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Failed to sync physical room state with JS interop");
         }
     }
 
@@ -199,6 +300,15 @@ public class GlobalVoiceService : IAsyncDisposable
 
             CurrentChannelId = options.ChannelId;
             CurrentUserId = options.UserId;
+            if (!string.IsNullOrWhiteSpace(options.DeviceId))
+            {
+                CurrentDeviceId = options.DeviceId;
+                CurrentDeviceName = string.IsNullOrWhiteSpace(options.DeviceName) ? "This Device" : options.DeviceName;
+            }
+            else if (string.IsNullOrWhiteSpace(CurrentDeviceId))
+            {
+                await GetOrCreatePhysicalDeviceIdentityAsync();
+            }
             CallParticipants.Clear();
             ActiveSpeakers.Clear();
             MutedParticipants.Clear();
@@ -216,6 +326,8 @@ public class GlobalVoiceService : IAsyncDisposable
                 MutedParticipants.Add(smId);
             }
 
+            IsSoftwareMuted = false;
+            IsHardwareMuted = false;
             IsMuted = false;
             IsVideoOn = false;
             IsScreenSharing = false;
@@ -231,7 +343,22 @@ public class GlobalVoiceService : IAsyncDisposable
 
             if (IsInVoiceCall)
             {
+                if (IsSoftwareMuted || IsMuted)
+                {
+                    await _jsInterop.SetMicrophoneEnabledAsync(false);
+                }
+                if (!string.IsNullOrWhiteSpace(CurrentDeviceId))
+                {
+                    _chatState.SetVoiceParticipantDevice(options.ChannelId, options.UserId, CurrentDeviceId, CurrentDeviceName);
+                }
+                _chatState.SetVoiceParticipantAudioTelemetry(
+                    options.ChannelId,
+                    options.UserId,
+                    CurrentNoiseSuppression,
+                    IsAndroid ? 75.0 : (IsIOS ? 40.0 : 25.0),
+                    IsAndroid ? "android" : (IsIOS ? "ios" : "web"));
                 await _voiceChannelService.JoinVoiceAsync(options.ChannelId, options.UserId);
+                await RefreshPhysicalRoomStateAsync();
                 _ = _voiceChannelService.SetUserMutedAsync(options.ChannelId, options.UserId, IsMuted);
                 if (options.VoiceSettings != null)
                 {
@@ -258,9 +385,18 @@ public class GlobalVoiceService : IAsyncDisposable
                     }
                 }
             }
+            else
+            {
+                ResetState();
+                await _jsInterop.DisconnectFromVoiceAsync();
+            }
         }
         finally
         {
+            if (!IsInVoiceCall && !string.IsNullOrEmpty(CurrentChannelId))
+            {
+                ResetState();
+            }
             IsConnecting = false;
             NotifyStateChanged();
         }
@@ -299,38 +435,38 @@ public class GlobalVoiceService : IAsyncDisposable
     {
         try
         {
-            bool newMuteState = !IsMuted;
-            IsMuted = newMuteState;
-            if (newMuteState)
+            if (!IsMuted)
             {
-                if (CurrentUserId != null)
-                {
-                    ActiveSpeakers.Remove(CurrentUserId);
-                    MutedParticipants.Add(CurrentUserId);
-                }
-                _wasISpeaking = false;
-                if (CurrentChannelId != null && CurrentUserId != null)
-                {
-                    _ = _voiceChannelService.SetUserSpeakingAsync(CurrentChannelId, CurrentUserId, false);
-                    _ = _voiceChannelService.SetUserMutedAsync(CurrentChannelId, CurrentUserId, true);
-                }
-            }
-            else
-            {
-                if (CurrentUserId != null)
-                {
-                    MutedParticipants.Remove(CurrentUserId);
-                }
-                if (CurrentChannelId != null && CurrentUserId != null)
-                {
-                    _ = _voiceChannelService.SetUserMutedAsync(CurrentChannelId, CurrentUserId, false);
-                }
-            }
-            NotifyStateChanged();
+                IsSoftwareMuted = true;
+                ApplyEffectiveLocalMuteState(syncChannel: true);
+                NotifyStateChanged();
 
-            if (_jsInterop.IsModuleLoaded)
+                if (_jsInterop.IsModuleLoaded)
+                {
+                    await _jsInterop.SetMicrophoneEnabledAsync(false);
+                }
+            }
+            else if (IsSoftwareMuted)
             {
-                await _jsInterop.SetMicrophoneEnabledAsync(!newMuteState);
+                IsSoftwareMuted = false;
+                ApplyEffectiveLocalMuteState(syncChannel: true);
+                NotifyStateChanged();
+
+                if (_jsInterop.IsModuleLoaded)
+                {
+                    await _jsInterop.SetMicrophoneEnabledAsync(true);
+                }
+
+                if (IsHardwareMuted)
+                {
+                    OnHardwareMuteBlockedUnmute?.Invoke();
+                }
+            }
+            else if (IsHardwareMuted)
+            {
+                // User attempted to unmute in UI while physical headset boom/switch is hardware-muted.
+                ApplyEffectiveLocalMuteState(syncChannel: true);
+                OnHardwareMuteBlockedUnmute?.Invoke();
             }
         }
         catch (Exception ex)
@@ -340,8 +476,46 @@ public class GlobalVoiceService : IAsyncDisposable
         NotifyStateChanged();
     }
 
+    private void ApplyEffectiveLocalMuteState(bool syncChannel)
+    {
+        bool effectiveMuted = IsSoftwareMuted || IsHardwareMuted;
+        IsMuted = effectiveMuted;
+
+        if (effectiveMuted)
+        {
+            if (CurrentUserId != null)
+            {
+                ActiveSpeakers.Remove(CurrentUserId);
+                MutedParticipants.Add(CurrentUserId);
+            }
+            _wasISpeaking = false;
+            if (syncChannel && CurrentChannelId != null && CurrentUserId != null)
+            {
+                _ = _voiceChannelService.SetUserSpeakingAsync(CurrentChannelId, CurrentUserId, false);
+                _ = _voiceChannelService.SetUserMutedAsync(CurrentChannelId, CurrentUserId, true);
+            }
+        }
+        else
+        {
+            if (CurrentUserId != null)
+            {
+                MutedParticipants.Remove(CurrentUserId);
+            }
+            if (syncChannel && CurrentChannelId != null && CurrentUserId != null)
+            {
+                _ = _voiceChannelService.SetUserMutedAsync(CurrentChannelId, CurrentUserId, false);
+            }
+        }
+    }
+
+    [JSInvokable]
+    public Task RequestExternalDisconnect() => DisconnectAsync();
+
     public async Task ToggleVideoAsync(string quality = "Auto", int fps = 30, string activeCameraDeviceId = "")
     {
+        if (IsTogglingVideo) return;
+        IsTogglingVideo = true;
+        NotifyStateChanged();
         try
         {
             bool newVideoState = !IsVideoOn;
@@ -351,20 +525,43 @@ public class GlobalVoiceService : IAsyncDisposable
                 var cameras = result?.Cameras?.Take(100).ToList() ?? [];
                 var activeId = result?.ActiveCameraDeviceId ?? "";
                 _deviceService.HandleCamerasUpdated(cameras, activeId);
+                IsVideoOn = true;
             }
             else
             {
                 await _jsInterop.SetCameraEnabledAsync(newVideoState, quality, fps, activeCameraDeviceId);
                 _deviceService.HandleCamerasUpdated([], "");
+                IsVideoOn = false;
+                if (!string.IsNullOrEmpty(CurrentUserId))
+                {
+                    ActiveCameraParticipants.Remove(CurrentUserId);
+                    if (!IsScreenSharing && !ActiveScreenShareParticipants.Contains(CurrentUserId))
+                    {
+                        _deviceService.RemoveParticipantVideo(CurrentUserId);
+                    }
+                }
             }
-            IsVideoOn = newVideoState;
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "[Voice] ToggleVideo failed: {Message}", ex.Message);
             IsVideoOn = false;
+            if (!string.IsNullOrEmpty(CurrentUserId))
+            {
+                ActiveCameraParticipants.Remove(CurrentUserId);
+            }
         }
-        NotifyStateChanged();
+        finally
+        {
+            IsTogglingVideo = false;
+            NotifyStateChanged();
+        }
+    }
+
+    public async Task UpdateVideoSettingsAsync(string quality, int fps, string activeCameraDeviceId = "")
+    {
+        if (!IsVideoOn || IsTogglingVideo) return;
+        await _deviceService.UpdateCameraSettingsAsync(quality, fps, activeCameraDeviceId, IsVideoOn);
     }
 
     [JSInvokable]
@@ -374,19 +571,36 @@ public class GlobalVoiceService : IAsyncDisposable
         NotifyStateChanged();
     }
 
+    [JSInvokable]
+    public void OnLocalAudioPipelineTelemetry(string filterType, double estimatedCaptureLatencyMs, string platform, double serverToClientDelayMs = 0.0)
+    {
+        if (!string.IsNullOrWhiteSpace(CurrentChannelId) && !string.IsNullOrWhiteSpace(CurrentUserId))
+        {
+            _chatState.SetVoiceParticipantAudioTelemetry(CurrentChannelId, CurrentUserId, filterType, estimatedCaptureLatencyMs, platform, serverToClientDelayMs);
+        }
+    }
+
     public async Task SetNoiseSuppressionAsync(string type)
     {
         if (CurrentNoiseSuppression == type) return;
         CurrentNoiseSuppression = type;
+        if (!string.IsNullOrWhiteSpace(CurrentChannelId) && !string.IsNullOrWhiteSpace(CurrentUserId))
+        {
+            var existingTelemetry = _chatState.GetVoiceParticipantAudioTelemetry(CurrentChannelId, CurrentUserId);
+            _chatState.SetVoiceParticipantAudioTelemetry(
+                CurrentChannelId,
+                CurrentUserId,
+                type,
+                existingTelemetry?.EstimatedCaptureLatencyMs ?? (IsAndroid ? 75.0 : (IsIOS ? 40.0 : 25.0)),
+                existingTelemetry?.Platform ?? (IsAndroid ? "android" : (IsIOS ? "ios" : "web")));
+        }
         if (_jsInterop.IsModuleLoaded)
         {
             await _jsInterop.SetNoiseSuppressionTypeAsync(type);
-        }
-        
-        if (!IsMuted && IsInVoiceCall)
-        {
-            await ToggleMuteAsync();
-            await ToggleMuteAsync();
+            if (!IsSoftwareMuted && IsInVoiceCall)
+            {
+                await _jsInterop.ReinitializeMicrophoneAsync();
+            }
         }
         NotifyStateChanged();
     }
@@ -481,11 +695,23 @@ public class GlobalVoiceService : IAsyncDisposable
                 await _jsInterop.SetScreenShareEnabledAsync(newScreenState, quality, fps, mode, captureAudio);
             }
             IsScreenSharing = newScreenState;
+            if (!newScreenState && !string.IsNullOrEmpty(CurrentUserId))
+            {
+                ActiveScreenShareParticipants.Remove(CurrentUserId);
+                if (!IsVideoOn && !ActiveCameraParticipants.Contains(CurrentUserId))
+                {
+                    _deviceService.RemoveParticipantVideo(CurrentUserId);
+                }
+            }
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "[Voice] ToggleScreenShare failed: {Message}", ex.Message);
             IsScreenSharing = false;
+            if (!string.IsNullOrEmpty(CurrentUserId))
+            {
+                ActiveScreenShareParticipants.Remove(CurrentUserId);
+            }
         }
         NotifyStateChanged();
     }
@@ -624,14 +850,20 @@ public class GlobalVoiceService : IAsyncDisposable
         RequiresIntegrityCheck = false;
         CurrentChannelId = null;
         CurrentUserId = null;
+        IsSoftwareMuted = false;
+        IsHardwareMuted = false;
         IsMuted = false;
+        _wasISpeaking = false;
         IsVideoOn = false;
+        IsTogglingVideo = false;
         IsScreenSharing = false;
         CallParticipants.Clear();
         ActiveSpeakers.Clear();
         MutedParticipants.Clear();
         RemoteScreenAudioParticipants.Clear();
         MutedRemoteScreenAudioParticipants.Clear();
+        ActiveCameraParticipants.Clear();
+        ActiveScreenShareParticipants.Clear();
         _deviceService.Reset();
     }
 
@@ -647,7 +879,7 @@ public class GlobalVoiceService : IAsyncDisposable
     {
         foreach (var id in participantIdentities)
         {
-            if (!id.StartsWith("bot:", StringComparison.OrdinalIgnoreCase))
+            if (!IsSyntheticParticipantIdentity(id))
             {
                 CallParticipants.Add(id);
             }
@@ -658,7 +890,7 @@ public class GlobalVoiceService : IAsyncDisposable
             var serverParticipants = _chatState.GetVoiceParticipants(CurrentChannelId);
             foreach (var spId in serverParticipants)
             {
-                if (!spId.StartsWith("bot:", StringComparison.OrdinalIgnoreCase))
+                if (!IsSyntheticParticipantIdentity(spId))
                 {
                     CallParticipants.Add(spId);
                 }
@@ -677,7 +909,7 @@ public class GlobalVoiceService : IAsyncDisposable
 
     private void HandleParticipantConnectedInternal(string identity)
     {
-        if (string.IsNullOrEmpty(identity) || identity == CurrentUserId || identity.StartsWith("bot:", StringComparison.OrdinalIgnoreCase)) return;
+        if (string.IsNullOrEmpty(identity) || identity == CurrentUserId || IsSyntheticParticipantIdentity(identity)) return;
 
         CallParticipants.Add(identity);
 
@@ -686,7 +918,7 @@ public class GlobalVoiceService : IAsyncDisposable
             var serverParticipants = _chatState.GetVoiceParticipants(CurrentChannelId);
             foreach (var spId in serverParticipants)
             {
-                if (!spId.StartsWith("bot:", StringComparison.OrdinalIgnoreCase))
+                if (!IsSyntheticParticipantIdentity(spId))
                 {
                     CallParticipants.Add(spId);
                 }
@@ -705,7 +937,7 @@ public class GlobalVoiceService : IAsyncDisposable
 
     private void HandleEnsureParticipantSlotInternal(string identity)
     {
-        if (string.IsNullOrEmpty(identity) || identity.StartsWith("bot:", StringComparison.OrdinalIgnoreCase)) return;
+        if (string.IsNullOrEmpty(identity) || IsSyntheticParticipantIdentity(identity)) return;
 
         if (CallParticipants.Add(identity))
         {
@@ -721,12 +953,14 @@ public class GlobalVoiceService : IAsyncDisposable
 
     private void HandleParticipantDisconnectedInternal(string identity)
     {
-        if (string.IsNullOrEmpty(identity) || identity == CurrentUserId || identity.StartsWith("bot:", StringComparison.OrdinalIgnoreCase)) return;
+        if (string.IsNullOrEmpty(identity) || identity == CurrentUserId || IsSyntheticParticipantIdentity(identity)) return;
 
         CallParticipants.Remove(identity);
         ActiveSpeakers.Remove(identity);
         RemoteScreenAudioParticipants.Remove(identity);
         MutedRemoteScreenAudioParticipants.Remove(identity);
+        ActiveCameraParticipants.Remove(identity);
+        ActiveScreenShareParticipants.Remove(identity);
         _deviceService.RemoveParticipantVideo(identity);
 
         OnParticipantLeft?.Invoke(identity);
@@ -743,7 +977,7 @@ public class GlobalVoiceService : IAsyncDisposable
 
     private void HandleActiveSpeakersChangedInternal(string[] speakerSids)
     {
-        ActiveSpeakers.ReplaceWith(speakerSids.Where(id => !(id == CurrentUserId && IsMuted) && !id.StartsWith("bot:", StringComparison.OrdinalIgnoreCase)));
+        ActiveSpeakers.ReplaceWith(speakerSids.Where(id => !(id == CurrentUserId && IsMuted) && !IsSyntheticParticipantIdentity(id)));
 
         if (CurrentChannelId != null && CurrentUserId != null)
         {
@@ -796,16 +1030,17 @@ public class GlobalVoiceService : IAsyncDisposable
 
     private void HandleLocalMutedInternal(bool isMuted)
     {
-        IsMuted = isMuted;
-        if (isMuted)
-        {
-            if (CurrentUserId != null) ActiveSpeakers.Remove(CurrentUserId);
-            _wasISpeaking = false;
-            if (CurrentChannelId != null && CurrentUserId != null)
-            {
-                _ = _voiceChannelService.SetUserSpeakingAsync(CurrentChannelId, CurrentUserId, false);
-            }
-        }
+        IsSoftwareMuted = isMuted;
+        ApplyEffectiveLocalMuteState(syncChannel: true);
+        NotifyStateChanged();
+    }
+
+    [JSInvokable]
+    public void OnLocalHardwareMuteChanged(bool isHardwareMuted)
+    {
+        if (IsHardwareMuted == isHardwareMuted) return;
+        IsHardwareMuted = isHardwareMuted;
+        ApplyEffectiveLocalMuteState(syncChannel: true);
         NotifyStateChanged();
     }
 
@@ -825,6 +1060,7 @@ public class GlobalVoiceService : IAsyncDisposable
         _chatState.VoiceMemberJoined -= OnServerVoiceMemberJoined;
         _chatState.VoiceMemberLeft -= OnServerVoiceMemberLeft;
         _chatState.VoiceUserMutedChanged -= OnServerVoiceUserMutedChanged;
+        _chatState.PhysicalRoomsChanged -= OnServerPhysicalRoomsChanged;
 
         if (IsInVoiceCall)
         {
@@ -897,5 +1133,99 @@ public class GlobalVoiceService : IAsyncDisposable
     public void OnVoiceLog(string message, string severityStr)
     {
         OnVoiceLogReceived?.Invoke(message, severityStr);
+    }
+
+    [JSInvokable]
+    public void OnVideoTrackStateChanged(string participantId, string source, bool isActive)
+    {
+        if (string.IsNullOrEmpty(participantId)) return;
+        bool isScreen = string.Equals(source, "screenshare", StringComparison.OrdinalIgnoreCase);
+        bool changed = isScreen
+            ? (isActive ? ActiveScreenShareParticipants.Add(participantId) : ActiveScreenShareParticipants.Remove(participantId))
+            : (isActive ? ActiveCameraParticipants.Add(participantId) : ActiveCameraParticipants.Remove(participantId));
+
+        if (!string.IsNullOrEmpty(CurrentUserId) && string.Equals(participantId, CurrentUserId, StringComparison.Ordinal))
+        {
+            if (isScreen && IsScreenSharing != isActive)
+            {
+                IsScreenSharing = isActive;
+                changed = true;
+            }
+            else if (!isScreen && IsVideoOn != isActive)
+            {
+                IsVideoOn = isActive;
+                changed = true;
+            }
+        }
+
+        if (!isActive && !ActiveCameraParticipants.Contains(participantId) && !ActiveScreenShareParticipants.Contains(participantId))
+        {
+            _deviceService.RemoveParticipantVideo(participantId);
+            changed = true;
+        }
+
+        if (changed)
+        {
+            NotifyStateChanged();
+        }
+    }
+
+    [JSInvokable]
+    public void OnOsPipStateChanged(bool isOpen)
+    {
+        OnOsPipStateChangedEvent?.Invoke(isOpen);
+        NotifyStateChanged();
+    }
+
+    [JSInvokable]
+    public void OnNativeMobilePipChanged(bool isInPip)
+    {
+        OnNativeMobilePipChangedEvent?.Invoke(isInPip);
+        NotifyStateChanged();
+    }
+
+    [JSInvokable]
+    public void OnPipFocusedParticipantChanged(string? participantId)
+    {
+        OnPipFocusChangedEvent?.Invoke(string.IsNullOrWhiteSpace(participantId) ? null : participantId);
+        NotifyStateChanged();
+    }
+
+    [JSInvokable]
+    public async Task OnNativeCallAction(string action)
+    {
+        if (string.IsNullOrWhiteSpace(action)) return;
+        switch (action)
+        {
+            case "toggleMute":
+                await ToggleMuteAsync();
+                break;
+            case "hangup":
+                await DisconnectAsync();
+                break;
+            case "toggleCamera":
+            case "returnToCall":
+                OnNativeCallActionReceived?.Invoke(action);
+                break;
+        }
+    }
+
+    [JSInvokable]
+    public string RequestCameraCompanionToken()
+    {
+        if ((!IsInVoiceCall && !IsConnecting) || string.IsNullOrWhiteSpace(CurrentChannelId) || string.IsNullOrWhiteSpace(CurrentUserId))
+        {
+            return string.Empty;
+        }
+
+        try
+        {
+            return _voiceChannelService.GenerateCameraCompanionToken(CurrentChannelId, CurrentUserId);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to generate camera companion token for user {UserId} in channel {ChannelId}", CurrentUserId, CurrentChannelId);
+            return string.Empty;
+        }
     }
 }

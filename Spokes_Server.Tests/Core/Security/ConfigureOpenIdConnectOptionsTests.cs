@@ -15,6 +15,7 @@ using Xunit;
 
 namespace Spokes_Server.Tests.Core.Security;
 
+[Collection("OpenIdConfigurationCache")]
 public class ConfigureOpenIdConnectOptionsTests : IDisposable
 {
     private readonly string _tempDir;

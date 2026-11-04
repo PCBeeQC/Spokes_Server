@@ -1,4 +1,4 @@
-namespace Spokes_Server.Core.Services.Communication.Chat;
+﻿namespace Spokes_Server.Core.Services.Communication.Chat;
 
 using System;
 using System.Collections.Concurrent;
@@ -112,7 +112,7 @@ public class UserClientStateService : IUserClientStateService
     }
 
     /// <summary>
-    /// Retrieves the current draft for a channel, checking memory first then the database repository.
+    /// Retrieves the current draft for a channel from RAM only. Drafts are never persisted to disk.
     /// </summary>
     public virtual string? GetDraft(string userId, string channelId)
     {
@@ -123,17 +123,9 @@ public class UserClientStateService : IUserClientStateService
             return memoryDraft;
         }
 
-        var diskDraft = _clientStates.GetDraft(userId, channelId);
-        if (!string.IsNullOrWhiteSpace(diskDraft))
-        {
-            _inMemoryDrafts[(userId, channelId)] = diskDraft;
-            return diskDraft;
-        }
-
         return null;
     }
 
-    /// <summary>
     private bool IsChannelExisting(string channelId)
     {
         if (string.IsNullOrEmpty(channelId)) return false;
@@ -146,7 +138,7 @@ public class UserClientStateService : IUserClientStateService
     }
 
     /// <summary>
-    /// Checks if the user has an active channel with an unsent draft.
+    /// Checks if the user has an active channel with an unsent draft in RAM.
     /// Used during mobile startup to decide whether to auto-redirect to the channel.
     /// Returns null if no draft exists.
     /// </summary>
@@ -171,26 +163,6 @@ public class UserClientStateService : IUserClientStateService
         if (!string.IsNullOrEmpty(anyMem.Key.ChannelId))
         {
             return anyMem.Key.ChannelId;
-        }
-
-        // 3. Check persisted state in repository
-        var state = _clientStates.GetByUserId(userId);
-        if (state != null)
-        {
-            if (!string.IsNullOrEmpty(state.ActiveChannelId) &&
-                state.ChannelDrafts.TryGetValue(state.ActiveChannelId, out var diskDraft) &&
-                !string.IsNullOrWhiteSpace(diskDraft) &&
-                !_autoOpenedDrafts.ContainsKey((userId, state.ActiveChannelId)) &&
-                IsChannelExisting(state.ActiveChannelId))
-            {
-                return state.ActiveChannelId;
-            }
-
-            var anyDisk = state.ChannelDrafts.FirstOrDefault(kvp => !string.IsNullOrWhiteSpace(kvp.Value) && !_autoOpenedDrafts.ContainsKey((userId, kvp.Key)) && IsChannelExisting(kvp.Key));
-            if (!string.IsNullOrEmpty(anyDisk.Key))
-            {
-                return anyDisk.Key;
-            }
         }
 
         return null;
@@ -244,8 +216,8 @@ public class UserClientStateService : IUserClientStateService
     }
 
     /// <summary>
-    /// Flushes any unsent in-memory draft to disk for this user, and cancels active typing.
-    /// Called strictly on app exit triggers (unfocus, circuit down, push unfocus beacon).
+    /// Cancels active typing on app exit triggers (unfocus, circuit down, push unfocus beacon).
+    /// Drafts remain strictly in RAM and are never written to disk.
     /// </summary>
     public virtual void FlushToDiskIfUnsent(string userId)
     {
@@ -253,39 +225,12 @@ public class UserClientStateService : IUserClientStateService
 
         StopActiveTyping(userId);
 
-        var userDrafts = _inMemoryDrafts
-            .Where(kvp => kvp.Key.UserId == userId && !string.IsNullOrWhiteSpace(kvp.Value))
-            .ToList();
-
         var state = _clientStates.GetByUserId(userId);
-        
-        // If there are no drafts in memory AND no state on disk, nothing to do.
-        if (userDrafts.Count == 0 && state == null)
+        if (state != null && state.ChannelDrafts.Count > 0)
         {
-            return;
-        }
-
-        // We have something to update. Ensure state exists.
-        state ??= new UserClientState { Id = userId, UserId = userId };
-
-        // Update ActiveChannelId if we have one in memory
-        if (_activeChannels.TryGetValue(userId, out var activeChan) && !string.IsNullOrEmpty(activeChan))
-        {
-            state.ActiveChannelId = activeChan;
-        }
-
-        // Only update the drafts we actually have in memory.
-        foreach (var draftEntry in userDrafts)
-        {
-            state.ChannelDrafts[draftEntry.Key.ChannelId] = draftEntry.Value;
-        }
-
-        state.LastUpdatedAt = DateTime.UtcNow;
-        _clientStates.Save(state);
-        
-        if (userDrafts.Count > 0)
-        {
-            _logger.LogInformation("Flushed unsent drafts for user {UserId} to disk on app exit.", userId);
+            state.ChannelDrafts.Clear();
+            state.LastUpdatedAt = DateTime.UtcNow;
+            _clientStates.Save(state);
         }
     }
 

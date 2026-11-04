@@ -43,6 +43,7 @@
         </MudText>
 
         <form method="post" action="/logout">
+            <AntiforgeryToken />
             <MudButton ButtonType="ButtonType.Submit" Variant="Variant.Filled" Color="Color.Primary"
                 StartIcon="@Icons.Material.Filled.Logout">
                 @Loc["Sign Out"]

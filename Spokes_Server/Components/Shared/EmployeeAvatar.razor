@@ -2,39 +2,9 @@
 @inject PresenceStateService PresenceState
 
 @{
-    bool showBadge = false;
-    bool isMobileBadge = false;
-    Color badgeColor = Color.Default;
-
-    if (ShowPresence && Employee != null)
-    {
-        var hasConn = PresenceState.HasActiveConnection(Employee.Id);
-        var isAway = PresenceState.IsGloballyAway(Employee.Id);
-        var hasDesktopActive = PresenceState.HasActiveDesktopConnection(Employee.Id) && !PresenceState.IsUserAwayFromDesktop(Employee.Id);
-        var hasCapacitorMobile = PresenceState.IsOnlineOnCapacitorMobile(Employee.Id);
-
-        if (hasDesktopActive)
-        {
-            showBadge = true;
-            badgeColor = Color.Success;
-        }
-        else if (hasCapacitorMobile)
-        {
-            showBadge = true;
-            isMobileBadge = true;
-            badgeColor = Color.Success;
-        }
-        else if (hasConn && !isAway)
-        {
-            showBadge = true;
-            badgeColor = Color.Success;
-        }
-        else if (isAway)
-        {
-            showBadge = true;
-            badgeColor = Color.Warning;
-        }
-    }
+    UserPresenceBadge presenceBadge = (ShowPresence && Employee != null)
+        ? PresenceState.GetUserPresenceBadge(Employee.Id)
+        : UserPresenceBadge.Offline;
     
     string safeColor = string.IsNullOrEmpty(Employee?.ProfileColor) ? Colors.DeepPurple.Default : Employee.ProfileColor;
     string overflowStyle = ShowPresence ? "overflow: visible !important;" : "overflow: hidden;";
@@ -59,9 +29,9 @@
             </div>
         }
     }
-    @if (showBadge)
+    @if (presenceBadge != UserPresenceBadge.Offline)
     {
-        @if (isMobileBadge)
+        @if (presenceBadge == UserPresenceBadge.OnlineMobile)
         {
             <div class="presence-mobile-badge" title="@Loc["Online on Mobile"]">
                 <MudIcon Icon="@Icons.Material.Filled.Smartphone" Class="presence-mobile-icon" />
@@ -69,7 +39,7 @@
         }
         else
         {
-            var badgeHexColor = badgeColor == Color.Success ? "var(--mud-palette-success)" : "var(--mud-palette-warning)";
+            var badgeHexColor = presenceBadge == UserPresenceBadge.Away ? "var(--mud-palette-warning)" : "var(--mud-palette-success)";
             <div class="presence-dot" style="background-color: @badgeHexColor;"></div>
         }
     }

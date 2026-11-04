@@ -1,76 +1,8 @@
 @implements IAsyncDisposable
 @inject IJSRuntime JS
 
-<style>
-.spokes-rich-text-editor {
-    position: relative;
-    margin-top: 16px;
-    margin-bottom: 8px;
-    width: 100%;
-}
-
-.editor-container {
-    border-radius: var(--mud-default-borderradius);
-    border: 1px solid var(--mud-palette-lines-default);
-    background-color: var(--mud-palette-background);
-    color: var(--mud-palette-text-primary);
-    transition: box-shadow 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-    min-height: 200px;
-    display: flex;
-    flex-direction: column;
-}
-
-.editor-container:focus-within {
-    border-color: var(--mud-palette-primary);
-    border-width: 2px;
-    margin: -1px;
-}
-
-.spokes-rich-text-editor .ql-toolbar.ql-snow {
-    border: none;
-    border-bottom: 1px solid var(--mud-palette-lines-default);
-    background-color: var(--mud-palette-surface);
-    border-top-left-radius: var(--mud-default-borderradius);
-    border-top-right-radius: var(--mud-default-borderradius);
-}
-
-.spokes-rich-text-editor .ql-container.ql-snow {
-    border: none;
-    flex-grow: 1;
-    display: flex;
-    flex-direction: column;
-}
-
-.spokes-rich-text-editor .ql-editor {
-    min-height: 150px;
-    font-family: var(--mud-typography-body1-family);
-    font-size: var(--mud-typography-body1-size);
-    font-weight: var(--mud-typography-body1-weight);
-    line-height: var(--mud-typography-body1-lineheight);
-    letter-spacing: var(--mud-typography-body1-letterspacing);
-}
-
-
-.spokes-rich-text-editor .ql-snow .ql-stroke {
-    stroke: var(--mud-palette-text-primary);
-}
-
-.spokes-rich-text-editor .ql-snow .ql-fill {
-    fill: var(--mud-palette-text-primary);
-}
-
-.spokes-rich-text-editor .ql-snow .ql-picker {
-    color: var(--mud-palette-text-primary);
-}
-
-.spokes-rich-text-editor .ql-snow .ql-picker-options {
-    background-color: var(--mud-palette-surface);
-    border-color: var(--mud-palette-lines-default);
-}
-</style>
-
-<div class="spokes-rich-text-editor @Class">
-    <div class="editor-container mud-input-outlined-border">
+<div class="@EditorRootClass">
+    <div class="editor-container @(Borderless ? "" : "mud-input-outlined-border")">
         <div id="@_editorId" class="quill-editor"></div>
     </div>
 </div>
@@ -83,6 +15,11 @@
     [Parameter] public bool ReadOnly { get; set; }
     [Parameter] public string Placeholder { get; set; } = "";
     [Parameter] public bool Immediate { get; set; } = true;
+    [Parameter] public bool ShowToolbar { get; set; } = true;
+    [Parameter] public bool Borderless { get; set; } = false;
+
+    private string EditorRootClass =>
+        $"spokes-rich-text-editor {(ShowToolbar ? "" : "spokes-rich-text-editor--hide-toolbar")} {(Borderless ? "spokes-rich-text-editor--borderless" : "")} {Class}".Trim();
 
     private readonly string _editorId = $"editor-{Guid.NewGuid():N}";
     private DotNetObjectReference<SpokesRichTextEditor>? _dotNetHelper;
@@ -97,14 +34,15 @@
             _dotNetHelper = DotNetObjectReference.Create(this);
             _previousParameterValue = Value;
             _currentValue = Value ?? "";
-            
-            await JS.InvokeVoidAsync("window.spokesQuill.init", 
-                _editorId, 
-                _currentValue, 
-                _dotNetHelper, 
-                ReadOnly, 
+
+            await JS.InvokeVoidAsync("window.ensureRichTextScriptsLoaded");
+            await JS.InvokeVoidAsync("window.spokesQuill.init",
+                _editorId,
+                _currentValue,
+                _dotNetHelper,
+                ReadOnly,
                 Placeholder);
-            
+
             _isInitialized = true;
         }
     }
@@ -166,7 +104,7 @@
                 // Ignored
             }
         }
-        
+
         _dotNetHelper?.Dispose();
     }
 }

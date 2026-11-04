@@ -30,6 +30,7 @@ public class SystemConfig : IDataEntity
     public int LiveKitFallbackPort { get; set; } = 7881;
     public int LiveKitUdpStartPort { get; set; } = 30000;
     public int LiveKitUdpEndPort { get; set; } = 30499;
+    public string LiveKitLogLevel { get; set; } = "info";
 
     // OIDC Info
     public string Authority { get; set; } = string.Empty;
@@ -37,4 +38,8 @@ public class SystemConfig : IDataEntity
     public string ClientSecret { get; set; } = string.Empty;
     public bool EnableAutoUpdate { get; set; }
     public bool EnableDetailedCircuitErrors { get; set; }
+
+    // Persisted File Token Revocation State
+    public long GlobalFileTokenInvalidatedAtSequence { get; set; }
+    public Dictionary<string, long> UserFileTokenInvalidatedAtSequence { get; set; } = new();
 }

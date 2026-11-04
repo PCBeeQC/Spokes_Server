@@ -153,7 +153,6 @@ public class PushDeviceSessionMigrationStep : IMigrationStep
                     session.PushSubscriptionType = sub.SubscriptionType ?? global::Spokes_Server.Core.Models.Core.PushSubscriptionType.WebPush;
                     session.PushPublicKey = sub.PublicKey ?? string.Empty;
                     session.PushEnabled = sub.IsEnabled;
-                    session.IsIdleDetectionEnabled = sub.IsIdleDetectionEnabled;
                     session.PushSubscribedAt = sub.CreatedAt;
                     session.PushUserAgent = sub.UserAgent ?? string.Empty;
                     session.DeviceType = sub.DeviceType ?? global::Spokes_Server.Core.Models.Core.DeviceType.Desktop;
@@ -231,7 +230,6 @@ public class PushDeviceSessionMigrationStep : IMigrationStep
         public string SubscriptionType { get; set; } = "WebPush";
         public string? PublicKey { get; set; }
         public bool IsEnabled { get; set; } = true;
-        public bool IsIdleDetectionEnabled { get; set; }
         public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     }
 }

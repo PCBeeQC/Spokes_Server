@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Spokes_Server.Core.Data.Repositories.Core;
 
 /// <summary>
 /// Hosted background service that periodically triggers the company billing inbox check.
@@ -35,6 +36,13 @@ public class CompanyBillInboxBackgroundService : BackgroundService
             try
             {
                 using var scope = _serviceProvider.CreateScope();
+                var companyProfileRepo = scope.ServiceProvider.GetService<CompanyProfileRepository>();
+                if (string.Equals(companyProfileRepo?.Get()?.Edition, "Family", StringComparison.OrdinalIgnoreCase))
+                {
+                    await Task.Delay(TimeSpan.FromMinutes(15), stoppingToken);
+                    continue;
+                }
+
                 var inboxService = scope.ServiceProvider.GetRequiredService<CompanyBillInboxService>();
                 var settings = inboxService.GetSettings();
 

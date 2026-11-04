@@ -15,11 +15,13 @@ public interface IVoiceJsInteropService : IAsyncDisposable
     Task DisconnectFromVoiceAsync();
     Task SetMicrophoneEnabledAsync(bool enabled);
     Task<CameraInitResult?> SetCameraEnabledAsync(bool enabled, string quality, int fps, string deviceId);
+    Task UpdateCameraSettingsAsync(string quality, int fps, string deviceId);
     Task SwitchActiveCameraAsync(string deviceId);
     Task SwitchActiveMicrophoneAsync(string deviceId);
     Task SwitchActiveSpeakerAsync(string deviceId);
     Task UpdateAudioDevicesAsync();
     Task SetNoiseSuppressionTypeAsync(string type);
+    Task ReinitializeMicrophoneAsync();
     Task<string> GetIosMicrophoneModeAsync();
     Task PromptIosVoiceIsolationAsync();
     Task SetMasterVolumeAsync(double volumePercent);
@@ -34,4 +36,12 @@ public interface IVoiceJsInteropService : IAsyncDisposable
     Task ReattachAllTracksAsync();
     Task RefreshVideoLayoutsAsync();
     Task SetRemoteVideoQualityAsync(string participantId, string quality);
+    Task<PhysicalDeviceIdentity?> GetOrCreatePhysicalDeviceIdentityAsync();
+    Task SyncPhysicalRoomStateAsync(string[] coLocatedUserIds, string[] mutedRoommateUserIds);
+    Task SyncPipMetadataAsync(VoicePipMetadataPayload payload);
+    Task SetInAppPipActiveAsync(bool active);
+    Task RefreshInAppPipAsync();
+    Task<bool> ToggleOsPipAsync();
+    Task CloseOsPipAsync();
+    Task<bool> IsOsPipSupportedAsync();
 }

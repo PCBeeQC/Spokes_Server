@@ -67,46 +67,181 @@ public static class AuthenticationExtensions
                 var employeeId = context.Principal?.FindFirst("EmployeeId")?.Value;
                 var employees = context.HttpContext.RequestServices.GetRequiredService<EmployeeRepository>();
                 var deviceSessions = context.HttpContext.RequestServices.GetRequiredService<DeviceSessionRepository>();
+                var path = context.HttpContext.Request.Path.Value ?? string.Empty;
 
-                if (!string.IsNullOrEmpty(employeeId) && employeeId != "system-renderer")
+                if (string.IsNullOrWhiteSpace(sessionId))
                 {
-                    var employee = employees.GetById(employeeId);
-                    if (employee == null || !employee.IsActive)
+                    if (IsRevokedBlockedPath(path))
                     {
+                        context.HttpContext.Items["Spokes.SessionRejected"] = true;
+                    }
+                    context.RejectPrincipal();
+                    return Task.CompletedTask;
+                }
+
+                var session = deviceSessions.GetById(sessionId);
+                if (session == null || session.ExpiresAt <= DateTime.UtcNow)
+                {
+                    if (IsRevokedBlockedPath(path))
+                    {
+                        context.HttpContext.Items["Spokes.SessionRejected"] = true;
+                    }
+                    context.RejectPrincipal();
+                    return Task.CompletedTask;
+                }
+
+                if (session.RevokedAt != null)
+                {
+                    context.Properties.SetParameter("IsRevoked", true);
+                    context.HttpContext.Items["Spokes.SessionRevoked"] = true;
+                    if (IsRevokedBlockedPath(path))
+                    {
+                        context.HttpContext.Items["Spokes.SessionRejected"] = true;
+                        context.RejectPrincipal();
+                    }
+                    return Task.CompletedTask;
+                }
+
+                var sessionService = context.HttpContext.RequestServices.GetService<SessionService>();
+                sessionService?.TouchLastSeen(session);
+
+                if (string.IsNullOrEmpty(employeeId))
+                {
+                    var sub = context.Principal?.FindFirst("sub")?.Value
+                              ?? context.Principal?.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+
+                    if (!string.IsNullOrEmpty(sub))
+                    {
+                        var openIdAccounts = context.HttpContext.RequestServices.GetService<OpenIdAccountRepository>();
+                        var linkedEmployeeId = openIdAccounts?.GetBySub(sub)?.LinkedEmployeeId;
+                        if (!string.IsNullOrEmpty(linkedEmployeeId))
+                        {
+                            var linkedEmployee = employees.GetById(linkedEmployeeId);
+                            if (linkedEmployee != null)
+                            {
+                                employeeId = linkedEmployeeId;
+                                if (session.EmployeeId != linkedEmployeeId)
+                                {
+                                    session.EmployeeId = linkedEmployeeId;
+                                    deviceSessions.Save(session);
+                                }
+                                if (sessionService != null)
+                                {
+                                    var upgradedIdentity = sessionService.BuildIdentity(linkedEmployee, sessionId);
+                                    context.ReplacePrincipal(new ClaimsPrincipal(upgradedIdentity));
+                                    context.ShouldRenew = true;
+                                }
+                            }
+                        }
+                    }
+
+                    if (string.IsNullOrEmpty(employeeId))
+                    {
+                        if (IsRestrictedPrincipalBlockedPath(path))
+                        {
+                            context.HttpContext.Items["Spokes.SessionRejected"] = true;
+                            context.RejectPrincipal();
+                            return Task.CompletedTask;
+                        }
+
+                        if (!IsAllowedPendingRoute(path))
+                        {
+                            context.HttpContext.Items["Spokes.AuthRedirect"] = "/access-pending";
+                            context.HttpContext.Response.Redirect("/access-pending");
+                        }
+                        return Task.CompletedTask;
+                    }
+                }
+
+                if (employeeId == "system-renderer")
+                {
+                    if (context.Principal?.HasClaim("Spokes_InternalRenderer", "true") != true)
+                    {
+                        if (IsRevokedBlockedPath(path))
+                        {
+                            context.HttpContext.Items["Spokes.SessionRejected"] = true;
+                        }
+                        context.RejectPrincipal();
+                    }
+                    return Task.CompletedTask;
+                }
+
+                if (!string.IsNullOrEmpty(session.EmployeeId) && session.EmployeeId != employeeId)
+                {
+                    if (IsRevokedBlockedPath(path))
+                    {
+                        context.HttpContext.Items["Spokes.SessionRejected"] = true;
+                    }
+                    context.RejectPrincipal();
+                    return Task.CompletedTask;
+                }
+
+                var employee = employees.GetById(employeeId);
+                if (employee == null || !employee.IsActive)
+                {
+                    sessionService?.RevokeAllUserSessions(employeeId);
+                    if (IsRevokedBlockedPath(path))
+                    {
+                        context.HttpContext.Items["Spokes.SessionRejected"] = true;
+                    }
+                    context.RejectPrincipal();
+                    return Task.CompletedTask;
+                }
+
+                if (employee.IsBanned)
+                {
+                    if (context.HttpContext.Request.Cookies.ContainsKey("Spokes_Refresh"))
+                    {
+                        context.HttpContext.Response.Cookies.Delete("Spokes_Refresh", new CookieOptions
+                        {
+                            HttpOnly = true,
+                            Secure = context.HttpContext.Request.IsHttps,
+                            SameSite = SameSiteMode.Lax,
+                            Path = "/"
+                        });
+                    }
+                    if (context.HttpContext.Request.Cookies.ContainsKey("chat_vault_key"))
+                    {
+                        context.HttpContext.Response.Cookies.Delete("chat_vault_key", new CookieOptions
+                        {
+                            Path = "/",
+                            HttpOnly = true,
+                            Secure = true,
+                            SameSite = SameSiteMode.Lax
+                        });
+                    }
+
+                    if (IsRestrictedPrincipalBlockedPath(path))
+                    {
+                        context.HttpContext.Items["Spokes.SessionRejected"] = true;
                         context.RejectPrincipal();
                         return Task.CompletedTask;
                     }
 
-                    if (employee.IsBanned)
+                    if (sessionService != null &&
+                        (context.Principal?.HasClaim("Banned", "true") != true ||
+                         context.Principal.HasClaim(c => c.Type == ClaimTypes.Role || c.Type == "Permission")))
                     {
-                        var path = context.HttpContext.Request.Path.Value ?? "";
-                        if (!path.Equals("/banned", StringComparison.OrdinalIgnoreCase) &&
-                            !path.Equals("/logout", StringComparison.OrdinalIgnoreCase) &&
-                            !path.StartsWith("/_blazor", StringComparison.OrdinalIgnoreCase) &&
-                            !path.StartsWith("/spokesapi", StringComparison.OrdinalIgnoreCase))
-                        {
-                            context.HttpContext.Response.Redirect("/banned");
-                        }
-                        return Task.CompletedTask;
+                        var restrictedIdentity = sessionService.BuildIdentity(employee, sessionId);
+                        context.ReplacePrincipal(new ClaimsPrincipal(restrictedIdentity));
+                        context.ShouldRenew = true;
                     }
+
+                    if (!IsAllowedBannedRoute(path))
+                    {
+                        context.HttpContext.Items["Spokes.AuthRedirect"] = "/banned";
+                        context.HttpContext.Response.Redirect("/banned");
+                    }
+                    return Task.CompletedTask;
                 }
 
-                if (!string.IsNullOrEmpty(sessionId))
+                if (sessionService != null && context.Principal?.HasClaim("Banned", "true") == true)
                 {
-                    var session = deviceSessions.GetById(sessionId);
-                    if (session != null)
-                    {
-                        if (session.RevokedAt != null)
-                        {
-                            context.Properties.SetParameter("IsRevoked", true);
-                        }
-                        else
-                        {
-                            var sessionService = context.HttpContext.RequestServices.GetRequiredService<SessionService>();
-                            sessionService.TouchLastSeen(session);
-                        }
-                    }
+                    var restoredIdentity = sessionService.BuildIdentity(employee, sessionId);
+                    context.ReplacePrincipal(new ClaimsPrincipal(restoredIdentity));
+                    context.ShouldRenew = true;
                 }
+
                 return Task.CompletedTask;
             };
 
@@ -305,7 +440,7 @@ public static class AuthenticationExtensions
                     {
                         var (session, _) = sessionService.CreateSession(
                             context.HttpContext, existingUser.Id, deviceId,
-                            issueCookie: true, idToken: context.TokenEndpointResponse?.IdToken);
+                            issueCookie: !existingUser.IsBanned, idToken: context.TokenEndpointResponse?.IdToken);
 
                         newIdentity = sessionService.BuildIdentity(existingUser, session.Id);
                     }
@@ -315,10 +450,11 @@ public static class AuthenticationExtensions
                         newIdentity.AddClaim(new Claim("sub", sub));
                         newIdentity.AddClaim(new Claim("name", name));
                         newIdentity.AddClaim(new Claim("email", email));
+                        newIdentity.AddClaim(new Claim("PendingApproval", "true"));
                         
                         var (session, _) = sessionService.CreateSession(
                             context.HttpContext, sub, deviceId,
-                            issueCookie: true, idToken: context.TokenEndpointResponse?.IdToken);
+                            issueCookie: false, idToken: context.TokenEndpointResponse?.IdToken);
                         newIdentity.AddClaim(new Claim("SessionId", session.Id));
                     }
 
@@ -326,7 +462,11 @@ public static class AuthenticationExtensions
                     context.Properties.IsPersistent = true;
                     context.Properties.ExpiresUtc = DateTimeOffset.UtcNow.AddDays(1);
 
-                    if (existingUser?.IsBanned == true)
+                    if (existingUser == null)
+                    {
+                        context.Properties.RedirectUri = "/access-pending";
+                    }
+                    else if (existingUser.IsBanned)
                     {
                         context.Properties.RedirectUri = "/banned";
                     }
@@ -383,5 +523,73 @@ public static class AuthenticationExtensions
         });
 
         return services;
+    }
+
+    private static bool IsRevokedBlockedPath(string path)
+    {
+        if (string.IsNullOrEmpty(path)) return false;
+
+        if (path.StartsWith("/spokesapi", StringComparison.OrdinalIgnoreCase))
+        {
+            return !path.Equals("/spokesapi/auth/force-logout", StringComparison.OrdinalIgnoreCase);
+        }
+
+        return path.StartsWith("/_blazor", StringComparison.OrdinalIgnoreCase) ||
+               path.StartsWith("/hubs", StringComparison.OrdinalIgnoreCase) ||
+               path.StartsWith("/media", StringComparison.OrdinalIgnoreCase) ||
+               path.StartsWith("/internal", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsRestrictedPrincipalBlockedPath(string path)
+    {
+        if (string.IsNullOrEmpty(path)) return false;
+
+        if (path.StartsWith("/spokesapi", StringComparison.OrdinalIgnoreCase))
+        {
+            return !path.Equals("/spokesapi/system/logo", StringComparison.OrdinalIgnoreCase) &&
+                   !path.Equals("/spokesapi/system/icon", StringComparison.OrdinalIgnoreCase) &&
+                   !path.Equals("/spokesapi/auth/force-logout", StringComparison.OrdinalIgnoreCase);
+        }
+
+        return path.StartsWith("/_blazor", StringComparison.OrdinalIgnoreCase) ||
+               path.StartsWith("/hubs", StringComparison.OrdinalIgnoreCase) ||
+               path.StartsWith("/media", StringComparison.OrdinalIgnoreCase) ||
+               path.StartsWith("/internal", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsAllowedPendingRoute(string path)
+    {
+        return path.Equals("/access-pending", StringComparison.OrdinalIgnoreCase) ||
+               path.Equals("/logout", StringComparison.OrdinalIgnoreCase) ||
+               path.StartsWith("/sso", StringComparison.OrdinalIgnoreCase) ||
+               path.StartsWith("/branding", StringComparison.OrdinalIgnoreCase) ||
+               path.Equals("/spokesapi/system/logo", StringComparison.OrdinalIgnoreCase) ||
+               path.Equals("/spokesapi/system/icon", StringComparison.OrdinalIgnoreCase) ||
+               path.Equals("/spokesapi/auth/force-logout", StringComparison.OrdinalIgnoreCase) ||
+               IsStaticAssetPath(path);
+    }
+
+    private static bool IsAllowedBannedRoute(string path)
+    {
+        return path.Equals("/banned", StringComparison.OrdinalIgnoreCase) ||
+               path.Equals("/logout", StringComparison.OrdinalIgnoreCase) ||
+               path.StartsWith("/sso/logout", StringComparison.OrdinalIgnoreCase) ||
+               path.StartsWith("/sso/mobile-logout", StringComparison.OrdinalIgnoreCase) ||
+               path.StartsWith("/branding", StringComparison.OrdinalIgnoreCase) ||
+               path.Equals("/spokesapi/system/logo", StringComparison.OrdinalIgnoreCase) ||
+               path.Equals("/spokesapi/system/icon", StringComparison.OrdinalIgnoreCase) ||
+               path.Equals("/spokesapi/auth/force-logout", StringComparison.OrdinalIgnoreCase) ||
+               IsStaticAssetPath(path);
+    }
+
+    private static bool IsStaticAssetPath(string path)
+    {
+        return path.StartsWith("/css/", StringComparison.OrdinalIgnoreCase) ||
+               path.StartsWith("/js/", StringComparison.OrdinalIgnoreCase) ||
+               path.StartsWith("/lib/", StringComparison.OrdinalIgnoreCase) ||
+               path.StartsWith("/fonts/", StringComparison.OrdinalIgnoreCase) ||
+               path.StartsWith("/_content/", StringComparison.OrdinalIgnoreCase) ||
+               path.StartsWith("/_framework/", StringComparison.OrdinalIgnoreCase) ||
+               path.Equals("/favicon.ico", StringComparison.OrdinalIgnoreCase);
     }
 }

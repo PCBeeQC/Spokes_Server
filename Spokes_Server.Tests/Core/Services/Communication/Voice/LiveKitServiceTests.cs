@@ -203,4 +203,154 @@ public class LiveKitServiceTests : IDisposable
         var ex = Record.Exception(() => service.ApplyPortConfiguration(systemConfig));
         Assert.Null(ex);
     }
+
+    [Theory]
+    [InlineData(null, "info")]
+    [InlineData("", "info")]
+    [InlineData("   ", "info")]
+    [InlineData("INFO", "info")]
+    [InlineData("debug", "debug")]
+    [InlineData("DEBUG", "debug")]
+    [InlineData("warn", "warn")]
+    [InlineData("WARNING", "warn")]
+    [InlineData("error", "error")]
+    [InlineData("ERROR", "error")]
+    [InlineData("unknown", "info")]
+    public void NormalizeLogLevel_ReturnsExpectedNormalizedValue(string? input, string expected)
+    {
+        Assert.Equal(expected, LiveKitService.NormalizeLogLevel(input));
+    }
+
+    [Fact]
+    public void BuildConfigurationYaml_DefaultInfoLevel_EmitsSampledInfoWithApiWarn()
+    {
+        var systemConfig = new SystemConfig
+        {
+            IsSetupComplete = true,
+            LiveKitFallbackPort = 7881,
+            LiveKitUdpStartPort = 30000,
+            LiveKitUdpEndPort = 30499,
+            LiveKitApiKey = "devkey",
+            LiveKitApiSecret = "devsecret",
+            LiveKitLogLevel = "info"
+        };
+
+        var yaml = _service.BuildConfigurationYaml(systemConfig);
+
+        Assert.Contains("level: info", yaml);
+        Assert.Contains("pion_level: error", yaml);
+        Assert.Contains("sample: true", yaml);
+        Assert.Contains("component_levels:", yaml);
+        Assert.Contains("api: warn", yaml);
+        Assert.DoesNotContain("room: debug", yaml);
+    }
+
+    [Fact]
+    public void BuildConfigurationYaml_DebugLevel_KeepsRootInfoAndSetsComponentDebugWithoutSdpFlood()
+    {
+        var systemConfig = new SystemConfig
+        {
+            IsSetupComplete = true,
+            LiveKitFallbackPort = 7881,
+            LiveKitUdpStartPort = 30000,
+            LiveKitUdpEndPort = 30499,
+            LiveKitApiKey = "devkey",
+            LiveKitApiSecret = "devsecret",
+            LiveKitLogLevel = "debug"
+        };
+
+        var yaml = _service.BuildConfigurationYaml(systemConfig);
+
+        Assert.Contains("level: info", yaml);
+        Assert.DoesNotContain("level: debug", yaml);
+        Assert.Contains("pion_level: error", yaml);
+        Assert.Contains("sample: true", yaml);
+        Assert.Contains("room: debug", yaml);
+        Assert.Contains("pub: debug", yaml);
+        Assert.Contains("sub: debug", yaml);
+        Assert.Contains("transport: debug", yaml);
+        Assert.Contains("sfu: info", yaml);
+        Assert.Contains("api: warn", yaml);
+    }
+
+    [Theory]
+    [InlineData("warn", "level: warn")]
+    [InlineData("error", "level: error")]
+    public void BuildConfigurationYaml_WarnAndErrorLevels_EmitExpectedRootAndApiLevels(string level, string expectedLevelLine)
+    {
+        var systemConfig = new SystemConfig
+        {
+            IsSetupComplete = true,
+            LiveKitApiKey = "devkey",
+            LiveKitApiSecret = "devsecret",
+            LiveKitLogLevel = level
+        };
+
+        var yaml = _service.BuildConfigurationYaml(systemConfig);
+
+        Assert.Contains(expectedLevelLine, yaml);
+        Assert.Contains("pion_level: error", yaml);
+        Assert.Contains("sample: true", yaml);
+        Assert.Contains("api: error", yaml);
+    }
+
+    [Fact]
+    public void BuildConfigurationYaml_WhenSetupComplete_PrefersSystemConfigOverEnvVar()
+    {
+        var configDict = new Dictionary<string, string?>
+        {
+            ["Spokes_LiveKit_Log_Level"] = "debug"
+        };
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(configDict).Build();
+        var service = new LiveKitService(_loggerMock.Object, configuration);
+
+        var preSetupConfig = new SystemConfig
+        {
+            IsSetupComplete = false,
+            LiveKitLogLevel = "info"
+        };
+        var preSetupYaml = service.BuildConfigurationYaml(preSetupConfig);
+        Assert.Contains("room: debug", preSetupYaml);
+
+        var postSetupConfig = new SystemConfig
+        {
+            IsSetupComplete = true,
+            LiveKitLogLevel = "info"
+        };
+        var postSetupYaml = service.BuildConfigurationYaml(postSetupConfig);
+        Assert.DoesNotContain("room: debug", postSetupYaml);
+        Assert.Equal("channel-abc", LiveKitService.GetRoomName("abc"));
+        Assert.Contains("level: info", postSetupYaml);
+    }
+
+    [Theory]
+    [InlineData("twirp error unknown: participant does not exist", true)]
+    [InlineData("requested participant not found", true)]
+    [InlineData("twirp error not_found: requested room does not exist", true)]
+    [InlineData("room not found", true)]
+    [InlineData("could not find room channel-123", true)]
+    [InlineData("Connection refused (127.0.0.1:7880)", false)]
+    [InlineData("twirp error unauthenticated: invalid token", false)]
+    public void IsParticipantOrRoomAbsentError_ClassifiesExceptionsAccurately(string message, bool expected)
+    {
+        var ex = new InvalidOperationException(message);
+        Assert.Equal(expected, LiveKitService.IsParticipantOrRoomAbsentError(ex));
+
+        var wrapped = new Exception("Outer wrapper", ex);
+        Assert.Equal(expected, LiveKitService.IsParticipantOrRoomAbsentError(wrapped));
+    }
+
+    [Fact]
+    public void IsParticipantOrRoomAbsentError_NullException_ReturnsFalse()
+    {
+        Assert.False(LiveKitService.IsParticipantOrRoomAbsentError(null));
+    }
+
+    [Fact]
+    public void GetRoomName_FormatsChannelPrefix()
+    {
+        var postSetupYaml = "level: info";
+        Assert.Equal("channel-abc", LiveKitService.GetRoomName("abc"));
+        Assert.Contains("level: info", postSetupYaml);
+    }
 }

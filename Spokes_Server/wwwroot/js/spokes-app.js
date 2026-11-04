@@ -180,23 +180,54 @@ let _electronFocusUnsub = null;
 let _isNativeActive = true;
 let _refocusTimer = null;
 
+if (window.SpokesBridge) {
+    if (typeof window.SpokesBridge.initLayout === 'function' && !window.SpokesBridge.initLayout._spokesPresenceWrapped) {
+        const origInitLayout = window.SpokesBridge.initLayout.bind(window.SpokesBridge);
+        const wrappedInitLayout = async function (dotNetRef, options) {
+            window._currentPresenceToken = (options && typeof options.presenceToken === 'string' && options.presenceToken.length > 0)
+                ? options.presenceToken
+                : null;
+            return await origInitLayout(dotNetRef, options);
+        };
+        wrappedInitLayout._spokesPresenceWrapped = true;
+        window.SpokesBridge.initLayout = wrappedInitLayout;
+    }
+    if (typeof window.SpokesBridge.disposeLayout === 'function' && !window.SpokesBridge.disposeLayout._spokesPresenceWrapped) {
+        const origDisposeLayout = window.SpokesBridge.disposeLayout.bind(window.SpokesBridge);
+        const wrappedDisposeLayout = function () {
+            window._currentPresenceToken = null;
+            return origDisposeLayout();
+        };
+        wrappedDisposeLayout._spokesPresenceWrapped = true;
+        window.SpokesBridge.disposeLayout = wrappedDisposeLayout;
+    }
+}
+
 function sendOutOfBandPresencePost(endpointPath) {
     if (!window._currentSubscriptionId) return;
-    const url = endpointPath + '?subscriptionId=' + encodeURIComponent(window._currentSubscriptionId);
+    const payload = JSON.stringify({
+        subscriptionId: window._currentSubscriptionId,
+        presenceToken: window._currentPresenceToken || null
+    });
     try {
-        fetch(url, {
+        fetch(endpointPath, {
             method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: payload,
             keepalive: true,
             cache: 'no-store'
         }).catch(() => {});
     } catch (e) {
         if (navigator.sendBeacon) {
-            try { navigator.sendBeacon(url); } catch (_) {}
+            try { navigator.sendBeacon(endpointPath, new Blob([payload], { type: 'application/json' })); } catch (_) {}
         }
     }
 }
 
 window.isSpokesWindowFocused = () => {
+    if (window._spokesHostViewActive === false) {
+        return false;
+    }
     const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
     const isNative = typeof window.isCapacitorNative === 'function' && window.isCapacitorNative();
     const isDesktop = !!(window.SpokesBridge && window.SpokesBridge.isDesktop);
@@ -217,6 +248,9 @@ window.registerWindowFocus = (dotNetRef) => {
     if (typeof window._spokesElectronWindowFocused === 'undefined') {
         window._spokesElectronWindowFocused = true;
     }
+    if (typeof window._spokesHostViewActive === 'undefined') {
+        window._spokesHostViewActive = true;
+    }
 
     const handleFocusInteropError = (err) => {
         const msg = String(err || '');
@@ -231,7 +265,7 @@ window.registerWindowFocus = (dotNetRef) => {
     const invokeFocusInterop = (isFocused) => {
         if (!_focusDotNetRef || window._blazorDisconnected) return;
         const hiddenDuration = window._hiddenAt ? Math.max(0, Date.now() - window._hiddenAt) : (window._lastHiddenDurationMs || 0);
-        if (isFocused && hiddenDuration >= 180000) {
+        if (isFocused && hiddenDuration >= 180000 && !window._spokesInVoiceCall) {
             window._blazorDisconnected = true;
             if (window.spokesResume && typeof window.spokesResume.onConnectionDown === 'function') {
                 window.spokesResume.onConnectionDown('background-retention-expired');
@@ -405,8 +439,14 @@ window.registerActivityTracker = (dotNetRef) => {
         }
         if (window._currentSubscriptionId) {
             try {
-                fetch('/spokesapi/presence/state?subscriptionId=' + encodeURIComponent(window._currentSubscriptionId) + '&state=' + encodeURIComponent(state), {
+                fetch('/spokesapi/presence/state', {
                     method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        subscriptionId: window._currentSubscriptionId,
+                        state: state,
+                        presenceToken: window._currentPresenceToken || null
+                    }),
                     keepalive: true
                 }).catch(() => {});
             } catch(e) {}
@@ -461,6 +501,11 @@ window.registerActivityTracker = (dotNetRef) => {
         const resetBrowserIdleTimer = () => {
             if (_browserIdleTimer) clearTimeout(_browserIdleTimer);
             _browserIdleTimer = setTimeout(() => {
+                if (window._spokesInVoiceCall) {
+                    sendActivePing();
+                    resetBrowserIdleTimer();
+                    return;
+                }
                 window._spokesClientIdle = true;
                 reportClientPresenceState('away');
             }, SPOKES_IDLE_TIMEOUT_MS);
@@ -524,20 +569,48 @@ window.unregisterActivityTracker = () => {
 // IMPORTANT: Never mutate Blazor-managed DOM (no innerHTML, no removeChild on
 // tracked nodes). Instead, hide the original paper and insert cloned pages as
 // a sibling. Call cleanupPagination on component dispose to remove the sibling.
-window.paginateSections = (paperId, availableHeight) => {
+window.paginateSections = async (paperId, availableHeight) => {
     const paper = document.getElementById(paperId);
     if (!paper) return;
 
+    // Wait for web fonts and any embedded images inside the paper to finish loading before measuring
+    try {
+        if (document.fonts && document.fonts.ready) {
+            await document.fonts.ready;
+        }
+        const images = Array.from(paper.querySelectorAll('img'));
+        await Promise.all(images.map(img => {
+            if (img.complete) return Promise.resolve();
+            return new Promise(resolve => {
+                img.addEventListener('load', resolve, { once: true });
+                img.addEventListener('error', resolve, { once: true });
+            });
+        }));
+    } catch (e) { }
+
+    if (!document.body.contains(paper)) return;
+
+    const existingContainer = document.querySelector(`[data-paginated-for="${paperId}"]`);
+    if (existingContainer) existingContainer.remove();
+    paper.removeAttribute('data-pagination-complete');
+    paper.style.display = '';
+
     const printBody = paper.querySelector('.print-body');
-    if (!printBody) return;
+    if (!printBody) {
+        paper.setAttribute('data-pagination-complete', 'true');
+        return;
+    }
 
     // --- 1. Identify measurable blocks ---
     const blocks = [];
     let currentId = 0;
 
-    function collectBlocks(node) {
+    function collectBlocks(node, forceBreak = false) {
+        const hasForceBreak = forceBreak || node.classList.contains('force-break');
+
         // If it's keep-together, it's atomic
         if (node.classList.contains('keep-together')) {
+            if (hasForceBreak) node.classList.add('force-break');
             node.setAttribute('data-pg-id', currentId++);
             blocks.push(node);
             return;
@@ -547,16 +620,20 @@ window.paginateSections = (paperId, availableHeight) => {
         // so individual list items (LI) can paginate across pages
         const isListContainer = /^(OL|UL)$/i.test(node.tagName);
         if (!node.classList.contains('allow-break') && !isListContainer) {
+            if (hasForceBreak) node.classList.add('force-break');
             node.setAttribute('data-pg-id', currentId++);
             blocks.push(node);
         } else {
             // It is allow-break or a list container: recursively drill down
             const children = Array.from(node.children);
             if (children.length === 0) {
+                if (hasForceBreak) node.classList.add('force-break');
                 node.setAttribute('data-pg-id', currentId++);
                 blocks.push(node);
             } else {
-                children.forEach(child => collectBlocks(child));
+                children.forEach((child, idx) => {
+                    collectBlocks(child, idx === 0 && hasForceBreak);
+                });
             }
         }
     }
@@ -564,6 +641,7 @@ window.paginateSections = (paperId, availableHeight) => {
     Array.from(printBody.children).forEach(child => collectBlocks(child));
 
     if (blocks.length === 0) {
+        paper.setAttribute('data-pagination-complete', 'true');
         return;
     }
 
@@ -574,6 +652,7 @@ window.paginateSections = (paperId, availableHeight) => {
         const rect = block.getBoundingClientRect();
         const style = window.getComputedStyle(block);
         
+        const boxHeight = rect.height;
         let actualHeight = rect.height;
         if (i < blocks.length - 1) {
             const nextRect = blocks[i + 1].getBoundingClientRect();
@@ -592,6 +671,7 @@ window.paginateSections = (paperId, availableHeight) => {
         measurements.push({
             index: i,
             height: actualHeight,
+            boxHeight: boxHeight,
             forceBreak: block.classList.contains('force-break'),
             keepWithNext: hasKeepWithNext,
             isEmpty: isEmpty,
@@ -670,20 +750,24 @@ window.paginateSections = (paperId, availableHeight) => {
             
             // Re-measure after applying max-height
             m.height = remaining;
+            m.boxHeight = remaining;
         }
 
-        // Calculate height of the "keep together" group starting here
-        let groupHeight = m.height;
+        // Calculate height of the "keep together" group starting here.
+        // Intermediate blocks in the group contribute their full step height (m.height, which includes
+        // the collapsed margin to the next block in the group), while the final block in the group only
+        // requires its own visual box height (boxHeight) to fit at the bottom of the page.
+        let groupHeight = m.boxHeight;
         let j = i;
         while (j + 1 < measurements.length) {
             if (measurements[j].keepWithNext) {
+                groupHeight += (measurements[j].height - measurements[j].boxHeight) + measurements[j + 1].boxHeight;
                 j++;
-                groupHeight += measurements[j].height;
                 if (measurements[j].forceBreak) break;
             } else if (measurements[j].isEmpty || measurements[j].height < 15) {
                 // Look ahead through empty spacer paragraphs following a keep-with-next element
+                groupHeight += (measurements[j].height - measurements[j].boxHeight) + measurements[j + 1].boxHeight;
                 j++;
-                groupHeight += measurements[j].height;
                 if (measurements[j].forceBreak) break;
             } else {
                 break;
@@ -799,6 +883,7 @@ window.paginateSections = (paperId, availableHeight) => {
     blocks.forEach(b => b.removeAttribute('data-pg-id'));
 
     // --- 5. Hide original, insert sibling ---
+    paper.setAttribute('data-pagination-complete', 'true');
     paper.style.display = 'none';
     paper.insertAdjacentElement('afterend', container);
 };
@@ -809,7 +894,10 @@ window.cleanupPagination = (paperId) => {
     const container = document.querySelector(`[data-paginated-for="${paperId}"]`);
     if (container) container.remove();
     const paper = document.getElementById(paperId);
-    if (paper) paper.style.display = '';
+    if (paper) {
+        paper.removeAttribute('data-pagination-complete');
+        paper.style.display = '';
+    }
 };
 
 // --- TV Slideshow Remote Zoom & Pan Dragging ---

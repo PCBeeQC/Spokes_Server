@@ -36,6 +36,12 @@ public class CompanyBillInboxSettings
     public string? SmtpUsername { get; set; }
     public string EncryptedSmtpPassword { get; set; } = string.Empty;
 
+    /// <summary>
+    /// Explicitly permits unencrypted plaintext IMAP/SMTP transport for trusted internal/local mail relays.
+    /// Defaults to false (enforcing mandatory STARTTLS when implicit SSL is not enabled).
+    /// </summary>
+    public bool AllowPlaintextTransport { get; set; } = false;
+
     // --- Ingestion & Matching Rules ---
     public string DefaultCurrency { get; set; } = "CAD";
     public int DuplicateDateWindowDays { get; set; } = 20;

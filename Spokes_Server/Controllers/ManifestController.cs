@@ -13,6 +13,7 @@ namespace Spokes_Server.Controllers;
 [ApiController]
 [EnableCors("AllowPublicApi")]
 [AllowAnonymous]
+[Spokes_Server.Core.Security.AllowDuringSetup]
 public class ManifestController : SpokesControllerBase
 {
     public static readonly string BootId = Guid.NewGuid().ToString("N");

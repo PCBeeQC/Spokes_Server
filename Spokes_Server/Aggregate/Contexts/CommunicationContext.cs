@@ -3,6 +3,7 @@ namespace Spokes_Server.Aggregate.Contexts;
 using System;
 using System.Threading.Tasks;
 using Microsoft.Extensions.DependencyInjection;
+using Spokes_Server.Core.Configuration;
 using Spokes_Server.Core.Data.Repositories.Communication;
 using Spokes_Server.Core.Data.Repositories.Core;
 using Spokes_Server.Core.Models.Communication;
@@ -18,10 +19,15 @@ public class CommunicationContext
     public virtual UserClientStateRepository ClientStates { get; }
     public virtual ReportedMessageRepository ReportedMessages { get; }
     public virtual AlbumRepository Albums { get; }
+    public virtual EmailAccountRepository EmailAccounts { get; }
+    public virtual EmailInboxRepository EmailInboxes { get; }
+    public virtual EmailSendingIdentityRepository EmailSendingIdentities { get; }
     public virtual EmailFolderRepository EmailFolders { get; }
     public virtual EmailMessageRepository EmailMessages { get; }
     public virtual PublicContactRepository PublicContacts { get; }
     public virtual PrivateContactRepository PrivateContacts { get; }
+    public virtual PhysicalVoiceRoomRepository PhysicalVoiceRooms { get; }
+    public virtual ChatPollRepository ChatPolls { get; }
 
     protected CommunicationContext()
     {
@@ -32,10 +38,15 @@ public class CommunicationContext
         ClientStates = null!;
         ReportedMessages = null!;
         Albums = null!;
+        EmailAccounts = null!;
+        EmailInboxes = null!;
+        EmailSendingIdentities = null!;
         EmailFolders = null!;
         EmailMessages = null!;
         PublicContacts = null!;
         PrivateContacts = null!;
+        PhysicalVoiceRooms = null!;
+        ChatPolls = null!;
     }
 
     [ActivatorUtilitiesConstructor]
@@ -51,7 +62,12 @@ public class CommunicationContext
         EmailMessageRepository emailMessages,
         PublicContactRepository publicContacts,
         PrivateContactRepository privateContacts,
-        CompanyProfileRepository? companyProfile = null)
+        CompanyProfileRepository? companyProfile = null,
+        EmailAccountRepository? emailAccounts = null,
+        EmailInboxRepository? emailInboxes = null,
+        EmailSendingIdentityRepository? emailSendingIdentities = null,
+        PhysicalVoiceRoomRepository? physicalVoiceRooms = null,
+        ChatPollRepository? chatPolls = null)
     {
         ChatChannels = chatChannels;
         ChatCategories = chatCategories;
@@ -60,10 +76,15 @@ public class CommunicationContext
         ClientStates = clientStates;
         ReportedMessages = reportedMessages;
         Albums = albums;
+        EmailAccounts = emailAccounts!;
+        EmailInboxes = emailInboxes!;
+        EmailSendingIdentities = emailSendingIdentities!;
         EmailFolders = emailFolders;
         EmailMessages = emailMessages;
         PublicContacts = publicContacts;
         PrivateContacts = privateContacts;
+        PhysicalVoiceRooms = physicalVoiceRooms!;
+        ChatPolls = chatPolls!;
         _companyProfile = companyProfile;
     }
 
@@ -96,10 +117,15 @@ public class CommunicationContext
             () => ClientStates.LoadFromDisk(),
             () => ReportedMessages.LoadFromDisk(),
             () => Albums.LoadFromDisk(),
+            () => EmailAccounts?.LoadFromDisk(),
+            () => EmailInboxes?.LoadFromDisk(),
+            () => EmailSendingIdentities?.LoadFromDisk(),
             () => EmailFolders.LoadFromDisk(),
             () => EmailMessages.LoadFromDisk(),
             () => PublicContacts.LoadFromDisk(),
-            () => PrivateContacts.LoadFromDisk()
+            () => PrivateContacts.LoadFromDisk(),
+            () => PhysicalVoiceRooms?.LoadFromDisk(),
+            () => ChatPolls?.LoadFromDisk()
         );
 
         ChatChannels.GetOrCreateDefaultGeneral();

@@ -1,12 +1,15 @@
 @using Spokes_Server.Core.Models.Core
 @using Spokes_Server.Core.Models.Projects
 @using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Constants
+@using Spokes_Server.Core.Services.Identity
 @using Spokes_Server.Components.Dialogs
 @using Spokes_Server.Core.Data
 @inject Database Db
 @inject IDialogService DialogService
 @inject ISnackbar Snackbar
 @inject NavigationManager Nav
+@inject UserService UserService
 
 <MudGrid Class="mb-4">
     <MudItem xs="12" md="6">
@@ -16,7 +19,10 @@
         </MudText>
     </MudItem>
     <MudItem xs="12" md="6" Class="d-flex justify-end align-center gap-2">
-        <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="CreateInvoice">Create Invoice</MudButton>
+        @if (_canManageInvoices)
+        {
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="CreateInvoice">Create Invoice</MudButton>
+        }
     </MudItem>
 </MudGrid>
 
@@ -66,8 +72,14 @@
     // Unbilled Tracking
     private decimal UnbilledLabor = 0;
     private decimal UnbilledExpenses = 0;
+    private bool _canManageInvoices;
 
-    protected override void OnInitialized() => Refresh();
+    protected override async Task OnInitializedAsync()
+    {
+        var emp = await UserService.GetEmployeeAsync();
+        _canManageInvoices = emp != null && (emp.IsAdmin || emp.HasPermission(AppPermissions.Finance.AccessAccounting) || emp.HasPermission(AppPermissions.Projects.Edit));
+        Refresh();
+    }
 
     private void Refresh()
     {
@@ -153,7 +165,7 @@
 
     private async Task CreateInvoice()
     {
-        if (Group == null) return;
+        if (Group == null || !_canManageInvoices) return;
 
         var profile = Db.CompanyProfile.Get();
         var template = Db.DocumentTemplates.GetDefault();
@@ -184,8 +196,11 @@
 
     private void OpenInvoice(Invoice inv)
     {
-        // Navigate to the invoice viewer via the first project in the group
-        if (Group != null && Group.ProjectIds.Any())
+        if (!string.IsNullOrEmpty(ProjectGroupId))
+        {
+            Nav.NavigateTo($"/project-groups/{ProjectGroupId}/invoices/{inv.Id}");
+        }
+        else if (Group != null && Group.ProjectIds.Any())
         {
             Nav.NavigateTo($"/projects/{Group.ProjectIds.First()}/invoices/{inv.Id}");
         }

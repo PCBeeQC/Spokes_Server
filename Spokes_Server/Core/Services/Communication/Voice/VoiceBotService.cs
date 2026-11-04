@@ -15,13 +15,14 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Spokes_Server.Core.Data.Repositories.Core;
+using Spokes_Server.Core.Services.Communication.Voice.Pipeline;
 
 namespace Spokes_Server.Core.Services.Communication.Voice;
 
 /// <summary>
-/// Server-side bot participant that connects to active LiveKit voice channels as a hidden
-/// participant and streams system sounds, audio clips, and future announcements directly
-/// into the WebRTC audio track.
+/// Server-side media participant that connects to active LiveKit voice channels over local loopback
+/// to stream system sounds, audio clips, and host pluggable <see cref="IVoiceRoomPipelineStage"/> modules
+/// (such as Physical Room multi-mic cross-talk cancellation).
 /// </summary>
 public class VoiceBotService : IVoiceBotService
 {
@@ -29,6 +30,8 @@ public class VoiceBotService : IVoiceBotService
     private readonly ILogger<VoiceBotService> _logger;
     private readonly IWebHostEnvironment? _webHostEnvironment;
     private readonly IConfiguration? _configuration;
+    private readonly List<IVoiceRoomPipelineStage> _pipelineStages = [];
+    private readonly object _stagesLock = new();
 
     private readonly ConcurrentDictionary<string, BotRoomSession> _sessions = new();
     private readonly ConcurrentDictionary<string, List<AudioFrame>> _soundCache = new();
@@ -39,12 +42,38 @@ public class VoiceBotService : IVoiceBotService
         SystemConfigRepository systemConfigs,
         ILogger<VoiceBotService> logger,
         IWebHostEnvironment? webHostEnvironment = null,
-        IConfiguration? configuration = null)
+        IConfiguration? configuration = null,
+        IEnumerable<IVoiceRoomPipelineStage>? pipelineStages = null)
     {
         _systemConfigs = systemConfigs ?? throw new ArgumentNullException(nameof(systemConfigs));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _webHostEnvironment = webHostEnvironment;
         _configuration = configuration;
+
+        if (pipelineStages != null)
+        {
+            _pipelineStages.AddRange(pipelineStages);
+        }
+    }
+
+    public virtual void RegisterPipelineStage(IVoiceRoomPipelineStage stage)
+    {
+        if (stage == null) return;
+        lock (_stagesLock)
+        {
+            if (!_pipelineStages.Any(s => s.StageId == stage.StageId))
+            {
+                _pipelineStages.Add(stage);
+            }
+        }
+    }
+
+    private IReadOnlyList<IVoiceRoomPipelineStage> GetPipelineStagesSnapshot()
+    {
+        lock (_stagesLock)
+        {
+            return _pipelineStages.ToList();
+        }
     }
 
     private string GetVoicePort() =>
@@ -181,6 +210,7 @@ public class VoiceBotService : IVoiceBotService
         if (_sessions.TryGetValue(channelId, out var existingSession))
         {
             existingSession.CancelScheduledDeparture();
+            await NotifyRoomConfigurationChangedAsync(channelId, cancellationToken);
             return;
         }
 
@@ -207,7 +237,7 @@ public class VoiceBotService : IVoiceBotService
                 Room = roomName,
                 CanPublish = true,
                 CanPublishData = true,
-                CanSubscribe = false,
+                CanSubscribe = true,
                 Hidden = false
             });
 
@@ -216,7 +246,7 @@ public class VoiceBotService : IVoiceBotService
             var liveKitUrl = $"ws://127.0.0.1:{port}";
 
             var room = new Room();
-            await room.ConnectAsync(liveKitUrl, jwt, new RoomOptions(), cancellationToken);
+            await room.ConnectAsync(liveKitUrl, jwt, new RoomOptions { AutoSubscribe = true }, cancellationToken);
 
             var audioSource = new AudioSource(sampleRate: 48000, numChannels: 2, queueSizeMs: 1000);
             var audioTrack = audioSource.CreateTrack("spokes-bot-audio");
@@ -236,10 +266,11 @@ public class VoiceBotService : IVoiceBotService
 
             await room.LocalParticipant.PublishTrackAsync(audioTrack, publishOptions);
 
-            var session = new BotRoomSession(room, audioSource, audioTrack, _logger);
+            var session = new BotRoomSession(channelId, room, audioSource, audioTrack, GetPipelineStagesSnapshot, _logger);
             if (_sessions.TryAdd(channelId, session))
             {
-                _logger.LogInformation("[VoiceBot] Successfully joined channel {ChannelId} with hidden audio track", channelId);
+                _logger.LogInformation("[VoiceBot] Successfully joined channel {ChannelId} with server media pipeline session", channelId);
+                await session.InitializePipelineStagesAsync(cancellationToken);
             }
             else
             {
@@ -249,6 +280,46 @@ public class VoiceBotService : IVoiceBotService
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "[VoiceBot] Failed to connect bot to channel {ChannelId}: {Message}", channelId, ex.Message);
+        }
+    }
+
+    public virtual async Task NotifyRoomConfigurationChangedAsync(string? channelId = null, CancellationToken cancellationToken = default)
+    {
+        var stages = GetPipelineStagesSnapshot();
+        if (stages.Count == 0) return;
+
+        if (!string.IsNullOrWhiteSpace(channelId))
+        {
+            if (_sessions.TryGetValue(channelId, out var session))
+            {
+                foreach (var stage in stages)
+                {
+                    try
+                    {
+                        await stage.OnRoomConfigurationChangedAsync(session, cancellationToken);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "[VoiceBot] Stage {StageId} failed OnRoomConfigurationChanged for channel {ChannelId}", stage.StageId, channelId);
+                    }
+                }
+            }
+            return;
+        }
+
+        foreach (var kvp in _sessions)
+        {
+            foreach (var stage in stages)
+            {
+                try
+                {
+                    await stage.OnRoomConfigurationChangedAsync(kvp.Value, cancellationToken);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "[VoiceBot] Stage {StageId} failed OnRoomConfigurationChanged for channel {ChannelId}", stage.StageId, kvp.Key);
+                }
+            }
         }
     }
 
@@ -322,6 +393,7 @@ public class VoiceBotService : IVoiceBotService
             try
             {
                 _logger.LogInformation("[VoiceBot] Leaving channel {ChannelId} and disposing WebRTC session", channelId);
+                await session.DetachPipelineStagesAsync(cancellationToken);
                 session.Dispose();
             }
             catch (Exception ex)
@@ -329,7 +401,6 @@ public class VoiceBotService : IVoiceBotService
                 _logger.LogWarning(ex, "[VoiceBot] Error leaving channel {ChannelId}", channelId);
             }
         }
-        await Task.CompletedTask;
     }
 
     public async ValueTask DisposeAsync()
@@ -338,30 +409,203 @@ public class VoiceBotService : IVoiceBotService
         {
             if (_sessions.TryRemove(key, out var session))
             {
+                try
+                {
+                    await session.DetachPipelineStagesAsync(CancellationToken.None);
+                }
+                catch { }
                 session.Dispose();
             }
         }
-        await Task.CompletedTask;
     }
 
-    private sealed class BotRoomSession : IDisposable
+    private sealed class BotRoomSession : IVoiceRoomMediaSessionContext, IDisposable
     {
+        public string ChannelId { get; }
         public Room Room { get; }
         public AudioSource AudioSource { get; }
         public LocalAudioTrack AudioTrack { get; }
         public SemaphoreSlim PlaybackLock { get; } = new(1, 1);
 
+        private readonly ConcurrentDictionary<string, PublishedServerAudioTrack> _auxiliaryTracks = new(StringComparer.Ordinal);
+        private readonly Func<IReadOnlyList<IVoiceRoomPipelineStage>> _getStages;
         private CancellationTokenSource? _departureCts;
         private readonly object _lock = new();
         private readonly ILogger _logger;
         private bool _disposed;
 
-        public BotRoomSession(Room room, AudioSource audioSource, LocalAudioTrack audioTrack, ILogger logger)
+        public BotRoomSession(
+            string channelId,
+            Room room,
+            AudioSource audioSource,
+            LocalAudioTrack audioTrack,
+            Func<IReadOnlyList<IVoiceRoomPipelineStage>> getStages,
+            ILogger logger)
         {
+            ChannelId = channelId;
             Room = room;
             AudioSource = audioSource;
             AudioTrack = audioTrack;
+            _getStages = getStages;
             _logger = logger;
+
+            Room.TrackSubscribed += OnRoomTrackSubscribed;
+            Room.TrackUnsubscribed += OnRoomTrackUnsubscribed;
+        }
+
+        public async Task InitializePipelineStagesAsync(CancellationToken cancellationToken)
+        {
+            var stages = _getStages();
+            foreach (var stage in stages)
+            {
+                try
+                {
+                    await stage.OnSessionAttachedAsync(this, cancellationToken);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "[VoiceBot] Error attaching pipeline stage {StageId} in channel {ChannelId}", stage.StageId, ChannelId);
+                }
+            }
+        }
+
+        public async Task DetachPipelineStagesAsync(CancellationToken cancellationToken)
+        {
+            var stages = _getStages();
+            foreach (var stage in stages)
+            {
+                try
+                {
+                    await stage.OnSessionDetachedAsync(ChannelId, cancellationToken);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogDebug(ex, "[VoiceBot] Error detaching pipeline stage {StageId} in channel {ChannelId}", stage.StageId, ChannelId);
+                }
+            }
+        }
+
+        private void OnRoomTrackSubscribed(object? sender, TrackSubscribedEventArgs e)
+        {
+            if (_disposed || e.Track is not RemoteAudioTrack remoteAudioTrack) return;
+            var identity = e.Participant?.Identity;
+            if (string.IsNullOrWhiteSpace(identity) || identity.StartsWith("bot:", StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            // Ignore screen share audio tracks (only process microphone audio tracks)
+            if (e.Publication?.Source == LiveKit.Proto.TrackSource.SourceScreenshareAudio)
+            {
+                return;
+            }
+
+            string trackSid = e.Publication?.Sid ?? remoteAudioTrack.Sid ?? string.Empty;
+            var stages = _getStages();
+            if (stages.Count == 0) return;
+
+            _ = Task.Run(async () =>
+            {
+                foreach (var stage in stages)
+                {
+                    try
+                    {
+                        await stage.OnRemoteAudioTrackSubscribedAsync(this, identity, trackSid, remoteAudioTrack, CancellationToken.None);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "[VoiceBot] Stage {StageId} error in OnRemoteAudioTrackSubscribed for {Identity}", stage.StageId, identity);
+                    }
+                }
+            });
+        }
+
+        private void OnRoomTrackUnsubscribed(object? sender, TrackSubscribedEventArgs e)
+        {
+            if (_disposed || e.Track is not RemoteAudioTrack remoteAudioTrack) return;
+            var identity = e.Participant?.Identity;
+            if (string.IsNullOrWhiteSpace(identity) || identity.StartsWith("bot:", StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            string trackSid = e.Publication?.Sid ?? remoteAudioTrack.Sid ?? string.Empty;
+            var stages = _getStages();
+            if (stages.Count == 0) return;
+
+            _ = Task.Run(async () =>
+            {
+                foreach (var stage in stages)
+                {
+                    try
+                    {
+                        await stage.OnRemoteAudioTrackUnsubscribedAsync(this, identity, trackSid, CancellationToken.None);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogDebug(ex, "[VoiceBot] Stage {StageId} error in OnRemoteAudioTrackUnsubscribed for {Identity}", stage.StageId, identity);
+                    }
+                }
+            });
+        }
+
+        public async Task<PublishedServerAudioTrack?> PublishAuxiliaryAudioTrackAsync(
+            string trackName,
+            int sampleRate = 48000,
+            int numChannels = 1,
+            CancellationToken cancellationToken = default)
+        {
+            if (_disposed || string.IsNullOrWhiteSpace(trackName)) return null;
+            if (_auxiliaryTracks.TryGetValue(trackName, out var existing))
+            {
+                return existing;
+            }
+
+            if (Room.LocalParticipant == null) return null;
+
+            var auxSource = new AudioSource(sampleRate: sampleRate, numChannels: numChannels, queueSizeMs: 400);
+            var auxTrack = auxSource.CreateTrack(trackName);
+            var pubOptions = new TrackPublishOptions
+            {
+                Source = LiveKit.Proto.TrackSource.SourceMicrophone,
+                AudioEncoding = new AudioEncodingOptions
+                {
+                    MaxBitrate = 64000
+                }
+            };
+
+            await Room.LocalParticipant.PublishTrackAsync(auxTrack, pubOptions);
+            var published = new PublishedServerAudioTrack(trackName, auxSource, auxTrack);
+            if (!_auxiliaryTracks.TryAdd(trackName, published))
+            {
+                published.Dispose();
+                _auxiliaryTracks.TryGetValue(trackName, out published);
+            }
+
+            return published;
+        }
+
+        public async Task UnpublishAuxiliaryAudioTrackAsync(string trackName, CancellationToken cancellationToken = default)
+        {
+            if (string.IsNullOrWhiteSpace(trackName)) return;
+            if (_auxiliaryTracks.TryRemove(trackName, out var published))
+            {
+                try
+                {
+                    if (!_disposed && Room.LocalParticipant != null && !string.IsNullOrWhiteSpace(published.AudioTrack.Sid))
+                    {
+                        await Room.LocalParticipant.UnpublishTrackAsync(published.AudioTrack.Sid);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogDebug(ex, "[VoiceBot] Failed to unpublish auxiliary track {TrackName}", trackName);
+                }
+                finally
+                {
+                    published.Dispose();
+                }
+            }
         }
 
         public void CancelScheduledDeparture()
@@ -408,7 +652,16 @@ public class VoiceBotService : IVoiceBotService
                 if (_disposed) return;
                 _disposed = true;
 
+                Room.TrackSubscribed -= OnRoomTrackSubscribed;
+                Room.TrackUnsubscribed -= OnRoomTrackUnsubscribed;
+
                 CancelScheduledDeparture();
+
+                foreach (var kvp in _auxiliaryTracks)
+                {
+                    try { kvp.Value.Dispose(); } catch { }
+                }
+                _auxiliaryTracks.Clear();
 
                 try
                 {

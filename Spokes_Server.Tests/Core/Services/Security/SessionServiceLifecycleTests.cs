@@ -775,4 +775,32 @@ public class SessionServiceLifecycleTests : IDisposable
         Assert.NotNull(stored);
         Assert.Equal("existing.id.token", stored.IdToken);
     }
+
+    [Fact]
+    public void CreateSession_DeviceIdProvided_DoesNotAdoptLegacyDevSessionAcrossMismatchedPlatform()
+    {
+        var emp = SeedEmployee();
+        var (_, mobileLegacySession) = SeedSession(emp.Id, deviceId: "dev_mobile_legacy_1");
+        mobileLegacySession.IsCapacitor = true;
+        mobileLegacySession.DeviceType = DeviceType.Mobile;
+        mobileLegacySession.PushPublicKey = "MOBILE_ANDROID_KEYSTORE_PUBKEY";
+        _sessionRepo.Save(mobileLegacySession);
+
+        // Desktop Electron client logs in with a desk_ deviceId
+        var desktopContext = CreateHttpContext();
+        desktopContext.Request.Headers["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) SpokesDesktop/1.0.0";
+
+        var (desktopSession, _) = _sessionService.CreateSession(desktopContext, emp.Id, deviceId: "desk_electron_uuid_1");
+
+        Assert.NotEqual(mobileLegacySession.Id, desktopSession.Id);
+        Assert.Equal("desk_electron_uuid_1", desktopSession.DeviceId);
+        Assert.Equal(DeviceType.Desktop, desktopSession.DeviceType);
+        Assert.False(desktopSession.IsCapacitor);
+
+        var preservedMobile = _sessionRepo.GetById(mobileLegacySession.Id);
+        Assert.NotNull(preservedMobile);
+        Assert.Null(preservedMobile.RevokedAt);
+        Assert.Equal("dev_mobile_legacy_1", preservedMobile.DeviceId);
+        Assert.Equal("MOBILE_ANDROID_KEYSTORE_PUBKEY", preservedMobile.PushPublicKey);
+    }
 }

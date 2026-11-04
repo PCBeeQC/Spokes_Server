@@ -4,6 +4,8 @@ using System.Collections.Generic;
 using System.Threading.Tasks;
 using Xunit;
 using Moq;
+using Microsoft.AspNetCore.DataProtection;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Spokes_Server.Core.Models.Communication;
@@ -142,7 +144,7 @@ public class AlbumServiceTests : IDisposable
         [Fact]
         public void GetPlainAlbumKey_DirectKey_ReturnsPlainKey()
         {
-            var album = new Album { Id = "a4" };
+            var album = new Album { Id = "a4", OwnerId = "u1" };
             album.EncryptedAlbumKeys["u1"] = "cipher";
             var result = _service.GetPlainAlbumKey(album, "u1", "priv");
             Assert.Equal("plain-aes-key", result);
@@ -917,6 +919,465 @@ public class AlbumServiceTests : IDisposable
             Assert.False(upgraded.EncryptedAlbumKeys.ContainsKey("Escrow"));
             Assert.True(service.IsAlbumLocked(upgraded, "u_claim", currentPrivateKey: null));
             Assert.False(service.IsAlbumLocked(upgraded, "u_claim", currentPrivateKey: privKey));
+        }
+
+        [Fact]
+        public void CanUserViewAlbum_EnforcesOwnerContributorAndSharedChannelMembership()
+        {
+            var privateChannel = new ChatChannel
+            {
+                Id = "chan_shared_priv",
+                Name = "Private Group",
+                ChannelType = ChatChannelType.Direct,
+                ParticipantIds = ["u_chan_member"]
+            };
+            _channels.Save(privateChannel);
+
+            var album = new Album
+            {
+                Id = "alb_view_auth",
+                OwnerId = "u_owner",
+                ContributorUserIds = ["u_contrib"],
+                SharedWithChannelIds = ["chan_shared_priv"]
+            };
+            _albums.Save(album);
+
+            Assert.True(_service.CanUserViewAlbum("alb_view_auth", "u_owner"));
+            Assert.True(_service.CanUserViewAlbum("alb_view_auth", "u_contrib"));
+            Assert.True(_service.CanUserViewAlbum("alb_view_auth", "u_chan_member"));
+            Assert.False(_service.CanUserViewAlbum("alb_view_auth", "u_outsider"));
+        }
+
+        [Fact]
+        public void GetPlainAlbumKey_WhenUserCannotViewAlbum_EvenWithDirectOrEscrowKey_ReturnsNull()
+        {
+            var realCrypto = new CryptoService();
+            var escrow = CreateInitializedEscrow(realCrypto);
+            var service = new AlbumService(_albums, _channels, realCrypto, escrow, _employees);
+
+            var plainKey = realCrypto.GenerateAesKeyBase64();
+            var (strangerPub, strangerPriv) = realCrypto.GenerateRsaKeyPair();
+
+            var album = new Album
+            {
+                Id = "alb_key_guard",
+                OwnerId = "u_real_owner",
+                IsEncrypted = true,
+                EncryptedAlbumKeys = new Dictionary<string, string>
+                {
+                    ["u_stranger"] = realCrypto.EncryptRsa(plainKey, strangerPub),
+                    ["Escrow"] = realCrypto.EncryptRsa(plainKey, escrow.EscrowPublicKey!)
+                }
+            };
+            _albums.Save(album);
+
+            Assert.Null(service.GetPlainAlbumKey(album, "u_stranger", strangerPriv));
+            Assert.Null(service.GetPlainAlbumKey(album, "u_stranger", null));
+        }
+
+        [Fact]
+        public void ShareAlbumWithChannel_NewChannelAsContributor_ReturnsForbiddenAndDoesNotAddEscrow()
+        {
+            var realCrypto = new CryptoService();
+            var escrow = CreateInitializedEscrow(realCrypto);
+            var service = new AlbumService(_albums, _channels, realCrypto, escrow, _employees);
+
+            var (ownerPub, ownerPriv) = realCrypto.GenerateRsaKeyPair();
+            var (contribPub, contribPriv) = realCrypto.GenerateRsaKeyPair();
+            _employees.Save(new Employee { Id = "u_owner_esc", PublicKey = ownerPub, EncryptedPrivateKey = "enc" });
+            _employees.Save(new Employee { Id = "u_contrib_esc", PublicKey = contribPub, EncryptedPrivateKey = "enc" });
+
+            var createRes = service.CreateAlbum(new Album { Id = "alb_e2ee_strict", Title = "Strict E2EE" }, "u_owner_esc", ownerPriv);
+            Assert.True(createRes.IsSuccess);
+            Assert.True(service.UpdateContributors("alb_e2ee_strict", "u_owner_esc", ["u_contrib_esc"], ownerPriv).IsSuccess);
+
+            var unencryptedChannel = new ChatChannel { Id = "pub_unenc", Name = "Public", IsEncrypted = false };
+            _channels.Save(unencryptedChannel);
+
+            var shareRes = service.ShareAlbumWithChannel("alb_e2ee_strict", "u_contrib_esc", "pub_unenc", contribPriv);
+
+            Assert.False(shareRes.IsSuccess);
+            Assert.Equal("FORBIDDEN", shareRes.Code);
+
+            var persisted = _albums.GetById("alb_e2ee_strict")!;
+            Assert.DoesNotContain("pub_unenc", persisted.SharedWithChannelIds);
+            Assert.False(persisted.EncryptedAlbumKeys.ContainsKey("Escrow"));
+        }
+
+        [Fact]
+        public void ShareAlbumWithChannel_AlreadySharedChannel_AllowsAccessibleMemberReMentionAndRejectsInaccessibleCaller()
+        {
+            var mockChatAuth = new Mock<IChatAuthorizationService>();
+            var owner = new Employee { Id = "u_owner_re", IsActive = true };
+            var contrib = new Employee { Id = "u_contrib_re", IsActive = true };
+            var outsider = new Employee { Id = "u_outsider_re", IsActive = true };
+            _employees.Save(owner);
+            _employees.Save(contrib);
+            _employees.Save(outsider);
+
+            var channel = new ChatChannel
+            {
+                Id = "chan_shared_re",
+                ChannelType = ChatChannelType.Group,
+                ParticipantIds = ["u_owner_re", "u_contrib_re"],
+                IsEncrypted = true,
+                EncryptedChannelKeys = new Dictionary<string, string>
+                {
+                    ["u_owner_re"] = "cipher",
+                    ["u_contrib_re"] = "cipher"
+                }
+            };
+            _channels.Save(channel);
+
+            mockChatAuth.Setup(a => a.CanUserAccessChannel(It.Is<ChatChannel>(c => c.Id == "chan_shared_re"), It.Is<Employee>(e => e.Id == "u_contrib_re"))).Returns(true);
+            mockChatAuth.Setup(a => a.CanUserAccessChannel(It.Is<ChatChannel>(c => c.Id == "chan_shared_re"), It.Is<Employee>(e => e.Id == "u_outsider_re"))).Returns(false);
+
+            var escrow = CreateInitializedEscrow(_mockCrypto.Object);
+            var service = new AlbumService(_albums, _channels, _mockCrypto.Object, escrow, _employees, chatAuth: mockChatAuth.Object);
+
+            var album = new Album
+            {
+                Id = "alb_re_mention",
+                OwnerId = "u_owner_re",
+                ContributorUserIds = ["u_contrib_re"],
+                SharedWithChannelIds = ["chan_shared_re"],
+                EncryptedAlbumKeys = new Dictionary<string, string>
+                {
+                    ["u_owner_re"] = "owner_cipher",
+                    ["Channel_chan_shared_re"] = "existing_channel_cipher"
+                }
+            };
+            _albums.Save(album);
+
+            var okRes = service.ShareAlbumWithChannel("alb_re_mention", "u_contrib_re", "chan_shared_re", currentPrivateKey: null);
+            Assert.True(okRes.IsSuccess);
+            var afterOk = _albums.GetById("alb_re_mention")!;
+            Assert.Equal("existing_channel_cipher", afterOk.EncryptedAlbumKeys["Channel_chan_shared_re"]);
+            Assert.False(afterOk.EncryptedAlbumKeys.ContainsKey("Escrow"));
+
+            var deniedRes = service.ShareAlbumWithChannel("alb_re_mention", "u_outsider_re", "chan_shared_re", currentPrivateKey: null);
+            Assert.False(deniedRes.IsSuccess);
+            Assert.Equal("FORBIDDEN", deniedRes.Code);
+        }
+
+        [Fact]
+        public void ShareAlbumWithChannel_NewChannelWhereOwnerCannotPost_ReturnsForbidden()
+        {
+            var mockChatAuth = new Mock<IChatAuthorizationService>();
+            var owner = new Employee { Id = "u_owner_nopost", IsActive = true };
+            _employees.Save(owner);
+
+            var announcementChannel = new ChatChannel
+            {
+                Id = "chan_announce",
+                IsAnnouncementOnly = true,
+                IsEncrypted = false
+            };
+            _channels.Save(announcementChannel);
+
+            mockChatAuth.Setup(a => a.CanUserPostToChannel(It.Is<ChatChannel>(c => c.Id == "chan_announce"), It.Is<Employee>(e => e.Id == "u_owner_nopost"))).Returns(false);
+
+            var escrow = CreateInitializedEscrow(_mockCrypto.Object);
+            var service = new AlbumService(_albums, _channels, _mockCrypto.Object, escrow, _employees, chatAuth: mockChatAuth.Object);
+
+            var album = new Album
+            {
+                Id = "alb_announce_block",
+                OwnerId = "u_owner_nopost",
+                EncryptedAlbumKeys = new Dictionary<string, string> { ["u_owner_nopost"] = "cipher" }
+            };
+            _albums.Save(album);
+
+            var res = service.ShareAlbumWithChannel("alb_announce_block", "u_owner_nopost", "chan_announce", "priv");
+            Assert.False(res.IsSuccess);
+            Assert.Equal("FORBIDDEN", res.Code);
+            Assert.DoesNotContain("chan_announce", _albums.GetById("alb_announce_block")!.SharedWithChannelIds);
+        }
+
+        [Fact]
+        public void UnshareAlbumWithChannel_AsContributor_ReturnsForbidden()
+        {
+            var album = new Album
+            {
+                Id = "alb_unshare_contrib",
+                OwnerId = "u_owner",
+                ContributorUserIds = ["u_contrib"],
+                SharedWithChannelIds = ["c1"]
+            };
+            _albums.Save(album);
+
+            var res = _service.UnshareAlbumWithChannel("alb_unshare_contrib", "u_contrib", "c1");
+            Assert.False(res.IsSuccess);
+            Assert.Equal("FORBIDDEN", res.Code);
+            Assert.Contains("c1", _albums.GetById("alb_unshare_contrib")!.SharedWithChannelIds);
+        }
+
+        [Fact]
+        public void UpdateContributors_And_UnshareAlbumWithChannel_InvalidateIssuedFileTokens()
+        {
+            using var cache = new MemoryCache(new MemoryCacheOptions());
+            var tokenService = new FileTokenService(new EphemeralDataProtectionProvider(), cache);
+            var mockChatAccess = new Mock<IChatChannelAccessService>();
+            mockChatAccess.Setup(a => a.GetUsersForChannel("c_rev")).Returns(["u_owner_rev", "u_viewer_rev"]);
+
+            var escrow = CreateInitializedEscrow(_mockCrypto.Object);
+            var service = new AlbumService(
+                _albums,
+                _channels,
+                _mockCrypto.Object,
+                escrow,
+                _employees,
+                chatAccess: mockChatAccess.Object,
+                fileTokenService: tokenService);
+
+            var album = new Album
+            {
+                Id = "alb_token_rev",
+                OwnerId = "u_owner_rev",
+                ContributorUserIds = ["u_contrib_rev"],
+                SharedWithChannelIds = ["c_rev"],
+                EncryptedAlbumKeys = new Dictionary<string, string>
+                {
+                    ["u_owner_rev"] = "cipher",
+                    ["u_contrib_rev"] = "cipher",
+                    ["Channel_c_rev"] = "cipher"
+                }
+            };
+            _albums.Save(album);
+            _channels.Save(new ChatChannel { Id = "c_rev", IsEncrypted = true });
+
+            var contribAlbumToken = tokenService.GenerateAccessToken("albums", "alb_token_rev", "p1.jpg", "plain-aes-key", "u_contrib_rev", "sess_c");
+            var contribOtherToken = tokenService.GenerateAccessToken("chat", "other_chan", "doc.pdf", "chat-key", "u_contrib_rev", "sess_c");
+            var ownerOtherToken = tokenService.GenerateAccessToken("chat", "other_chan", "doc.pdf", "chat-key", "u_owner_rev", "sess_o");
+
+            Assert.Equal(FileTokenStatus.Valid, tokenService.ValidateAccessToken("albums", "alb_token_rev", "p1.jpg", contribAlbumToken, "u_contrib_rev", "sess_c").Status);
+
+            // Removing contributor invalidates their tokens without invalidating the owner's unrelated chat token
+            var updateRes = service.UpdateContributors("alb_token_rev", "u_owner_rev", [], "priv");
+            Assert.True(updateRes.IsSuccess);
+            Assert.Equal(FileTokenStatus.Invalid, tokenService.ValidateAccessToken("albums", "alb_token_rev", "p1.jpg", contribAlbumToken, "u_contrib_rev", "sess_c").Status);
+            Assert.Equal(FileTokenStatus.Invalid, tokenService.ValidateAccessToken("chat", "other_chan", "doc.pdf", contribOtherToken, "u_contrib_rev", "sess_c").Status);
+            Assert.Equal(FileTokenStatus.Valid, tokenService.ValidateAccessToken("chat", "other_chan", "doc.pdf", ownerOtherToken, "u_owner_rev", "sess_o").Status);
+
+            // Unsharing channel invalidates album context tokens and viewer tokens while keeping owner's unrelated chat token valid
+            var viewerAlbumToken = tokenService.GenerateAccessToken("albums", "alb_token_rev", "p1.jpg", "plain-aes-key", "u_viewer_rev", "sess_v");
+            var ownerAlbumTokenBeforeUnshare = tokenService.GenerateAccessToken("albums", "alb_token_rev", "p1.jpg", "plain-aes-key", "u_owner_rev", "sess_o");
+            Assert.Equal(FileTokenStatus.Valid, tokenService.ValidateAccessToken("albums", "alb_token_rev", "p1.jpg", viewerAlbumToken, "u_viewer_rev", "sess_v").Status);
+
+            var unshareRes = service.UnshareAlbumWithChannel("alb_token_rev", "u_owner_rev", "c_rev");
+            Assert.True(unshareRes.IsSuccess);
+            Assert.Equal(FileTokenStatus.Invalid, tokenService.ValidateAccessToken("albums", "alb_token_rev", "p1.jpg", viewerAlbumToken, "u_viewer_rev", "sess_v").Status);
+            Assert.Equal(FileTokenStatus.Invalid, tokenService.ValidateAccessToken("albums", "alb_token_rev", "p1.jpg", ownerAlbumTokenBeforeUnshare, "u_owner_rev", "sess_o").Status);
+            Assert.Equal(FileTokenStatus.Valid, tokenService.ValidateAccessToken("chat", "other_chan", "doc.pdf", ownerOtherToken, "u_owner_rev", "sess_o").Status);
+        }
+
+        [Fact]
+        public void Mutations_WhenCallerIsSuspended_ReturnForbidden()
+        {
+            _employees.Save(new Employee { Id = "u_susp", IsActive = true, IsSuspended = true });
+            _channels.Save(new ChatChannel { Id = "c_susp" });
+
+            var album = new Album
+            {
+                Id = "alb_susp",
+                Title = "Original",
+                OwnerId = "u_susp",
+                SharedWithChannelIds = ["c_susp"],
+                Media = [new AlbumMedia { Id = "m_susp", AddedByUserId = "u_susp" }]
+            };
+            _albums.Save(album);
+
+            Assert.Equal("FORBIDDEN", _service.CreateAlbum(new Album { Id = "alb_new_susp" }, "u_susp", "priv").Code);
+            Assert.Equal("FORBIDDEN", _service.RenameAlbum("alb_susp", "u_susp", "Renamed").Code);
+            Assert.Equal("FORBIDDEN", _service.AddMedia("alb_susp", "u_susp", [new AlbumMedia { Id = "m2" }]).Code);
+            Assert.Equal("FORBIDDEN", _service.RemoveMedia("alb_susp", "u_susp", new AlbumMedia { Id = "m_susp" }).Code);
+            Assert.Equal("FORBIDDEN", _service.RemoveMediaBulk("alb_susp", "u_susp", ["m_susp"]).Code);
+            Assert.Equal("FORBIDDEN", _service.ShareAlbumWithChannel("alb_susp", "u_susp", "c_susp", "priv").Code);
+            Assert.Equal("FORBIDDEN", _service.UnshareAlbumWithChannel("alb_susp", "u_susp", "c_susp").Code);
+            Assert.Equal("FORBIDDEN", _service.UpdateContributors("alb_susp", "u_susp", ["u_other"], "priv").Code);
+            Assert.Equal("FORBIDDEN", _service.DeleteAlbum("alb_susp", "u_susp").Code);
+
+            var persisted = _albums.GetById("alb_susp");
+            Assert.NotNull(persisted);
+            Assert.Equal("Original", persisted.Title);
+            Assert.Single(persisted.Media);
+        }
+
+        [Fact]
+        public async Task ImportChatAttachmentsToAlbumAsync_EncryptedChannel_DecryptsWithOwnersKeyAndReEncryptsIntoAlbumAndDeletesChatFiles()
+        {
+            var realCrypto = new CryptoService();
+            var fileService = new Spokes_Server.Core.Services.Storage.FileService(
+                _config,
+                new Mock<ILogger<Spokes_Server.Core.Services.Storage.FileService>>().Object,
+                realCrypto);
+            var companyProfiles = new CompanyProfileRepository(_persistence, _config);
+            var serverConfigs = new ServerConfigRepository(_persistence, _config);
+            var escrow = new ServerEscrowService(companyProfiles, serverConfigs, realCrypto);
+            var service = new AlbumService(_albums, _channels, realCrypto, escrow, _employees, fileService: fileService);
+
+            var (pubKey, privKey) = realCrypto.GenerateRsaKeyPair();
+
+            var owner = new Employee { Id = "u_enc_owner", PublicKey = pubKey, EncryptedPrivateKey = "enc-priv", IsActive = true };
+            _employees.Save(owner);
+
+            var plainChannelKey = realCrypto.GenerateAesKeyBase64();
+            var channel = new ChatChannel
+            {
+                Id = "c_secure_import",
+                Name = "Secure Channel",
+                ChannelType = ChatChannelType.General,
+                IsEncrypted = true,
+                EncryptedChannelKeys = new Dictionary<string, string>
+                {
+                    [owner.Id] = realCrypto.EncryptRsa(plainChannelKey, pubKey)
+                }
+            };
+            _channels.Save(channel);
+
+            var chatAttachments = new List<ChatAttachment>();
+            var originalPayloads = new List<byte[]>();
+
+            for (int i = 0; i < 4; i++)
+            {
+                var payload = System.Text.Encoding.UTF8.GetBytes($"encrypted-photo-payload-{i}-{Guid.NewGuid()}");
+                originalPayloads.Add(payload);
+
+                using var stream = new MemoryStream(payload);
+                var chatFilePath = await fileService.UploadStreamAsync("chat", channel.Id, stream, $"photo{i}.jpg", plainChannelKey);
+                var chatSafeName = Path.GetFileName(chatFilePath);
+
+                using var thumbStream = new MemoryStream(System.Text.Encoding.UTF8.GetBytes($"thumb-{i}"));
+                await fileService.UploadThumbnailAsync("chat", channel.Id, thumbStream, chatSafeName, plainChannelKey);
+
+                chatAttachments.Add(new ChatAttachment
+                {
+                    Id = $"att-{i}",
+                    FileName = $"photo{i}.jpg",
+                    FilePath = chatFilePath,
+                    ContentType = "image/jpeg",
+                    FileSizeBytes = payload.Length,
+                    HasServerThumbnail = true,
+                    ImageWidth = 800,
+                    ImageHeight = 600
+                });
+            }
+
+            var importResult = await service.ImportChatAttachmentsToAlbumAsync(
+                owner.Id,
+                channel.Id,
+                chatAttachments,
+                targetAlbumId: null,
+                newAlbumTitle: "Secure Trip Photos",
+                currentPrivateKey: privKey,
+                plainChannelKey: null,
+                deleteSourceFiles: true);
+
+            Assert.True(importResult.IsSuccess);
+            var album = importResult.Value!;
+            Assert.Equal("Secure Trip Photos", album.Title);
+            Assert.Equal(4, album.Media.Count);
+            Assert.Contains(channel.Id, album.SharedWithChannelIds);
+            Assert.True(album.EncryptedAlbumKeys.ContainsKey($"Channel_{channel.Id}"));
+            Assert.False(album.EncryptedAlbumKeys.ContainsKey("Escrow"));
+
+            var plainAlbumKey = service.GetPlainAlbumKey(album, owner.Id, privKey);
+            Assert.False(string.IsNullOrEmpty(plainAlbumKey));
+
+            for (int i = 0; i < 4; i++)
+            {
+                var media = album.Media[i];
+                Assert.StartsWith($"/spokesapi/files/albums/{album.Id}/", media.FilePath);
+                Assert.True(media.HasServerThumbnail);
+
+                var albumSafeName = Path.GetFileName(media.FilePath);
+                using var decryptedAlbumStream = fileService.OpenRead("albums", album.Id, albumSafeName, plainAlbumKey);
+                Assert.NotNull(decryptedAlbumStream);
+                using var ms = new MemoryStream();
+                await decryptedAlbumStream!.CopyToAsync(ms);
+                Assert.Equal(originalPayloads[i], ms.ToArray());
+
+                // Verify source chat file and thumbnail were deleted
+                var oldChatSafeName = Path.GetFileName(chatAttachments[i].FilePath);
+                Assert.False(fileService.FileExists("chat", channel.Id, oldChatSafeName));
+                Assert.False(fileService.FileExists("chat", channel.Id, Spokes_Server.Core.Services.Storage.FileService.GetThumbnailFileName(oldChatSafeName)));
+            }
+        }
+
+        [Fact]
+        public async Task ImportChatAttachmentsToAlbumAsync_EncryptedChannelWithLockedVault_ReturnsVaultLocked()
+        {
+            var realCrypto = new CryptoService();
+            var fileService = new Spokes_Server.Core.Services.Storage.FileService(
+                _config,
+                new Mock<ILogger<Spokes_Server.Core.Services.Storage.FileService>>().Object,
+                realCrypto);
+            var companyProfiles = new CompanyProfileRepository(_persistence, _config);
+            var serverConfigs = new ServerConfigRepository(_persistence, _config);
+            var escrow = new ServerEscrowService(companyProfiles, serverConfigs, realCrypto);
+            var service = new AlbumService(_albums, _channels, realCrypto, escrow, _employees, fileService: fileService);
+
+            _employees.Save(new Employee { Id = "u_locked", IsActive = true });
+            _channels.Save(new ChatChannel { Id = "c_locked", ChannelType = ChatChannelType.General, IsEncrypted = true });
+
+            var result = await service.ImportChatAttachmentsToAlbumAsync(
+                "u_locked",
+                "c_locked",
+                [new ChatAttachment { FileName = "a.jpg", FilePath = "/spokesapi/files/chat/c_locked/a.jpg", ContentType = "image/jpeg" }],
+                targetAlbumId: null,
+                newAlbumTitle: "Locked Album",
+                currentPrivateKey: null,
+                plainChannelKey: null);
+
+            Assert.False(result.IsSuccess);
+            Assert.Equal("VAULT_LOCKED", result.Code);
+        }
+
+        [Fact]
+        public void GetWritableAlbumsForChannel_FiltersByOwnerAndSharedContributorAlbums()
+        {
+            _employees.Save(new Employee { Id = "u_writer", PublicKey = "pub", IsActive = true });
+            _channels.Save(new ChatChannel { Id = "c_target", ChannelType = ChatChannelType.General });
+
+            var ownedAlbum = new Album
+            {
+                Id = "alb_owned",
+                Title = "Owned",
+                OwnerId = "u_writer",
+                IsEncrypted = true,
+                EncryptedAlbumKeys = new Dictionary<string, string> { ["u_writer"] = "rsa-enc-key" }
+            };
+            var contribSharedAlbum = new Album
+            {
+                Id = "alb_contrib_shared",
+                Title = "Contrib Shared",
+                OwnerId = "other",
+                ContributorUserIds = ["u_writer"],
+                SharedWithChannelIds = ["c_target"],
+                IsEncrypted = true,
+                EncryptedAlbumKeys = new Dictionary<string, string> { ["u_writer"] = "rsa-enc-key" }
+            };
+            var contribUnsharedAlbum = new Album
+            {
+                Id = "alb_contrib_unshared",
+                Title = "Contrib Unshared",
+                OwnerId = "other",
+                ContributorUserIds = ["u_writer"],
+                SharedWithChannelIds = ["c_other"],
+                IsEncrypted = true,
+                EncryptedAlbumKeys = new Dictionary<string, string> { ["u_writer"] = "rsa-enc-key" }
+            };
+
+            _albums.Save(ownedAlbum);
+            _albums.Save(contribSharedAlbum);
+            _albums.Save(contribUnsharedAlbum);
+
+            var writable = _service.GetWritableAlbumsForChannel("u_writer", "c_target", "priv");
+
+            Assert.Equal(2, writable.Count);
+            Assert.Contains(writable, a => a.Id == "alb_owned");
+            Assert.Contains(writable, a => a.Id == "alb_contrib_shared");
+            Assert.DoesNotContain(writable, a => a.Id == "alb_contrib_unshared");
         }
     }
 

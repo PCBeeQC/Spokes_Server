@@ -41,6 +41,7 @@ public class QuoteTests
         Assert.Equal(string.Empty, quote.ScopeOfWork);
         Assert.Equal(string.Empty, quote.MainImageBase64);
         Assert.Equal(string.Empty, quote.TermsAndConditions);
+        Assert.False(quote.TermsStartOnNewPage);
         Assert.False(quote.IsConfidential);
         Assert.False(quote.SignatureRequired);
         Assert.False(quote.ShowIntermediateSignature);
@@ -98,6 +99,7 @@ public class QuoteTests
         Assert.Equal(0, item.Hours);
         Assert.Equal(0, item.Rate);
         Assert.Equal(0, item.Total);
+        Assert.Equal(string.Empty, item.Note);
     }
 
     [Fact]
@@ -203,6 +205,7 @@ public class QuoteTests
             ScopeOfWork = "Full overhaul",
             MainImageBase64 = "base64data",
             TermsAndConditions = "Standard terms",
+            TermsStartOnNewPage = true,
             IsConfidential = true,
             SignatureRequired = true,
             ShowIntermediateSignature = true,
@@ -234,6 +237,7 @@ public class QuoteTests
         Assert.Equal("Full overhaul", quote.ScopeOfWork);
         Assert.Equal("base64data", quote.MainImageBase64);
         Assert.Equal("Standard terms", quote.TermsAndConditions);
+        Assert.True(quote.TermsStartOnNewPage);
         Assert.True(quote.IsConfidential);
         Assert.True(quote.SignatureRequired);
         Assert.True(quote.ShowIntermediateSignature);
@@ -313,7 +317,8 @@ public class QuoteTests
             SubTaskId = "ST-1",
             SubTaskName = "Design",
             Hours = 8.5m,
-            Rate = 125.0m
+            Rate = 125.0m,
+            Note = "Detailed plan"
         };
 
         Assert.Equal("QLI-001", item.Id);
@@ -321,6 +326,7 @@ public class QuoteTests
         Assert.Equal("Engineering", item.WorkTypeName);
         Assert.Equal("ST-1", item.SubTaskId);
         Assert.Equal("Design", item.SubTaskName);
+        Assert.Equal("Detailed plan", item.Note);
         Assert.Equal(8.5m, item.Hours);
         Assert.Equal(125.0m, item.Rate);
     }
@@ -574,6 +580,18 @@ public class QuoteTests
         var json = System.Text.Json.JsonSerializer.Serialize(quote);
         Assert.Contains("\"MaterialLineItems\"", json);
         Assert.DoesNotContain("\"LegacyItemRows\"", json);
+    }
+
+    [Theory]
+    [InlineData(120.0, "120")]
+    [InlineData(135.5, "135.5")]
+    [InlineData(120.75, "120.75")]
+    [InlineData(0.0, "0")]
+    public void QuoteEditor_NumberFormatting_DisplaysOnlyRelevantDigits(double value, string expected)
+    {
+        var decimalValue = (decimal)value;
+        var formatted = decimalValue.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
+        Assert.Equal(expected, formatted);
     }
 
     #endregion

@@ -320,7 +320,7 @@ public class FileServiceTests : IDisposable
         public void GetEmailAttachmentPhysicalPath_ValidatesAndRejectsPathTraversal()
         {
             var validPath = _service.GetEmailAttachmentPhysicalPath("emp1", "msg1", "att1.pdf");
-            Assert.Contains(Path.Combine("Employees", "emp1", "Email", "Attachments", "msg1", "att1.pdf"), validPath);
+            Assert.Contains(Path.Combine("EmailAccounts", "emp1", "Attachments", "msg1", "att1.pdf"), validPath);
 
             // Path traversal should throw ArgumentException or be sanitized
             Assert.Throws<ArgumentException>(() => _service.GetEmailAttachmentPhysicalPath("emp1", "..", "att1.pdf"));

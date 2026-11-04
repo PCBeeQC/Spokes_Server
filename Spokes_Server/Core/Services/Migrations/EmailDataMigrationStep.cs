@@ -12,7 +12,7 @@ using Spokes_Server.Core.Models.Communication;
 namespace Spokes_Server.Core.Services.Migrations;
 
 /// <summary>
-/// Migration step that migrates email folders, messages, and bodies to employee-centric storage.
+/// Migration step that migrates email folders, messages, and bodies to account-centric storage.
 /// Self-contained IMigrationStep implementation.
 /// </summary>
 public class EmailDataMigrationStep : IMigrationStep
@@ -22,7 +22,7 @@ public class EmailDataMigrationStep : IMigrationStep
     private readonly ILogger? _logger;
 
     public string MigrationKey => "20260101_EmailEmployeeCentric";
-    public string Description => "Migrates email folders, messages, and bodies to employee-centric storage";
+    public string Description => "Migrates email folders, messages, and bodies to account-centric storage";
     public int Order => 10;
 
     [ActivatorUtilitiesConstructor]
@@ -66,7 +66,6 @@ public class EmailDataMigrationStep : IMigrationStep
         var oldMessagesPath = Path.Combine(dataPath, "EmailMessages");
         var oldBodiesPath = Path.Combine(dataPath, "Emails");
 
-        // 1. Migrate Folders
         if (Directory.Exists(oldFoldersPath))
         {
             foreach (var file in Directory.GetFiles(oldFoldersPath, "*.json"))
@@ -75,9 +74,9 @@ public class EmailDataMigrationStep : IMigrationStep
                 {
                     var json = File.ReadAllText(file);
                     var item = JsonSerializer.Deserialize<EmailFolder>(json);
-                    if (item != null)
+                    if (item != null && !string.IsNullOrEmpty(item.AccountId))
                     {
-                        var newDir = Path.Combine(dataPath, "Employees", item.EmployeeId, "Email", "Folders");
+                        var newDir = Path.Combine(dataPath, "EmailAccounts", item.AccountId, "Folders");
                         Directory.CreateDirectory(newDir);
 
                         var newPath = Path.Combine(newDir, Path.GetFileName(file));
@@ -91,7 +90,6 @@ public class EmailDataMigrationStep : IMigrationStep
             }
         }
 
-        // 2. Migrate Messages & Bodies
         if (Directory.Exists(oldMessagesPath))
         {
             foreach (var file in Directory.GetFiles(oldMessagesPath, "*.json"))
@@ -100,20 +98,18 @@ public class EmailDataMigrationStep : IMigrationStep
                 {
                     var json = File.ReadAllText(file);
                     var item = JsonSerializer.Deserialize<EmailMessage>(json);
-                    if (item != null)
+                    if (item != null && !string.IsNullOrEmpty(item.AccountId))
                     {
-                        // Move Message JSON
-                        var newMsgDir = Path.Combine(dataPath, "Employees", item.EmployeeId, "Email", "Messages");
+                        var newMsgDir = Path.Combine(dataPath, "EmailAccounts", item.AccountId, "Messages");
                         Directory.CreateDirectory(newMsgDir);
 
                         var newMsgPath = Path.Combine(newMsgDir, Path.GetFileName(file));
                         if (!File.Exists(newMsgPath)) File.Move(file, newMsgPath);
 
-                        // Move Body HTML
                         var oldBodyFile = Path.Combine(oldBodiesPath, $"{item.Id}.html");
                         if (File.Exists(oldBodyFile))
                         {
-                            var newBodyDir = Path.Combine(dataPath, "Employees", item.EmployeeId, "Email", "Bodies");
+                            var newBodyDir = Path.Combine(dataPath, "EmailAccounts", item.AccountId, "Bodies");
                             Directory.CreateDirectory(newBodyDir);
 
                             var newBodyPath = Path.Combine(newBodyDir, $"{item.Id}.html");

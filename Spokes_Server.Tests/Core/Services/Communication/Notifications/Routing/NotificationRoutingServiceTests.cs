@@ -135,10 +135,10 @@ public class NotificationRoutingServiceTests : IDisposable
             var userId = "user-1";
             
             // Setup an unread email folder
-            var folder = new EmailFolder { Id = "fold-1", EmployeeId = userId, Path = "INBOX", UnreadCount = 1 };
+            var folder = new EmailFolder { Id = "fold-1", AccountId = userId, Path = "INBOX", UnreadCount = 1 };
             _emailFolders.Save(folder);
 
-            var email = new EmailMessage { Id = "email-1", EmployeeId = userId, FolderPath = "INBOX", IsRead = false };
+            var email = new EmailMessage { Id = "email-1", AccountId = userId, FolderPath = "INBOX", IsRead = false };
             _emailMessages.Save(email);
 
             // Setup an unread chat channel
@@ -167,6 +167,47 @@ public class NotificationRoutingServiceTests : IDisposable
             Assert.NotNull(employee);
             Assert.NotNull(msg);
             Assert.Equal(2, totalCount); // 1 email + 1 chat
+        }
+
+        [Fact]
+        public void GetTotalBadgeCount_WhenLastEmailVisitedAtSet_CountsOnlyNewerUnreadEmails()
+        {
+            var userId = "user-visit-routing";
+            var visitTime = DateTimeOffset.UtcNow;
+
+            var folder = new EmailFolder { Id = "fold-visit-r", AccountId = userId, Path = "INBOX", IsInbox = true, UnreadCount = 2 };
+            _emailFolders.Save(folder);
+
+            _emailMessages.Save(new EmailMessage
+            {
+                Id = "email-old-r",
+                AccountId = userId,
+                FolderPath = "INBOX",
+                UniqueId = 1,
+                IsRead = false,
+                Date = visitTime.AddHours(-1)
+            });
+            _emailMessages.Save(new EmailMessage
+            {
+                Id = "email-new-r",
+                AccountId = userId,
+                FolderPath = "INBOX",
+                UniqueId = 2,
+                IsRead = false,
+                Date = visitTime.AddMinutes(5)
+            });
+
+            _employees.Save(new Employee
+            {
+                Id = userId,
+                FirstName = "Test",
+                LastName = "User",
+                IsActive = true,
+                LastEmailVisitedAt = visitTime
+            });
+
+            var totalCount = _service.GetTotalBadgeCount(userId);
+            Assert.Equal(1, totalCount);
         }
 
         [Fact]
@@ -290,9 +331,9 @@ public class NotificationRoutingServiceTests : IDisposable
         public void GetBadgeBreakdown_ReturnsCorrectBreakdown()
         {
             var userId = "user-1";
-            var folder = new EmailFolder { Id = "fold-1", EmployeeId = userId, Path = "INBOX", UnreadCount = 1 };
+            var folder = new EmailFolder { Id = "fold-1", AccountId = userId, Path = "INBOX", UnreadCount = 1 };
             _emailFolders.Save(folder);
-            var email = new EmailMessage { Id = "email-1", EmployeeId = userId, FolderPath = "INBOX", IsRead = false };
+            var email = new EmailMessage { Id = "email-1", AccountId = userId, FolderPath = "INBOX", IsRead = false };
             _emailMessages.Save(email);
             
             var syncResult = _service.GetBadgeBreakdown(userId);
@@ -309,7 +350,7 @@ public class NotificationRoutingServiceTests : IDisposable
         {
             var employee = new Employee { Id = "user-1", PushNotificationsEnabled = true, EmailNotificationsEnabled = true };
             _employees.Save(employee);
-            var email = new EmailMessage { Id = "email-1", EmployeeId = "user-1", FromName = "Test", Subject = "Subj", FolderPath = "INBOX" };
+            var email = new EmailMessage { Id = "email-1", AccountId = "user-1", FromName = "Test", Subject = "Subj", FolderPath = "INBOX" };
             
             _mockPushDecision.Setup(p => p.DetermineNotificationTier("user-1")).Returns(PresenceTier.All);
             
@@ -321,7 +362,27 @@ public class NotificationRoutingServiceTests : IDisposable
                 r.Body == "Subj" &&
                 r.Tier == PresenceTier.All &&
                 r.Tag == "email-user-1" &&
-                r.Category == "email"
+                r.Category == "email" &&
+                r.Sound == "spokesnotif1.wav"
+            )), Times.Once);
+        }
+
+        [Fact]
+        public async Task RouteEmailNotificationAsync_UsesCustomNotificationSound_WhenConfigured()
+        {
+            var employee = new Employee { Id = "user-sound-email", PushNotificationsEnabled = true, EmailNotificationsEnabled = true };
+            employee.SetNotificationSound("email", "mixkit_happy_bell_alert_601");
+            _employees.Save(employee);
+            var email = new EmailMessage { Id = "email-custom", AccountId = "user-sound-email", FromName = "Test", Subject = "Subj", FolderPath = "INBOX" };
+
+            _mockPushDecision.Setup(p => p.DetermineNotificationTier("user-sound-email")).Returns(PresenceTier.All);
+
+            await _service.RouteEmailNotificationAsync(email);
+
+            _mockWebPush.Verify(w => w.SendNotificationAsync(It.Is<PushNotificationRequest>(r =>
+                r.UserId == "user-sound-email" &&
+                r.Category == "email" &&
+                r.Sound == "mixkit_happy_bell_alert_601.wav"
             )), Times.Once);
         }
 
@@ -684,6 +745,182 @@ public class NotificationRoutingServiceTests : IDisposable
                 r.IsEncrypted == true &&
                 r.MaskedBody == "🔒 Secure Message"
             )), Times.Once);
+        }
+
+        [Fact]
+        public void GetBadgeBreakdown_PopulatesUnreadByThreadAndReadWatermarksUtc_ForWakeReconciliation()
+        {
+            var userId = "user-wake-1";
+            var emailVisit = new DateTimeOffset(2026, 10, 28, 12, 0, 0, TimeSpan.Zero);
+            var chatReadTime = new DateTime(2026, 10, 28, 15, 0, 0, DateTimeKind.Utc);
+
+            var reportedMessages = new ReportedMessageRepository(_persistence, _config);
+            reportedMessages.Save(new ReportedMessage { Id = "rep-open", Status = ReportedMessageStatus.Open, Reason = "Spam" });
+            reportedMessages.Save(new ReportedMessage { Id = "rep-resolved", Status = ReportedMessageStatus.Resolved, Reason = "Done" });
+
+            _employees.Save(new Employee
+            {
+                Id = userId,
+                FirstName = "Mod",
+                LastName = "User",
+                IsActive = true,
+                IsAdmin = true,
+                ModerationNotificationsEnabled = true,
+                LastEmailVisitedAt = emailVisit
+            });
+
+            var folder = new EmailFolder { Id = "fold-wake", AccountId = userId, Path = "INBOX", IsInbox = true, UnreadCount = 2 };
+            _emailFolders.Save(folder);
+            _emailMessages.Save(new EmailMessage { Id = "em-read-before-visit", AccountId = userId, FolderPath = "INBOX", UniqueId = 1, IsRead = false, Date = emailVisit.AddHours(-1) });
+            _emailMessages.Save(new EmailMessage { Id = "em-after-visit", AccountId = userId, FolderPath = "INBOX", UniqueId = 2, IsRead = false, Date = emailVisit.AddHours(1) });
+
+            _chatChannels.Save(new ChatChannel { Id = "chan-read", Name = "ReadChan", ChannelType = ChatChannelType.General });
+            _chatChannels.Save(new ChatChannel { Id = "chan-unread", Name = "UnreadChan", ChannelType = ChatChannelType.General });
+
+            _readStates.Save(new ChatReadState { Id = ChatReadState.CreateId(userId, "chan-read"), UserId = userId, ChannelId = "chan-read", LastReadAt = chatReadTime, NotificationLevel = "All" });
+            _readStates.Save(new ChatReadState { Id = ChatReadState.CreateId(userId, "chan-unread"), UserId = userId, ChannelId = "chan-unread", LastReadAt = chatReadTime, NotificationLevel = "All" });
+
+            _chatMessages.Save(new ChatMessage { Id = "m-old", ChannelId = "chan-read", SenderId = "u2", Content = "old", SentAt = chatReadTime.AddMinutes(-5) });
+            _chatMessages.Save(new ChatMessage { Id = "m-new-1", ChannelId = "chan-unread", SenderId = "u2", Content = "new1", SentAt = chatReadTime.AddMinutes(5) });
+            _chatMessages.Save(new ChatMessage { Id = "m-new-2", ChannelId = "chan-unread", SenderId = "u2", Content = "new2", SentAt = chatReadTime.AddMinutes(10) });
+
+            var mockChatAccess = new Mock<IChatChannelAccessService>();
+            mockChatAccess.Setup(c => c.GetChannelsForUser(userId)).Returns(_chatChannels.GetAll().ToList());
+
+            var commContext = new Mock<CommunicationContext>();
+            commContext.Setup(c => c.ChatChannels).Returns(_chatChannels);
+            commContext.Setup(c => c.ChatMessages).Returns(_chatMessages);
+            commContext.Setup(c => c.ChatReadStates).Returns(_readStates);
+            commContext.Setup(c => c.EmailFolders).Returns(_emailFolders);
+            commContext.Setup(c => c.EmailMessages).Returns(_emailMessages);
+            commContext.Setup(c => c.ReportedMessages).Returns(reportedMessages);
+
+            var hrContext = new Mock<HrContext>();
+            hrContext.Setup(h => h.Employees).Returns(_employees);
+            hrContext.Setup(h => h.Teams).Returns(_teams);
+
+            var projectsContext = new Mock<ProjectsContext>();
+            projectsContext.Setup(p => p.Projects).Returns(_projects);
+
+            var coreContext = new Mock<CoreContext>();
+            coreContext.Setup(c => c.CompanyProfile).Returns(_companyProfile);
+
+            var svc = new NotificationRoutingService(
+                commContext.Object,
+                hrContext.Object,
+                projectsContext.Object,
+                coreContext.Object,
+                _mockWebPush.Object,
+                _queue,
+                _keystore,
+                _mockCrypto.Object,
+                _mockDataProtection.Object,
+                mockChatAccess.Object);
+
+            var result = svc.GetBadgeBreakdown(userId);
+
+            // Backwards-compatible email + chat total (1 unseen email + 2 unread chat messages)
+            Assert.Equal(3, result.Count);
+            Assert.Equal(1, result.UnreadByThread[$"email-{userId}"]);
+            Assert.Equal(2, result.UnreadByThread["chan-unread"]);
+            Assert.False(result.UnreadByThread.ContainsKey("chan-read"));
+            Assert.Equal(1, result.UnreadByThread["mod-rep-open"]);
+            Assert.False(result.UnreadByThread.ContainsKey("mod-rep-resolved"));
+
+            Assert.Equal(emailVisit.UtcDateTime, result.ReadWatermarksUtc[$"email-{userId}"]);
+            Assert.Equal(chatReadTime, result.ReadWatermarksUtc["chan-read"]);
+            Assert.Equal(chatReadTime, result.ReadWatermarksUtc["chan-unread"]);
+        }
+
+        [Fact]
+        public async Task RouteChatNotificationAsync_WhenCallInviteAndTierDesktopOnly_PromotesToTierAllImmediately()
+        {
+            var senderId = "user-sender";
+            var recipientId = "user-recipient";
+            var channelId = "chan-call-1";
+
+            var sender = new Employee { Id = senderId, FirstName = "Alice", LastName = "Smith", IsActive = true };
+            var recipient = new Employee { Id = recipientId, FirstName = "Bob", LastName = "Jones", IsActive = true, ChatNotificationsEnabled = true, PushNotificationsEnabled = true };
+            _employees.Save(sender);
+            _employees.Save(recipient);
+
+            var channel = new ChatChannel { Id = channelId, Name = "General", ChannelType = ChatChannelType.Direct };
+            _chatChannels.Save(channel);
+
+            var callMessage = new ChatMessage
+            {
+                Id = "msg-call-1",
+                ChannelId = channelId,
+                SenderId = senderId,
+                MessageType = ChatMessageType.CallInvite,
+                CallStatus = CallStatus.Active,
+                Content = "Alice Smith started a voice call",
+                SentAt = DateTime.UtcNow
+            };
+
+            _mockPushDecision.Setup(p => p.DetermineNotificationTier(recipientId)).Returns(PresenceTier.DesktopOnly);
+            _readStates.SetNotificationLevel(recipientId, channelId, "All");
+
+            await _service.RouteChatNotificationAsync(callMessage, channel, sender);
+
+            _mockWebPush.Verify(w => w.SendNotificationAsync(It.Is<PushNotificationRequest>(r =>
+                r.UserId == recipientId &&
+                r.Category == "call" &&
+                r.Tier == PresenceTier.All &&
+                r.ExcludedSessionIds == null
+            )), Times.Once);
+        }
+
+        [Fact]
+        public async Task RouteChatNotificationAsync_WhenCallInviteAndTierNone_SendsPushToNonFocusedDevicesExcludingFocusedSessionIds()
+        {
+            var senderId = "user-sender";
+            var recipientId = "user-recipient";
+            var channelId = "chan-call-2";
+
+            var sender = new Employee { Id = senderId, FirstName = "Alice", LastName = "Smith", IsActive = true };
+            var recipient = new Employee { Id = recipientId, FirstName = "Bob", LastName = "Jones", IsActive = true, ChatNotificationsEnabled = true, PushNotificationsEnabled = true };
+            _employees.Save(sender);
+            _employees.Save(recipient);
+
+            var channel = new ChatChannel { Id = channelId, Name = "General", ChannelType = ChatChannelType.Direct };
+            _chatChannels.Save(channel);
+
+            var callMessage = new ChatMessage
+            {
+                Id = "msg-call-2",
+                ChannelId = channelId,
+                SenderId = senderId,
+                MessageType = ChatMessageType.CallInvite,
+                CallStatus = CallStatus.Active,
+                Content = "Alice Smith started a voice call",
+                SentAt = DateTime.UtcNow
+            };
+
+            _mockPushDecision.Setup(p => p.DetermineNotificationTier(recipientId)).Returns(PresenceTier.None);
+            _mockPushDecision.Setup(p => p.GetFocusedSessionIds(recipientId)).Returns(new[] { "session-android-focused" });
+            _readStates.SetNotificationLevel(recipientId, channelId, "All");
+
+            await _service.RouteChatNotificationAsync(callMessage, channel, sender);
+
+            _mockWebPush.Verify(w => w.SendNotificationAsync(It.Is<PushNotificationRequest>(r =>
+                r.UserId == recipientId &&
+                r.Category == "call" &&
+                r.Tier == PresenceTier.All &&
+                r.ExcludedSessionIds != null &&
+                r.ExcludedSessionIds.Contains("session-android-focused")
+            )), Times.Once);
+        }
+
+        [Fact]
+        public async Task ClearChannelNotificationsAsync_SendsCallScopedThreadIdToAllChannelUsers()
+        {
+            var channelId = "chan-voice-99";
+            await _service.ClearChannelNotificationsAsync(channelId);
+
+            _mockWebPush.Verify(w => w.SendClearNotificationAsync("user-recipient", $"call_{channelId}"), Times.Once);
+            _mockWebPush.Verify(w => w.SendClearNotificationAsync("user-1", $"call_{channelId}"), Times.Once);
+            _mockWebPush.Verify(w => w.SendClearNotificationAsync("user-sender", $"call_{channelId}"), Times.Once);
         }
     }
 

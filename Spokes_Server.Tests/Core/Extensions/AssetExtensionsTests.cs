@@ -93,4 +93,23 @@ public class AssetExtensionsTests
         // Assert
         Assert.Equal($"scripts/number.js?v={AssetExtensions.AppVersion}", result);
     }
+
+    [Theory]
+    [InlineData("css/app.css")]
+    [InlineData("css/chat.css")]
+    [InlineData("css/roboto.css")]
+    public void StaticWebAssets_EndpointsJson_HasFingerprintedLowercaseCssRoutes(string assetPath)
+    {
+        var baseDir = AppContext.BaseDirectory;
+        var endpointsFiles = System.IO.Directory.GetFiles(baseDir, "*staticwebassets*.endpoints.json");
+        if (endpointsFiles.Length == 0)
+        {
+            var projectDir = System.IO.Path.GetFullPath(System.IO.Path.Combine(baseDir, "..", "..", "..", "..", "Spokes_Server"));
+            endpointsFiles = System.IO.Directory.GetFiles(projectDir, "*staticwebassets*.endpoints.json", System.IO.SearchOption.AllDirectories);
+        }
+
+        Assert.NotEmpty(endpointsFiles);
+        var json = System.IO.File.ReadAllText(endpointsFiles[0]);
+        Assert.Contains($"\"Value\":\"{assetPath}\"", json);
+    }
 }

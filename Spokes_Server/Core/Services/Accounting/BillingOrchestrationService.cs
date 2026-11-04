@@ -148,9 +148,9 @@ public class BillingOrchestrationService
         allInvoices.AddRange(groupInvoices);
         allInvoices = allInvoices.DistinctBy(i => i.Id).ToList();
 
-        // Find all paid prepayments
+        // Find all paid prepayments (excluding the current invoice itself)
         var paidPrepayments = allInvoices
-            .Where(i => i.Status == InvoiceStatus.Paid)
+            .Where(i => i.Status == InvoiceStatus.Paid && i.Id != invoice.Id)
             .SelectMany(i => i.LineItems.Where(l => l.IsPrepayment).Select(l => new { Invoice = i, Line = l }))
             .ToList();
 
@@ -405,6 +405,34 @@ public class BillingOrchestrationService
     {
         var invoice = request.Invoice;
 
+        var invoiceProjects = new List<Project>();
+        if (!string.IsNullOrEmpty(invoice.ProjectGroupId))
+        {
+            var group = _projects.ProjectGroups.GetById(invoice.ProjectGroupId);
+            if (group != null)
+            {
+                foreach (var pid in group.ProjectIds)
+                {
+                    var p = _projects.Projects.GetById(pid);
+                    if (p != null && !invoiceProjects.Any(x => x.Id == p.Id))
+                    {
+                        invoiceProjects.Add(p);
+                    }
+                }
+            }
+        }
+        if (!string.IsNullOrEmpty(invoice.ProjectId))
+        {
+            var p = _projects.Projects.GetById(invoice.ProjectId);
+            if (p != null && !invoiceProjects.Any(x => x.Id == p.Id))
+            {
+                invoiceProjects.Add(p);
+            }
+        }
+
+        var availableCreditsById = CalculateAvailablePrepaymentCredits(invoiceProjects, invoice)
+            .ToDictionary(c => c.PrepaymentLineId, StringComparer.OrdinalIgnoreCase);
+
         // Clear all Billed ID lists for this invoice so we can rebuild them
         invoice.BilledTimeEntryIds.Clear();
         invoice.BilledPoItemIds.Clear();
@@ -522,7 +550,8 @@ public class BillingOrchestrationService
             invoice.LineItems.Add(new InvoiceLine
             {
                 Type = "Labor",
-                Description = TimesheetSearchHelper.FormatTaskAndSubTask(l.WorkTypeName, l.SubTaskName, ": "),
+                Description = TimesheetSearchHelper.FormatTaskAndSubTask(l.WorkTypeName, l.SubTaskName, ": ", l.Note),
+                Note = l.Note,
                 WorkTypeId = l.WorkTypeId,
                 SubTaskId = l.SubTaskId,
                 Quantity = l.Hours,
@@ -565,14 +594,27 @@ public class BillingOrchestrationService
         invoice.LineItems.AddRange(request.CustomMaterialLines);
         invoice.LineItems.AddRange(request.GeneralLines);
 
-        // 7. Apply Specific Credits
+        // 7. Apply Specific Credits (clamped to remaining balance and positive invoice subtotal)
+        decimal remainingPositiveSubtotal = Math.Max(0m, invoice.LineItems.Where(l => !l.IsCreditUsed).Sum(l => l.Total));
         foreach (var credit in request.AppliedCredits.Where(c => c.AmountToApply > 0))
         {
+            if (remainingPositiveSubtotal <= 0m) break;
+            if (!availableCreditsById.TryGetValue(credit.PrepaymentLineId, out var availableCredit) || availableCredit.RemainingBalance <= 0m)
+            {
+                continue;
+            }
+
+            decimal clampedAmount = Math.Min(credit.AmountToApply, Math.Min(availableCredit.RemainingBalance, remainingPositiveSubtotal));
+            if (clampedAmount <= 0m) continue;
+
+            availableCredit.RemainingBalance -= clampedAmount;
+            remainingPositiveSubtotal -= clampedAmount;
+
             invoice.LineItems.Add(new InvoiceLine
             {
                 Description = $"Credit Applied from {credit.InvoiceNumber}: {credit.Description}",
                 Quantity = 1,
-                UnitPrice = -credit.AmountToApply,
+                UnitPrice = -clampedAmount,
                 IsCreditUsed = true,
                 Type = "General",
                 SourceId = credit.PrepaymentLineId,

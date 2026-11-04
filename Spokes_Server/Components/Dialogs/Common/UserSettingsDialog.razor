@@ -22,6 +22,7 @@
 @inject IConfiguration Config
 @inject LicenseValidationService LicenseValidationService
 @inject ISoundService SoundService
+@inject Spokes_Server.Core.Services.Security.FileTokenService FileTokenService
 @inject ILogger<UserSettingsDialog> Logger
 
 <MudDialog>
@@ -159,7 +160,7 @@
                                 <div class="d-flex align-center justify-space-between py-2">
                                     <div>
                                         <MudText Typo="Typo.body2" Style="font-weight: 500;">@Loc["Notification Sounds"]</MudText>
-                                        <MudText Typo="Typo.caption" Color="Color.Secondary" Style="line-height: 1.2;">@Loc["Customize notification sounds for chats, calls, and calendar alerts."]</MudText>
+                                        <MudText Typo="Typo.caption" Color="Color.Secondary" Style="line-height: 1.2;">@(IsFriendEdition ? Loc["Customize notification sounds for chats, calls, and calendar alerts."] : BizLoc["Customize notification sounds for chats, calls, calendar alerts, and emails."])</MudText>
                                     </div>
                                     <MudButton Class="ml-2 flex-shrink-0" Variant="Variant.Outlined" Color="Color.Primary" OnClick="OpenNotificationSoundsDialog">@Loc["Manage"]</MudButton>
                                 </div>
@@ -800,7 +801,7 @@
                 {
                     var hasCookie = hc.GetBoolean();
                     var currentSession = Db.DeviceSessions.GetById(_currentSessionId);
-                    if (currentSession != null && currentSession.HasVaultCookie != hasCookie)
+                    if (!IsReadOnlyOrRestricted && currentSession != null && currentSession.EmployeeId == _currentUser!.Id && currentSession.HasVaultCookie != hasCookie)
                     {
                         currentSession.HasVaultCookie = hasCookie;
                         Db.DeviceSessions.Save(currentSession);
@@ -812,13 +813,15 @@
         }
     }
 
+    private bool IsReadOnlyOrRestricted => _currentUser == null || !_currentUser.IsActive || _currentUser.IsBanned || _currentUser.IsSuspended;
+
     private async Task OnLanguageChanged(string newCulture)
     {
         _selectedLanguage = newCulture;
-        if (_currentUser != null)
+        if (!IsReadOnlyOrRestricted && _currentUser != null)
         {
             var freshUser = Db.Employees.GetById(_currentUser.Id);
-            if (freshUser != null)
+            if (freshUser is { IsActive: true, IsBanned: false, IsSuspended: false })
             {
                 freshUser.PreferredLanguage = newCulture;
                 Db.Employees.Save(freshUser);
@@ -845,7 +848,6 @@
                 DeviceInfoText = s.DeviceInfo,
                 LastSeenAt = s.LastSeenAt,
                 IsEnabled = s.HasPush && s.PushEnabled,
-                IsIdleDetectionEnabled = s.IsCapacitorApp ? false : s.IsIdleDetectionEnabled,
                 HasPush = s.HasPush,
                 PushSubscriptionType = s.PushSubscriptionType ?? "",
                 Endpoint = s.PushEndpoint ?? "",
@@ -888,17 +890,24 @@
 
     private async Task RevokeSession(string sessionId)
     {
+        if (_currentUser == null) return;
         var session = Db.DeviceSessions.GetById(sessionId);
-        if (session != null)
+        if (session != null && session.EmployeeId == _currentUser.Id)
         {
             session.RevokedAt = DateTime.UtcNow;
+            session.HasVaultCookie = false;
             // Push fields live on the session — clear them on revocation
             if (session.HasPush)
             {
-                session.PushEndpoint = null;
-                session.PushEnabled = false;
+                Db.DeviceSessions.ClearPushFields(session);
             }
-            Db.DeviceSessions.Save(session);
+            else
+            {
+                Db.DeviceSessions.Save(session);
+            }
+
+            FileTokenService.InvalidateUserTokens(session.EmployeeId);
+            SessionService.EvictGlobalKeystoreIfNoUnlockedSessions(session.EmployeeId);
 
             if (sessionId == _currentSessionId)
             {
@@ -979,10 +988,10 @@
 
     private async Task SavePreferences()
     {
-        if (_currentUser == null) return;
+        if (IsReadOnlyOrRestricted || _currentUser == null) return;
 
         var fresh = Db.Employees.GetById(_currentUser.Id);
-        if (fresh == null) return;
+        if (fresh is not { IsActive: true, IsBanned: false, IsSuspended: false }) return;
 
         fresh.PushNotificationsEnabled = _pushEnabled;
         fresh.ChatNotificationsEnabled = _chatEnabled;
@@ -1048,7 +1057,7 @@
 
     private async Task SubscribeDevice()
     {
-        if (IsLoading) return;
+        if (IsLoading || IsReadOnlyOrRestricted) return;
         IsLoading = true;
         _debugLogs.Clear();
         AddSubscriptionLog("Starting subscription process...");
@@ -1121,7 +1130,7 @@
             // 5. Send to server with device info
             AddSubscriptionLog("Sending subscription to server...");
             var result = await JS.InvokeAsync<bool>("pushNotifications.sendSubscriptionToServer",
-                subscription, _newDeviceType, _newDeviceName, true);
+                subscription, _newDeviceType, _newDeviceName);
 
             if (result)
             {
@@ -1172,7 +1181,7 @@
 
     private async Task UnsubscribeDevice()
     {
-        if (IsLoading) return;
+        if (IsLoading || IsReadOnlyOrRestricted) return;
         IsLoading = true;
         StateHasChanged();
 
@@ -1217,6 +1226,7 @@
 
     private void SaveDeviceName(string deviceId)
     {
+        if (IsReadOnlyOrRestricted || _currentUser == null) return;
         try
         {
             var device = _devices.FirstOrDefault(d => d.Id == deviceId);
@@ -1224,7 +1234,7 @@
 
             // Update the DeviceSession directly (push fields and session are now unified)
             var session = Db.DeviceSessions.GetById(deviceId);
-            if (session != null)
+            if (session != null && session.EmployeeId == _currentUser.Id)
             {
                 session.DeviceName = _editingDeviceName;
                 session.DeviceInfo = _editingDeviceName;
@@ -1246,6 +1256,7 @@
 
     private async Task ToggleDeviceEnabled(string deviceId, bool enabled)
     {
+        if (IsReadOnlyOrRestricted) return;
         try
         {
             var enabledStr = enabled ? "true" : "false";
@@ -1277,6 +1288,7 @@
 
     private async Task DeleteDevice(string sessionId)
     {
+        if (IsReadOnlyOrRestricted) return;
         try
         {
             // Clear push fields from the DeviceSession (via API for auth)
@@ -1321,6 +1333,7 @@
 
     private async Task ConfirmDeleteAccount()
     {
+        if (IsReadOnlyOrRestricted) return;
         bool? result = await DialogService.ShowMessageBoxAsync(
             Loc["Delete Account"].Value,
             Loc["Are you absolutely sure? This will permanently delete your account and all associated data from this server. This action cannot be undone."].Value,
@@ -1377,6 +1390,7 @@
 
     private async Task TestDevice(string deviceId)
     {
+        if (IsReadOnlyOrRestricted) return;
         _isTesting = true;
         AddDebugLog($"Starting test push for device {deviceId}...");
         
@@ -1473,7 +1487,6 @@
         public string DeviceType { get; set; } = Spokes_Server.Core.Models.Core.DeviceType.Desktop;
         public string DeviceName { get; set; } = "";
         public bool IsEnabled { get; set; } = true;
-        public bool IsIdleDetectionEnabled { get; set; } = true;
         public bool HasPush { get; set; }
         public string PushSubscriptionType { get; set; } = "";
         public string Endpoint { get; set; } = "";
@@ -1484,6 +1497,7 @@
 
     private async Task OpenSecureChatSettings()
     {
+        if (IsReadOnlyOrRestricted) return;
         var parameters = new DialogParameters<SecureChatSettingsDialog> { { x => x.Employee, _currentUser } };
         var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Small, FullWidth = true };
         var dialog = await DialogService.ShowAsync<SecureChatSettingsDialog>(Loc["Secure Chat Settings"].Value, parameters, options);
@@ -1498,6 +1512,7 @@
 
     private async Task OpenNotificationSoundsDialog()
     {
+        if (IsReadOnlyOrRestricted) return;
         var parameters = new DialogParameters<NotificationSoundsDialog> { { x => x.Employee, _currentUser } };
         var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Small, FullWidth = true };
         var dialog = await DialogService.ShowAsync<NotificationSoundsDialog>(Loc["Notification Sounds"].Value, parameters, options);

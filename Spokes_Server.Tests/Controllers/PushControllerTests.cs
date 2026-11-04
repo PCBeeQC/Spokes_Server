@@ -415,31 +415,7 @@ public class PushControllerTests : TestDataTestBase
         var reloaded = _sessionRepo.GetById("sess_defaults");
         Assert.Equal(PushSubscriptionType.WebPush, reloaded?.PushSubscriptionType);
         Assert.Equal(DeviceType.Desktop, reloaded?.DeviceType);
-        Assert.False(reloaded?.IsIdleDetectionEnabled); // request.DeviceType was null, so (request.DeviceType == "Desktop") is false
         Assert.Equal("Custom Name", reloaded?.DeviceName);
-    }
-
-    [Fact]
-    public void Subscribe_EnablesIdleDetection_WhenDeviceTypeIsDesktop()
-    {
-        _empRepo.Save(new Employee { Id = "emp1" });
-        _openIdRepo.Save(new OpenIdAccount { Sub = "sub1", LinkedEmployeeId = "emp1" });
-        var session = new DeviceSession { Id = "sess_desktop", EmployeeId = "emp1" };
-        _sessionRepo.Save(session);
-        SetUserWithSession("sub1", "sess_desktop");
-
-        var req = new SubscribeRequest
-        {
-            Endpoint = "https://endpoint.desktop",
-            P256dh = "dh",
-            Auth = "auth",
-            DeviceType = DeviceType.Desktop
-        };
-        var result = _controller.Subscribe(req);
-        Assert.IsType<OkObjectResult>(result);
-
-        var reloaded = _sessionRepo.GetById("sess_desktop");
-        Assert.True(reloaded?.IsIdleDetectionEnabled);
     }
 
     [Fact]
@@ -467,11 +443,10 @@ public class PushControllerTests : TestDataTestBase
         var reloaded = _sessionRepo.GetById("session_native");
         Assert.True(reloaded?.IsCapacitor);
         Assert.Equal(DeviceType.Mobile, reloaded?.DeviceType);
-        Assert.False(reloaded?.IsIdleDetectionEnabled);
     }
 
     [Fact]
-    public void Subscribe_WhenIsCapacitorTrue_ForcesMobileAndDisablesIdleDetection()
+    public void Subscribe_WhenIsCapacitorTrue_ForcesMobileDeviceType()
     {
         _empRepo.Save(new Employee { Id = "emp1" });
         _openIdRepo.Save(new OpenIdAccount { Sub = "sub1", LinkedEmployeeId = "emp1" });
@@ -485,8 +460,7 @@ public class PushControllerTests : TestDataTestBase
             P256dh = "dh",
             Auth = "auth",
             DeviceType = DeviceType.Desktop,
-            IsCapacitor = true,
-            IsIdleDetectionEnabled = true
+            IsCapacitor = true
         };
         var result = _controller.Subscribe(req);
         Assert.IsType<OkObjectResult>(result);
@@ -494,7 +468,6 @@ public class PushControllerTests : TestDataTestBase
         var reloaded = _sessionRepo.GetById("sess_cap");
         Assert.True(reloaded?.IsCapacitor);
         Assert.Equal(DeviceType.Mobile, reloaded?.DeviceType);
-        Assert.False(reloaded?.IsIdleDetectionEnabled);
     }
 
     // ==========================================
@@ -693,15 +666,14 @@ public class PushControllerTests : TestDataTestBase
     {
         _empRepo.Save(new Employee { Id = "emp1" });
         _openIdRepo.Save(new OpenIdAccount { Sub = "sub1", LinkedEmployeeId = "emp1" });
-        _sessionRepo.Save(new DeviceSession { Id = "sess_upd", EmployeeId = "emp1", DeviceName = "OldName", DeviceType = DeviceType.Desktop, PushEnabled = false, IsIdleDetectionEnabled = false });
+        _sessionRepo.Save(new DeviceSession { Id = "sess_upd", EmployeeId = "emp1", DeviceName = "OldName", DeviceType = DeviceType.Desktop, PushEnabled = false });
         SetUser("sub1");
 
         var req = new UpdateDeviceRequest
         {
             DeviceName = "NewName",
             DeviceType = DeviceType.Mobile,
-            IsEnabled = true,
-            IsIdleDetectionEnabled = true
+            IsEnabled = true
         };
         var result = _controller.UpdateDevice("sess_upd", req);
         var ok = Assert.IsType<OkObjectResult>(result);
@@ -711,36 +683,6 @@ public class PushControllerTests : TestDataTestBase
         Assert.Equal("NewName", updated?.DeviceName);
         Assert.Equal(DeviceType.Mobile, updated?.DeviceType);
         Assert.True(updated?.PushEnabled);
-        Assert.True(updated?.IsIdleDetectionEnabled);
-    }
-
-    [Fact]
-    public void UpdateDevice_WhenSessionIsCapacitor_SuppressesIdleDetection()
-    {
-        _empRepo.Save(new Employee { Id = "emp1" });
-        _openIdRepo.Save(new OpenIdAccount { Sub = "sub1", LinkedEmployeeId = "emp1" });
-        _sessionRepo.Save(new DeviceSession
-        {
-            Id = "sess_cap_upd",
-            EmployeeId = "emp1",
-            DeviceName = "Cap Phone",
-            DeviceType = DeviceType.Mobile,
-            IsCapacitor = true,
-            PushEnabled = true,
-            IsIdleDetectionEnabled = false
-        });
-        SetUser("sub1");
-
-        var req = new UpdateDeviceRequest
-        {
-            IsIdleDetectionEnabled = true
-        };
-        var result = _controller.UpdateDevice("sess_cap_upd", req);
-        var ok = Assert.IsType<OkObjectResult>(result);
-        Assert.Contains("Device updated", ok.Value?.ToString());
-
-        var updated = _sessionRepo.GetById("sess_cap_upd");
-        Assert.False(updated?.IsIdleDetectionEnabled);
     }
 
     // ==========================================
@@ -1215,7 +1157,7 @@ public class PushControllerTests : TestDataTestBase
     }
 
     [Fact]
-    public void Subscribe_DesktopNativeRelay_PreservesDesktopDeviceType_AndIdleDetection()
+    public void Subscribe_DesktopNativeRelay_PreservesDesktopDeviceType()
     {
         _empRepo.Save(new Employee { Id = "emp_desk" });
         _openIdRepo.Save(new OpenIdAccount { Sub = "sub_desk", LinkedEmployeeId = "emp_desk" });
@@ -1225,7 +1167,6 @@ public class PushControllerTests : TestDataTestBase
             EmployeeId = "emp_desk",
             DeviceId = "dev_desk",
             DeviceType = DeviceType.Desktop,
-            IsIdleDetectionEnabled = true,
             IsCapacitor = false
         };
         _sessionRepo.Save(session);
@@ -1272,7 +1213,6 @@ public class PushControllerTests : TestDataTestBase
         Assert.Equal(PushSubscriptionType.NativeRelay, updated.PushSubscriptionType);
         Assert.Equal(DeviceType.Desktop, updated.DeviceType);
         Assert.False(updated.IsCapacitor);
-        Assert.True(updated.IsIdleDetectionEnabled);
         Assert.Equal("Windows Desktop App", updated.DeviceName);
     }
 
@@ -1329,6 +1269,93 @@ public class PushControllerTests : TestDataTestBase
         var updated = _sessionRepo.GetById("sess_web");
         Assert.NotNull(updated);
         Assert.Equal("https://fcm.googleapis.com/fcm/send/direct-webpush", updated.PushEndpoint);
+        Assert.Equal(PushSubscriptionType.WebPush, updated.PushSubscriptionType);
+        Assert.True(updated.PushEnabled);
+    }
+
+    [Fact]
+    public void Subscribe_WhenSessionHasLegacyDevId_UpdatesSessionDeviceIdToIncomingStableId()
+    {
+        _empRepo.Save(new Employee { Id = "emp_bind" });
+        _openIdRepo.Save(new OpenIdAccount { Sub = "sub_bind", LinkedEmployeeId = "emp_bind" });
+
+        var session = new DeviceSession
+        {
+            Id = "sess_bind",
+            EmployeeId = "emp_bind",
+            DeviceId = "dev_legacy_123"
+        };
+        _sessionRepo.Save(session);
+
+        var user = new ClaimsPrincipal(new ClaimsIdentity(new Claim[] {
+            new Claim("sub", "sub_bind"),
+            new Claim("SessionId", "sess_bind")
+        }, "mock"));
+
+        _controller.ControllerContext = new ControllerContext
+        {
+            HttpContext = new DefaultHttpContext { User = user }
+        };
+
+        var req = new SubscribeRequest
+        {
+            Endpoint = "https://relay.spokes.com/send-bind",
+            SubscriptionType = PushSubscriptionType.NativeRelay,
+            DeviceId = "android_stable_hw_999",
+            PublicKey = "NEW_RSA_PUBLIC_KEY"
+        };
+
+        var result = _controller.Subscribe(req);
+        Assert.IsType<OkObjectResult>(result);
+
+        var updated = _sessionRepo.GetById("sess_bind");
+        Assert.NotNull(updated);
+        Assert.Equal("android_stable_hw_999", updated.DeviceId);
+        Assert.Equal("NEW_RSA_PUBLIC_KEY", updated.PushPublicKey);
+    }
+
+    [Fact]
+    public void Subscribe_WhenSwitchingFromNativeRelayToWebPush_ClearsStalePushPublicKey()
+    {
+        _empRepo.Save(new Employee { Id = "emp_switch" });
+        _openIdRepo.Save(new OpenIdAccount { Sub = "sub_switch", LinkedEmployeeId = "emp_switch" });
+
+        var session = new DeviceSession
+        {
+            Id = "sess_switch",
+            EmployeeId = "emp_switch",
+            DeviceId = "web_uuid_1",
+            PushSubscriptionType = PushSubscriptionType.NativeRelay,
+            PushPublicKey = "STALE_RSA_PUBLIC_KEY"
+        };
+        _sessionRepo.Save(session);
+
+        var user = new ClaimsPrincipal(new ClaimsIdentity(new Claim[] {
+            new Claim("sub", "sub_switch"),
+            new Claim("SessionId", "sess_switch")
+        }, "mock"));
+
+        _controller.ControllerContext = new ControllerContext
+        {
+            HttpContext = new DefaultHttpContext { User = user }
+        };
+
+        var req = new SubscribeRequest
+        {
+            Endpoint = "https://fcm.googleapis.com/fcm/send/webpush-switch",
+            P256dh = "p256dh-val",
+            Auth = "auth-val",
+            SubscriptionType = PushSubscriptionType.WebPush,
+            DeviceId = "web_uuid_1",
+            PublicKey = null
+        };
+
+        var result = _controller.Subscribe(req);
+        Assert.IsType<OkObjectResult>(result);
+
+        var updated = _sessionRepo.GetById("sess_switch");
+        Assert.NotNull(updated);
+        Assert.Equal(string.Empty, updated.PushPublicKey);
         Assert.Equal(PushSubscriptionType.WebPush, updated.PushSubscriptionType);
         Assert.True(updated.PushEnabled);
     }

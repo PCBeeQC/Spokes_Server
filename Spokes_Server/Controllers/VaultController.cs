@@ -53,9 +53,24 @@ public class VaultController : SpokesControllerBase
     [HttpPost("login")]
     public IActionResult Login([FromBody] VaultLoginRequest request)
     {
+        if (User?.HasClaim("PendingApproval", "true") == true)
+        {
+            return ForbiddenError("An active linked account is required to unlock the vault.", "FORBIDDEN");
+        }
+
         if (string.IsNullOrEmpty(request.Password))
         {
             return BadRequestError("Password is required.");
+        }
+
+        var session = _sessionService.GetActiveSession(HttpContext);
+        var employeeId = session?.EmployeeId
+                         ?? User?.FindFirst("EmployeeId")?.Value
+                         ?? User?.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+        var employee = _sessionService.GetEmployeeById(employeeId);
+        if (employee != null && (!employee.IsActive || employee.IsBanned || employee.IsSuspended))
+        {
+            return ForbiddenError("Vault persistence is not permitted while account is inactive, suspended, or banned.", "ACCOUNT_RESTRICTED");
         }
 
         var protector = _dataProtection.CreateProtector("ChatVaultKey");
@@ -76,7 +91,6 @@ public class VaultController : SpokesControllerBase
             Response.Cookies.Append(VaultCookieName, encryptedPassword, cookieOptions);
         }
 
-        var session = _sessionService.GetActiveSession(HttpContext);
         if (session != null)
         {
             session.HasVaultCookie = true;
@@ -102,14 +116,20 @@ public class VaultController : SpokesControllerBase
         {
             session.HasVaultCookie = false;
             _coreContext.DeviceSessions.Save(session);
-            _fileTokenService?.InvalidateUserEncryptedTokens(session.EmployeeId);
+            if (!string.IsNullOrWhiteSpace(session.EmployeeId))
+            {
+                _fileTokenService?.InvalidateUserEncryptedTokens(session.EmployeeId);
+                _sessionService.EvictGlobalKeystoreIfNoUnlockedSessions(session.EmployeeId);
+            }
         }
         else
         {
-            var userId = User?.FindFirst(ClaimTypes.NameIdentifier)?.Value;
-            if (!string.IsNullOrEmpty(userId))
+            var userId = User?.FindFirst("EmployeeId")?.Value
+                         ?? User?.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+            if (!string.IsNullOrWhiteSpace(userId))
             {
                 _fileTokenService?.InvalidateUserEncryptedTokens(userId);
+                _sessionService.EvictGlobalKeystoreIfNoUnlockedSessions(userId);
             }
         }
 

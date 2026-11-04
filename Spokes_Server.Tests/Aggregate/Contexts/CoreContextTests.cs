@@ -51,6 +51,7 @@ public class CoreContextTests : TestDataTestBase
         Assert.NotNull(_context.DeviceSessions);
         Assert.NotNull(_context.DemoConfigs);
         Assert.NotNull(_context.StandardDocuments);
+        Assert.NotNull(_context.TermsAndConditions);
     }
 
     [Fact]
@@ -102,7 +103,8 @@ public class CoreContextTests : TestDataTestBase
             _context.SystemConfigs,
             _context.DeviceSessions,
             _context.DemoConfigs,
-            _context.StandardDocuments);
+            _context.StandardDocuments,
+            _context.TermsAndConditions);
 
         Assert.NotNull(manualContext.GetBranding());
         Assert.NotNull(manualContext.Branding);

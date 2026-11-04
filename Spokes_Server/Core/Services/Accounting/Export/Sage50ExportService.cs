@@ -114,6 +114,8 @@ public class Sage50ExportService : ISage50ExportService
             ? bill.SupplierName
             : (!string.IsNullOrWhiteSpace(supplier?.Name) ? supplier.Name : (po?.Supplier?.BusinessName ?? string.Empty));
 
+        supplier ??= FindSupplierByName(vendorName);
+
         bool isCredit = bill.IsCreditNote || bill.Amount < 0m;
         decimal absTotal = Math.Round(Math.Abs(bill.Amount), 2, MidpointRounding.AwayFromZero);
 
@@ -143,33 +145,44 @@ public class Sage50ExportService : ISage50ExportService
         decimal absSubTotal = Math.Max(0m, absTotal - (absTps + absTvq));
         decimal sign = isCredit ? -1m : 1m;
 
+        var mappedVendorGl = !string.IsNullOrWhiteSpace(vendorName) && config.VendorDefaultGlMappings.TryGetValue(vendorName.Trim(), out var vGl) && !string.IsNullOrWhiteSpace(vGl)
+            ? vGl.Trim()
+            : null;
+
         var glCode = !string.IsNullOrWhiteSpace(bill.GlAccountCode)
-            ? bill.GlAccountCode
+            ? bill.GlAccountCode.Trim()
             : (!string.IsNullOrWhiteSpace(supplier?.ContactInfo?.DefaultGlAccountCode)
-                ? supplier.ContactInfo.DefaultGlAccountCode
-                : config.DefaultExpenseGl);
+                ? supplier.ContactInfo.DefaultGlAccountCode.Trim()
+                : (mappedVendorGl ?? config.DefaultExpenseGl));
 
         var itemCode = !string.IsNullOrWhiteSpace(bill.SageItemCode)
-            ? bill.SageItemCode
+            ? bill.SageItemCode.Trim()
             : (!string.IsNullOrWhiteSpace(supplier?.ContactInfo?.DefaultSageItemCode)
-                ? supplier.ContactInfo.DefaultSageItemCode
+                ? supplier.ContactInfo.DefaultSageItemCode.Trim()
                 : config.DefaultPurchaseItemCode);
 
-        var effectiveCode = !string.IsNullOrWhiteSpace(itemCode) ? itemCode : glCode;
+        var defaultLineCode = ResolveDetailLineCode(glCode, itemCode, isSales: false, config);
 
         var lines = bill.LineItems.Count > 0
-            ? bill.LineItems.Select(li => (
-                Description: string.IsNullOrWhiteSpace(li.Description) ? bill.Description : li.Description,
-                Quantity: li.Quantity > 0 ? li.Quantity : 1m,
-                RawLineTotal: li.Total * sign,
-                GlAccountOrItemCode: (string?)effectiveCode)).ToList()
+            ? bill.LineItems.Select(li =>
+            {
+                var lineGl = !string.IsNullOrWhiteSpace(li.GlAccountCode) ? li.GlAccountCode.Trim() : glCode;
+                var lineItem = !string.IsNullOrWhiteSpace(li.SageItemCode) ? li.SageItemCode.Trim() : itemCode;
+                var resolvedLineCode = ResolveDetailLineCode(lineGl, lineItem, isSales: false, config);
+                return (
+                    Description: string.IsNullOrWhiteSpace(li.Description) ? bill.Description : li.Description,
+                    Quantity: li.Quantity > 0 ? li.Quantity : 1m,
+                    RawLineTotal: li.Total * sign,
+                    GlAccountOrItemCode: (string?)resolvedLineCode
+                );
+            }).ToList()
             :
             [
                 (
                     Description: string.IsNullOrWhiteSpace(bill.Description) ? "Purchase" : bill.Description,
                     Quantity: 1m,
                     RawLineTotal: absSubTotal * sign,
-                    GlAccountOrItemCode: (string?)effectiveCode
+                    GlAccountOrItemCode: (string?)defaultLineCode
                 )
             ];
 
@@ -184,7 +197,7 @@ public class Sage50ExportService : ISage50ExportService
             InvoiceOrReferenceNumber = refNumber,
             Description = bill.Description,
             VendorName = vendorName,
-            SupplierId = bill.SupplierId,
+            SupplierId = !string.IsNullOrEmpty(bill.SupplierId) ? bill.SupplierId : supplier?.Id,
             PurchaseOrderId = bill.PurchaseOrderId,
             PurchaseOrderNumber = po?.PoNumber,
             Date = bill.Date,
@@ -244,18 +257,25 @@ public class Sage50ExportService : ISage50ExportService
 
         decimal absSubTotal = Math.Max(0m, absTotal - (absTps + absTvq));
 
+        var vendorName = !string.IsNullOrWhiteSpace(profile.Supplier) ? profile.Supplier : profile.Name;
+        var supplier = !string.IsNullOrEmpty(profile.SupplierId) ? _db.Suppliers.GetById(profile.SupplierId) : FindSupplierByName(vendorName);
+        var mappedVendorGl = !string.IsNullOrWhiteSpace(vendorName) && config.VendorDefaultGlMappings.TryGetValue(vendorName.Trim(), out var vGl) && !string.IsNullOrWhiteSpace(vGl)
+            ? vGl.Trim()
+            : null;
+
         var glCode = !string.IsNullOrWhiteSpace(record.GlAccountCode)
-            ? record.GlAccountCode
+            ? record.GlAccountCode.Trim()
             : (!string.IsNullOrWhiteSpace(profile.GlAccountCode)
-                ? profile.GlAccountCode
-                : (!string.IsNullOrWhiteSpace(config.DefaultRecurringExpenseGl) ? config.DefaultRecurringExpenseGl : config.DefaultExpenseGl));
+                ? profile.GlAccountCode.Trim()
+                : (!string.IsNullOrWhiteSpace(supplier?.ContactInfo?.DefaultGlAccountCode)
+                    ? supplier.ContactInfo.DefaultGlAccountCode.Trim()
+                    : (mappedVendorGl ?? (!string.IsNullOrWhiteSpace(config.DefaultRecurringExpenseGl) ? config.DefaultRecurringExpenseGl : config.DefaultExpenseGl))));
 
         var itemCode = !string.IsNullOrWhiteSpace(record.SageItemCode)
-            ? record.SageItemCode
-            : (!string.IsNullOrWhiteSpace(profile.SageItemCode) ? profile.SageItemCode : config.DefaultPurchaseItemCode);
+            ? record.SageItemCode.Trim()
+            : (!string.IsNullOrWhiteSpace(profile.SageItemCode) ? profile.SageItemCode.Trim() : config.DefaultPurchaseItemCode);
 
-        var effectiveCode = !string.IsNullOrWhiteSpace(itemCode) ? itemCode : glCode;
-        var vendorName = !string.IsNullOrWhiteSpace(profile.Supplier) ? profile.Supplier : profile.Name;
+        var effectiveCode = ResolveDetailLineCode(glCode, itemCode, isSales: false, config);
         var refNumber = !string.IsNullOrWhiteSpace(record.InvoiceNumber)
             ? record.InvoiceNumber
             : $"{profile.Name}-{record.Date:yyyyMMdd}";
@@ -269,7 +289,7 @@ public class Sage50ExportService : ISage50ExportService
             InvoiceOrReferenceNumber = refNumber,
             Description = profile.Name,
             VendorName = vendorName,
-            SupplierId = profile.SupplierId,
+            SupplierId = !string.IsNullOrEmpty(profile.SupplierId) ? profile.SupplierId : supplier?.Id,
             Date = record.Date,
             DueDate = record.DueDate ?? record.Date.AddDays(30),
             SubTotal = absSubTotal * sign,
@@ -302,17 +322,20 @@ public class Sage50ExportService : ISage50ExportService
     private SagePayableExportItem ConvertExpenseReportToExportItem(ExpenseReport report, Sage50ExportConfig config)
     {
         var reportDate = report.DateSubmitted ?? report.DateCreated;
-        var defaultExpenseGl = !string.IsNullOrWhiteSpace(config.DefaultEmployeeExpenseGl) ? config.DefaultEmployeeExpenseGl : config.DefaultExpenseGl;
+        var mappedVendorGl = !string.IsNullOrWhiteSpace(report.EmployeeName) && config.VendorDefaultGlMappings.TryGetValue(report.EmployeeName.Trim(), out var vGl) && !string.IsNullOrWhiteSpace(vGl)
+            ? vGl.Trim()
+            : null;
+
+        var defaultExpenseGl = mappedVendorGl ?? (!string.IsNullOrWhiteSpace(config.DefaultEmployeeExpenseGl) ? config.DefaultEmployeeExpenseGl : config.DefaultExpenseGl);
         var defaultKmGl = !string.IsNullOrWhiteSpace(config.DefaultKilometrageGl) ? config.DefaultKilometrageGl : defaultExpenseGl;
 
         var lines = new List<(string Description, decimal Quantity, decimal RawLineTotal, string? GlAccountOrItemCode)>();
         foreach (var item in report.LineItems)
         {
-            var code = !string.IsNullOrWhiteSpace(item.SageItemCode)
-                ? item.SageItemCode
-                : (!string.IsNullOrWhiteSpace(item.GlAccountCode)
-                    ? item.GlAccountCode
-                    : (item.IsKilometrage ? defaultKmGl : defaultExpenseGl));
+            var lineGl = !string.IsNullOrWhiteSpace(item.GlAccountCode)
+                ? item.GlAccountCode.Trim()
+                : (item.IsKilometrage ? defaultKmGl : defaultExpenseGl);
+            var code = ResolveDetailLineCode(lineGl, item.SageItemCode, isSales: false, config);
 
             lines.Add((
                 Description: string.IsNullOrWhiteSpace(item.Description) ? (item.IsKilometrage ? "Kilometrage" : "Expense") : item.Description,
@@ -321,6 +344,9 @@ public class Sage50ExportService : ISage50ExportService
                 GlAccountOrItemCode: code
             ));
         }
+
+        var firstCustomGl = report.LineItems.Select(i => i.GlAccountCode).FirstOrDefault(g => !string.IsNullOrWhiteSpace(g));
+        var reportGl = !string.IsNullOrWhiteSpace(firstCustomGl) ? firstCustomGl.Trim() : defaultExpenseGl;
 
         var refNumber = !string.IsNullOrWhiteSpace(report.ReportNumber)
             ? report.ReportNumber
@@ -344,7 +370,7 @@ public class Sage50ExportService : ISage50ExportService
             IsCreditNote = report.TotalAmount < 0m,
             HasExplicitTaxBreakdown = true,
             Status = report.Status,
-            GlAccountCode = defaultExpenseGl,
+            GlAccountCode = reportGl,
             SageItemCode = config.DefaultPurchaseItemCode,
             ExportedToSageAt = report.ExportedToSageAt,
             SageBatchId = report.SageBatchId,
@@ -378,10 +404,14 @@ public class Sage50ExportService : ISage50ExportService
         }
 
         decimal absTotal = absBase + absTps + absTvq;
+        var mappedVendorGl = !string.IsNullOrWhiteSpace(comm.BeneficiaryName) && config.VendorDefaultGlMappings.TryGetValue(comm.BeneficiaryName.Trim(), out var vGl) && !string.IsNullOrWhiteSpace(vGl)
+            ? vGl.Trim()
+            : null;
+
         var glCode = !string.IsNullOrWhiteSpace(comm.GlAccountCode)
-            ? comm.GlAccountCode
-            : (!string.IsNullOrWhiteSpace(config.DefaultCommissionGl) ? config.DefaultCommissionGl : config.DefaultExpenseGl);
-        var effectiveCode = !string.IsNullOrWhiteSpace(comm.SageItemCode) ? comm.SageItemCode : glCode;
+            ? comm.GlAccountCode.Trim()
+            : (mappedVendorGl ?? (!string.IsNullOrWhiteSpace(config.DefaultCommissionGl) ? config.DefaultCommissionGl : config.DefaultExpenseGl));
+        var effectiveCode = ResolveDetailLineCode(glCode, comm.SageItemCode, isSales: false, config);
         var projCode = proj?.ProjectNumber ?? comm.Id[..Math.Min(6, comm.Id.Length)];
         var refNumber = $"COMM-{projCode}-{comm.DateGenerated:yyyyMMdd}";
 
@@ -421,7 +451,7 @@ public class Sage50ExportService : ISage50ExportService
     }
 
     // =========================================================================
-    // 3. PRE-FLIGHT VALIDATION
+    // 3. PRE-FLIGHT VALIDATION (Including Chart of Accounts Verification)
     // =========================================================================
 
     public SageExportValidationResult ValidateForExport(
@@ -456,6 +486,23 @@ public class Sage50ExportService : ISage50ExportService
             result.Errors.Add("Both TPS and TVQ tax codes are required for Sage 50 Canadian Edition.");
         }
 
+        bool hasAccountBaseline = config.ImportedAccounts.Count > 0;
+        HashSet<string>? validAccountNumbers = hasAccountBaseline
+            ? new HashSet<string>(config.ImportedAccounts.Select(a => a.AccountNumber.Trim()), StringComparer.OrdinalIgnoreCase)
+            : null;
+
+        if (validAccountNumbers != null)
+        {
+            if (!string.IsNullOrWhiteSpace(config.AccountsReceivableGl) && !validAccountNumbers.Contains(config.AccountsReceivableGl.Trim()))
+            {
+                result.Errors.Add($"Accounts Receivable GL '{config.AccountsReceivableGl}' does not exist in the imported Sage 50 Chart of Accounts.");
+            }
+            if (!string.IsNullOrWhiteSpace(config.AccountsPayableGl) && !validAccountNumbers.Contains(config.AccountsPayableGl.Trim()))
+            {
+                result.Errors.Add($"Accounts Payable GL '{config.AccountsPayableGl}' does not exist in the imported Sage 50 Chart of Accounts.");
+            }
+        }
+
         bool hasCustomerBaseline = config.ImportedCustomers.Count > 0;
         bool hasVendorBaseline = config.ImportedVendors.Count > 0;
 
@@ -477,6 +524,12 @@ public class Sage50ExportService : ISage50ExportService
                 }
             }
 
+            var invGl = ResolveInvoiceGlAccount(inv, config);
+            if (validAccountNumbers != null && !string.IsNullOrWhiteSpace(invGl) && !validAccountNumbers.Contains(invGl.Trim()))
+            {
+                result.Errors.Add($"Invoice {inv.InvoiceNumber} uses GL account '{invGl}', which does not exist in the imported Sage 50 Chart of Accounts.");
+            }
+
             if (inv.GrandTotal <= 0m)
             {
                 result.Warnings.Add($"Invoice {inv.InvoiceNumber} has an amount of {inv.GrandTotal:C2}.");
@@ -491,7 +544,7 @@ public class Sage50ExportService : ISage50ExportService
             }
             else if (hasVendorBaseline)
             {
-                var supplier = !string.IsNullOrEmpty(payable.SupplierId) ? _db.Suppliers.GetById(payable.SupplierId) : null;
+                var supplier = !string.IsNullOrEmpty(payable.SupplierId) ? _db.Suppliers.GetById(payable.SupplierId) : FindSupplierByName(payable.VendorName);
                 var resolvedVendor = ResolveSageVendorName(payable.VendorName, supplier?.ContactInfo, config);
                 bool matchesBaseline = config.ImportedVendors.Any(v =>
                     string.Equals(v.Name, resolvedVendor, StringComparison.OrdinalIgnoreCase));
@@ -499,6 +552,12 @@ public class Sage50ExportService : ISage50ExportService
                 {
                     result.Warnings.Add($"Vendor '{payable.VendorName}' ({payable.TypeBadge} {payable.InvoiceOrReferenceNumber}) is not mapped to an imported Sage 50 Vendor.");
                 }
+            }
+
+            var payGl = ResolvePayableGlAccount(payable, config);
+            if (validAccountNumbers != null && !string.IsNullOrWhiteSpace(payGl) && !validAccountNumbers.Contains(payGl.Trim()))
+            {
+                result.Errors.Add($"{payable.TypeBadge} '{payable.InvoiceOrReferenceNumber}' ({payable.VendorName}) uses GL account '{payGl}', which does not exist in the imported Sage 50 Chart of Accounts.");
             }
 
             if (payable.TotalAmount == 0m || (!payable.IsCreditNote && payable.TotalAmount < 0m))
@@ -571,18 +630,25 @@ public class Sage50ExportService : ISage50ExportService
 
             // Calculate exact Quebec taxes via FinancialCalculationEngine so SubTotal + TPS + TVQ == Header Total
             var taxBreakdown = FinancialCalculationEngine.CalculateFromSubTotal(inv.SubTotal, inv.TaxRate);
-            var defaultSalesCode = !string.IsNullOrWhiteSpace(client.DefaultSageItemCode)
-                ? client.DefaultSageItemCode
-                : (!string.IsNullOrWhiteSpace(config.DefaultSalesItemCode)
-                    ? config.DefaultSalesItemCode
-                    : (!string.IsNullOrWhiteSpace(client.DefaultGlAccountCode) ? client.DefaultGlAccountCode : config.DefaultSalesRevenueGl));
+            var invoiceGlCode = ResolveInvoiceGlAccount(inv, config);
+            var invoiceItemCode = !string.IsNullOrWhiteSpace(inv.SageItemCode)
+                ? inv.SageItemCode
+                : (!string.IsNullOrWhiteSpace(client.DefaultSageItemCode) ? client.DefaultSageItemCode : config.DefaultSalesItemCode);
+            var defaultSalesCode = ResolveDetailLineCode(invoiceGlCode, invoiceItemCode, isSales: true, config);
 
             var rawLines = inv.LineItems.Count > 0
-                ? inv.LineItems.Select(l => (
-                    Description: string.IsNullOrWhiteSpace(l.Description) ? "Services" : l.Description,
-                    Quantity: l.Quantity > 0m ? l.Quantity : 1m,
-                    RawLineTotal: l.Total,
-                    GlAccountOrItemCode: (string?)defaultSalesCode)).ToList()
+                ? inv.LineItems.Select(l =>
+                {
+                    var lineGl = !string.IsNullOrWhiteSpace(l.GlAccountCode) ? l.GlAccountCode.Trim() : invoiceGlCode;
+                    var lineItem = !string.IsNullOrWhiteSpace(l.SageItemCode) ? l.SageItemCode.Trim() : invoiceItemCode;
+                    var resolvedLineCode = ResolveDetailLineCode(lineGl, lineItem, isSales: true, config);
+                    return (
+                        Description: string.IsNullOrWhiteSpace(l.Description) ? "Services" : l.Description,
+                        Quantity: l.Quantity > 0m ? l.Quantity : 1m,
+                        RawLineTotal: l.Total,
+                        GlAccountOrItemCode: (string?)resolvedLineCode
+                    );
+                }).ToList()
                 :
                 [
                     (
@@ -643,11 +709,8 @@ public class Sage50ExportService : ISage50ExportService
             // Line 1: Vendor header (Vendor max 35 chars, "0", Street max 35, City max 35, Prov max 2, Postal max 10, Country)
             AppendImpLine(sb, $"\"{EscapeImp(vendorName, 35)}\", \"0\", \"{EscapeImp(street, 35)}\", \"{EscapeImp(city, 35)}\", \"{EscapeImp(state, 2)}\", \"{EscapeImp(zip, 10)}\", \"{EscapeImp(country, 20)}\"");
 
-            var defaultPurchaseCode = !string.IsNullOrWhiteSpace(payable.SageItemCode)
-                ? payable.SageItemCode
-                : (!string.IsNullOrWhiteSpace(payable.GlAccountCode)
-                    ? payable.GlAccountCode
-                    : (!string.IsNullOrWhiteSpace(config.DefaultPurchaseItemCode) ? config.DefaultPurchaseItemCode : config.DefaultExpenseGl));
+            var payableGl = ResolvePayableGlAccount(payable, config);
+            var defaultPurchaseCode = ResolveDetailLineCode(payableGl, payable.SageItemCode, isSales: false, config);
 
             var reconciledLines = FinancialCalculationEngine.ProrateLinesWithTaxReconciliation(
                 payable.LineItems,
@@ -677,7 +740,9 @@ public class Sage50ExportService : ISage50ExportService
 
             foreach (var line in reconciledLines)
             {
-                var lineCode = !string.IsNullOrWhiteSpace(line.GlAccountOrItemCode) ? line.GlAccountOrItemCode : defaultPurchaseCode;
+                var lineCode = !string.IsNullOrWhiteSpace(line.GlAccountOrItemCode)
+                    ? ResolveDetailLineCode(line.GlAccountOrItemCode, null, isSales: false, config)
+                    : defaultPurchaseCode;
                 AppendImpLine(sb,
                     $"\"{EscapeImp(lineCode, 20)}\", \"{FormatDecimal(line.Quantity)}\", \"{FormatDecimal(line.UnitPrice)}\", \"{FormatDecimal(line.LineSubTotal)}\", " +
                     $"\"{EscapeImp(tpsCode)}\", \"{exemptFlag}\", \"1\", \"{tpsRateStr}\", \"{FormatDecimal(line.LineTps)}\", " +
@@ -688,6 +753,41 @@ public class Sage50ExportService : ISage50ExportService
         }
 
         return sb.ToString();
+    }
+
+    private static string ResolveDetailLineCode(string? glAccountCode, string? explicitItemCode, bool isSales, Sage50ExportConfig config)
+    {
+        if (!string.IsNullOrWhiteSpace(explicitItemCode))
+        {
+            return explicitItemCode.Trim();
+        }
+
+        var cleanGl = glAccountCode?.Trim() ?? string.Empty;
+
+        if (config.PreferServiceItemCodesFromGl && config.ImportedServiceItems.Count > 0 && !string.IsNullOrEmpty(cleanGl))
+        {
+            var matchedItem = config.ImportedServiceItems.FirstOrDefault(item =>
+                !string.IsNullOrWhiteSpace(item.ItemId) &&
+                string.Equals(isSales ? item.LinkedRevenueGl?.Trim() : item.LinkedExpenseGl?.Trim(), cleanGl, StringComparison.OrdinalIgnoreCase));
+
+            if (matchedItem != null)
+            {
+                return matchedItem.ItemId.Trim();
+            }
+        }
+
+        var defaultItem = isSales ? config.DefaultSalesItemCode : config.DefaultPurchaseItemCode;
+        if (!string.IsNullOrWhiteSpace(defaultItem))
+        {
+            return defaultItem.Trim();
+        }
+
+        if (!string.IsNullOrEmpty(cleanGl))
+        {
+            return cleanGl;
+        }
+
+        return isSales ? config.DefaultSalesRevenueGl : config.DefaultExpenseGl;
     }
 
     private void EmitNewCustomersBlock(StringBuilder sb, List<Invoice> invoices, Sage50ExportConfig config)
@@ -771,7 +871,7 @@ public class Sage50ExportService : ISage50ExportService
             var client = ResolveClientForInvoice(inv) ?? new ClientInfo();
             var sageName = ResolveSageCustomerName(client, config);
             var taxBreakdown = FinancialCalculationEngine.CalculateFromSubTotal(inv.SubTotal, inv.TaxRate);
-            var glAccount = !string.IsNullOrWhiteSpace(client.DefaultGlAccountCode) ? client.DefaultGlAccountCode : config.DefaultSalesRevenueGl;
+            var glAccount = ResolveInvoiceGlAccount(inv, config);
 
             var row = new[]
             {
@@ -809,7 +909,7 @@ public class Sage50ExportService : ISage50ExportService
                 ? _db.Suppliers.GetById(payable.SupplierId)
                 : FindSupplierByName(payable.VendorName);
             var sageVendor = ResolveSageVendorName(payable.VendorName, supplier?.ContactInfo, config);
-            var glAccount = !string.IsNullOrWhiteSpace(payable.GlAccountCode) ? payable.GlAccountCode : config.DefaultExpenseGl;
+            var glAccount = ResolvePayableGlAccount(payable, config);
 
             var row = new[]
             {
@@ -982,7 +1082,7 @@ public class Sage50ExportService : ISage50ExportService
     }
 
     // =========================================================================
-    // 7. ENTITY RESOLUTION & SAGE 50 BASELINE IMPORT
+    // 7. ENTITY RESOLUTION, SELF-LEARNING ASSIGNMENTS & SAGE 50 BASELINE IMPORT
     // =========================================================================
 
     public ClientInfo? ResolveClientForInvoice(Invoice inv)
@@ -1011,18 +1111,21 @@ public class Sage50ExportService : ISage50ExportService
     public string ResolveSageCustomerName(ClientInfo? client, Sage50ExportConfig config)
     {
         if (client == null) return "Client";
+        var rawName = client.BusinessName?.Trim() ?? string.Empty;
+
+        if (!string.IsNullOrEmpty(rawName) &&
+            config.CustomerNameMappings.TryGetValue(rawName, out var mapped) &&
+            !string.IsNullOrWhiteSpace(mapped))
+        {
+            return mapped.Trim();
+        }
+
         if (!string.IsNullOrWhiteSpace(client.SageReferenceName))
         {
             return client.SageReferenceName.Trim();
         }
 
-        var rawName = client.BusinessName?.Trim() ?? string.Empty;
         if (string.IsNullOrEmpty(rawName)) return "Client";
-
-        if (config.CustomerNameMappings.TryGetValue(rawName, out var mapped) && !string.IsNullOrWhiteSpace(mapped))
-        {
-            return mapped.Trim();
-        }
 
         // Check normalized match in ImportedCustomers
         var match = FindBestPartyMatch(rawName, config.ImportedCustomers);
@@ -1031,24 +1134,326 @@ public class Sage50ExportService : ISage50ExportService
 
     public string ResolveSageVendorName(string? vendorName, PartyContactInfo? contactInfo, Sage50ExportConfig config)
     {
+        var rawName = !string.IsNullOrWhiteSpace(vendorName)
+            ? vendorName.Trim()
+            : (contactInfo?.BusinessName?.Trim() ?? string.Empty);
+
+        if (!string.IsNullOrEmpty(rawName) &&
+            config.VendorNameMappings.TryGetValue(rawName, out var mapped) &&
+            !string.IsNullOrWhiteSpace(mapped))
+        {
+            return mapped.Trim();
+        }
+
         if (!string.IsNullOrWhiteSpace(contactInfo?.SageReferenceName))
         {
             return contactInfo.SageReferenceName.Trim();
         }
 
-        var rawName = !string.IsNullOrWhiteSpace(vendorName)
-            ? vendorName.Trim()
-            : (contactInfo?.BusinessName?.Trim() ?? string.Empty);
-
         if (string.IsNullOrEmpty(rawName)) return "Supplier";
-
-        if (config.VendorNameMappings.TryGetValue(rawName, out var mapped) && !string.IsNullOrWhiteSpace(mapped))
-        {
-            return mapped.Trim();
-        }
 
         var match = FindBestPartyMatch(rawName, config.ImportedVendors);
         return match?.Name ?? rawName;
+    }
+
+    public string ResolveInvoiceGlAccount(Invoice inv, Sage50ExportConfig config)
+    {
+        if (!string.IsNullOrWhiteSpace(inv.GlAccountCode))
+        {
+            return inv.GlAccountCode.Trim();
+        }
+
+        var client = ResolveClientForInvoice(inv);
+        if (!string.IsNullOrWhiteSpace(client?.DefaultGlAccountCode))
+        {
+            return client.DefaultGlAccountCode.Trim();
+        }
+
+        var rawClientName = client?.BusinessName?.Trim();
+        if (!string.IsNullOrEmpty(rawClientName) &&
+            config.CustomerDefaultGlMappings.TryGetValue(rawClientName, out var mappedGl) &&
+            !string.IsNullOrWhiteSpace(mappedGl))
+        {
+            return mappedGl.Trim();
+        }
+
+        return config.DefaultSalesRevenueGl;
+    }
+
+    public string ResolvePayableGlAccount(SagePayableExportItem payable, Sage50ExportConfig config)
+    {
+        if (!string.IsNullOrWhiteSpace(payable.GlAccountCode))
+        {
+            return payable.GlAccountCode.Trim();
+        }
+
+        var supplier = !string.IsNullOrEmpty(payable.SupplierId)
+            ? _db.Suppliers.GetById(payable.SupplierId)
+            : FindSupplierByName(payable.VendorName);
+        if (!string.IsNullOrWhiteSpace(supplier?.ContactInfo?.DefaultGlAccountCode))
+        {
+            return supplier.ContactInfo.DefaultGlAccountCode.Trim();
+        }
+
+        if (!string.IsNullOrWhiteSpace(payable.VendorName) &&
+            config.VendorDefaultGlMappings.TryGetValue(payable.VendorName.Trim(), out var mappedGl) &&
+            !string.IsNullOrWhiteSpace(mappedGl))
+        {
+            return mappedGl.Trim();
+        }
+
+        return payable.SourceType switch
+        {
+            SagePayableSourceType.RecurringBill => !string.IsNullOrWhiteSpace(config.DefaultRecurringExpenseGl) ? config.DefaultRecurringExpenseGl : config.DefaultExpenseGl,
+            SagePayableSourceType.ExpenseReport => !string.IsNullOrWhiteSpace(config.DefaultEmployeeExpenseGl) ? config.DefaultEmployeeExpenseGl : config.DefaultExpenseGl,
+            SagePayableSourceType.Commission => !string.IsNullOrWhiteSpace(config.DefaultCommissionGl) ? config.DefaultCommissionGl : config.DefaultExpenseGl,
+            _ => config.DefaultExpenseGl
+        };
+    }
+
+    public void AssignInvoiceGlAndCustomer(Invoice invoice, string? glAccountCode, string? sageCustomerName, bool rememberForClient = true)
+    {
+        var profile = _db.CompanyProfile.Get();
+        var config = profile.Accounting.SageSettings ??= new Sage50ExportConfig();
+
+        var cleanGl = string.IsNullOrWhiteSpace(glAccountCode) ? null : glAccountCode.Trim();
+        var cleanCustomer = string.IsNullOrWhiteSpace(sageCustomerName) ? null : sageCustomerName.Trim();
+
+        if (cleanGl != null)
+        {
+            invoice.GlAccountCode = cleanGl;
+            _db.Invoices.Save(invoice);
+        }
+
+        if (rememberForClient)
+        {
+            bool configChanged = false;
+            var client = ResolveClientForInvoice(invoice);
+            var clientKey = client?.BusinessName?.Trim();
+
+            if (!string.IsNullOrEmpty(clientKey))
+            {
+                if (cleanGl != null)
+                {
+                    config.CustomerDefaultGlMappings[clientKey] = cleanGl;
+                    configChanged = true;
+                }
+                if (cleanCustomer != null)
+                {
+                    config.CustomerNameMappings[clientKey] = cleanCustomer;
+                    configChanged = true;
+                }
+            }
+
+            if (!string.IsNullOrEmpty(invoice.ProjectId))
+            {
+                var proj = _db.Projects.GetById(invoice.ProjectId);
+                if (proj?.Client != null)
+                {
+                    if (cleanGl != null) proj.Client.DefaultGlAccountCode = cleanGl;
+                    if (cleanCustomer != null) proj.Client.SageReferenceName = cleanCustomer;
+                    _db.Projects.Save(proj);
+                }
+            }
+
+            if (!string.IsNullOrEmpty(invoice.ProjectGroupId))
+            {
+                var grp = _db.ProjectGroups.GetById(invoice.ProjectGroupId);
+                if (grp?.Client != null)
+                {
+                    if (cleanGl != null) grp.Client.DefaultGlAccountCode = cleanGl;
+                    if (cleanCustomer != null) grp.Client.SageReferenceName = cleanCustomer;
+                    _db.ProjectGroups.Save(grp);
+                }
+            }
+
+            if (configChanged)
+            {
+                _db.CompanyProfile.Save(profile);
+            }
+        }
+    }
+
+    public void AssignPayableGlAndVendor(SagePayableExportItem payable, string? glAccountCode, string? sageVendorName, bool rememberForVendor = true)
+    {
+        var profile = _db.CompanyProfile.Get();
+        var config = profile.Accounting.SageSettings ??= new Sage50ExportConfig();
+
+        var cleanGl = string.IsNullOrWhiteSpace(glAccountCode) ? null : glAccountCode.Trim();
+        var cleanVendor = string.IsNullOrWhiteSpace(sageVendorName) ? null : sageVendorName.Trim();
+
+        if (cleanGl != null)
+        {
+            payable.GlAccountCode = cleanGl;
+            var lineCode = ResolveDetailLineCode(cleanGl, payable.SageItemCode, isSales: false, config);
+            payable.LineItems = payable.LineItems
+                .Select(li => (li.Description, li.Quantity, li.RawLineTotal, (string?)lineCode))
+                .ToList();
+        }
+
+        switch (payable.SourceType)
+        {
+            case SagePayableSourceType.SupplierBill:
+                var bill = payable.UnderlyingEntity as Bill ?? _db.Bills.GetById(payable.Id);
+                if (bill != null)
+                {
+                    if (cleanGl != null) bill.GlAccountCode = cleanGl;
+                    _db.Bills.Save(bill);
+                }
+                break;
+
+            case SagePayableSourceType.RecurringBill:
+                var recProfile = payable.UnderlyingEntity as RecurringExpense
+                    ?? (!string.IsNullOrEmpty(payable.ParentEntityId) ? _db.RecurringExpenses.GetById(payable.ParentEntityId) : null);
+                var record = payable.SecondaryEntity as RecurringBillRecord
+                    ?? recProfile?.History.FirstOrDefault(h => h.Id == payable.Id);
+                if (recProfile != null)
+                {
+                    if (cleanGl != null)
+                    {
+                        if (record != null) record.GlAccountCode = cleanGl;
+                        if (rememberForVendor) recProfile.GlAccountCode = cleanGl;
+                    }
+                    _db.RecurringExpenses.Save(recProfile);
+                }
+                break;
+
+            case SagePayableSourceType.ExpenseReport:
+                var report = payable.UnderlyingEntity as ExpenseReport ?? _db.ExpenseReports.GetById(payable.Id);
+                if (report != null && cleanGl != null)
+                {
+                    foreach (var li in report.LineItems)
+                    {
+                        li.GlAccountCode = cleanGl;
+                    }
+                    _db.ExpenseReports.Save(report);
+                }
+                break;
+
+            case SagePayableSourceType.Commission:
+                var comm = payable.UnderlyingEntity as CommissionLedgerRecord ?? _db.CommissionLedgerRecords.GetById(payable.Id);
+                if (comm != null && cleanGl != null)
+                {
+                    comm.GlAccountCode = cleanGl;
+                    _db.CommissionLedgerRecords.Save(comm);
+                }
+                break;
+        }
+
+        if (rememberForVendor && !string.IsNullOrWhiteSpace(payable.VendorName))
+        {
+            var vKey = payable.VendorName.Trim();
+            bool configChanged = false;
+
+            if (cleanGl != null)
+            {
+                config.VendorDefaultGlMappings[vKey] = cleanGl;
+                configChanged = true;
+            }
+            if (cleanVendor != null)
+            {
+                config.VendorNameMappings[vKey] = cleanVendor;
+                configChanged = true;
+            }
+
+            var supplier = !string.IsNullOrEmpty(payable.SupplierId)
+                ? _db.Suppliers.GetById(payable.SupplierId)
+                : FindSupplierByName(vKey);
+
+            if (supplier != null)
+            {
+                if (cleanGl != null) supplier.ContactInfo.DefaultGlAccountCode = cleanGl;
+                if (cleanVendor != null) supplier.ContactInfo.SageReferenceName = cleanVendor;
+                _db.Suppliers.Save(supplier);
+            }
+
+            if (configChanged)
+            {
+                _db.CompanyProfile.Save(profile);
+            }
+        }
+    }
+
+    public void UpdatePayableTaxBreakdown(SagePayableExportItem payable, bool isTaxExempt, decimal subTotal, decimal tpsAmount, decimal tvqAmount)
+    {
+        decimal sign = payable.IsCreditNote ? -1m : 1m;
+        decimal absSubTotal = Math.Round(Math.Abs(subTotal), 2, MidpointRounding.AwayFromZero);
+        decimal absTps = isTaxExempt ? 0m : Math.Round(Math.Abs(tpsAmount), 2, MidpointRounding.AwayFromZero);
+        decimal absTvq = isTaxExempt ? 0m : Math.Round(Math.Abs(tvqAmount), 2, MidpointRounding.AwayFromZero);
+        decimal absTax = absTps + absTvq;
+        decimal absTotal = absSubTotal + absTax;
+
+        payable.IsTaxExempt = isTaxExempt;
+        payable.SubTotal = absSubTotal * sign;
+        payable.TpsAmount = absTps * sign;
+        payable.TvqAmount = absTvq * sign;
+        payable.TaxAmount = absTax * sign;
+        payable.TotalAmount = absTotal * sign;
+        payable.HasExplicitTaxBreakdown = true;
+
+        switch (payable.SourceType)
+        {
+            case SagePayableSourceType.SupplierBill:
+                var bill = payable.UnderlyingEntity as Bill ?? _db.Bills.GetById(payable.Id);
+                if (bill != null)
+                {
+                    bill.IsTaxExempt = isTaxExempt;
+                    bill.SubTotal = absSubTotal;
+                    bill.TpsAmount = absTps;
+                    bill.TvqAmount = absTvq;
+                    bill.TaxAmount = absTax;
+                    bill.Amount = absTotal;
+                    _db.Bills.Save(bill);
+                }
+                break;
+
+            case SagePayableSourceType.RecurringBill:
+                var recProfile = payable.UnderlyingEntity as RecurringExpense
+                    ?? (!string.IsNullOrEmpty(payable.ParentEntityId) ? _db.RecurringExpenses.GetById(payable.ParentEntityId) : null);
+                var record = payable.SecondaryEntity as RecurringBillRecord
+                    ?? recProfile?.History.FirstOrDefault(h => h.Id == payable.Id);
+                if (recProfile != null && record != null)
+                {
+                    record.IsTaxExempt = isTaxExempt;
+                    record.SubTotal = absSubTotal;
+                    record.TpsAmount = absTps;
+                    record.TvqAmount = absTvq;
+                    record.TaxAmount = absTax;
+                    record.Amount = absTotal;
+                    _db.RecurringExpenses.Save(recProfile);
+                }
+                break;
+
+            case SagePayableSourceType.ExpenseReport:
+                var report = payable.UnderlyingEntity as ExpenseReport ?? _db.ExpenseReports.GetById(payable.Id);
+                if (report != null)
+                {
+                    foreach (var li in report.LineItems)
+                    {
+                        li.IsTaxExempt = isTaxExempt;
+                        if (isTaxExempt)
+                        {
+                            li.SubTotal = li.Total;
+                            li.TpsAmount = 0m;
+                            li.TvqAmount = 0m;
+                        }
+                    }
+                    _db.ExpenseReports.Save(report);
+                }
+                break;
+
+            case SagePayableSourceType.Commission:
+                var comm = payable.UnderlyingEntity as CommissionLedgerRecord ?? _db.CommissionLedgerRecords.GetById(payable.Id);
+                if (comm != null)
+                {
+                    comm.ApplyTaxes = !isTaxExempt;
+                    comm.CommissionAmount = absSubTotal;
+                    comm.TpsAmount = absTps;
+                    comm.TvqAmount = absTvq;
+                    _db.CommissionLedgerRecords.Save(comm);
+                }
+                break;
+        }
     }
 
     public SageBaselineImportSummary ImportSageBaselineBytes(byte[] fileBytes, Sage50ExportConfig config, bool syncSuppliersToDatabase = true)
@@ -1518,6 +1923,120 @@ public class Sage50ExportService : ISage50ExportService
 
             summary.AccountsImported++;
         }
+
+        if (config.ImportedAccounts.Count > 0)
+        {
+            AutoDetectControlAndDefaultGlAccounts(config);
+        }
+    }
+
+    private static void AutoDetectControlAndDefaultGlAccounts(Sage50ExportConfig config)
+    {
+        config.AccountsReceivableGl = ResolveValidOrBestGl(
+            config.AccountsReceivableGl,
+            config.ImportedAccounts,
+            ["Accounts Receivable", "Comptes clients", "Receivable", "Clients"],
+            "1");
+
+        config.AccountsPayableGl = ResolveValidOrBestGl(
+            config.AccountsPayableGl,
+            config.ImportedAccounts,
+            ["Accounts Payable", "Comptes fournisseurs", "Payable", "Fournisseurs"],
+            "2");
+
+        config.TpsTaxAccount = ResolveValidOrBestGl(
+            config.TpsTaxAccount,
+            config.ImportedAccounts,
+            ["TPS", "GST", "Taxe sur les produits"],
+            "2");
+
+        config.TvqTaxAccount = ResolveValidOrBestGl(
+            config.TvqTaxAccount,
+            config.ImportedAccounts,
+            ["TVQ", "QST", "Taxe de vente"],
+            "2");
+
+        config.DefaultSalesRevenueGl = ResolveValidOrBestGl(
+            config.DefaultSalesRevenueGl,
+            config.ImportedAccounts,
+            ["Sales", "Revenue", "Ventes", "Revenus", "Services", "Honoraires"],
+            "4");
+
+        config.DefaultExpenseGl = ResolveValidOrBestGl(
+            config.DefaultExpenseGl,
+            config.ImportedAccounts,
+            ["Purchases", "Materials", "Cost of Goods", "Subcontracts", "Achats", "Matériaux", "Materiaux", "Sous-traitance", "Expense"],
+            "5");
+
+        config.DefaultRecurringExpenseGl = ResolveValidOrBestGl(
+            config.DefaultRecurringExpenseGl,
+            config.ImportedAccounts,
+            ["Utilities", "Telecom", "Telephone", "Internet", "Rent", "Hydro", "Électricité", "Electricite", "Loyer", "Télécommunications"],
+            "5",
+            fallbackAccount: config.DefaultExpenseGl);
+
+        config.DefaultEmployeeExpenseGl = ResolveValidOrBestGl(
+            config.DefaultEmployeeExpenseGl,
+            config.ImportedAccounts,
+            ["Travel", "Employee Expense", "Meals", "Déplacement", "Deplacement", "Frais de voyage", "Remboursement"],
+            "5",
+            fallbackAccount: config.DefaultExpenseGl);
+
+        config.DefaultKilometrageGl = ResolveValidOrBestGl(
+            config.DefaultKilometrageGl,
+            config.ImportedAccounts,
+            ["Kilometrage", "Mileage", "Automobile", "Vehicle", "Kilométrage", "Véhicule", "Vehicule"],
+            "5",
+            fallbackAccount: config.DefaultEmployeeExpenseGl);
+
+        config.DefaultCommissionGl = ResolveValidOrBestGl(
+            config.DefaultCommissionGl,
+            config.ImportedAccounts,
+            ["Commission", "Commissions"],
+            "5",
+            fallbackAccount: config.DefaultExpenseGl);
+    }
+
+    private static string ResolveValidOrBestGl(
+        string currentGl,
+        List<SageGlAccountRecord> accounts,
+        string[] keywords,
+        string preferredLeadingDigit,
+        string? fallbackAccount = null)
+    {
+        if (!string.IsNullOrWhiteSpace(currentGl) &&
+            accounts.Any(a => string.Equals(a.AccountNumber.Trim(), currentGl.Trim(), StringComparison.OrdinalIgnoreCase)))
+        {
+            return currentGl.Trim();
+        }
+
+        foreach (var kw in keywords)
+        {
+            var match = accounts.FirstOrDefault(a =>
+                (a.AccountName?.Contains(kw, StringComparison.OrdinalIgnoreCase) == true) ||
+                (a.AccountNameFr?.Contains(kw, StringComparison.OrdinalIgnoreCase) == true) ||
+                (a.AccountClass?.Contains(kw, StringComparison.OrdinalIgnoreCase) == true));
+
+            if (match != null && !string.IsNullOrWhiteSpace(match.AccountNumber))
+            {
+                return match.AccountNumber.Trim();
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(fallbackAccount) &&
+            accounts.Any(a => string.Equals(a.AccountNumber.Trim(), fallbackAccount.Trim(), StringComparison.OrdinalIgnoreCase)))
+        {
+            return fallbackAccount.Trim();
+        }
+
+        var prefixMatch = accounts.FirstOrDefault(a =>
+            a.AccountNumber.Trim().StartsWith(preferredLeadingDigit, StringComparison.OrdinalIgnoreCase));
+        if (prefixMatch != null)
+        {
+            return prefixMatch.AccountNumber.Trim();
+        }
+
+        return currentGl;
     }
 
     private static void ParseSageInventoryRows(List<string> lines, int startIndex, Sage50ExportConfig config, SageBaselineImportSummary summary)

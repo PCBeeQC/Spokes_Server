@@ -11,10 +11,10 @@ public class EmailFolderRepositoryTests : RepositoryTestFixture<EmailFolderRepos
     [Fact]
     public void Save_AddsToCache()
     {
-        var folder = new EmailFolder { Id = "f1", EmployeeId = "emp1", Name = "Inbox", Path = "INBOX" };
+        var folder = new EmailFolder { Id = "f1", AccountId = "emp1", Name = "Inbox", Path = "INBOX" };
         _repo.Save(folder);
 
-        var folders = _repo.GetByEmployee("emp1");
+        var folders = _repo.GetByAccount("emp1");
         Assert.Single(folders);
         Assert.Equal("Inbox", folders.First().Name);
     }
@@ -22,12 +22,12 @@ public class EmailFolderRepositoryTests : RepositoryTestFixture<EmailFolderRepos
     [Fact]
     public void LoadFromDisk_LoadsCorrectly()
     {
-        // Set up directory structure: Data/Employees/{EmployeeId}/Email/Folders/{Id}.json
-        var empDir = Path.Combine(_testDataDir, "Employees", "emp2", "Email", "Folders");
+        // Set up directory structure: Data/EmailAccounts/{AccountId}/Folders/{Id}.json
+        var empDir = Path.Combine(_testDataDir, "EmailAccounts", "emp2", "Folders");
         Directory.CreateDirectory(empDir);
 
-        var folder1 = new EmailFolder { Id = "f1", EmployeeId = "emp2", Name = "Sent" };
-        var folder2 = new EmailFolder { Id = "f2", EmployeeId = "emp2", Name = "Trash" };
+        var folder1 = new EmailFolder { Id = "f1", AccountId = "emp2", Name = "Sent" };
+        var folder2 = new EmailFolder { Id = "f2", AccountId = "emp2", Name = "Trash" };
 
         File.WriteAllText(Path.Combine(empDir, "f1.json"), JsonSerializer.Serialize(folder1));
         File.WriteAllText(Path.Combine(empDir, "f2.json"), JsonSerializer.Serialize(folder2));
@@ -37,7 +37,7 @@ public class EmailFolderRepositoryTests : RepositoryTestFixture<EmailFolderRepos
 
         _repo.LoadFromDisk();
 
-        var loaded = _repo.GetByEmployee("emp2");
+        var loaded = _repo.GetByAccount("emp2");
         Assert.Equal(2, loaded.Count);
         Assert.Contains(loaded, f => f.Id == "f1");
         Assert.Contains(loaded, f => f.Id == "f2");
@@ -46,48 +46,48 @@ public class EmailFolderRepositoryTests : RepositoryTestFixture<EmailFolderRepos
     [Fact]
     public void LoadFromDisk_IgnoresMissingSubdirectories()
     {
-        // Just the Employees folder, no Email/Folders inside
-        var empDir = Path.Combine(_testDataDir, "Employees", "emp3");
+        // Just the EmailAccounts folder, no Email/Folders inside
+        var empDir = Path.Combine(_testDataDir, "EmailAccounts", "emp3");
         Directory.CreateDirectory(empDir);
 
         _repo.LoadFromDisk();
 
-        var loaded = _repo.GetByEmployee("emp3");
+        var loaded = _repo.GetByAccount("emp3");
         Assert.Empty(loaded);
     }
 
     [Fact]
-    public void GetFilePath_ResolvesUnderEmployeeEmailFolders()
+    public void GetFilePath_ResolvesUnderAccountEmailFolders()
     {
-        var folder = new EmailFolder { Id = "f-disk", EmployeeId = "emp-path", Name = "Archive" };
+        var folder = new EmailFolder { Id = "f-disk", AccountId = "emp-path", Name = "Archive" };
 
         _repo.Save(folder);
         _writer.FlushAll();
 
-        var expectedPath = Path.Combine(_testDataDir, "Employees", "emp-path", "Email", "Folders", "f-disk.json");
+        var expectedPath = Path.Combine(_testDataDir, "EmailAccounts", "emp-path", "Folders", "f-disk.json");
         Assert.True(File.Exists(expectedPath));
     }
 
     [Fact]
     public void Delete_RemovesFolderFromCache()
     {
-        var folder = new EmailFolder { Id = "f-del", EmployeeId = "emp-del", Name = "Temp" };
+        var folder = new EmailFolder { Id = "f-del", AccountId = "emp-del", Name = "Temp" };
         _repo.Save(folder);
 
-        Assert.Single(_repo.GetByEmployee("emp-del"));
+        Assert.Single(_repo.GetByAccount("emp-del"));
 
         _repo.Delete("f-del");
 
-        Assert.Empty(_repo.GetByEmployee("emp-del"));
+        Assert.Empty(_repo.GetByAccount("emp-del"));
     }
 
     [Fact]
-    public void GetByEmployee_WhenNoFoldersMatch_ReturnsEmptyList()
+    public void GetByAccount_WhenNoFoldersMatch_ReturnsEmptyList()
     {
-        var folder = new EmailFolder { Id = "f-other", EmployeeId = "emp-other", Name = "Inbox" };
+        var folder = new EmailFolder { Id = "f-other", AccountId = "emp-other", Name = "Inbox" };
         _repo.Save(folder);
 
-        var result = _repo.GetByEmployee("emp-none");
+        var result = _repo.GetByAccount("emp-none");
         Assert.NotNull(result);
         Assert.Empty(result);
     }

@@ -121,6 +121,9 @@
     public string? sso_error { get; set; }
 
     [SupplyParameterFromQuery]
+    public string? no_auto { get; set; }
+
+    [SupplyParameterFromQuery]
     public string? ReturnUrl { get; set; }
     private string SafeReturnUrl
     {
@@ -138,7 +141,7 @@
         Profile = Db.CompanyProfile.Get();
         
         var authState = await AuthStateProvider.GetAuthenticationStateAsync();
-        if (authState.User.Identity?.IsAuthenticated == true)
+        if (no_auto != "1" && sso_error != "1" && authState.User.Identity?.IsAuthenticated == true)
         {
             Nav.NavigateTo(SafeReturnUrl, forceLoad: true);
         }

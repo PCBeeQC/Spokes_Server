@@ -95,6 +95,11 @@ public class ChatMessage : IDataEntity, IHasAssociatedFiles
     public List<string> MentionedAlbumIds { get; set; } = new();
 
     /// <summary>
+    /// IDs of polls explicitly #mentioned in this message.
+    /// </summary>
+    public List<string> MentionedPollIds { get; set; } = new();
+
+    /// <summary>
     /// Whether the message contains @everyone.
     /// </summary>
     public bool MentionsEveryone { get; set; }

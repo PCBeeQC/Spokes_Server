@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.Extensions.Caching.Memory;
+using Spokes_Server.Core.Data.Repositories.Core;
 
 namespace Spokes_Server.Core.Services.Security;
 
@@ -21,23 +22,86 @@ public class FileTokenPayload
 
 public class FileTokenService
 {
+    public static readonly TimeSpan DefaultEncryptedTokenLifetime = TimeSpan.FromHours(2);
+    public static readonly TimeSpan DefaultUnencryptedTokenLifetime = TimeSpan.FromDays(1);
+
     private readonly IDataProtector _protector;
     private readonly IMemoryCache _cache;
+    private readonly SystemConfigRepository? _systemConfigs;
+    private readonly object _persistLock = new();
     private readonly ConcurrentDictionary<string, long> _userInvalidatedAtSequence = new();
+    private readonly ConcurrentDictionary<string, long> _contextInvalidatedAtSequence = new();
     private long _sequence = DateTime.UtcNow.Ticks;
     private long _globalInvalidatedAtSequence;
     private long _invalidationVersion;
 
-    public FileTokenService(IDataProtectionProvider dataProtection, IMemoryCache cache)
+    public FileTokenService(
+        IDataProtectionProvider dataProtection,
+        IMemoryCache cache,
+        SystemConfigRepository? systemConfigs = null)
     {
         _protector = dataProtection.CreateProtector("SpokesFileToken");
         _cache = cache;
+        _systemConfigs = systemConfigs;
+
+        if (_systemConfigs != null)
+        {
+            var config = _systemConfigs.Get();
+            if (config != null)
+            {
+                _globalInvalidatedAtSequence = config.GlobalFileTokenInvalidatedAtSequence;
+                long maxPersisted = _globalInvalidatedAtSequence;
+                if (config.UserFileTokenInvalidatedAtSequence != null)
+                {
+                    foreach (var kvp in config.UserFileTokenInvalidatedAtSequence)
+                    {
+                        _userInvalidatedAtSequence[kvp.Key] = kvp.Value;
+                        if (kvp.Value > maxPersisted)
+                        {
+                            maxPersisted = kvp.Value;
+                        }
+                    }
+                }
+
+                if (maxPersisted >= _sequence)
+                {
+                    _sequence = maxPersisted + 1;
+                }
+            }
+        }
     }
 
     /// <summary>
-    /// Invalidates all previously generated encrypted file tokens for the specified user
+    /// Invalidates all previously generated file access tokens (both encrypted and unencrypted) for the specified user.
+    /// </summary>
+    public void InvalidateUserTokens(string userId)
+    {
+        if (!string.IsNullOrWhiteSpace(userId))
+        {
+            InvalidateUserEncryptedTokens(userId);
+        }
+    }
+
+    /// <summary>
+    /// Invalidates all previously generated file access tokens for a specific category/context (e.g., channel or album).
+    /// </summary>
+    public void InvalidateContextTokens(string category, string contextId)
+    {
+        if (string.IsNullOrWhiteSpace(category) || string.IsNullOrWhiteSpace(contextId))
+        {
+            return;
+        }
+
+        long cutOffSequence = Interlocked.Increment(ref _sequence);
+        Interlocked.Increment(ref _invalidationVersion);
+        _contextInvalidatedAtSequence[$"{category}:{contextId}"] = cutOffSequence;
+    }
+
+    /// <summary>
+    /// Invalidates all previously generated file tokens for the specified user
     /// (or globally across all users when <paramref name="userId"/> is null/empty).
-    /// Called when a user locks their Secure Vault or removes their saved device vault key.
+    /// Called when a user locks their Secure Vault, revokes a session, or removes their saved device vault key.
+    /// Persists the revocation watermark to SystemConfig so revocations survive server restarts.
     /// </summary>
     public void InvalidateUserEncryptedTokens(string? userId = null)
     {
@@ -51,6 +115,24 @@ public class FileTokenService
         else
         {
             _userInvalidatedAtSequence[userId] = cutOffSequence;
+        }
+
+        if (_systemConfigs != null)
+        {
+            lock (_persistLock)
+            {
+                var config = _systemConfigs.Get();
+                if (config != null)
+                {
+                    config.GlobalFileTokenInvalidatedAtSequence = Interlocked.Read(ref _globalInvalidatedAtSequence);
+                    config.UserFileTokenInvalidatedAtSequence ??= new Dictionary<string, long>();
+                    if (!string.IsNullOrEmpty(userId))
+                    {
+                        config.UserFileTokenInvalidatedAtSequence[userId] = cutOffSequence;
+                    }
+                    _systemConfigs.Save(config);
+                }
+            }
         }
     }
 
@@ -68,6 +150,16 @@ public class FileTokenService
         string? userId = null,
         string? sessionId = null)
     {
+        if (string.IsNullOrWhiteSpace(userId))
+        {
+            throw new ArgumentException("A non-empty userId is required to generate a file access token.", nameof(userId));
+        }
+
+        if (string.IsNullOrWhiteSpace(sessionId))
+        {
+            throw new ArgumentException("A non-empty sessionId is required to generate a file access token.", nameof(sessionId));
+        }
+
         int lastSlash = filePath.LastIndexOf('/');
         string safeName = lastSlash >= 0 ? filePath[(lastSlash + 1)..] : filePath;
 
@@ -78,9 +170,9 @@ public class FileTokenService
             ? string.Empty
             : Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(encryptionKeyBase64)))[..16];
 
-        var userPart = string.IsNullOrEmpty(userId) ? "" : $"_{userId}";
-        var sessionPart = string.IsNullOrEmpty(sessionId) ? "" : $"_{sessionId}";
-        var invPart = string.IsNullOrEmpty(encryptionKeyBase64) ? "" : $"_v{Interlocked.Read(ref _invalidationVersion)}";
+        var userPart = $"_{userId}";
+        var sessionPart = $"_{sessionId}";
+        var invPart = $"_v{Interlocked.Read(ref _invalidationVersion)}";
         string generationCacheKey = $"FileTokenId_{category}_{contextId}_{safeName}_{keyHash}{userPart}{sessionPart}{invPart}";
 
         if (_cache.TryGetValue(generationCacheKey, out string? cachedToken) && !string.IsNullOrEmpty(cachedToken))
@@ -88,13 +180,17 @@ public class FileTokenService
             return cachedToken;
         }
 
+        var lifetime = string.IsNullOrEmpty(encryptionKeyBase64)
+            ? DefaultUnencryptedTokenLifetime
+            : DefaultEncryptedTokenLifetime;
+
         var payload = new FileTokenPayload
         {
             Category = category,
             ContextId = contextId,
             FileName = safeName,
             EncryptionKeyBase64 = encryptionKeyBase64,
-            ExpiryTicks = DateTime.UtcNow.AddDays(14).Ticks,
+            ExpiryTicks = DateTime.UtcNow.Add(lifetime).Ticks,
             UserId = userId,
             SessionId = sessionId,
             TokenSequence = Interlocked.Increment(ref _sequence)
@@ -104,7 +200,7 @@ public class FileTokenService
         var token = _protector.Protect(json);
 
         // Cache for dedup (not correctness — the token is self-contained and works without the cache)
-        _cache.Set(generationCacheKey, token, TimeSpan.FromDays(14));
+        _cache.Set(generationCacheKey, token, lifetime);
 
         return token;
     }
@@ -143,6 +239,11 @@ public class FileTokenService
     {
         if (string.IsNullOrEmpty(token)) return FileTokenValidationResult.None();
 
+        if (string.IsNullOrWhiteSpace(requestingUserId) || string.IsNullOrWhiteSpace(requestingSessionId))
+        {
+            return FileTokenValidationResult.Invalid();
+        }
+
         var payload = UnprotectToken(token);
         if (payload == null)
         {
@@ -161,40 +262,36 @@ public class FileTokenService
             return FileTokenValidationResult.Expired();
         }
 
-        // Validate user identity binding if present in token
-        if (!string.IsNullOrEmpty(payload.UserId))
+        // Mandatory user and session identity binding
+        if (string.IsNullOrWhiteSpace(payload.UserId) ||
+            !string.Equals(payload.UserId, requestingUserId, StringComparison.Ordinal))
         {
-            if (string.IsNullOrEmpty(requestingUserId) || !string.Equals(payload.UserId, requestingUserId, StringComparison.Ordinal))
-            {
-                return FileTokenValidationResult.Invalid();
-            }
+            return FileTokenValidationResult.Invalid();
         }
 
-        // Validate session identity binding if present in token
-        if (!string.IsNullOrEmpty(payload.SessionId))
+        if (string.IsNullOrWhiteSpace(payload.SessionId) ||
+            !string.Equals(payload.SessionId, requestingSessionId, StringComparison.Ordinal))
         {
-            if (string.IsNullOrEmpty(requestingSessionId) || !string.Equals(payload.SessionId, requestingSessionId, StringComparison.Ordinal))
-            {
-                return FileTokenValidationResult.Invalid();
-            }
+            return FileTokenValidationResult.Invalid();
         }
 
-        // Check if encrypted tokens have been invalidated due to a vault lock
-        if (!string.IsNullOrEmpty(payload.EncryptionKeyBase64))
+        // Apply global, per-user, and per-context revocation cutoffs to ALL tokens (encrypted and unencrypted)
+        long globalCutOff = Interlocked.Read(ref _globalInvalidatedAtSequence);
+        if (globalCutOff > 0 && payload.TokenSequence <= globalCutOff)
         {
-            long globalCutOff = Interlocked.Read(ref _globalInvalidatedAtSequence);
-            if (globalCutOff > 0 && payload.TokenSequence <= globalCutOff)
-            {
-                return FileTokenValidationResult.Invalid();
-            }
+            return FileTokenValidationResult.Invalid();
+        }
 
-            var effectiveUserId = !string.IsNullOrEmpty(payload.UserId) ? payload.UserId : requestingUserId;
-            if (!string.IsNullOrEmpty(effectiveUserId) &&
-                _userInvalidatedAtSequence.TryGetValue(effectiveUserId, out long userCutOff) &&
-                payload.TokenSequence <= userCutOff)
-            {
-                return FileTokenValidationResult.Invalid();
-            }
+        if (_userInvalidatedAtSequence.TryGetValue(payload.UserId, out long userCutOff) &&
+            payload.TokenSequence <= userCutOff)
+        {
+            return FileTokenValidationResult.Invalid();
+        }
+
+        if (_contextInvalidatedAtSequence.TryGetValue($"{category}:{contextId}", out long contextCutOff) &&
+            payload.TokenSequence <= contextCutOff)
+        {
+            return FileTokenValidationResult.Invalid();
         }
 
         // Return the AES key (may be null for non-encrypted files)

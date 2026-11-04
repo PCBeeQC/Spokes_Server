@@ -34,6 +34,8 @@ public class Invoice : IDataEntity
     public bool IsExported => ExportedToSageAt.HasValue;
     public DateTime? ExportedToSageAt { get; set; }
     public string? SageBatchId { get; set; }
+    public string? GlAccountCode { get; set; }
+    public string? SageItemCode { get; set; }
 
     // The Line Items
     public List<InvoiceLine> LineItems { get; set; } = [];
@@ -115,6 +117,7 @@ public class InvoiceLine
     public string Description { get; set; } = string.Empty;
     public string? WorkTypeId { get; set; }
     public string? SubTaskId { get; set; }
+    public string? Note { get; set; } = string.Empty;
     public decimal Quantity { get; set; }
     public decimal UnitPrice { get; set; }
     public decimal Total => Quantity * UnitPrice;
@@ -131,4 +134,6 @@ public class InvoiceLine
     // Markup Transparency
     public decimal OriginalUnitCost { get; set; } = 0;
     public decimal MarkupPercentage { get; set; } = 0; // e.g. 0.15 for 15%
+    public string? GlAccountCode { get; set; }
+    public string? SageItemCode { get; set; }
 }

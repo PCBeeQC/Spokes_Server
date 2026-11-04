@@ -95,9 +95,6 @@ public class DeviceSession : IDataEntity
     /// <summary>Whether push notifications are enabled for this device.</summary>
     public bool PushEnabled { get; set; }
 
-    /// <summary>Whether this device uses the Idle API to report physical activity.</summary>
-    public bool IsIdleDetectionEnabled { get; set; }
-
     /// <summary>When push was enabled on this device.</summary>
     public DateTime? PushSubscribedAt { get; set; }
 

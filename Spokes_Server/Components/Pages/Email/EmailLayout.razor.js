@@ -32,6 +32,12 @@ export function initInfiniteScroll(containerId, sentinelId, dotNetHelper) {
     currentObserver.observe(sentinel);
 }
 
+export function scrollToTopOfEmail() {
+    const scrollContainer = document.querySelector('.print-scroll');
+    if (scrollContainer) {
+        scrollContainer.scrollTop = 0;
+    }
+}
 
 export function printEmail(subject, from, to, date, htmlContent) {
     const iframe = document.createElement('iframe');

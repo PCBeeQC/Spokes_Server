@@ -1,12 +1,13 @@
 using System;
 using System.Threading;
 using System.Threading.Tasks;
+using Spokes_Server.Core.Services.Communication.Voice.Pipeline;
 
 namespace Spokes_Server.Core.Services.Communication.Voice;
 
 /// <summary>
-/// Service managing the lifecycle, in-room presence, and audio playback of the server-side
-/// LiveKit bot across voice and call channels.
+/// Service managing the lifecycle, in-room presence, audio playback, and server-side media pipeline stages
+/// of the LiveKit bot across voice and call channels.
 /// </summary>
 public interface IVoiceBotService : IAsyncDisposable
 {
@@ -31,4 +32,16 @@ public interface IVoiceBotService : IAsyncDisposable
     /// If a participant joins before the delay expires, the departure is cancelled.
     /// </summary>
     void ScheduleBotDeparture(string channelId, TimeSpan delay);
+
+    /// <summary>
+    /// Registers a reusable server-side media pipeline stage (e.g., Physical Room DSP, transcription, recording).
+    /// </summary>
+    void RegisterPipelineStage(IVoiceRoomPipelineStage stage) { }
+
+    /// <summary>
+    /// Notifies active room media sessions that room or participant configuration has changed
+    /// (such as a device joining/leaving a Physical Room or changing mute state).
+    /// When <paramref name="channelId"/> is null, notifies all active channel sessions.
+    /// </summary>
+    Task NotifyRoomConfigurationChangedAsync(string? channelId = null, CancellationToken cancellationToken = default) => Task.CompletedTask;
 }

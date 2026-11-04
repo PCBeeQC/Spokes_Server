@@ -26,27 +26,23 @@
             
                 <div class="d-flex align-center mt-2">
                 @{
-                    var hasConnection = PresenceState.HasActiveConnection(Employee.Id);
-                    var isAway = PresenceState.IsGloballyAway(Employee.Id);
-                    var hasDesktopActive = PresenceState.HasActiveDesktopConnection(Employee.Id) && !PresenceState.IsUserAwayFromDesktop(Employee.Id);
-                    var hasCapacitorMobile = PresenceState.IsOnlineOnCapacitorMobile(Employee.Id);
-                    var isMobileOnlineOnly = !hasDesktopActive && hasCapacitorMobile;
+                    var presence = PresenceState.GetUserPresenceBadge(Employee.Id);
                     var lastSeen = PresenceState.GetLastSeen(Employee.Id);
                     
                     string lastSeenText = Loc["Offline"].Value;
                     string dotColor = "var(--mud-palette-action-disabled)"; // Offline Gray
 
-                    if (isMobileOnlineOnly)
+                    if (presence == UserPresenceBadge.OnlineMobile)
                     {
                         lastSeenText = Loc["Online on Mobile"].Value;
                         dotColor = "var(--mud-palette-success)";
                     }
-                    else if (hasConnection && !isAway)
+                    else if (presence == UserPresenceBadge.OnlineDesktop)
                     {
                         lastSeenText = Loc["Online"].Value;
                         dotColor = "var(--mud-palette-success)"; // Online Green
                     }
-                    else if (isAway)
+                    else if (presence == UserPresenceBadge.Away)
                     {
                         lastSeenText = Loc["Away"].Value;
                         dotColor = "var(--mud-palette-warning)"; // Away Amber
@@ -56,7 +52,7 @@
                         lastSeenText = PresenceStateService.FormatLastSeen(lastSeen);
                     }
                 }
-                @if (isMobileOnlineOnly)
+                @if (presence == UserPresenceBadge.OnlineMobile)
                 {
                     <MudIcon Icon="@Icons.Material.Filled.Smartphone" Color="Color.Success" Size="Size.Small" Style="font-size: 16px; margin-right: 6px;" />
                 }
@@ -131,7 +127,7 @@
                      </MudItem>
                  }
 
-                 @if (_currentUser?.HasPermission(AppPermissions.Chat.Moderator) == true && !(Employee.IsAdmin || Employee.HasPermission(AppPermissions.Chat.Moderator)))
+                 @if (UserService.CanModerateUserTarget(_currentUser, Employee))
                  {
                      <MudItem xs="12" Class="mt-4 pt-4" Style="border-top: 1px solid var(--mud-palette-lines-default);">
                          <MudText Typo="Typo.subtitle2" Color="Color.Error" Class="mb-3 d-flex align-center gap-2">
@@ -232,16 +228,38 @@
 
     private void ToggleSuspend()
     {
-        Employee.IsSuspended = !Employee.IsSuspended;
-        Database.Employees.Save(Employee);
+        if (_currentUser == null) return;
+        var result = UserService.ToggleModerationSuspension(_currentUser.Id, Employee.Id);
+        if (!result.IsSuccess)
+        {
+            Snackbar.Add(
+                result.Code == "FORBIDDEN_TARGET"
+                    ? Loc["Cannot suspend another moderator or admin."].Value
+                    : (result.ErrorMessage ?? Loc["Failed to update user status."].Value),
+                Severity.Error);
+            return;
+        }
+
+        Employee.IsSuspended = result.Value;
         Snackbar.Add(Employee.IsSuspended ? Loc["User suspended."].Value : Loc["User unsuspended."].Value, Severity.Success);
         StateHasChanged();
     }
 
     private void ToggleBan()
     {
-        Employee.IsBanned = !Employee.IsBanned;
-        Database.Employees.Save(Employee);
+        if (_currentUser == null) return;
+        var result = UserService.ToggleModerationBan(_currentUser.Id, Employee.Id);
+        if (!result.IsSuccess)
+        {
+            Snackbar.Add(
+                result.Code == "FORBIDDEN_TARGET"
+                    ? Loc["Cannot ban another moderator or admin."].Value
+                    : (result.ErrorMessage ?? Loc["Failed to update user status."].Value),
+                Severity.Error);
+            return;
+        }
+
+        Employee.IsBanned = result.Value;
         Snackbar.Add(Employee.IsBanned ? Loc["User banned."].Value : Loc["User unbanned."].Value, Severity.Success);
         StateHasChanged();
     }

@@ -48,6 +48,11 @@
     [Parameter]
     public string? ChannelKey { get; set; }
 
+    [Parameter]
+    public string? SessionId { get; set; }
+
+    private string? EffectiveSessionId => !string.IsNullOrWhiteSpace(SessionId) ? SessionId : CircuitContext?.SessionId;
+
     private bool _isPlaying;
     private bool _thumbnailFailed;
 
@@ -69,14 +74,18 @@
 
     private string GetVideoTokenUrl()
     {
-        var token = FileTokens.GenerateAccessToken("chat", ChannelId, Attachment.FilePath, ChannelKey, CurrentUserId, CircuitContext?.SessionId);
+        if (string.IsNullOrWhiteSpace(CurrentUserId) || string.IsNullOrWhiteSpace(EffectiveSessionId))
+            return Attachment.FilePath;
+        var token = FileTokens.GenerateAccessToken("chat", ChannelId, Attachment.FilePath, ChannelKey, CurrentUserId, EffectiveSessionId);
         return Attachment.FilePath.Contains("?") ? $"{Attachment.FilePath}&t={token}" : $"{Attachment.FilePath}?t={token}";
     }
 
     private string GetThumbnailTokenUrl()
     {
         if (!Attachment.HasServerThumbnail || string.IsNullOrEmpty(Attachment.ThumbnailUrl)) return "";
-        var token = FileTokens.GenerateAccessToken("chat", ChannelId, Attachment.ThumbnailUrl, ChannelKey, CurrentUserId, CircuitContext?.SessionId);
+        if (string.IsNullOrWhiteSpace(CurrentUserId) || string.IsNullOrWhiteSpace(EffectiveSessionId))
+            return Attachment.ThumbnailUrl;
+        var token = FileTokens.GenerateAccessToken("chat", ChannelId, Attachment.ThumbnailUrl, ChannelKey, CurrentUserId, EffectiveSessionId);
         return Attachment.ThumbnailUrl.Contains("?") ? $"{Attachment.ThumbnailUrl}&t={token}" : $"{Attachment.ThumbnailUrl}?t={token}";
     }
 }

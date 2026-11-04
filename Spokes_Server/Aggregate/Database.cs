@@ -5,6 +5,7 @@ using System.Linq;
 using System.Threading.Tasks;
 using Microsoft.Extensions.DependencyInjection;
 using Spokes_Server.Aggregate.Contexts;
+using Spokes_Server.Core.Configuration;
 using Spokes_Server.Core.Data.Repositories.Accounting;
 using Spokes_Server.Core.Data.Repositories.Communication;
 using Spokes_Server.Core.Data.Repositories.Core;
@@ -68,15 +69,21 @@ public class Database
     public virtual UserClientStateRepository ClientStates => CommunicationContext?.ClientStates!;
     public virtual ReportedMessageRepository ReportedMessages => CommunicationContext?.ReportedMessages!;
     public virtual AlbumRepository Albums => CommunicationContext?.Albums!;
+    public virtual EmailAccountRepository EmailAccounts => CommunicationContext?.EmailAccounts!;
+    public virtual EmailInboxRepository EmailInboxes => CommunicationContext?.EmailInboxes!;
+    public virtual EmailSendingIdentityRepository EmailSendingIdentities => CommunicationContext?.EmailSendingIdentities!;
     public virtual EmailFolderRepository EmailFolders => CommunicationContext?.EmailFolders!;
     public virtual EmailMessageRepository EmailMessages => CommunicationContext?.EmailMessages!;
     public virtual PublicContactRepository PublicContacts => CommunicationContext?.PublicContacts!;
     public virtual PrivateContactRepository PrivateContacts => CommunicationContext?.PrivateContacts!;
+    public virtual PhysicalVoiceRoomRepository PhysicalVoiceRooms => CommunicationContext?.PhysicalVoiceRooms!;
+    public virtual ChatPollRepository ChatPolls => CommunicationContext?.ChatPolls!;
 
     // Core Bounded Context
     public virtual CompanyProfileRepository CompanyProfile => CoreContext?.CompanyProfile!;
     public virtual DocumentTemplateRepository DocumentTemplates => CoreContext?.DocumentTemplates!;
     public virtual StandardDocumentRepository StandardDocuments => CoreContext?.StandardDocuments!;
+    public virtual TermsAndConditionsRepository TermsAndConditions => CoreContext?.TermsAndConditions!;
     public virtual OpenIdAccountRepository OpenIdAccounts => CoreContext?.OpenIdAccounts!;
     public virtual ServerConfigRepository ServerConfigs => CoreContext?.ServerConfigs!;
     public virtual SystemConfigRepository SystemConfigs => CoreContext?.SystemConfigs!;

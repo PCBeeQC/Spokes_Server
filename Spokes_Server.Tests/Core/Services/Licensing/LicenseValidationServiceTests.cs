@@ -353,4 +353,18 @@ public class LicenseValidationServiceTests : IDisposable
             Assert.Equal("2026.5.0", result.LockupVersion);
             Assert.Equal("v2026.7.0", result.MaxAllowedVersion);
         }
+
+        [Fact]
+        public void ValidateLicense_LifetimeSentinel_ReturnsValidAndIsLifetimeExpiry()
+        {
+            var lifetimeDate = new DateTime(9999, 1, 1, 12, 0, 0, DateTimeKind.Utc);
+            var json = CreateSignedLicenseJson("lifetime@example.com", "SPK-LIFETIME", lifetimeDate, new List<string> { "Family" });
+
+            var result = _testKeyLicenseService.ValidateLicense(json, new ServerConfig());
+
+            Assert.Equal(LicenseStatus.Valid, result.Status);
+            Assert.NotNull(result.ParsedLicense);
+            Assert.True(LicenseValidationService.IsLifetimeExpiry(result.ParsedLicense.ValidForUpdatesUntil));
+            Assert.False(LicenseValidationService.IsLifetimeExpiry(DateTime.UtcNow.AddYears(2)));
+        }
     }

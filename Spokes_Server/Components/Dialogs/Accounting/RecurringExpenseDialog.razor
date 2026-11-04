@@ -20,7 +20,13 @@
                     </MudItem>
 
                     <MudItem xs="12">
-                        <MudTextField @bind-Value="Expense.Supplier" Label="Supplier / Vendor"
+                        <MudAutocomplete T="string"
+                            Value="@Expense.Supplier"
+                            ValueChanged="@OnSupplierChanged"
+                            SearchFunc="@SearchSupplierNames"
+                            CoerceText="false"
+                            CoerceValue="true"
+                            Label="Supplier / Vendor"
                             Placeholder="e.g. Bell, Hydro-Québec"
                             Variant="Variant.Outlined" />
                     </MudItem>
@@ -54,8 +60,8 @@
                     </MudItem>
 
                     <MudItem xs="12" sm="6">
-                        <MudTextField @bind-Value="Expense.GlAccountCode" Label="GL Account (Sage 50)"
-                            Placeholder="e.g. 5600" Variant="Variant.Outlined" />
+                        <SageGlAccountSelect @bind-Value="Expense.GlAccountCode" Label="Accounting Category / GL (Optional)" Clearable="true"
+                            Placeholder="Auto-inherited from Supplier" Variant="Variant.Outlined" />
                     </MudItem>
 
                     <MudItem xs="12">
@@ -312,6 +318,63 @@
     [Parameter] public int ActiveTabIndex { get; set; }
 
     private DateTime? _createdDate;
+
+    private Task<IEnumerable<string>> SearchSupplierNames(string? value, CancellationToken token)
+    {
+        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var s in Db.Suppliers.GetAll())
+        {
+            if (!string.IsNullOrWhiteSpace(s.ContactInfo.BusinessName))
+                names.Add(s.ContactInfo.BusinessName.Trim());
+        }
+        var sageVendors = Db.CompanyProfile.GetAccounting().SageSettings?.ImportedVendors;
+        if (sageVendors != null)
+        {
+            foreach (var v in sageVendors)
+            {
+                if (!string.IsNullOrWhiteSpace(v.Name))
+                    names.Add(v.Name.Trim());
+            }
+        }
+
+        var ordered = names.OrderBy(n => n);
+        if (string.IsNullOrWhiteSpace(value))
+            return Task.FromResult<IEnumerable<string>>(ordered.Take(75));
+
+        return Task.FromResult<IEnumerable<string>>(
+            ordered.Where(n => n.Contains(value.Trim(), StringComparison.OrdinalIgnoreCase)).Take(75));
+    }
+
+    private void OnSupplierChanged(string? newName)
+    {
+        Expense.Supplier = newName?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(Expense.Supplier))
+        {
+            Expense.SupplierId = null;
+            return;
+        }
+
+        var supplier = Db.Suppliers.GetAll().FirstOrDefault(s =>
+            string.Equals(s.ContactInfo.BusinessName, Expense.Supplier, StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(s.ContactInfo.SageReferenceName, Expense.Supplier, StringComparison.OrdinalIgnoreCase));
+
+        if (supplier != null)
+        {
+            Expense.SupplierId = supplier.Id;
+            if (string.IsNullOrWhiteSpace(Expense.GlAccountCode) && !string.IsNullOrWhiteSpace(supplier.ContactInfo.DefaultGlAccountCode))
+            {
+                Expense.GlAccountCode = supplier.ContactInfo.DefaultGlAccountCode;
+            }
+        }
+        else if (string.IsNullOrWhiteSpace(Expense.GlAccountCode))
+        {
+            var sageSettings = Db.CompanyProfile.GetAccounting().SageSettings;
+            if (sageSettings != null && sageSettings.VendorDefaultGlMappings.TryGetValue(Expense.Supplier, out var mappedGl) && !string.IsNullOrWhiteSpace(mappedGl))
+            {
+                Expense.GlAccountCode = mappedGl;
+            }
+        }
+    }
 
     protected override void OnInitialized()
     {

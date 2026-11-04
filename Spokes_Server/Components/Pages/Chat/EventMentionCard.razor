@@ -105,9 +105,23 @@ else
     private bool IsCurrentUserSuspended =>
         Employees.FirstOrDefault(e => e.Id == CurrentUserId)?.IsSuspended == true;
 
+    private CalendarEvent? ResolveAuthorizedEvent(CalendarEvent? evt)
+    {
+        if (evt == null) return null;
+        if (!string.IsNullOrEmpty(CurrentUserId))
+        {
+            var currentEmp = Employees.FirstOrDefault(e => e.Id == CurrentUserId);
+            if (currentEmp != null && !CalendarService.CanUserViewEvent(evt, currentEmp))
+            {
+                return null;
+            }
+        }
+        return evt;
+    }
+
     protected override void OnInitialized()
     {
-        _event = CalendarService.GetEventById(EventId);
+        _event = ResolveAuthorizedEvent(CalendarService.GetEventById(EventId));
         CalendarService.EventUpdated += HandleCalendarEventUpdated;
     }
 
@@ -115,7 +129,7 @@ else
     {
         if (_event == null || _event.Id != EventId)
         {
-            _event = CalendarService.GetEventById(EventId);
+            _event = ResolveAuthorizedEvent(CalendarService.GetEventById(EventId));
         }
     }
 
@@ -123,7 +137,7 @@ else
     {
         if (updatedEvent.Id == EventId)
         {
-            _event = updatedEvent;
+            _event = ResolveAuthorizedEvent(updatedEvent);
             InvokeAsync(StateHasChanged);
         }
     }

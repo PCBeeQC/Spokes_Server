@@ -96,6 +96,7 @@ public class Quote : IDataEntity
     // NEW: Legal
     // This gets copied from the Template when created, but can be edited per project
     public string TermsAndConditions { get; set; } = string.Empty;
+    public bool TermsStartOnNewPage { get; set; }
 
     public bool IsConfidential { get; set; }
 
@@ -122,6 +123,7 @@ public class QuoteLaborItem
     public string WorkTypeName { get; set; } = string.Empty;
     public string SubTaskId { get; set; } = string.Empty;
     public string SubTaskName { get; set; } = string.Empty;
+    public string Note { get; set; } = string.Empty;
     public decimal Hours { get; set; }
     public decimal Rate { get; set; }
     public decimal Total => Hours * Rate;

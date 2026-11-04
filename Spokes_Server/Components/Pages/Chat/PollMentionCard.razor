@@ -1,0 +1,518 @@
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Services.Communication.Chat
+@using Spokes_Server.Components.Dialogs.Communication.Chat
+@inject PollService PollService
+@inject ChatStateService ChatState
+@inject ISnackbar Snackbar
+@inject IDialogService DialogService
+@inject TimeProvider TimeProvider
+@implements IDisposable
+
+@if (_poll == null)
+{
+    <MudCard Class="pa-3" Style="width: 100%; max-width: 420px; border-radius: 8px; border: 1px dashed var(--mud-palette-divider); box-shadow: none; background: transparent;">
+        <div class="d-flex align-center gap-3">
+            <MudIcon Icon="@Icons.Material.Filled.Poll" Color="Color.Secondary" />
+            <MudText Typo="Typo.body2" Color="Color.Secondary" Style="font-style: italic;">@Loc["This poll is no longer available."]</MudText>
+        </div>
+    </MudCard>
+}
+else
+{
+    var now = TimeProvider.GetUtcNow().UtcDateTime;
+    var isExpired = _poll.IsExpired(now);
+    var totalVotes = _poll.TotalVotes;
+    var maxVotes = _poll.Options.Any() ? _poll.Options.Max(o => o.VoteCount) : 0;
+    var canModify = CanCurrentUserModifyPoll();
+
+    <MudCard Class="pa-3 poll-card" Style="width: 100%; max-width: 420px; border-radius: 10px; border: 1px solid var(--mud-palette-divider); box-shadow: none;">
+        @* Header: Icon + Question + Subtitle + Creator/Mod Menu *@
+        <div class="d-flex align-start justify-space-between gap-2 mb-3">
+            <div class="d-flex align-start gap-3" style="min-width: 0; flex: 1;">
+                <MudAvatar Size="Size.Medium" Class="flex-shrink-0" Style="background: color-mix(in srgb, var(--mud-palette-primary) 15%, transparent); color: var(--mud-palette-primary);">
+                    <MudIcon Icon="@Icons.Material.Filled.Poll" Size="Size.Small" />
+                </MudAvatar>
+                <div style="min-width: 0; flex: 1;">
+                    <MudText Typo="Typo.subtitle1" Style="font-weight: 700; line-height: 1.3; word-break: break-word;">@_displayPoll.Question</MudText>
+                    <div class="d-flex flex-wrap align-center gap-1 mt-1">
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">
+                            @(_poll.AllowMultipleAnswers ? Loc["Select one or more options"] : Loc["Select one option"])
+                        </MudText>
+                        @if (_poll.IsAnonymous)
+                        {
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">•</MudText>
+                            <MudChip T="string" Size="Size.Small" Variant="Variant.Text" Color="Color.Secondary" Icon="@Icons.Material.Filled.VisibilityOff" Style="height: 18px; font-size: 0.68rem;" Class="ma-0 px-1">
+                                @Loc["Anonymous"]
+                            </MudChip>
+                        }
+                    </div>
+                </div>
+            </div>
+
+            @if (canModify)
+            {
+                <MudMenu Icon="@Icons.Material.Filled.MoreVert" Size="Size.Small" Dense="true" IconColor="Color.Secondary" AnchorOrigin="Origin.BottomRight" TransformOrigin="Origin.TopRight">
+                    <MudMenuItem OnClick="OpenEditPollDialog">
+                        <div class="d-flex align-center gap-2">
+                            <MudIcon Icon="@Icons.Material.Filled.Edit" Size="Size.Small" />
+                            <span>@Loc["Edit Poll"]</span>
+                        </div>
+                    </MudMenuItem>
+                    @if (!isExpired)
+                    {
+                        <MudMenuItem OnClick="@(() => SetPollClosed(true))">
+                            <div class="d-flex align-center gap-2">
+                                <MudIcon Icon="@Icons.Material.Filled.LockClock" Size="Size.Small" Color="Color.Warning" />
+                                <span>@Loc["End Poll Now"]</span>
+                            </div>
+                        </MudMenuItem>
+                    }
+                    else
+                    {
+                        <MudMenuItem OnClick="@(() => SetPollClosed(false))">
+                            <div class="d-flex align-center gap-2">
+                                <MudIcon Icon="@Icons.Material.Filled.Replay" Size="Size.Small" Color="Color.Success" />
+                                <span>@Loc["Reopen Poll"]</span>
+                            </div>
+                        </MudMenuItem>
+                    }
+                    <MudMenuItem OnClick="DeletePoll">
+                        <div class="d-flex align-center gap-2">
+                            <MudIcon Icon="@Icons.Material.Filled.Delete" Size="Size.Small" Color="Color.Error" />
+                            <MudText Typo="Typo.body2" Color="Color.Error">@Loc["Delete Poll"]</MudText>
+                        </div>
+                    </MudMenuItem>
+                </MudMenu>
+            }
+        </div>
+
+        @* Options Stack *@
+        <MudStack Spacing="2" Class="mb-3">
+            @foreach (var opt in _displayPoll.Options)
+            {
+                var voteCount = opt.VoteCount;
+                var percentage = totalVotes > 0 ? Math.Round((double)voteCount * 100.0 / totalVotes) : 0;
+                var hasVoted = !_poll.IsAnonymous && !string.IsNullOrEmpty(CurrentUserId) && opt.VoterIds.Contains(CurrentUserId);
+                var isWinner = isExpired && maxVotes > 0 && voteCount == maxVotes;
+                var canVote = !isExpired && !IsCurrentUserSuspended && !string.IsNullOrEmpty(CurrentUserId);
+
+                <MudPaper Outlined="true"
+                          Class="@($"pa-2 poll-option-paper {(canVote ? "interactive cursor-pointer" : "")} {(hasVoted ? "selected" : "")} {(isWinner ? "winner" : "")}")"
+                          Style="border-radius: 8px;"
+                          @onclick="@(() => { if (canVote) ToggleVote(opt.Id); })">
+                    <div class="d-flex align-center justify-space-between gap-2 mb-1">
+                        <div class="d-flex align-center gap-2" style="min-width: 0; flex: 1;">
+                            @if (isWinner)
+                            {
+                                <MudIcon Icon="@Icons.Material.Filled.EmojiEvents" Size="Size.Small" Color="Color.Success" />
+                            }
+                            else
+                            {
+                                <MudIcon Icon="@GetOptionIcon(hasVoted, _poll.AllowMultipleAnswers)"
+                                         Size="Size.Small"
+                                         Color="@(hasVoted ? Color.Primary : Color.Secondary)" />
+                            }
+                            @if (!string.IsNullOrWhiteSpace(opt.Emoji))
+                            {
+                                <span style="font-size: 1.1rem; line-height: 1;">@opt.Emoji</span>
+                            }
+                            <MudText Typo="Typo.body2" Style="@($"font-weight: {(hasVoted || isWinner ? "700" : "500")}; word-break: break-word;")">
+                                @opt.Text
+                            </MudText>
+                        </div>
+
+                        <div class="d-flex align-center gap-2 flex-shrink-0">
+                            @if (!_poll.IsAnonymous && voteCount > 0)
+                            {
+                                <div class="d-flex align-center gap-1" @onclick:stopPropagation="true" @onclick="OpenVotesDialog" style="cursor: pointer;" title="@Loc["View Votes"]">
+                                    @foreach (var voterId in opt.VoterIds.Take(4))
+                                    {
+                                        var voter = Employees.FirstOrDefault(e => e.Id == voterId);
+                                        if (voter != null)
+                                        {
+                                            <MudTooltip Text="@voter.FullName" Placement="Placement.Top" RootStyle="display: inline-flex; align-items: center;">
+                                                <EmployeeAvatar Employee="voter" Size="Size.Small" ShowPresence="false" Style="width: 18px; height: 18px; min-width: 18px; min-height: 18px; font-size: 0.55rem;" />
+                                            </MudTooltip>
+                                        }
+                                    }
+                                    @if (voteCount > 4)
+                                    {
+                                        <MudText Typo="Typo.caption" Color="Color.Secondary" Style="font-size: 0.7rem; font-weight: 600;">
+                                            +@(voteCount - 4)
+                                        </MudText>
+                                    }
+                                </div>
+                            }
+                            <MudText Typo="Typo.caption" Color="@(hasVoted ? Color.Primary : Color.Secondary)" Style="font-weight: 700; min-width: 58px; text-align: right;">
+                                @voteCount (@($"{percentage:0}%"))
+                            </MudText>
+                        </div>
+                    </div>
+
+                    <MudProgressLinear Value="@percentage"
+                                       Color="@(isWinner ? Color.Success : (hasVoted ? Color.Primary : Color.Info))"
+                                       Rounded="true"
+                                       Size="Size.Small" />
+                </MudPaper>
+            }
+        </MudStack>
+
+        @* Participant Add Option Row *@
+        @if (_poll.AllowAddOptions && !isExpired && !IsCurrentUserSuspended && !string.IsNullOrEmpty(CurrentUserId))
+        {
+            <div class="mb-3">
+                @if (!_isAddingOption)
+                {
+                    <MudButton Variant="Variant.Text"
+                               Color="Color.Primary"
+                               Size="Size.Small"
+                               StartIcon="@Icons.Material.Filled.Add"
+                               OnClick="@(() => _isAddingOption = true)">
+                        @Loc["Add option"]
+                    </MudButton>
+                }
+                else
+                {
+                    <div class="d-flex align-center gap-1">
+                        <div style="position: relative;">
+                            <MudButton Variant="Variant.Outlined"
+                                       Color="Color.Default"
+                                       Size="Size.Small"
+                                       Style="min-width: 36px; width: 36px; height: 36px; padding: 0; font-size: 1rem;"
+                                       OnClick="@(() => _showNewOptionEmojiPicker = !_showNewOptionEmojiPicker)">
+                                @if (!string.IsNullOrWhiteSpace(_newOptionEmoji))
+                                {
+                                    <span>@_newOptionEmoji</span>
+                                }
+                                else
+                                {
+                                    <MudIcon Icon="@Icons.Material.Outlined.EmojiEmotions" Size="Size.Small" Color="Color.Secondary" />
+                                }
+                            </MudButton>
+                            @if (_showNewOptionEmojiPicker)
+                            {
+                                <MudPopover Open="true" AnchorOrigin="Origin.TopLeft" TransformOrigin="Origin.BottomLeft" OverflowBehavior="OverflowBehavior.FlipAlways">
+                                    <EmojiPicker IsOpen="true"
+                                                 DisableGifs="true"
+                                                 OnEmojiSelected="@(emoji => { _newOptionEmoji = emoji; _showNewOptionEmojiPicker = false; })"
+                                                 OnClose="@(() => _showNewOptionEmojiPicker = false)"
+                                                 ContainerStyle="position: relative; margin: 0; box-shadow: none;" />
+                                </MudPopover>
+                            }
+                        </div>
+                        <MudTextField @bind-Value="_newOptionText"
+                                      Placeholder="@Loc["New option..."]"
+                                      Variant="Variant.Outlined"
+                                      Margin="Margin.Dense"
+                                      MaxLength="120"
+                                      Immediate="true"
+                                      OnKeyDown="HandleNewOptionKeyDown"
+                                      Class="flex-grow-1" />
+                        <MudIconButton Icon="@Icons.Material.Filled.Check"
+                                       Color="Color.Primary"
+                                       Size="Size.Small"
+                                       Disabled="@string.IsNullOrWhiteSpace(_newOptionText)"
+                                       OnClick="SubmitNewParticipantOption" />
+                        <MudIconButton Icon="@Icons.Material.Filled.Close"
+                                       Color="Color.Secondary"
+                                       Size="Size.Small"
+                                       OnClick="CancelAddOption" />
+                    </div>
+                }
+            </div>
+        }
+
+        @* Footer: Total Votes + Status/Expiration + View Votes *@
+        <div class="d-flex align-center justify-space-between flex-wrap gap-2 pt-1" style="border-top: 1px solid var(--mud-palette-divider);">
+            <div class="d-flex align-center gap-2">
+                <MudText Typo="Typo.caption" Color="Color.Secondary" Style="font-weight: 600;">
+                    @totalVotes @(totalVotes == 1 ? Loc["vote"].Value : Loc["votes"].Value)
+                </MudText>
+                <MudText Typo="Typo.caption" Color="Color.Secondary">•</MudText>
+                @if (isExpired)
+                {
+                    <MudChip T="string" Size="Size.Small" Color="Color.Default" Variant="Variant.Filled" Style="height: 20px; font-size: 0.7rem;" Class="ma-0">
+                        @Loc["Final Results"]
+                    </MudChip>
+                }
+                else
+                {
+                    <MudText Typo="Typo.caption" Color="Color.Secondary">
+                        @GetTimeRemainingText(now)
+                    </MudText>
+                }
+            </div>
+
+            @if (!_poll.IsAnonymous)
+            {
+                <MudButton Variant="Variant.Text"
+                           Color="Color.Primary"
+                           Size="Size.Small"
+                           Class="py-0 px-2"
+                           Style="text-transform: none; font-size: 0.75rem; min-width: unset;"
+                           OnClick="OpenVotesDialog">
+                    @Loc["View Votes"]
+                </MudButton>
+            }
+        </div>
+    </MudCard>
+}
+
+@* Styles live in wwwroot/css/chat.css: this component renders once per poll mention, so inline style blocks would be re-sent and re-inserted per instance (AGENTS.md §3). *@
+
+@code {
+    [Parameter, EditorRequired]
+    public string PollId { get; set; } = string.Empty;
+
+    [Parameter]
+    public string? CurrentUserId { get; set; }
+
+    [Parameter]
+    public string? ChannelId { get; set; }
+
+    [Parameter]
+    public string? ChannelKey { get; set; }
+
+    [Parameter, EditorRequired]
+    public List<Employee> Employees { get; set; } = [];
+
+    private ChatPoll? _poll;
+    private ChatPoll _displayPoll = new();
+    private string? _lastChannelKey;
+    private string? _lastChannelId;
+    private string? _lastCurrentUserId;
+
+    private bool _isAddingOption;
+    private string _newOptionText = string.Empty;
+    private string? _newOptionEmoji;
+    private bool _showNewOptionEmojiPicker;
+
+    private Employee? CurrentEmployee =>
+        !string.IsNullOrEmpty(CurrentUserId) ? Employees.FirstOrDefault(e => e.Id == CurrentUserId) : null;
+
+    private bool IsCurrentUserSuspended => CurrentEmployee?.IsSuspended == true;
+
+    protected override void OnInitialized()
+    {
+        LoadPoll();
+        ChatState.PollUpdated += HandlePollUpdated;
+        ChatState.PollDeleted += HandlePollDeleted;
+    }
+
+    protected override void OnParametersSet()
+    {
+        if (_poll == null || _poll.Id != PollId || _lastChannelKey != ChannelKey || _lastChannelId != ChannelId || _lastCurrentUserId != CurrentUserId)
+        {
+            LoadPoll();
+        }
+    }
+
+    private void LoadPoll()
+    {
+        _lastChannelKey = ChannelKey;
+        _lastChannelId = ChannelId;
+        _lastCurrentUserId = CurrentUserId;
+        _poll = !string.IsNullOrEmpty(CurrentUserId)
+            ? PollService.GetPollById(PollId, CurrentUserId, ChannelId)
+            : null;
+        if (_poll != null)
+        {
+            _displayPoll = PollService.DecryptPollForDisplay(_poll, ChannelKey);
+        }
+    }
+
+    private void HandlePollUpdated(ChatPoll updatedPoll)
+    {
+        if (updatedPoll.Id == PollId &&
+            (string.IsNullOrEmpty(ChannelId) || string.Equals(updatedPoll.ChannelId, ChannelId, StringComparison.Ordinal)) &&
+            _poll != null)
+        {
+            _poll = updatedPoll;
+            _displayPoll = PollService.DecryptPollForDisplay(_poll, ChannelKey);
+            InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private void HandlePollDeleted(string deletedPollId)
+    {
+        if (deletedPollId == PollId)
+        {
+            _poll = null;
+            InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private bool CanCurrentUserModifyPoll()
+    {
+        return PollService.CanUserModifyPoll(_poll, CurrentEmployee);
+    }
+
+    private static string GetOptionIcon(bool hasVoted, bool allowMultiple)
+    {
+        if (allowMultiple)
+        {
+            return hasVoted ? Icons.Material.Filled.CheckBox : Icons.Material.Filled.CheckBoxOutlineBlank;
+        }
+        return hasVoted ? Icons.Material.Filled.RadioButtonChecked : Icons.Material.Filled.RadioButtonUnchecked;
+    }
+
+    private string GetTimeRemainingText(DateTime utcNow)
+    {
+        if (_poll?.ExpiresAt == null)
+        {
+            return Loc["Open poll"].Value;
+        }
+
+        var remaining = _poll.ExpiresAt.Value - utcNow;
+        if (remaining.TotalSeconds <= 0)
+        {
+            return Loc["Poll ended"].Value;
+        }
+
+        if (remaining.TotalDays >= 1)
+        {
+            int days = (int)Math.Ceiling(remaining.TotalDays);
+            return days == 1
+                ? Loc["1 day left"].Value
+                : string.Format(Loc["{0} days left"].Value, days);
+        }
+
+        if (remaining.TotalHours >= 1)
+        {
+            int hours = (int)Math.Ceiling(remaining.TotalHours);
+            return hours == 1
+                ? Loc["1 hour left"].Value
+                : string.Format(Loc["{0} hours left"].Value, hours);
+        }
+
+        int minutes = Math.Max(1, (int)Math.Ceiling(remaining.TotalMinutes));
+        return minutes == 1
+            ? Loc["1 minute left"].Value
+            : string.Format(Loc["{0} minutes left"].Value, minutes);
+    }
+
+    private void ToggleVote(string optionId)
+    {
+        if (string.IsNullOrEmpty(CurrentUserId)) return;
+        var result = PollService.ToggleVote(PollId, optionId, CurrentUserId);
+        if (!result.IsSuccess)
+        {
+            Snackbar.Add(result.ErrorMessage ?? Loc["Failed to record vote."].Value, Severity.Warning);
+        }
+    }
+
+    private void HandleNewOptionKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter" && !string.IsNullOrWhiteSpace(_newOptionText))
+        {
+            SubmitNewParticipantOption();
+        }
+        else if (e.Key == "Escape")
+        {
+            CancelAddOption();
+        }
+    }
+
+    private void SubmitNewParticipantOption()
+    {
+        if (string.IsNullOrEmpty(CurrentUserId) || string.IsNullOrWhiteSpace(_newOptionText)) return;
+
+        var result = PollService.AddParticipantOption(PollId, CurrentUserId, _newOptionText, _newOptionEmoji, ChannelKey);
+        if (result.IsSuccess)
+        {
+            CancelAddOption();
+        }
+        else
+        {
+            Snackbar.Add(result.ErrorMessage ?? Loc["Failed to add option."].Value, Severity.Warning);
+        }
+    }
+
+    private void CancelAddOption()
+    {
+        _isAddingOption = false;
+        _newOptionText = string.Empty;
+        _newOptionEmoji = null;
+        _showNewOptionEmojiPicker = false;
+    }
+
+    private async Task OpenEditPollDialog()
+    {
+        if (_poll == null || string.IsNullOrEmpty(CurrentUserId)) return;
+
+        var parameters = new DialogParameters<ChatPollDialog>
+        {
+            { x => x.Poll, _poll },
+            { x => x.IsEditMode, true },
+            { x => x.ChannelId, _poll.ChannelId },
+            { x => x.CurrentUserId, CurrentUserId },
+            { x => x.ChannelKey, ChannelKey }
+        };
+        var options = new DialogOptions { CloseButton = true, MaxWidth = MaxWidth.Small, FullWidth = true };
+        await DialogService.ShowAsync<ChatPollDialog>(Loc["Edit Poll"].Value, parameters, options);
+    }
+
+    private void SetPollClosed(bool closed)
+    {
+        if (string.IsNullOrEmpty(CurrentUserId)) return;
+        var result = PollService.SetPollClosed(PollId, CurrentUserId, closed);
+        if (!result.IsSuccess)
+        {
+            Snackbar.Add(result.ErrorMessage ?? Loc["Failed to update poll status."].Value, Severity.Warning);
+        }
+    }
+
+    private void DeletePoll()
+    {
+        if (string.IsNullOrEmpty(CurrentUserId)) return;
+        var result = PollService.DeletePoll(PollId, CurrentUserId);
+        if (!result.IsSuccess)
+        {
+            Snackbar.Add(result.ErrorMessage ?? Loc["Failed to delete poll."].Value, Severity.Warning);
+        }
+    }
+
+    private async Task OpenVotesDialog()
+    {
+        if (_poll == null || _poll.IsAnonymous) return;
+
+        var groups = new Dictionary<string, List<Employee>>();
+        foreach (var opt in _displayPoll.Options)
+        {
+            var label = string.IsNullOrWhiteSpace(opt.Emoji) ? opt.Text : $"{opt.Emoji} {opt.Text}";
+            if (groups.ContainsKey(label))
+            {
+                label = $"{label} ({opt.Id[..Math.Min(4, opt.Id.Length)]})";
+            }
+
+            var voters = new List<Employee>();
+            foreach (var voterId in opt.VoterIds)
+            {
+                var emp = Employees.FirstOrDefault(e => e.Id == voterId);
+                if (emp != null)
+                {
+                    voters.Add(emp);
+                }
+            }
+            groups[label] = voters;
+        }
+
+        var parameters = new DialogParameters<MessageReactionsDialog>
+        {
+            { x => x.IsPollVotesMode, true },
+            { x => x.CustomEmployeeGroups, groups },
+            { x => x.Employees, Employees },
+            { x => x.AnonymizeUsers, _poll.IsAnonymous },
+            { x => x.CustomTitle, _displayPoll.Question },
+            { x => x.CustomIcon, Icons.Material.Filled.Poll }
+        };
+        var options = new DialogOptions { CloseButton = true, MaxWidth = MaxWidth.Small, FullWidth = true };
+        await DialogService.ShowAsync<MessageReactionsDialog>(Loc["Poll Votes"].Value, parameters, options);
+    }
+
+    public void Dispose()
+    {
+        ChatState.PollUpdated -= HandlePollUpdated;
+        ChatState.PollDeleted -= HandlePollDeleted;
+    }
+}

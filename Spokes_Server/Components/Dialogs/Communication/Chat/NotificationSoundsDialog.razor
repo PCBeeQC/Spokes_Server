@@ -18,10 +18,10 @@
         </div>
     </TitleContent>
     <DialogContent>
-        <div class="d-flex flex-column gap-3 pb-2" style="max-height: 70vh; overflow-y: auto;">
+        <div class="d-flex flex-column gap-3 pb-2 pr-1" style="max-height: 60vh; overflow-y: auto; min-height: 0;">
             @if (_iosSoundDisabled)
             {
-                <MudAlert Severity="Severity.Warning" Dense="true" Class="mb-1" Elevation="1">
+                <MudAlert Severity="Severity.Warning" Dense="true" Class="mb-1 flex-shrink-0" Elevation="1">
                     <div class="d-flex align-center justify-space-between flex-wrap gap-2">
                         <span>@Loc["Notification sounds are currently disabled for Spokes in your iPhone Settings."]</span>
                         <MudButton Variant="Variant.Filled" Color="Color.Warning" Size="Size.Small" OnClick="OpenIosSettings">
@@ -31,7 +31,7 @@
                 </MudAlert>
             }
 
-            <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-1">
+            <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-1 flex-shrink-0">
                 @Loc["Customize sounds played for each notification category on this device and for push notifications."]
             </MudText>
 
@@ -43,11 +43,11 @@
                 var isSystemDefault = currentSoundId == NotificationSoundIds.SystemDefault;
                 var availableSounds = NotificationSoundCatalog.GetSoundsForCategory(catId);
 
-                <MudPaper Elevation="0" Outlined="true" Class="rounded-lg overflow-hidden">
+                <MudPaper Elevation="0" Outlined="true" Class="rounded-lg overflow-hidden flex-shrink-0">
                     <div class="d-flex align-center justify-space-between px-4 py-2">
                         <div class="d-flex align-center gap-2">
                             <MudIcon Icon="@category.Icon" Size="Size.Small" Color="Color.Primary" />
-                            <MudText Typo="Typo.subtitle1" Style="font-weight: 600;">@Loc[category.DisplayName]</MudText>
+                            <MudText Typo="Typo.subtitle1" Style="font-weight: 600;">@GetCategoryDisplayName(category)</MudText>
                         </div>
                         @if (isSystemDefault)
                         {
@@ -65,7 +65,7 @@
                     <MudDivider />
                     <div class="px-4 py-3 d-flex flex-column gap-2">
                         <MudText Typo="Typo.caption" Color="Color.Secondary">
-                            @Loc[category.Description]
+                            @GetCategoryDescription(category)
                         </MudText>
 
                         <div class="d-flex align-center gap-2 mt-1">
@@ -119,10 +119,11 @@
     private IReadOnlyList<NotificationCategoryDefinition> _categories = [];
     private string? _playingCategoryId;
     private bool _iosSoundDisabled = false;
+    private bool IsFriendEdition => Db.CompanyProfile.Get()?.Edition == "Family";
 
     protected override async Task OnInitializedAsync()
     {
-        _categories = NotificationCategoryRegistry.GetAllCategories();
+        _categories = NotificationCategoryRegistry.GetAllCategories(isBusinessEdition: !IsFriendEdition);
 
         if (Employee != null)
         {
@@ -177,6 +178,24 @@
         catch { }
     }
 
+    private string GetCategoryDisplayName(NotificationCategoryDefinition category)
+    {
+        return category.Id switch
+        {
+            NotificationCategories.Email => BizLoc["Incoming Emails"].Value,
+            _ => Loc[category.DisplayName].Value
+        };
+    }
+
+    private string GetCategoryDescription(NotificationCategoryDefinition category)
+    {
+        return category.Id switch
+        {
+            NotificationCategories.Email => BizLoc["Notifications for new incoming email messages."].Value,
+            _ => Loc[category.Description].Value
+        };
+    }
+
     private string GetCurrentSoundId(string categoryId)
     {
         var soundId = _currentUser?.GetNotificationSound(categoryId);
@@ -216,8 +235,8 @@
 
             var cat = NotificationCategoryRegistry.GetCategory(categoryId);
             var soundName = NotificationSoundCatalog.GetSoundDisplayName(categoryId, soundId);
-            var catName = cat?.DisplayName ?? categoryId;
-            Snackbar.Add(string.Format(Loc["Updated {0} sound to {1}."].Value, Loc[catName].Value, Loc[soundName].Value), Severity.Success);
+            var catName = cat != null ? GetCategoryDisplayName(cat) : categoryId;
+            Snackbar.Add(string.Format(Loc["Updated {0} sound to {1}."].Value, catName, Loc[soundName].Value), Severity.Success);
         }
     }
 

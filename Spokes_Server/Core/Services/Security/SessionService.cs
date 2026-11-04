@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Linq;
 using System.Security.Claims;
 using System.Security.Cryptography;
@@ -33,6 +35,8 @@ namespace Spokes_Server.Core.Services.Security;
 /// </summary>
 public class SessionService
 {
+    private static readonly ConcurrentDictionary<string, object> _employeeSessionLocks = new(StringComparer.OrdinalIgnoreCase);
+
     private readonly DeviceSessionRepository _deviceSessions;
     private readonly EmployeeRepository _employees;
     private readonly SystemConfigRepository? _systemConfigs;
@@ -41,8 +45,11 @@ public class SessionService
     private readonly IConfigurationManager<OpenIdConnectConfiguration>? _injectedConfigManager;
     private readonly IOpenIdConfigurationProvider? _openIdConfigurationProvider;
     private readonly ILogger<SessionService>? _logger;
+    private readonly GlobalKeystoreService? _globalKeystore;
+    private readonly FileTokenService? _fileTokenService;
 
     public event Action<string>? OnSessionRevoked;
+    public event Action<string>? OnSessionBanned;
 
     [ActivatorUtilitiesConstructor]
     public SessionService(
@@ -52,15 +59,17 @@ public class SessionService
         IMemoryCache? cache = null,
         ILogger<SessionService>? logger = null,
         IConfigurationManager<OpenIdConnectConfiguration>? injectedConfigManager = null,
-        IOpenIdConfigurationProvider? openIdConfigurationProvider = null)
-        : this(coreContext?.DeviceSessions!, hrContext?.Employees!, coreContext?.SystemConfigs, oidcOptionsMonitor, cache, logger, injectedConfigManager, openIdConfigurationProvider)
+        IOpenIdConfigurationProvider? openIdConfigurationProvider = null,
+        GlobalKeystoreService? globalKeystore = null,
+        FileTokenService? fileTokenService = null)
+        : this(coreContext?.DeviceSessions!, hrContext?.Employees!, coreContext?.SystemConfigs, oidcOptionsMonitor, cache, logger, injectedConfigManager, openIdConfigurationProvider, globalKeystore, fileTokenService)
     {
     }
 
     public SessionService(
         CoreContext coreContext,
         HrContext hrContext)
-        : this(coreContext, hrContext, null, null, null, null, null)
+        : this(coreContext, hrContext, null, null, null, null, null, null, null)
     {
     }
 
@@ -72,7 +81,9 @@ public class SessionService
         IMemoryCache? cache = null,
         ILogger<SessionService>? logger = null,
         IConfigurationManager<OpenIdConnectConfiguration>? injectedConfigManager = null,
-        IOpenIdConfigurationProvider? openIdConfigurationProvider = null)
+        IOpenIdConfigurationProvider? openIdConfigurationProvider = null,
+        GlobalKeystoreService? globalKeystore = null,
+        FileTokenService? fileTokenService = null)
     {
         _deviceSessions = deviceSessions ?? throw new ArgumentNullException(nameof(deviceSessions));
         _employees = employees ?? throw new ArgumentNullException(nameof(employees));
@@ -81,11 +92,16 @@ public class SessionService
         _cache = cache;
         _logger = logger;
         _injectedConfigManager = injectedConfigManager;
+        _globalKeystore = globalKeystore;
+        _fileTokenService = fileTokenService;
         _openIdConfigurationProvider = openIdConfigurationProvider
             ?? (injectedConfigManager != null || oidcOptionsMonitor != null
                 ? new OpenIdConfigurationProvider(null, oidcOptionsMonitor, injectedConfigManager)
                 : OpenIdConfigurationProvider.Shared);
     }
+
+    internal Employee? GetEmployeeById(string? employeeId)
+        => string.IsNullOrEmpty(employeeId) ? null : _employees.GetById(employeeId);
 
     /// <summary>
     /// Builds a consistent ClaimsIdentity from an Employee + SessionId.
@@ -100,18 +116,25 @@ public class SessionService
         identity.AddClaim(new Claim("EmployeeId", employee.Id));
         identity.AddClaim(new Claim("SessionId", sessionId));
 
-        if (employee.IsAdmin)
+        if (!employee.IsBanned)
         {
-            identity.AddClaim(new Claim(ClaimTypes.Role, AppPermissions.Admin.RoleName));
-        }
-
-        var effectivePermissions = employee.PermissionGroup?.Permissions ?? employee.Permissions;
-        if (effectivePermissions != null)
-        {
-            foreach (var perm in effectivePermissions)
+            if (employee.IsAdmin)
             {
-                identity.AddClaim(new Claim("Permission", perm));
+                identity.AddClaim(new Claim(ClaimTypes.Role, AppPermissions.Admin.RoleName));
             }
+
+            var effectivePermissions = employee.PermissionGroup?.Permissions ?? employee.Permissions;
+            if (effectivePermissions != null)
+            {
+                foreach (var perm in effectivePermissions)
+                {
+                    identity.AddClaim(new Claim("Permission", perm));
+                }
+            }
+        }
+        else
+        {
+            identity.AddClaim(new Claim("Banned", "true"));
         }
 
         return identity;
@@ -129,6 +152,7 @@ public class SessionService
         bool issueCookie = true,
         string? idToken = null)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(employeeId);
         string? rawToken = null;
         var tokenBytes = RandomNumberGenerator.GetBytes(64);
         var refreshToken = Convert.ToBase64String(tokenBytes);
@@ -148,76 +172,83 @@ public class SessionService
             deviceId = deviceId.Trim();
         }
 
-        // Look for active sessions matching this employee.
-        // Prefer an exact device match; if none exists, adopt any legacy dev_ or unbound session.
-        var employeeSessions = _deviceSessions.GetAll()
-            .Where(s => s.EmployeeId == employeeId && s.RevokedAt == null)
-            .ToList();
-
-        // Only match existing sessions if a device ID is present.
-        // Desktop web sessions (deviceId == null) always create isolated sessions to allow multi-workstation concurrency.
-        var matchingSessions = !string.IsNullOrEmpty(deviceId)
-            ? employeeSessions.Where(s => !string.IsNullOrEmpty(s.DeviceId) && string.Equals(s.DeviceId, deviceId, StringComparison.OrdinalIgnoreCase)).ToList()
-            : [];
-
-        if (matchingSessions.Count == 0 && !string.IsNullOrEmpty(deviceId))
-        {
-            // If no exact match, check for a legacy dev_ session to adopt.
-            // NEVER adopt unbound desktop sessions (where DeviceId is null or empty).
-            var legacySession = employeeSessions.FirstOrDefault(s => !string.IsNullOrEmpty(s.DeviceId) && s.DeviceId.StartsWith("dev_", StringComparison.OrdinalIgnoreCase));
-            if (legacySession != null)
-            {
-                matchingSessions.Add(legacySession);
-            }
-        }
-
         DeviceSession deviceSession;
-        if (matchingSessions.Count > 0)
+        var empLock = _employeeSessionLocks.GetOrAdd(employeeId, _ => new object());
+        lock (empLock)
         {
-            deviceSession = matchingSessions[0];
-            deviceSession.TokenHash = tokenHash;
-            deviceSession.DeviceInfo = deviceInfo;
-            deviceSession.DeviceId = deviceId; // Ensure adopted session receives the modernized device ID
-            if (isMobileDevice)
-            {
-                deviceSession.DeviceType = DeviceType.Mobile;
-            }
-            if (isCapacitor)
-            {
-                deviceSession.IsCapacitor = true;
-                deviceSession.IsIdleDetectionEnabled = false;
-            }
-            deviceSession.ExpiresAt = DateTime.UtcNow.AddDays(90);
-            deviceSession.LastSeenAt = DateTime.UtcNow;
-            if (!string.IsNullOrEmpty(idToken)) deviceSession.IdToken = idToken;
+            // Look for active sessions matching this employee.
+            // Prefer an exact device match; if none exists, adopt any legacy dev_ or unbound session.
+            var employeeSessions = _deviceSessions.GetAll()
+                .Where(s => s.EmployeeId == employeeId && s.RevokedAt == null)
+                .ToList();
 
-            // Preserve existing push credentials across same-device re-logins and legacy dev_ migrations
-            _deviceSessions.Save(deviceSession);
+            // Only match existing sessions if a device ID is present.
+            // Desktop web sessions (deviceId == null) always create isolated sessions to allow multi-workstation concurrency.
+            var matchingSessions = !string.IsNullOrEmpty(deviceId)
+                ? employeeSessions.Where(s => !string.IsNullOrEmpty(s.DeviceId) && string.Equals(s.DeviceId, deviceId, StringComparison.OrdinalIgnoreCase)).ToList()
+                : [];
 
-            // Revoke any duplicates that were created previously
-            foreach (var duplicate in matchingSessions.Skip(1))
+            if (matchingSessions.Count == 0 && !string.IsNullOrEmpty(deviceId))
             {
-                duplicate.RevokedAt = DateTime.UtcNow;
-                _deviceSessions.Save(duplicate);
+                // If no exact match, check for a legacy dev_ session to adopt.
+                // NEVER adopt unbound desktop sessions (where DeviceId is null or empty).
+                var expectedDeviceType = isMobileDevice ? DeviceType.Mobile : DeviceType.Desktop;
+                var legacySession = employeeSessions.FirstOrDefault(s =>
+                    !string.IsNullOrEmpty(s.DeviceId)
+                    && s.DeviceId.StartsWith("dev_", StringComparison.OrdinalIgnoreCase)
+                    && s.IsCapacitor == isCapacitor
+                    && string.Equals(s.DeviceType, expectedDeviceType, StringComparison.OrdinalIgnoreCase));
+                if (legacySession != null)
+                {
+                    matchingSessions.Add(legacySession);
+                }
             }
-        }
-        else
-        {
-            deviceSession = new DeviceSession
+
+            if (matchingSessions.Count > 0)
             {
-                EmployeeId = employeeId,
-                TokenHash = tokenHash,
-                DeviceInfo = deviceInfo,
-                DeviceId = deviceId,
-                IsCapacitor = isCapacitor,
-                DeviceType = isMobileDevice ? DeviceType.Mobile : DeviceType.Desktop,
-                IsIdleDetectionEnabled = false,
-                CreatedAt = DateTime.UtcNow,
-                ExpiresAt = DateTime.UtcNow.AddDays(90),
-                LastSeenAt = DateTime.UtcNow
-            };
-            if (!string.IsNullOrEmpty(idToken)) deviceSession.IdToken = idToken;
-            _deviceSessions.Save(deviceSession);
+                deviceSession = matchingSessions[0];
+                deviceSession.TokenHash = tokenHash;
+                deviceSession.DeviceInfo = deviceInfo;
+                deviceSession.DeviceId = deviceId; // Ensure adopted session receives the modernized device ID
+                if (isMobileDevice)
+                {
+                    deviceSession.DeviceType = DeviceType.Mobile;
+                }
+                if (isCapacitor)
+                {
+                    deviceSession.IsCapacitor = true;
+                }
+                deviceSession.ExpiresAt = DateTime.UtcNow.AddDays(90);
+                deviceSession.LastSeenAt = DateTime.UtcNow;
+                if (!string.IsNullOrEmpty(idToken)) deviceSession.IdToken = idToken;
+
+                // Preserve existing push credentials across same-device re-logins and legacy dev_ migrations
+                _deviceSessions.Save(deviceSession);
+
+                // Revoke any duplicates that were created previously
+                foreach (var duplicate in matchingSessions.Skip(1))
+                {
+                    duplicate.RevokedAt = DateTime.UtcNow;
+                    _deviceSessions.Save(duplicate);
+                }
+            }
+            else
+            {
+                deviceSession = new DeviceSession
+                {
+                    EmployeeId = employeeId,
+                    TokenHash = tokenHash,
+                    DeviceInfo = deviceInfo,
+                    DeviceId = deviceId,
+                    IsCapacitor = isCapacitor,
+                    DeviceType = isMobileDevice ? DeviceType.Mobile : DeviceType.Desktop,
+                    CreatedAt = DateTime.UtcNow,
+                    ExpiresAt = DateTime.UtcNow.AddDays(90),
+                    LastSeenAt = DateTime.UtcNow
+                };
+                if (!string.IsNullOrEmpty(idToken)) deviceSession.IdToken = idToken;
+                _deviceSessions.Save(deviceSession);
+            }
         }
 
         if (issueCookie)
@@ -235,8 +266,6 @@ public class SessionService
 
         return (deviceSession, rawToken);
     }
-
-
 
     /// <summary>
     /// Resolves the currently active DeviceSession from the HttpContext, checking
@@ -272,11 +301,6 @@ public class SessionService
     /// Single source of truth for all token validation — used by DeviceTokenAuthHandler,
     /// /spokesapi/auth/refresh, SessionService.GetActiveSession, and force-logout.
     /// </summary>
-    /// <param name="rawToken">The plaintext token to validate.</param>
-    /// <param name="expectedDeviceId">Optional device ID to check. If the session has a bound DeviceId (mobile),
-    /// this must be provided and must match (prevents cross-device token reuse from iCloud cookie sync).</param>
-    /// <param name="allowRevoked">Whether to return revoked sessions (used exclusively by force-logout).</param>
-    /// <returns>The active session and employee, or null if validation fails.</returns>
     public (DeviceSession Session, Employee Employee)? ValidateToken(
         string rawToken, string? expectedDeviceId = null, bool allowRevoked = false)
     {
@@ -317,7 +341,7 @@ public class SessionService
 
         var employee = _employees.GetById(session.EmployeeId);
         if (employee == null) return null;
-        if (!allowRevoked && (!employee.IsActive || employee.IsSuspended || employee.IsBanned)) return null;
+        if (!allowRevoked && (!employee.IsActive || employee.IsBanned)) return null;
 
         return (session, employee);
     }
@@ -327,37 +351,119 @@ public class SessionService
     /// Deduplicates active sessions for the same employee and device, persisting changes to database.
     /// Should be called during authentication lifecycle steps (e.g. login, token renewal, refresh) rather than read validation.
     /// </summary>
-    /// <param name="session">The session to migrate.</param>
-    /// <param name="expectedDeviceId">The target persistent device ID.</param>
-    /// <returns>True if migration occurred and was saved; otherwise false.</returns>
     public bool AdoptLegacySessionDeviceId(DeviceSession session, string? expectedDeviceId)
     {
-        if (session == null || string.IsNullOrWhiteSpace(expectedDeviceId)) return false;
+        if (session == null || string.IsNullOrWhiteSpace(session.EmployeeId) || string.IsNullOrWhiteSpace(expectedDeviceId)) return false;
         expectedDeviceId = expectedDeviceId.Trim();
 
-        if (!string.IsNullOrEmpty(session.DeviceId) &&
-            session.DeviceId.StartsWith("dev_", StringComparison.OrdinalIgnoreCase) &&
-            !string.Equals(session.DeviceId, expectedDeviceId, StringComparison.OrdinalIgnoreCase))
+        var empLock = _employeeSessionLocks.GetOrAdd(session.EmployeeId, _ => new object());
+        lock (empLock)
         {
-            _logger?.LogInformation("Migrating legacy session {SessionId} device ID from '{OldDeviceId}' to '{NewDeviceId}'", session.Id, session.DeviceId, expectedDeviceId);
-            session.DeviceId = expectedDeviceId;
-            session.LastSeenAt = DateTime.UtcNow;
-
-            // Deduplicate: revoke any other active duplicate sessions for this employee matching expectedDeviceId
-            var duplicateSessions = _deviceSessions.GetByEmployeeId(session.EmployeeId)
-                .Where(s => s.Id != session.Id && s.RevokedAt == null && string.Equals(s.DeviceId, expectedDeviceId, StringComparison.OrdinalIgnoreCase))
-                .ToList();
-            foreach (var dup in duplicateSessions)
+            if (!string.IsNullOrEmpty(session.DeviceId) &&
+                session.DeviceId.StartsWith("dev_", StringComparison.OrdinalIgnoreCase) &&
+                !string.Equals(session.DeviceId, expectedDeviceId, StringComparison.OrdinalIgnoreCase))
             {
-                dup.RevokedAt = DateTime.UtcNow;
-                _deviceSessions.Save(dup);
-            }
+                _logger?.LogInformation("Migrating legacy session {SessionId} device ID from '{OldDeviceId}' to '{NewDeviceId}'", session.Id, session.DeviceId, expectedDeviceId);
+                session.DeviceId = expectedDeviceId;
+                session.LastSeenAt = DateTime.UtcNow;
 
-            _deviceSessions.Save(session);
-            return true;
+                // Deduplicate: revoke any other active duplicate sessions for this employee matching expectedDeviceId
+                var duplicateSessions = _deviceSessions.GetByEmployeeId(session.EmployeeId)
+                    .Where(s => s.Id != session.Id && s.RevokedAt == null && string.Equals(s.DeviceId, expectedDeviceId, StringComparison.OrdinalIgnoreCase))
+                    .ToList();
+                foreach (var dup in duplicateSessions)
+                {
+                    dup.RevokedAt = DateTime.UtcNow;
+                    _deviceSessions.Save(dup);
+                }
+
+                _deviceSessions.Save(session);
+                return true;
+            }
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// Evicts the user's decrypted private key from <see cref="GlobalKeystoreService"/>
+    /// when no remaining active, unrevoked, unexpired <see cref="DeviceSession"/> has <c>HasVaultCookie == true</c>.
+    /// </summary>
+    public void EvictGlobalKeystoreIfNoUnlockedSessions(string? employeeId)
+    {
+        if (string.IsNullOrWhiteSpace(employeeId)) return;
+
+        var now = DateTime.UtcNow;
+        bool hasRemainingUnlockedSession = _deviceSessions
+            .GetByEmployeeId(employeeId)
+            .Any(s => s.RevokedAt == null && s.ExpiresAt > now && s.HasVaultCookie);
+
+        if (!hasRemainingUnlockedSession)
+        {
+            _globalKeystore?.LockVault(employeeId);
+        }
+    }
+
+    /// <summary>
+    /// Revokes all active sessions for the specified employee, clears push credentials,
+    /// unconditionally evicts cached vault keys and file tokens, and triggers remote logout across all active circuits.
+    /// </summary>
+    public void RevokeAllUserSessions(string employeeId)
+    {
+        if (string.IsNullOrWhiteSpace(employeeId)) return;
+
+        var activeSessions = _deviceSessions.GetByEmployeeId(employeeId)
+            .Where(s => s.RevokedAt == null)
+            .ToList();
+
+        var now = DateTime.UtcNow;
+        foreach (var session in activeSessions)
+        {
+            session.RevokedAt = now;
+            session.HasVaultCookie = false;
+            _deviceSessions.Save(session);
+            if (session.HasPush)
+            {
+                _deviceSessions.ClearPushFields(session);
+            }
+            TriggerRemoteLogout(session.Id);
+        }
+
+        _globalKeystore?.LockVault(employeeId);
+        _fileTokenService?.InvalidateUserEncryptedTokens(employeeId);
+    }
+
+    /// <summary>
+    /// Quarantines all active sessions for a newly banned employee: clears refresh token hashes,
+    /// vault unlock state, push credentials, cached keystore keys, and encrypted file tokens while
+    /// preserving unrevoked DeviceSession state and IdToken strictly for Static SSR /banned containment
+    /// and clean RP-initiated IdP sign-out.
+    /// </summary>
+    public void QuarantineUserSessionsForBan(string employeeId)
+    {
+        if (string.IsNullOrWhiteSpace(employeeId)) return;
+
+        var activeSessions = _deviceSessions.GetByEmployeeId(employeeId)
+            .Where(s => s.RevokedAt == null)
+            .ToList();
+
+        foreach (var session in activeSessions)
+        {
+            session.HasVaultCookie = false;
+            session.TokenHash = string.Empty;
+            if (session.HasPush)
+            {
+                _deviceSessions.ClearPushFields(session);
+            }
+            else
+            {
+                _deviceSessions.Save(session);
+            }
+            TriggerRemoteBanRedirect(session.Id);
+        }
+
+        _globalKeystore?.LockVault(employeeId);
+        _fileTokenService?.InvalidateUserEncryptedTokens(employeeId);
     }
 
     /// <summary>
@@ -414,6 +520,17 @@ public class SessionService
         if (!string.IsNullOrEmpty(sessionId))
         {
             OnSessionRevoked?.Invoke(sessionId);
+        }
+    }
+
+    /// <summary>
+    /// Triggers a global broadcast to redirect all active circuits for the specified SessionId to /banned.
+    /// </summary>
+    public void TriggerRemoteBanRedirect(string sessionId)
+    {
+        if (!string.IsNullOrEmpty(sessionId))
+        {
+            OnSessionBanned?.Invoke(sessionId);
         }
     }
 
@@ -507,12 +624,38 @@ public class SessionService
         if (revokeActiveSession && session != null)
         {
             session.RevokedAt ??= DateTime.UtcNow;
+            session.HasVaultCookie = false;
             _deviceSessions.Save(session);
 
             if (session.HasPush)
             {
                 _deviceSessions.ClearPushFields(session);
             }
+
+            if (!string.IsNullOrEmpty(session.EmployeeId))
+            {
+                (_fileTokenService ?? context.RequestServices?.GetService<FileTokenService>())?.InvalidateUserEncryptedTokens(session.EmployeeId);
+                EvictGlobalKeystoreIfNoUnlockedSessions(session.EmployeeId);
+                if (_globalKeystore == null)
+                {
+                    var resolvedKeystore = context.RequestServices?.GetService<GlobalKeystoreService>();
+                    if (resolvedKeystore != null)
+                    {
+                        var now = DateTime.UtcNow;
+                        bool hasRemainingUnlocked = _deviceSessions
+                            .GetByEmployeeId(session.EmployeeId)
+                            .Any(s => s.RevokedAt == null && s.ExpiresAt > now && s.HasVaultCookie);
+                        if (!hasRemainingUnlocked)
+                        {
+                            resolvedKeystore.LockVault(session.EmployeeId);
+                        }
+                    }
+                }
+            }
+        }
+        else if (session != null && !string.IsNullOrEmpty(session.EmployeeId))
+        {
+            EvictGlobalKeystoreIfNoUnlockedSessions(session.EmployeeId);
         }
 
         // 3. Clear session and security cookies
@@ -569,7 +712,7 @@ public class SessionService
 
             if (isMobile)
             {
-                var serverBaseUrl = $"{context.Request.Scheme}://{context.Request.Host}";
+                var serverBaseUrl = ServerUrlResolver.GetSafeServerBaseUrl(context, _systemConfigs?.Get()?.ServerPublicUrl);
                 return LogoutHandoffResult.MobileLocal(serverBaseUrl);
             }
 
@@ -590,7 +733,13 @@ public class SessionService
             var reqId = Guid.NewGuid().ToString("N");
             _cache?.Set($"logout_{reqId}", new Tuple<string, string>(idToken, endSessionUrl), TimeSpan.FromMinutes(5));
 
-            return LogoutHandoffResult.MobileIdp(reqId);
+            var serverBaseUrl = ServerUrlResolver.GetSafeServerBaseUrl(context, _systemConfigs?.Get()?.ServerPublicUrl);
+            return new LogoutHandoffResult
+            {
+                HandoffType = LogoutHandoffType.MobileIdpLogout,
+                LogoutRequestId = reqId,
+                ServerBaseUrl = serverBaseUrl
+            };
         }
 
         // 8. Standard desktop client logout

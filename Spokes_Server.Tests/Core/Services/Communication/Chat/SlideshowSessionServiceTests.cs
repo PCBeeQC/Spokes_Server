@@ -231,31 +231,115 @@ public class SlideshowSessionServiceTests
     }
 
     [Fact]
-    public void RebindTvConnection_SucceedsForPairedSession_FailsForUnpairedOrUnknown()
+    public void RebindTvConnection_SucceedsForDisconnectedCastReceiverWithSecret_FailsOtherwise()
     {
-        var session = _service.CreateSession("tv-screen-old");
+        var session = _service.CreateSession("tv-screen-old", SlideshowDisplayKind.SignalRCastReceiver);
+        Assert.False(string.IsNullOrWhiteSpace(session.TvSecret));
 
         // Fails while unpaired
-        bool reboundUnpaired = _service.RebindTvConnection(session.SessionId, "tv-screen-new");
-        Assert.False(reboundUnpaired);
+        Assert.False(_service.RebindTvConnection(session.SessionId, "tv-screen-new", session.TvSecret));
 
         // Pair session
         _service.TryPair(session.PairingPin, "user-1", "host-conn-1", "album-1", out _, out _);
 
+        // Fails while original TV connection is still active (prevents hijack before disconnect)
+        Assert.False(_service.RebindTvConnection(session.SessionId, "tv-screen-new", session.TvSecret));
+
         // Disconnect TV
         _service.HandleDisconnect("tv-screen-old");
 
-        // Rebind succeeds
-        bool reboundPaired = _service.RebindTvConnection(session.SessionId, "tv-screen-new");
-        Assert.True(reboundPaired);
+        // Fails with wrong or missing secret
+        Assert.False(_service.RebindTvConnection(session.SessionId, "tv-screen-new", "wrong-secret"));
+        Assert.False(_service.RebindTvConnection(session.SessionId, "tv-screen-new", null));
+
+        // Rebind succeeds with valid TvSecret
+        Assert.True(_service.RebindTvConnection(session.SessionId, "tv-screen-new", session.TvSecret));
 
         var updated = _service.GetSessionById(session.SessionId);
         Assert.NotNull(updated);
         Assert.Equal("tv-screen-new", updated.TvConnectionId);
 
+        // Fails for BlazorPinStage even after disconnect and with valid TvSecret
+        var blazorSession = _service.CreateSession("blazor-tv-old", SlideshowDisplayKind.BlazorPinStage);
+        _service.TryPair(blazorSession.PairingPin, "user-1", "host-conn-2", "album-1", out _, out _);
+        _service.HandleDisconnect("blazor-tv-old");
+        Assert.False(_service.RebindTvConnection(blazorSession.SessionId, "blazor-tv-new", blazorSession.TvSecret));
+
         // Fails for unknown session
-        bool reboundUnknown = _service.RebindTvConnection("non-existent", "tv-screen-new");
-        Assert.False(reboundUnknown);
+        Assert.False(_service.RebindTvConnection("non-existent", "tv-screen-new", session.TvSecret));
+    }
+
+    [Fact]
+    public void TryPair_PerUserRateLimit_DoesNotWipeWaitingTvSessionsForOtherUsers()
+    {
+        var waitingTv = _service.CreateSession("tv-waiting", SlideshowDisplayKind.BlazorPinStage, "10.0.0.10");
+
+        // Attacker makes 5 wrong PIN guesses
+        for (int i = 0; i < 5; i++)
+        {
+            bool ok = _service.TryPair("000000", "attacker-user", "attacker-conn", "album-1", out _, out _);
+            Assert.False(ok);
+        }
+
+        // 6th attempt by attacker is rate-limited even with the real PIN
+        bool attackerSixth = _service.TryPair(waitingTv.PairingPin, "attacker-user", "attacker-conn", "album-1", out _, out var rateLimitErr);
+        Assert.False(attackerSixth);
+        Assert.Contains("Too many failed pairing attempts", rateLimitErr);
+
+        // Waiting TV session was NOT wiped; legitimate presenter pairs immediately
+        bool legitPair = _service.TryPair(waitingTv.PairingPin, "legit-host", "legit-conn", "album-1", out var paired, out var legitErr);
+        Assert.True(legitPair);
+        Assert.Null(legitErr);
+        Assert.NotNull(paired);
+        Assert.Equal(waitingTv.SessionId, paired.SessionId);
+    }
+
+    [Fact]
+    public void CreateSession_EnforcesPerIpUnpairedCap_WithoutEvictingOtherIps()
+    {
+        var otherIpTv = _service.CreateSession("tv-other-ip", SlideshowDisplayKind.BlazorPinStage, "192.168.1.50");
+
+        for (int i = 0; i < 5; i++)
+        {
+            _service.CreateSession($"tv-flood-{i}", SlideshowDisplayKind.BlazorPinStage, "192.168.1.99");
+        }
+
+        Assert.Throws<InvalidOperationException>(() =>
+            _service.CreateSession("tv-flood-overflow", SlideshowDisplayKind.BlazorPinStage, "192.168.1.99"));
+
+        // Other IP's waiting TV is untouched and another IP can still create a session
+        Assert.NotNull(_service.GetSessionById(otherIpTv.SessionId));
+        var thirdIpTv = _service.CreateSession("tv-third-ip", SlideshowDisplayKind.BlazorPinStage, "192.168.1.51");
+        Assert.NotNull(thirdIpTv);
+    }
+
+    [Fact]
+    public void DirectStageBinding_AllowsSingleCircuitWithValidSecret_AndGuardsStageOwnerEndSession()
+    {
+        var direct = _service.CreateDirectSession("host-1", "host-conn-1", "album-1");
+        Assert.Equal(SlideshowDisplayKind.DirectExternalDisplay, direct.DisplayKind);
+        Assert.False(string.IsNullOrWhiteSpace(direct.TvSecret));
+
+        // Fails with missing or invalid secret
+        Assert.False(_service.TryBindDirectStageCircuit(direct.SessionId, null, out _, out _));
+        Assert.False(_service.TryBindDirectStageCircuit(direct.SessionId, "wrong-secret", out _, out _));
+
+        // First stage circuit binds successfully
+        Assert.True(_service.TryBindDirectStageCircuit(direct.SessionId, direct.TvSecret, out var stageToken, out var boundSession));
+        Assert.False(string.IsNullOrEmpty(stageToken));
+        Assert.NotNull(boundSession);
+
+        // Second concurrent stage circuit is rejected even with valid secret
+        Assert.False(_service.TryBindDirectStageCircuit(direct.SessionId, direct.TvSecret, out _, out _));
+
+        // Non-owner stage Dispose cannot end the active direct presentation
+        Assert.False(_service.EndSessionIfStageOwner(direct.SessionId, null, null));
+        Assert.False(_service.EndSessionIfStageOwner(direct.SessionId, null, "forged-stage-token"));
+        Assert.NotNull(_service.GetSessionById(direct.SessionId));
+
+        // Verified bound stage circuit ends the session cleanly on Dispose
+        Assert.True(_service.EndSessionIfStageOwner(direct.SessionId, null, stageToken));
+        Assert.Null(_service.GetSessionById(direct.SessionId));
     }
 
     [Fact]

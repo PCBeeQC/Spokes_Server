@@ -5,7 +5,9 @@ namespace Spokes_Server.Core.Services.Communication.Email;
 
 public class SendEmailRequest
 {
-    public required string EmployeeId { get; set; }
+    public string EmployeeId { get; set; } = string.Empty;
+    public string? AccountId { get; set; }
+    public string? SendingIdentityId { get; set; }
     public required string To { get; set; }
     public required string Subject { get; set; }
     public required string Body { get; set; }
@@ -15,11 +17,21 @@ public class SendEmailRequest
     public List<EmailAttachmentMeta>? ExistingAttachments { get; set; }
     public string? DraftId { get; set; }
     public List<(string FilePath, string FileName)>? FileAttachmentPaths { get; set; }
+    public string? InReplyTo { get; set; }
+    public List<string>? References { get; set; }
+
+    /// <summary>
+    /// Internal marker for non-interactive automated system sends (e.g. CompanyBillInboxService background ingestion replies).
+    /// Must never be set by interactive UI requests.
+    /// </summary>
+    internal bool IsSystemAutomatedSend { get; init; }
 }
 
 public class SaveDraftRequest
 {
-    public required string EmployeeId { get; set; }
+    public string AccountId { get; set; } = string.Empty;
+    public string EmployeeId { get; set; } = string.Empty;
+    public string? SendingIdentityId { get; set; }
     public string? To { get; set; }
     public string? Subject { get; set; }
     public string? Body { get; set; }
@@ -27,4 +39,6 @@ public class SaveDraftRequest
     public string? Cc { get; set; }
     public string? Bcc { get; set; }
     public string? ExistingDraftId { get; set; }
+    public string? InReplyTo { get; set; }
+    public List<string>? References { get; set; }
 }

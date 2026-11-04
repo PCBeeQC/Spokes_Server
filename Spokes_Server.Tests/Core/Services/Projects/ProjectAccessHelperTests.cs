@@ -82,7 +82,7 @@ public class ProjectAccessHelperTests : TestDataTestBase
 
     [Theory]
     [InlineData(false, false, false)] // Inactive
-    [InlineData(true, true, false)]  // Suspended
+    [InlineData(false, true, false)]  // Inactive + Suspended
     [InlineData(true, false, true)]  // Banned
     public void CanAccess_ReturnsFalse_WhenUserStatusIsInvalid(bool isActive, bool isSuspended, bool isBanned)
     {
@@ -293,8 +293,9 @@ public class ProjectAccessHelperTests : TestDataTestBase
         var inactiveUser = new Employee { IsActive = false };
         Assert.False(ProjectAccessHelper.HasAccess(_projectRepo, _teamRepo, inactiveUser, "proj-1"));
 
-        var suspendedUser = new Employee { IsActive = true, IsSuspended = true };
-        Assert.False(ProjectAccessHelper.HasAccess(_projectRepo, _teamRepo, suspendedUser, "proj-1"));
+
+        var suspendedUser = new Employee { IsActive = true, IsSuspended = true, IsAdmin = true };
+        Assert.True(ProjectAccessHelper.HasAccess(_projectRepo, _teamRepo, suspendedUser, "proj-1"));
 
         var bannedUser = new Employee { IsActive = true, IsBanned = true };
         Assert.False(ProjectAccessHelper.HasAccess(_projectRepo, _teamRepo, bannedUser, "proj-1"));

@@ -214,6 +214,7 @@
                 _lastMaxDim = maxDim;
                 _lastQuality = quality;
                 StartupTimings.AddChatTransition($"Server: ApiFileUpload.OnAfterRenderAsync ({_inputId}, firstRender={firstRender})");
+                await JS.InvokeVoidAsync("window.ensureUploadScriptsLoaded");
                 // Initialize or re-synchronize dynamic limits with the native JS file input handler
                 await JS.InvokeVoidAsync("spokesUpload.initializeInput", _inputId, _objRef, maxAllowed, maxDim, quality);
             }
@@ -222,9 +223,8 @@
         {
             try
             {
-                // If spokesUpload is not yet defined, trigger deferred script loading and retry initialization
-                await JS.InvokeVoidAsync("eval", "if (window.loadDeferredScripts) window.loadDeferredScripts();");
-                await Task.Delay(100);
+                // If spokesUpload was not yet defined, await upload script loader and retry initialization
+                await JS.InvokeVoidAsync("window.ensureUploadScriptsLoaded");
                 await JS.InvokeVoidAsync("spokesUpload.initializeInput", _inputId, _objRef, EffectiveMaxAllowedSize, EffectiveDesktopMaxDim, EffectiveDesktopQuality);
             }
             catch { /* Ignore prerendering errors */ }
@@ -239,21 +239,24 @@
         
         if (result is { Canceled: false, Data: string filename })
         {
-            var mockResult = new UploadResult
+            try
             {
-                FileName = filename,
-                FilePath = $"/spokesapi/files/demo-media/{filename}",
-                ContentType = "image/jpeg",
-                FileSizeBytes = 1000,
-                HasThumbnail = true,
-                ImageWidth = 800,
-                ImageHeight = 600,
-                Category = this.Category,
-                ContextId = this.ContextId
-            };
-            
-            await OnUploadStarted.InvokeAsync();
-            await OnUploadCompleted.InvokeAsync(new List<UploadResult> { mockResult });
+                await OnUploadStarted.InvokeAsync();
+                var effectiveUrl = string.IsNullOrEmpty(UploadUrl) 
+                    ? $"/spokesapi/files/{Category}/{ContextId}" 
+                    : UploadUrl;
+
+                var jsonResult = await JS.InvokeAsync<string>("spokesUpload.importDemoMedia", effectiveUrl, filename);
+                await OnUploadCompletedCallback(jsonResult);
+            }
+            catch (Exception ex)
+            {
+                Logger.LogError(ex, "Failed to import demo media file {FileName}", filename);
+                if (OnUploadError.HasDelegate)
+                    await OnUploadError.InvokeAsync("Failed to import sample media.");
+                else
+                    Snackbar.Add("Failed to import sample media.", Severity.Error);
+            }
         }
     }
 

@@ -113,17 +113,46 @@ public class SlideshowMediaControllerTests : IDisposable
         var session = _sessionService.CreateSession("tv-conn-1");
         _sessionService.TryPair(session.PairingPin, "user-1", "host-1", "album-1", out _, out _, mockBridge.Object);
 
-        // Works while session is active
-        var activeResult = _controller.GetMedia(session.SessionId, "media-1");
+        // Works while session is active with valid capability secret
+        var activeResult = _controller.GetMedia(session.SessionId, "media-1", session.TvSecret);
         Assert.IsType<OkResult>(activeResult);
 
         // Presenter ends the session
         _sessionService.EndSession(session.SessionId);
 
-        // Immediate 403 Forbidden
-        var endedResult = _controller.GetMedia(session.SessionId, "media-1");
+        // Immediate 403 Forbidden even with secret
+        var endedResult = _controller.GetMedia(session.SessionId, "media-1", session.TvSecret);
         var objResult = Assert.IsType<ObjectResult>(endedResult);
         Assert.Equal(403, objResult.StatusCode);
+    }
+
+    [Fact]
+    public void GetMedia_MissingOrInvalidCapabilitySecret_ReturnsForbidden403_UnlessAuthenticatedHost()
+    {
+        var mockBridge = new Mock<ISlideshowFileBridge>();
+        mockBridge.Setup(b => b.GetMedia("photo-1", false)).Returns(new OkResult());
+
+        var session = _sessionService.CreateSession("tv-conn-1");
+        _sessionService.TryPair(session.PairingPin, "user-1", "host-1", "album-1", out _, out _, mockBridge.Object);
+
+        // Missing ?st= rejected with 403
+        var missingSecret = Assert.IsType<ObjectResult>(_controller.GetMedia(session.SessionId, "photo-1"));
+        Assert.Equal(403, missingSecret.StatusCode);
+
+        // Wrong ?st= rejected with 403
+        var wrongSecret = Assert.IsType<ObjectResult>(_controller.GetMedia(session.SessionId, "photo-1", "wrong-secret"));
+        Assert.Equal(403, wrongSecret.StatusCode);
+
+        // Authenticated non-host user without ?st= rejected with 403
+        _controller.ControllerContext.HttpContext.User = new ClaimsPrincipal(
+            new ClaimsIdentity([new Claim("EmployeeId", "other-user")], "TestAuth"));
+        var nonHostResult = Assert.IsType<ObjectResult>(_controller.GetMedia(session.SessionId, "photo-1"));
+        Assert.Equal(403, nonHostResult.StatusCode);
+
+        // Authenticated session host user allowed without ?st=
+        _controller.ControllerContext.HttpContext.User = new ClaimsPrincipal(
+            new ClaimsIdentity([new Claim("EmployeeId", "user-1")], "TestAuth"));
+        Assert.IsType<OkResult>(_controller.GetMedia(session.SessionId, "photo-1"));
     }
 
     [Fact]
@@ -136,7 +165,7 @@ public class SlideshowMediaControllerTests : IDisposable
         var session = _sessionService.CreateSession("tv-conn-1");
         _sessionService.TryPair(session.PairingPin, "user-1", "host-1", "album-1", out _, out _, mockBridge.Object);
 
-        var result = _controller.GetMedia(session.SessionId, "photo-1");
+        var result = _controller.GetMedia(session.SessionId, "photo-1", session.TvSecret);
 
         Assert.Same(expectedResult, result);
         mockBridge.Verify(b => b.GetMedia("photo-1", false), Times.Once);
@@ -152,7 +181,7 @@ public class SlideshowMediaControllerTests : IDisposable
         var session = _sessionService.CreateSession("tv-conn-1");
         _sessionService.TryPair(session.PairingPin, "user-1", "host-1", "album-1", out _, out _, mockBridge.Object);
 
-        var result = _controller.GetMediaThumb(session.SessionId, "photo-1");
+        var result = _controller.GetMediaThumb(session.SessionId, "photo-1", session.TvSecret);
 
         Assert.Same(expectedResult, result);
         mockBridge.Verify(b => b.GetMedia("photo-1", true), Times.Once);
@@ -230,6 +259,67 @@ public class SlideshowMediaControllerTests : IDisposable
         Assert.Equal(fakeFilePath, physicalFile.FileName);
         Assert.Equal("image/jpeg", physicalFile.ContentType);
         Assert.True(physicalFile.EnableRangeProcessing);
+    }
+
+    [Fact]
+    public void UserScopedBridge_WhenFileNotFoundInAlbum_FallsBackToDemoMedia()
+    {
+        var demoMediaPath = Path.Combine(_tempDir, "DemoMedia");
+        Directory.CreateDirectory(demoMediaPath);
+        var demoFilePath = Path.Combine(demoMediaPath, "sample1.jpg");
+        File.WriteAllText(demoFilePath, "demo image bytes");
+
+        var user = new Employee { Id = "user-1", IsActive = true };
+        var allowedMedia = new Dictionary<string, string>
+        {
+            { "media-1", "sample1.jpg" }
+        };
+
+        var mockFileService = new Mock<IFileService>();
+        mockFileService.Setup(f => f.GetPhysicalPath("albums", "album-1", "sample1.jpg"))
+            .Returns(Path.Combine(_tempDir, "albums", "album-1", "sample1.jpg"));
+        mockFileService.Setup(f => f.GetContentType("sample1.jpg")).Returns("image/jpeg");
+
+        var mockAuthService = new Mock<IFileAuthorizationService>();
+        mockAuthService.Setup(a => a.IsKnownCategory("albums")).Returns(true);
+        mockAuthService.Setup(a => a.CanAccess("albums", "album-1", user)).Returns(true);
+        mockAuthService.Setup(a => a.ResolveDownloadKey("albums", "album-1", user, null, null))
+            .Returns(FileKeyResolutionResult.NotEncrypted());
+
+        var mockPersistenceLogger = new Mock<ILogger<DiskPersistenceService>>();
+        var writer = new DiskPersistenceService(mockPersistenceLogger.Object);
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?> {
+            { "DataPath", _tempDir },
+            { "Spokes_DemoMode", "true" }
+        }).Build();
+
+        var empRepo = new EmployeeRepository(writer, config);
+        var openIdRepo = new OpenIdAccountRepository(writer, config);
+        var mockAuthState = new Mock<Microsoft.AspNetCore.Components.Authorization.AuthenticationStateProvider>();
+        var userService = new UserService(mockAuthState.Object, empRepo, openIdRepo);
+        var companyProfileRepo = new CompanyProfileRepository(writer, config);
+        var chatChannelRepo = new ChatChannelRepository(writer, config);
+
+        var fileController = new FileController(
+            mockFileService.Object,
+            mockAuthService.Object,
+            companyProfileRepo,
+            NullLogger<FileController>.Instance,
+            userService,
+            new ImageProcessingService(),
+            chatChannelRepo,
+            config: config);
+
+        var services = new ServiceCollection();
+        services.AddSingleton(fileController);
+
+        var sp = services.BuildServiceProvider();
+        var bridge = new UserScopedSlideshowBridge(sp, user, "album-1", null, allowedMedia);
+
+        var result = bridge.GetMedia("media-1", thumb: false);
+
+        var physicalFile = Assert.IsType<PhysicalFileResult>(result);
+        Assert.Equal(Path.GetFullPath(demoFilePath), physicalFile.FileName);
     }
 
     public void Dispose()

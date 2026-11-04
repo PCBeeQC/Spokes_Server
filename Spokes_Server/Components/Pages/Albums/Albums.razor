@@ -131,6 +131,9 @@ else if (_selectedAlbum != null)
                                     <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Upload" Class="rounded-lg">@Loc["Upload"]</MudButton>
                                 </CustomContent>
                             </ApiFileUpload>
+                        }
+                        @if (IsOwner(_selectedAlbum))
+                        {
                             <MudButton Variant="Variant.Outlined" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Chat" OnClick="OpenShareDialog" Class="rounded-lg">@Loc["Share"]</MudButton>
                         }
                         @if (_selectedAlbum.OwnerId == _currentUser?.Id)
@@ -462,7 +465,7 @@ else
                                         <MudText Typo="Typo.subtitle1" Style="font-weight: 700; line-height: 1.3;" Class="text-truncate">@album.Title</MudText>
                                         <MudMenu Icon="@Icons.Material.Filled.MoreVert" Size="Size.Small" AnchorOrigin="Origin.BottomRight" TransformOrigin="Origin.TopRight" Dense="true" @onclick:stopPropagation="true">
                                             <MudMenuItem Icon="@Icons.Material.Filled.FolderOpen" OnClick="() => SelectAlbum(album)">@Loc["Open"]</MudMenuItem>
-                                            @if (CanContribute(album))
+                                            @if (isOwner)
                                             {
                                                 <MudMenuItem Icon="@Icons.Material.Filled.Share" OnClick="() => OpenShareDialogFor(album)">@Loc["Share to Chat"]</MudMenuItem>
                                             }
@@ -810,15 +813,18 @@ else
     {
         if (_selectedAlbum == null) return string.Empty;
         string baseUrl = $"/spokesapi/files/albums/{_selectedAlbum.Id}";
+        if (string.IsNullOrWhiteSpace(_currentUser?.Id) || string.IsNullOrWhiteSpace(CircuitContext?.SessionId))
+            return baseUrl;
+
         if (_selectedAlbum.IsEncrypted && !IsAlbumLocked(_selectedAlbum, out var albumKey) && !string.IsNullOrEmpty(albumKey))
         {
-            var token = FileTokenService.GenerateAccessToken("albums", _selectedAlbum.Id, "*", albumKey, _currentUser?.Id, CircuitContext?.SessionId);
+            var token = FileTokenService.GenerateAccessToken("albums", _selectedAlbum.Id, "*", albumKey, _currentUser.Id, CircuitContext.SessionId);
             return $"{baseUrl}?t={token}";
         }
         else if (_selectedAlbum.IsEncrypted)
         {
-             var token = FileTokenService.GenerateAccessToken("albums", _selectedAlbum.Id, "*", null, _currentUser?.Id, CircuitContext?.SessionId);
-             return $"{baseUrl}?t={token}";
+            var token = FileTokenService.GenerateAccessToken("albums", _selectedAlbum.Id, "*", null, _currentUser.Id, CircuitContext.SessionId);
+            return $"{baseUrl}?t={token}";
         }
         return baseUrl;
     }
@@ -1432,6 +1438,8 @@ else
     private async Task StartExternalDisplayPresentation()
     {
         if (_selectedAlbum == null || _currentUser == null || !_selectedAlbum.Media.Any()) return;
+        if (!_currentUser.IsActive || _currentUser.IsSuspended || _currentUser.IsBanned) return;
+        if (!AlbumService.CanUserViewAlbum(_selectedAlbum, _currentUser.Id)) return;
 
         _isStartingPresentation = true;
         StateHasChanged();
@@ -1453,7 +1461,7 @@ else
 
             foreach (var media in _selectedAlbum.Media)
             {
-                string url = $"/spokesapi/slideshow/{session.SessionId}/media/{media.Id}";
+                string baseUrl = $"/spokesapi/slideshow/{session.SessionId}/media/{media.Id}";
 
                 var uploader = allEmployees.FirstOrDefault(e => e.Id == media.AddedByUserId);
                 string uploaderName = uploader != null ? $"{uploader.FirstName} {uploader.LastName}".Trim() : string.Empty;
@@ -1462,8 +1470,8 @@ else
                 {
                     Id = media.Id,
                     FileName = media.FileName,
-                    Url = url,
-                    ThumbnailUrl = $"{url}/thumb",
+                    Url = SlideshowSessionService.AppendSecretQuery(baseUrl, session.TvSecret),
+                    ThumbnailUrl = SlideshowSessionService.AppendSecretQuery($"{baseUrl}/thumb", session.TvSecret),
                     ContentType = media.ContentType,
                     ImageWidth = media.ImageWidth,
                     ImageHeight = media.ImageHeight,
@@ -1486,7 +1494,9 @@ else
             // Notify in-memory TV Stage
             SessionService.NotifySessionStarted(session.SessionId, stagePayload);
 
-            string stageUrl = $"{NavManager.BaseUri.TrimEnd('/')}/slideshow/stage/{session.SessionId}";
+            string stageUrl = SlideshowSessionService.AppendSecretQuery(
+                $"{NavManager.BaseUri.TrimEnd('/')}/slideshow/stage/{session.SessionId}",
+                session.TvSecret);
             await JS.InvokeVoidAsync("spokesExternalDisplay.startPresentation", stageUrl);
 
             NavManager.NavigateTo($"/albums/{_selectedAlbum.Id}/remote/{session.SessionId}");
@@ -1600,7 +1610,7 @@ else
 
     private async Task OpenShareDialogFor(Album album)
     {
-        if (album == null || _currentUser == null) return;
+        if (album == null || _currentUser == null || !IsOwner(album)) return;
         
         var sharedText = $"#[{album.Title}](album:{album.Id})";
         var parameters = new DialogParameters
@@ -1631,11 +1641,12 @@ else
 
     private string GetTokenizedUrl(Album? album, AlbumMedia media, bool isThumbnail = true)
     {
-        if (album == null || _currentUser == null) return isThumbnail ? media.ThumbnailUrl : media.FilePath;
-        
         string baseUrl = isThumbnail ? media.ThumbnailUrl : media.FilePath;
+        if (album == null || string.IsNullOrWhiteSpace(_currentUser?.Id) || string.IsNullOrWhiteSpace(CircuitContext?.SessionId))
+            return baseUrl;
+
         IsAlbumLocked(album, out var albumKey);
-        string token = FileTokenService.GenerateAccessToken("albums", album.Id, baseUrl, albumKey, _currentUser?.Id, CircuitContext?.SessionId);
+        string token = FileTokenService.GenerateAccessToken("albums", album.Id, baseUrl, albumKey, _currentUser.Id, CircuitContext.SessionId);
         return $"{baseUrl}?t={token}";
     }
 }

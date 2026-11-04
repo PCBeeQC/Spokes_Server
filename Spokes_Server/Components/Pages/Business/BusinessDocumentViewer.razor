@@ -80,7 +80,7 @@ else
             }
             else
             {
-                <MudSelect T="string" Value="@_document.Status" ValueChanged="UpdateStatusAsync" Dense="true" Margin="Margin.Dense"
+                <MudSelect T="string" Value="@_document.Status" ValueChanged="UpdateStatusAsync" Disabled="@(!_canEdit)" Dense="true" Margin="Margin.Dense"
                     Variant="Variant.Outlined" Style="width: 160px; min-width: 160px; flex-shrink: 0;">
                     <MudSelectItem Value="@(ProjectDocumentStatus.Draft)">Draft</MudSelectItem>
                     <MudSelectItem Value="@(ProjectDocumentStatus.Final)">Final</MudSelectItem>
@@ -95,7 +95,7 @@ else
                     <MudButton Variant="Variant.Outlined" Color="Color.Secondary" StartIcon="@Icons.Material.Filled.OpenInNew" OnClick="OpenPdf">Open PDF</MudButton>
                 }
 
-                @if (_document.Status != ProjectDocumentStatus.Final)
+                @if (_canEdit && _document.Status != ProjectDocumentStatus.Final)
                 {
                     <MudButton Variant="Variant.Outlined" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Edit"
                         OnClick="StartEditing" Class="mr-2">Edit Content</MudButton>
@@ -166,6 +166,7 @@ else
     private CompanyProfile? _profile;
 
     private bool _isAdmin;
+    private bool _canEdit;
     private bool _isEditing;
     private string _editingBody = string.Empty;
     private bool _needsPagination;
@@ -192,21 +193,25 @@ else
     protected override async Task OnInitializedAsync()
     {
         var emp = await UserService.GetEmployeeAsync();
-        if (emp == null || !emp.HasPermission(AppPermissions.BusinessDocuments.View))
+        if (emp == null || (!emp.IsAdmin && !emp.HasPermission(AppPermissions.BusinessDocuments.View)))
         {
             Nav.NavigateTo("/");
             return;
         }
 
-        _document = Db.ProjectDocuments.GetById(DocumentId);
-        _profile = Db.CompanyProfile.Get();
-        _isAdmin = await UserService.IsAdminAsync();
+        _isAdmin = emp.IsAdmin;
+        _canEdit = emp.IsAdmin || emp.HasPermission(AppPermissions.BusinessDocuments.View);
 
-        if (_document == null)
+        var loadedDoc = Db.ProjectDocuments.GetById(DocumentId);
+        if (loadedDoc == null || !string.IsNullOrEmpty(loadedDoc.ProjectId))
         {
             Snackbar.Add("Document not found", Severity.Error);
             Nav.NavigateTo("/business/documents");
+            return;
         }
+
+        _document = loadedDoc;
+        _profile = Db.CompanyProfile.Get();
     }
 
     private string GetResolvedBody()
@@ -265,7 +270,7 @@ else
 
     private async Task UpdateStatusAsync(string newStatus)
     {
-        if (_document == null) return;
+        if (_document == null || !_canEdit) return;
 
         if (_document.Status == ProjectDocumentStatus.Final && newStatus == ProjectDocumentStatus.Draft && !_isAdmin)
         {
@@ -304,7 +309,7 @@ else
 
     private void SaveEdits()
     {
-        if (_document == null) return;
+        if (_document == null || !_canEdit) return;
 
         _document.ResolvedBody = _editingBody;
         _document.IsManualEdit = true;
@@ -324,7 +329,7 @@ else
 
     private void SaveBlocks()
     {
-        if (_document == null) return;
+        if (_document == null || !_canEdit) return;
         _document.IsManualEdit = true;
         _document.UpdatedAt = DateTime.UtcNow;
         Db.ProjectDocuments.Save(_document);
@@ -353,7 +358,7 @@ else
 
     private async Task StartEditing()
     {
-        if (_document == null) return;
+        if (_document == null || !_canEdit) return;
 
         try { await JS.InvokeVoidAsync("cleanupPagination", "printable-area"); }
         catch { }

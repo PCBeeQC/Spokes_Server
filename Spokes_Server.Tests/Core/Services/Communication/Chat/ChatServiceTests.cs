@@ -3,9 +3,11 @@ namespace Spokes_Server.Tests.Core.Services.Communication.Chat;
 using System.Collections.Generic;
 using System.IO;
 using Microsoft.AspNetCore.DataProtection;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Moq;
+using Spokes_Server.Core.Constants;
 using Spokes_Server.Core.Data;
 using Spokes_Server.Core.Data.Repositories.Communication;
 using Spokes_Server.Core.Data.Repositories.Core;
@@ -616,30 +618,39 @@ public class ChatServiceTests : IDisposable
         }
 
         [Fact]
-        public void UpdateChannel_NormalizesDirectChannel_RemovingAnnouncementSettings()
+        public void UpdateChannel_RejectsDirectChannel_AndCreateChannelNormalizesDirectChannelRemovingAnnouncementSettings()
         {
-            var channel = new ChatChannel
+            var admin = new Employee { Id = "admin-1", FirstName = "Admin", LastName = "One", IsAdmin = true };
+            _employees.Save(admin);
+
+            var dmChannel = new ChatChannel
             {
                 Id = "dm_test_update",
                 ChannelType = ChatChannelType.Direct,
-                ParticipantIds = new List<string> { "user-1", "user-2" },
+                CreatedById = "admin-1",
+                ParticipantIds = new List<string> { "admin-1", "user-2" },
                 IsAnnouncementOnly = true,
-                AllowedPostUserIds = new List<string> { "user-1" },
+                AllowedPostUserIds = new List<string> { "admin-1" },
                 AllowedPostTeamIds = new List<string> { "team-1" }
             };
 
-            _service.UpdateChannel(channel);
+            var createdDm = _service.CreateChannel(dmChannel);
+            Assert.False(createdDm.IsAnnouncementOnly);
+            Assert.Empty(createdDm.AllowedPostUserIds);
+            Assert.Empty(createdDm.AllowedPostTeamIds);
 
-            var saved = _channels.GetById("dm_test_update");
-            Assert.NotNull(saved);
-            Assert.False(saved.IsAnnouncementOnly);
-            Assert.Empty(saved.AllowedPostUserIds);
-            Assert.Empty(saved.AllowedPostTeamIds);
+            createdDm.IsAnnouncementOnly = true;
+            var dmResult = _service.UpdateChannel(createdDm, "admin-1");
+            Assert.False(dmResult.IsSuccess);
+            Assert.Equal("ACCESS_DENIED", dmResult.Code);
         }
 
         [Fact]
         public void UpdateChannel_EncryptedChannel_WhenLocked_FailsWithVaultLocked()
         {
+            var admin = new Employee { Id = "admin-1", FirstName = "Admin", LastName = "One", IsAdmin = true };
+            _employees.Save(admin);
+
             var channel = new ChatChannel
             {
                 Id = "enc_update_locked",
@@ -654,7 +665,7 @@ public class ChatServiceTests : IDisposable
                 Name = "Updated Encrypted Channel",
                 IsEncrypted = true
             };
-            var result = _service.UpdateChannel(updatedChannel, isSessionUnlocked: false);
+            var result = _service.UpdateChannel(updatedChannel, "admin-1", isSessionUnlocked: false);
 
             Assert.False(result.IsSuccess);
             Assert.Equal("VAULT_LOCKED", result.Code);
@@ -666,6 +677,9 @@ public class ChatServiceTests : IDisposable
         [Fact]
         public void UpdateChannel_EncryptedChannel_WhenUnlocked_Succeeds()
         {
+            var admin = new Employee { Id = "admin-1", FirstName = "Admin", LastName = "One", IsAdmin = true };
+            _employees.Save(admin);
+
             var channel = new ChatChannel
             {
                 Id = "enc_update_unlocked",
@@ -675,7 +689,7 @@ public class ChatServiceTests : IDisposable
             _channels.Save(channel);
 
             channel.Name = "Updated Encrypted Channel";
-            var result = _service.UpdateChannel(channel, isSessionUnlocked: true);
+            var result = _service.UpdateChannel(channel, "admin-1", isSessionUnlocked: true);
 
             Assert.True(result.IsSuccess);
             var persisted = _channels.GetById("enc_update_unlocked");
@@ -685,6 +699,9 @@ public class ChatServiceTests : IDisposable
         [Fact]
         public void DeleteChannel_EncryptedChannel_WhenLocked_FailsWithVaultLocked()
         {
+            var admin = new Employee { Id = "admin-1", FirstName = "Admin", LastName = "One", IsAdmin = true };
+            _employees.Save(admin);
+
             var channel = new ChatChannel
             {
                 Id = "enc_delete_locked",
@@ -693,7 +710,7 @@ public class ChatServiceTests : IDisposable
             };
             _channels.Save(channel);
 
-            var result = _service.DeleteChannel(channel.Id, isSessionUnlocked: false);
+            var result = _service.DeleteChannel(channel.Id, "admin-1", isSessionUnlocked: false);
 
             Assert.False(result.IsSuccess);
             Assert.Equal("VAULT_LOCKED", result.Code);
@@ -703,6 +720,9 @@ public class ChatServiceTests : IDisposable
         [Fact]
         public void DeleteChannel_EncryptedChannel_WhenUnlocked_SucceedsAndCleansUp()
         {
+            var admin = new Employee { Id = "admin-1", FirstName = "Admin", LastName = "One", IsAdmin = true };
+            _employees.Save(admin);
+
             var channel = new ChatChannel
             {
                 Id = "enc_delete_unlocked",
@@ -728,7 +748,7 @@ public class ChatServiceTests : IDisposable
             };
             _readStates.Save(readState);
 
-            var result = _service.DeleteChannel(channel.Id, isSessionUnlocked: true);
+            var result = _service.DeleteChannel(channel.Id, "admin-1", isSessionUnlocked: true);
 
             Assert.True(result.IsSuccess);
             Assert.Null(_channels.GetById(channel.Id));
@@ -739,6 +759,9 @@ public class ChatServiceTests : IDisposable
         [Fact]
         public void ArchiveChannel_EncryptedChannel_WhenLocked_FailsWithVaultLocked()
         {
+            var admin = new Employee { Id = "admin-1", FirstName = "Admin", LastName = "One", IsAdmin = true };
+            _employees.Save(admin);
+
             var channel = new ChatChannel
             {
                 Id = "enc_archive_locked",
@@ -748,7 +771,7 @@ public class ChatServiceTests : IDisposable
             };
             _channels.Save(channel);
 
-            var result = _service.ArchiveChannel(channel.Id, true, isSessionUnlocked: false);
+            var result = _service.ArchiveChannel(channel.Id, true, "admin-1", isSessionUnlocked: false);
 
             Assert.False(result.IsSuccess);
             Assert.Equal("VAULT_LOCKED", result.Code);
@@ -758,6 +781,9 @@ public class ChatServiceTests : IDisposable
         [Fact]
         public void ArchiveChannel_EncryptedChannel_WhenUnlocked_Succeeds()
         {
+            var admin = new Employee { Id = "admin-1", FirstName = "Admin", LastName = "One", IsAdmin = true };
+            _employees.Save(admin);
+
             var channel = new ChatChannel
             {
                 Id = "enc_archive_unlocked",
@@ -767,7 +793,7 @@ public class ChatServiceTests : IDisposable
             };
             _channels.Save(channel);
 
-            var result = _service.ArchiveChannel(channel.Id, true, isSessionUnlocked: true);
+            var result = _service.ArchiveChannel(channel.Id, true, "admin-1", isSessionUnlocked: true);
 
             Assert.True(result.IsSuccess);
             Assert.True(_channels.GetById(channel.Id)?.IsArchived);
@@ -798,17 +824,21 @@ public class ChatServiceTests : IDisposable
         [Fact]
         public void UpdateChannelOrders_UpdatesDisplayOrder()
         {
+            var admin = new Employee { Id = "admin-1", FirstName = "Admin", LastName = "One", IsAdmin = true };
+            _employees.Save(admin);
+
             var channel1 = new ChatChannel { Id = "chan-order-1", Name = "One", DisplayOrder = 0 };
             var channel2 = new ChatChannel { Id = "chan-order-2", Name = "Two", DisplayOrder = 1 };
             _channels.Save(channel1);
             _channels.Save(channel2);
 
-            _service.UpdateChannelOrders(new Dictionary<string, int>
+            var result = _service.UpdateChannelOrders(new Dictionary<string, int>
             {
                 { "chan-order-1", 5 },
                 { "chan-order-2", 10 }
-            });
+            }, "admin-1");
 
+            Assert.True(result.IsSuccess);
             Assert.Equal(5, _channels.GetById("chan-order-1")?.DisplayOrder);
             Assert.Equal(10, _channels.GetById("chan-order-2")?.DisplayOrder);
         }
@@ -816,7 +846,10 @@ public class ChatServiceTests : IDisposable
         [Fact]
         public async Task AdminDeleteMessageAsync_MessageNotFound_ReturnsNotFoundFailure()
         {
-            var result = await _service.AdminDeleteMessageAsync("non-existent-msg");
+            var admin = new Employee { Id = "admin-1", FirstName = "Admin", LastName = "One", IsAdmin = true };
+            _employees.Save(admin);
+
+            var result = await _service.AdminDeleteMessageAsync("non-existent-msg", "admin-1");
             Assert.False(result.IsSuccess);
             Assert.Equal("NOT_FOUND", result.Code);
         }
@@ -824,6 +857,9 @@ public class ChatServiceTests : IDisposable
         [Fact]
         public async Task AdminDeleteMessageAsync_MessageWithAttachments_DeletesAttachmentsAndMarksMessageDeleted()
         {
+            var admin = new Employee { Id = "admin-1", FirstName = "Admin", LastName = "One", IsAdmin = true };
+            _employees.Save(admin);
+
             var msg = new ChatMessage
             {
                 Id = "admin-del-msg-att",
@@ -837,13 +873,13 @@ public class ChatServiceTests : IDisposable
             };
             _messages.Save(msg);
 
-            var result = await _service.AdminDeleteMessageAsync("admin-del-msg-att");
+            var result = await _service.AdminDeleteMessageAsync("admin-del-msg-att", "admin-1");
 
             Assert.True(result.IsSuccess);
             var saved = _messages.GetById("admin-del-msg-att");
             Assert.NotNull(saved);
             Assert.True(saved.IsDeleted);
-            Assert.Equal("content deleted", saved.Content);
+            Assert.Equal(string.Empty, saved.Content);
             Assert.Empty(saved.Attachments);
             _mockFileService.Verify(f => f.DeleteAsync("uploads/att1.pdf"), Times.Once);
         }
@@ -851,6 +887,9 @@ public class ChatServiceTests : IDisposable
         [Fact]
         public async Task AdminDeleteMessageAsync_MessageWithoutAttachments_MarksMessageDeletedAndReturnsSuccess()
         {
+            var admin = new Employee { Id = "admin-1", FirstName = "Admin", LastName = "One", IsAdmin = true };
+            _employees.Save(admin);
+
             var msg = new ChatMessage
             {
                 Id = "admin-del-msg-plain",
@@ -860,13 +899,13 @@ public class ChatServiceTests : IDisposable
             };
             _messages.Save(msg);
 
-            var result = await _service.AdminDeleteMessageAsync("admin-del-msg-plain");
+            var result = await _service.AdminDeleteMessageAsync("admin-del-msg-plain", "admin-1");
 
             Assert.True(result.IsSuccess);
             var saved = _messages.GetById("admin-del-msg-plain");
             Assert.NotNull(saved);
             Assert.True(saved.IsDeleted);
-            Assert.Equal("content deleted", saved.Content);
+            Assert.Equal(string.Empty, saved.Content);
         }
 
         [Fact]
@@ -1475,5 +1514,480 @@ public class ChatServiceTests : IDisposable
 
             var decrypted = crypto.DecryptAes(reloaded.Content, plainChannelKey);
             Assert.Equal(newPlaintext, decrypted);
+        }
+
+        [Fact]
+        public async Task ChannelManagementAndModeration_RequireNonEmptyAuthorizedActor_AndPreventForgedOwnershipEscalation()
+        {
+            var creator = new Employee { Id = "grp-owner", FirstName = "Owner", LastName = "User" };
+            var attacker = new Employee { Id = "grp-attacker", FirstName = "Attacker", LastName = "User" };
+            var moderator = new Employee
+            {
+                Id = "chat-mod",
+                FirstName = "Mod",
+                LastName = "User",
+                Permissions = new List<string> { AppPermissions.Chat.Moderator }
+            };
+            _employees.Save(creator);
+            _employees.Save(attacker);
+            _employees.Save(moderator);
+
+            var persistedGroup = new ChatChannel
+            {
+                Id = "grp-forged-test",
+                Name = "Private Group",
+                ChannelType = ChatChannelType.Group,
+                CreatedById = creator.Id,
+                ParticipantIds = new List<string> { creator.Id, attacker.Id }
+            };
+            _channels.Save(persistedGroup);
+
+            // Empty requestingUserId must be rejected across all channel management & admin deletion methods
+            Assert.Equal("ACCESS_DENIED", _service.UpdateChannel(persistedGroup, "").Code);
+            Assert.Equal("ACCESS_DENIED", _service.DeleteChannel(persistedGroup.Id, "   ").Code);
+            Assert.Equal("ACCESS_DENIED", _service.ArchiveChannel(persistedGroup.Id, true, "").Code);
+            Assert.Equal("ACCESS_DENIED", _service.UpdateChannelOrders(new Dictionary<string, int> { [persistedGroup.Id] = 1 }, "").Code);
+            Assert.Equal("ACCESS_DENIED", (await _service.AdminDeleteMessageAsync("any-msg", "")).Code);
+
+            // Attacker attempts to forge CreatedById and mutate ChannelType to General on an existing Group channel
+            var forgedClone = new ChatChannel
+            {
+                Id = persistedGroup.Id,
+                Name = "Hijacked Group",
+                ChannelType = ChatChannelType.General,
+                CreatedById = attacker.Id,
+                ParticipantIds = new List<string> { attacker.Id }
+            };
+            var forgedUpdate = _service.UpdateChannel(forgedClone, attacker.Id);
+            Assert.False(forgedUpdate.IsSuccess);
+            Assert.Equal("ACCESS_DENIED", forgedUpdate.Code);
+            Assert.Equal("Private Group", _channels.GetById(persistedGroup.Id)!.Name);
+            Assert.Equal(creator.Id, _channels.GetById(persistedGroup.Id)!.CreatedById);
+
+            // Regular user cannot reorder global channels or call AdminDeleteMessageAsync
+            var pubChan = new ChatChannel { Id = "pub-order-1", Name = "Public", ChannelType = ChatChannelType.General, DisplayOrder = 1 };
+            _channels.Save(pubChan);
+            var unauthorizedOrder = _service.UpdateChannelOrders(new Dictionary<string, int> { [pubChan.Id] = 99 }, attacker.Id);
+            Assert.False(unauthorizedOrder.IsSuccess);
+            Assert.Equal("ACCESS_DENIED", unauthorizedOrder.Code);
+            Assert.Equal(1, _channels.GetById(pubChan.Id)!.DisplayOrder);
+
+            var msg = new ChatMessage { Id = "mod-target-msg", ChannelId = pubChan.Id, SenderId = creator.Id, Content = "Flagged text" };
+            _messages.Save(msg);
+
+            var unauthorizedModDel = await _service.AdminDeleteMessageAsync(msg.Id, attacker.Id);
+            Assert.False(unauthorizedModDel.IsSuccess);
+            Assert.Equal("ACCESS_DENIED", unauthorizedModDel.Code);
+            Assert.False(_messages.GetById(msg.Id)!.IsDeleted);
+
+            // Moderator succeeds on AdminDeleteMessageAsync
+            var authorizedModDel = await _service.AdminDeleteMessageAsync(msg.Id, moderator.Id);
+            Assert.True(authorizedModDel.IsSuccess);
+            Assert.True(_messages.GetById(msg.Id)!.IsDeleted);
+            Assert.Equal(string.Empty, _messages.GetById(msg.Id)!.Content);
+        }
+
+        [Fact]
+        public void LeaveGroupChannel_RemovesOnlyCallerAndEncryptedKey_TransfersOwnership_AndInvalidatesCallerFileTokens()
+        {
+            var fileTokens = new FileTokenService(
+                DataProtectionProvider.Create("ChatServiceLeaveGroupTests"),
+                new MemoryCache(new MemoryCacheOptions()));
+
+            var serviceWithFileTokens = new ChatService(
+                _commContext.Object,
+                _hrContext.Object,
+                _projectsContext.Object,
+                _mockRealtimeGateway.Object,
+                _chatState,
+                _notificationRouting,
+                _mockPresence.Object,
+                _mockFileService.Object,
+                _mockModeration.Object,
+                new AlbumService(_albums, _channels, new Mock<ICryptoService>().Object, _escrowService, _employees),
+                new MarkdownSanitizerService(),
+                new Mock<ILogger<ChatService>>().Object,
+                fileTokenService: fileTokens);
+
+            var creator = new Employee { Id = "grp-leave-creator", FirstName = "Creator", LastName = "One" };
+            var member = new Employee { Id = "grp-leave-member", FirstName = "Member", LastName = "Two" };
+            var outsider = new Employee { Id = "grp-leave-outsider", FirstName = "Outsider", LastName = "Three" };
+            _employees.Save(creator);
+            _employees.Save(member);
+            _employees.Save(outsider);
+
+            var group = new ChatChannel
+            {
+                Id = "grp-leave-1",
+                Name = "Secure Squad",
+                ChannelType = ChatChannelType.Group,
+                CreatedById = creator.Id,
+                IsEncrypted = true,
+                ParticipantIds = new List<string> { creator.Id, member.Id },
+                EncryptedChannelKeys = new Dictionary<string, string>
+                {
+                    [creator.Id] = "enc-key-creator",
+                    [member.Id] = "enc-key-member"
+                }
+            };
+            _channels.Save(group);
+
+            var creatorToken = fileTokens.GenerateAccessToken("chat", group.Id, "secret.png", "aes-key", creator.Id, "sess-creator");
+            var memberToken = fileTokens.GenerateAccessToken("chat", group.Id, "secret.png", "aes-key", member.Id, "sess-member");
+
+            // Non-participant cannot call LeaveGroupChannel
+            var outsiderLeave = serviceWithFileTokens.LeaveGroupChannel(group.Id, outsider.Id);
+            Assert.False(outsiderLeave.IsSuccess);
+            Assert.Equal("ACCESS_DENIED", outsiderLeave.Code);
+
+            // Direct channel rejects LeaveGroupChannel
+            var dm = new ChatChannel
+            {
+                Id = "dm-no-leave",
+                ChannelType = ChatChannelType.Direct,
+                ParticipantIds = new List<string> { creator.Id, member.Id }
+            };
+            _channels.Save(dm);
+            Assert.Equal("INVALID_OPERATION", serviceWithFileTokens.LeaveGroupChannel(dm.Id, creator.Id).Code);
+
+            // Creator leaves Group: removed from ParticipantIds & EncryptedChannelKeys, ownership transfers to member, creator token invalidated
+            var leaveRes = serviceWithFileTokens.LeaveGroupChannel(group.Id, creator.Id);
+            Assert.True(leaveRes.IsSuccess);
+
+            var updatedGroup = _channels.GetById(group.Id)!;
+            Assert.DoesNotContain(creator.Id, updatedGroup.ParticipantIds);
+            Assert.Contains(member.Id, updatedGroup.ParticipantIds);
+            Assert.False(updatedGroup.EncryptedChannelKeys.ContainsKey(creator.Id));
+            Assert.True(updatedGroup.EncryptedChannelKeys.ContainsKey(member.Id));
+            Assert.Equal(member.Id, updatedGroup.CreatedById);
+
+            Assert.False(fileTokens.ValidateAccessToken("chat", group.Id, "secret.png", creatorToken, creator.Id, "sess-creator").IsSuccess);
+            Assert.True(fileTokens.ValidateAccessToken("chat", group.Id, "secret.png", memberToken, member.Id, "sess-member").IsSuccess);
+        }
+
+        [Fact]
+        public async Task SuspendedUser_IsBlockedAcrossAllChatServiceWriteAndReadMutationMethods()
+        {
+            var suspended = new Employee
+            {
+                Id = "emp-suspended-1",
+                FirstName = "Suspended",
+                LastName = "Admin",
+                IsAdmin = true,
+                IsSuspended = true
+            };
+            var activePeer = new Employee { Id = "emp-active-peer", FirstName = "Active", LastName = "Peer" };
+            _employees.Save(suspended);
+            _employees.Save(activePeer);
+
+            var channel = new ChatChannel
+            {
+                Id = "chan-susp-test",
+                Name = "General",
+                ChannelType = ChatChannelType.General,
+                IsDefaultGeneral = true,
+                CreatedById = suspended.Id
+            };
+            _channels.Save(channel);
+
+            var group = new ChatChannel
+            {
+                Id = "grp-susp-test",
+                Name = "Group",
+                ChannelType = ChatChannelType.Group,
+                CreatedById = activePeer.Id,
+                ParticipantIds = new List<string> { activePeer.Id, suspended.Id }
+            };
+            _channels.Save(group);
+
+            var ownMsg = new ChatMessage
+            {
+                Id = "msg-susp-own",
+                ChannelId = channel.Id,
+                SenderId = suspended.Id,
+                Content = "Before suspension"
+            };
+            var peerMsg = new ChatMessage
+            {
+                Id = "msg-susp-peer",
+                ChannelId = channel.Id,
+                SenderId = activePeer.Id,
+                Content = "Unread by suspended",
+                ReadBy = new List<string> { activePeer.Id }
+            };
+            _messages.Save(ownMsg);
+            _messages.Save(peerMsg);
+
+            Assert.False((await _service.SendMessageAsync(suspended.Id, channel.Id, "Blocked post")).IsSuccess);
+            Assert.False((await _service.EditMessageAsync(suspended.Id, ownMsg.Id, "Blocked edit")).IsSuccess);
+            Assert.False((await _service.DeleteMessageAsync(suspended.Id, ownMsg.Id)).IsSuccess);
+            Assert.False((await _service.ToggleReactionAsync(suspended.Id, peerMsg.Id, "👍")).IsSuccess);
+            Assert.False((await _service.AddReactionAsync(suspended.Id, peerMsg.Id, "👍")).IsSuccess);
+            Assert.False((await _service.RemoveReactionAsync(suspended.Id, peerMsg.Id, "👍")).IsSuccess);
+            Assert.False(_service.UpdateChannel(channel, suspended.Id).IsSuccess);
+            Assert.False(_service.DeleteChannel(channel.Id, suspended.Id).IsSuccess);
+            Assert.False(_service.ArchiveChannel(channel.Id, true, suspended.Id).IsSuccess);
+            Assert.False(_service.UpdateChannelOrders(new Dictionary<string, int> { [channel.Id] = 3 }, suspended.Id).IsSuccess);
+            Assert.False(_service.LeaveGroupChannel(group.Id, suspended.Id).IsSuccess);
+            Assert.False((await _service.AdminDeleteMessageAsync(peerMsg.Id, suspended.Id)).IsSuccess);
+            Assert.Throws<UnauthorizedAccessException>(() => _service.CreateDirectMessageChannel(suspended.Id, activePeer.Id));
+
+            await _service.MarkMessagesAsReadAsync(suspended.Id, channel.Id, new[] { peerMsg.Id });
+            await _service.MarkChannelMessagesAsReadAsync(suspended.Id, channel.Id);
+            Assert.DoesNotContain(suspended.Id, _messages.GetById(peerMsg.Id)!.ReadBy);
+        }
+
+        [Fact]
+        public async Task MarkMessagesAsReadAsync_FailsClosedForUnauthorizedUsersAndIgnoresCrossChannelMessageIds()
+        {
+            var memberA = new Employee { Id = "read-member-a", FirstName = "Member", LastName = "A" };
+            var memberB = new Employee { Id = "read-member-b", FirstName = "Member", LastName = "B" };
+            var intruder = new Employee { Id = "read-intruder", FirstName = "Intruder", LastName = "C" };
+            _employees.Save(memberA);
+            _employees.Save(memberB);
+            _employees.Save(intruder);
+
+            var privateDm = new ChatChannel
+            {
+                Id = "dm-read-closed",
+                ChannelType = ChatChannelType.Direct,
+                ParticipantIds = new List<string> { memberA.Id, memberB.Id }
+            };
+            var publicChan = new ChatChannel
+            {
+                Id = "pub-read-other",
+                ChannelType = ChatChannelType.General,
+                IsDefaultGeneral = true
+            };
+            _channels.Save(privateDm);
+            _channels.Save(publicChan);
+
+            var dmMessage = new ChatMessage
+            {
+                Id = "msg-in-dm",
+                ChannelId = privateDm.Id,
+                SenderId = memberA.Id,
+                Content = "Private DM message",
+                ReadBy = new List<string> { memberA.Id }
+            };
+            _messages.Save(dmMessage);
+
+            // Intruder cannot mark private DM messages as read directly OR by passing dmMessage.Id against publicChan
+            await _service.MarkMessagesAsReadAsync(intruder.Id, privateDm.Id, new[] { dmMessage.Id });
+            await _service.MarkChannelMessagesAsReadAsync(intruder.Id, privateDm.Id);
+            await _service.MarkMessagesAsReadAsync(intruder.Id, publicChan.Id, new[] { dmMessage.Id });
+
+            // Nonexistent user/channel also fails closed
+            await _service.MarkMessagesAsReadAsync("ghost-user", privateDm.Id, new[] { dmMessage.Id });
+            await _service.MarkMessagesAsReadAsync(memberB.Id, "ghost-channel", new[] { dmMessage.Id });
+
+            Assert.DoesNotContain(intruder.Id, _messages.GetById(dmMessage.Id)!.ReadBy);
+            Assert.DoesNotContain("ghost-user", _messages.GetById(dmMessage.Id)!.ReadBy);
+            Assert.DoesNotContain(memberB.Id, _messages.GetById(dmMessage.Id)!.ReadBy);
+
+            // Authorized participant marking against the matching channel succeeds
+            await _service.MarkMessagesAsReadAsync(memberB.Id, privateDm.Id, new[] { dmMessage.Id });
+            Assert.Contains(memberB.Id, _messages.GetById(dmMessage.Id)!.ReadBy);
+        }
+
+        [Fact]
+        public async Task DeleteMessageAsync_ScrubsContentAttachmentsReactionsMentions_AndUnsharesOrphanedAlbum()
+        {
+            var author = new Employee { Id = "scrub-author", FirstName = "Author", LastName = "One" };
+            _employees.Save(author);
+
+            var channel = new ChatChannel
+            {
+                Id = "chan-scrub-full",
+                Name = "General",
+                ChannelType = ChatChannelType.General,
+                IsDefaultGeneral = true
+            };
+            _channels.Save(channel);
+
+            var album = new Spokes_Server.Core.Models.Communication.Album
+            {
+                Id = "album-scrub-1",
+                OwnerId = author.Id,
+                SharedWithChannelIds = new List<string> { channel.Id }
+            };
+            _albums.Save(album);
+
+            var msg = new ChatMessage
+            {
+                Id = "msg-scrub-full",
+                ChannelId = channel.Id,
+                SenderId = author.Id,
+                Content = "Confidential text #[Photos](album:album-scrub-1) @everyone",
+                Attachments = new List<ChatAttachment>
+                {
+                    new ChatAttachment { Id = "att-scrub-1", FileName = "secret.pdf", FilePath = "/spokesapi/files/chat/chan-scrub-full/secret.pdf" }
+                },
+                Reactions = new List<string> { "🔥:other-user" },
+                MentionedUserIds = new List<string> { "other-user" },
+                MentionedAlbumIds = new List<string> { "album-scrub-1" },
+                MentionedPollIds = new List<string> { "poll-1" },
+                MentionedEventIds = new List<string> { "evt-1" },
+                MentionsTeam = true,
+                MentionsEveryone = true
+            };
+            _messages.Save(msg);
+
+            var delResult = await _service.DeleteMessageAsync(author.Id, msg.Id);
+            Assert.True(delResult.IsSuccess);
+
+            var scrubbed = _messages.GetById(msg.Id)!;
+            Assert.True(scrubbed.IsDeleted);
+            Assert.Equal(string.Empty, scrubbed.Content);
+            Assert.Empty(scrubbed.Attachments);
+            Assert.Empty(scrubbed.Reactions);
+            Assert.Empty(scrubbed.MentionedUserIds);
+            Assert.Empty(scrubbed.MentionedAlbumIds);
+            Assert.Empty(scrubbed.MentionedPollIds);
+            Assert.Empty(scrubbed.MentionedEventIds);
+            Assert.False(scrubbed.MentionsTeam);
+            Assert.False(scrubbed.MentionsEveryone);
+
+            _mockFileService.Verify(f => f.DeleteAsync("/spokesapi/files/chat/chan-scrub-full/secret.pdf"), Times.Once);
+            Assert.DoesNotContain(channel.Id, _albums.GetById("album-scrub-1")!.SharedWithChannelIds);
+        }
+
+        [Fact]
+        public async Task ConvertMessageImagesToAlbumAsync_EncryptedChannel_MovesOnlyImagesToAlbumPreservesNonImageAndReEncryptsMessage()
+        {
+            var realCrypto = new CryptoService();
+            var realFileService = new FileService(_config, new Mock<ILogger<FileService>>().Object, realCrypto);
+            var serverConfigRepo = new ServerConfigRepository(_persistence, _config);
+            var realEscrow = new ServerEscrowService(_companyProfile, serverConfigRepo, realCrypto);
+            var realAlbumService = new AlbumService(_albums, _channels, realCrypto, realEscrow, _employees, fileService: realFileService);
+
+            var chatService = new ChatService(
+                _commContext.Object,
+                _hrContext.Object,
+                _projectsContext.Object,
+                _mockRealtimeGateway.Object,
+                _chatState,
+                _notificationRouting,
+                _mockPresence.Object,
+                realFileService,
+                _mockModeration.Object,
+                realAlbumService,
+                new MarkdownSanitizerService(),
+                new Mock<ILogger<ChatService>>().Object,
+                crypto: realCrypto);
+
+            var (pubKey, privKey) = realCrypto.GenerateRsaKeyPair();
+
+            var poster = new Employee
+            {
+                Id = "poster-enc",
+                FirstName = "Poster",
+                LastName = "One",
+                PublicKey = pubKey,
+                EncryptedPrivateKey = "enc-priv",
+                IsActive = true
+            };
+            _employees.Save(poster);
+
+            var plainChannelKey = realCrypto.GenerateAesKeyBase64();
+            var channel = new ChatChannel
+            {
+                Id = "chan-convert-enc",
+                Name = "Secure Photos",
+                ChannelType = ChatChannelType.General,
+                IsDefaultGeneral = true,
+                IsEncrypted = true,
+                EncryptedChannelKeys = new Dictionary<string, string>
+                {
+                    [poster.Id] = realCrypto.EncryptRsa(plainChannelKey, pubKey)
+                }
+            };
+            _channels.Save(channel);
+
+            var attachments = new List<ChatAttachment>();
+            for (int i = 0; i < 4; i++)
+            {
+                using var imgStream = new MemoryStream(System.Text.Encoding.UTF8.GetBytes($"img-bytes-{i}-0123456789abcdef"));
+                var path = await realFileService.UploadStreamAsync("chat", channel.Id, imgStream, $"pic{i}.png", plainChannelKey);
+                attachments.Add(new ChatAttachment
+                {
+                    Id = $"img-{i}",
+                    FileName = $"pic{i}.png",
+                    FilePath = path,
+                    ContentType = "image/png",
+                    FileSizeBytes = 28
+                });
+            }
+
+            attachments.Add(new ChatAttachment
+            {
+                Id = "doc-keep",
+                FileName = "notes.pdf",
+                FilePath = "/spokesapi/files/chat/chan-convert-enc/notes.pdf",
+                ContentType = "application/pdf",
+                FileSizeBytes = 1024
+            });
+
+            var msg = new ChatMessage
+            {
+                Id = "msg-convert-enc",
+                ChannelId = channel.Id,
+                SenderId = poster.Id,
+                Content = realCrypto.EncryptAes("Check out these shots!", plainChannelKey),
+                IsEncrypted = true,
+                Attachments = attachments
+            };
+            _messages.Save(msg);
+
+            var result = await chatService.ConvertMessageImagesToAlbumAsync(
+                poster.Id,
+                msg.Id,
+                targetAlbumId: null,
+                newAlbumTitle: "Weekend Highlights",
+                privateKey: privKey);
+
+            Assert.True(result.IsSuccess);
+            var updatedMsg = _messages.GetById(msg.Id)!;
+            Assert.Single(updatedMsg.Attachments);
+            Assert.Equal("notes.pdf", updatedMsg.Attachments[0].FileName);
+            Assert.Single(updatedMsg.MentionedAlbumIds);
+
+            var createdAlbumId = updatedMsg.MentionedAlbumIds[0];
+            var decryptedText = realCrypto.DecryptAes(updatedMsg.Content, plainChannelKey);
+            Assert.Contains($"#[Weekend Highlights](album:{createdAlbumId})", decryptedText);
+            Assert.Contains("Check out these shots!", decryptedText);
+
+            var createdAlbum = _albums.GetById(createdAlbumId)!;
+            Assert.Equal(4, createdAlbum.Media.Count);
+            Assert.Contains(channel.Id, createdAlbum.SharedWithChannelIds);
+        }
+
+        [Fact]
+        public async Task ConvertMessageImagesToAlbumAsync_NonSender_ReturnsForbidden()
+        {
+            var sender = new Employee { Id = "orig-sender", FirstName = "Orig", LastName = "Sender", IsActive = true };
+            var otherUser = new Employee { Id = "other-caller", FirstName = "Other", LastName = "Caller", IsActive = true, IsAdmin = true };
+            _employees.Save(sender);
+            _employees.Save(otherUser);
+
+            var channel = new ChatChannel { Id = "chan-non-sender", Name = "General", ChannelType = ChatChannelType.General };
+            _channels.Save(channel);
+
+            var msg = new ChatMessage
+            {
+                Id = "msg-non-sender",
+                ChannelId = channel.Id,
+                SenderId = sender.Id,
+                Content = "My photos",
+                Attachments =
+                [
+                    new ChatAttachment { Id = "a1", FileName = "1.jpg", FilePath = "/spokesapi/files/chat/chan-non-sender/1.jpg", ContentType = "image/jpeg" }
+                ]
+            };
+            _messages.Save(msg);
+
+            var res = await _service.ConvertMessageImagesToAlbumAsync(otherUser.Id, msg.Id, null, "Stolen Album");
+            Assert.False(res.IsSuccess);
+            Assert.Equal("FORBIDDEN", res.Code);
         }
 }

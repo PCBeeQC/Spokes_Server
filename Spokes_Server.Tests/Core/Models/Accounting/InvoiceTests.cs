@@ -84,6 +84,14 @@ public class InvoiceTests
         Assert.Equal("General", line.Type);
         Assert.Equal(0, line.OriginalUnitCost);
         Assert.Equal(0, line.MarkupPercentage);
+        Assert.Equal(string.Empty, line.Note);
+    }
+
+    [Fact]
+    public void InvoiceLine_Note_MutatesCorrectly()
+    {
+        var line = new InvoiceLine { Note = "Special discount" };
+        Assert.Equal("Special discount", line.Note);
     }
 
     [Fact]

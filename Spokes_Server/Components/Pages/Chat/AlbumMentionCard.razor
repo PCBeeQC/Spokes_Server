@@ -155,10 +155,11 @@ else
 
     private string GetTokenizedUrl(AlbumMedia media, bool isThumbnail = true)
     {
-        if (_album == null || string.IsNullOrEmpty(CurrentUserId)) return isThumbnail ? media.ThumbnailUrl : media.FilePath;
-        
         string baseUrl = isThumbnail ? media.ThumbnailUrl : media.FilePath;
-        string token = FileTokenService.GenerateAccessToken("albums", _album.Id, baseUrl, _cachedPlainAlbumKey, CurrentUserId, CircuitContext?.SessionId);
+        if (_album == null || string.IsNullOrWhiteSpace(CurrentUserId) || string.IsNullOrWhiteSpace(CircuitContext?.SessionId))
+            return baseUrl;
+
+        string token = FileTokenService.GenerateAccessToken("albums", _album.Id, baseUrl, _cachedPlainAlbumKey, CurrentUserId, CircuitContext.SessionId);
         return $"{baseUrl}?t={token}";
     }
 }

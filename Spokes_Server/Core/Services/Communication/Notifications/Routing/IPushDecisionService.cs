@@ -13,4 +13,6 @@ public interface IPushDecisionService
     bool WasRecentlySeenOnDesktopForPush(string userId);
     bool ShouldSuppressMobilePush(string userId);
     PresenceTier DetermineNotificationTier(string userId);
+    bool IsUserInVoiceCall(string userId) => false;
+    System.Collections.Generic.IReadOnlyCollection<string> GetFocusedSessionIds(string userId) => System.Array.Empty<string>();
 }

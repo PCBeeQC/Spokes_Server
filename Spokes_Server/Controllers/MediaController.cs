@@ -53,6 +53,7 @@ public class MediaController : SpokesControllerBase
     }
 
     [HttpGet("Icon")]
+    [Spokes_Server.Core.Security.AllowDuringSetup]
     [Microsoft.AspNetCore.Authorization.AllowAnonymous]
     [ResponseCache(Duration = 3600, Location = ResponseCacheLocation.Client)] // Cache for 1 hour locally
     public IActionResult GetIcon([FromQuery] string? t = null)
@@ -75,6 +76,7 @@ public class MediaController : SpokesControllerBase
     }
 
     [HttpGet("Logo")]
+    [Spokes_Server.Core.Security.AllowDuringSetup]
     [Microsoft.AspNetCore.Authorization.AllowAnonymous]
     [ResponseCache(Duration = 3600, Location = ResponseCacheLocation.Client)]
     public IActionResult GetLogo([FromQuery] string? t = null)
@@ -100,7 +102,7 @@ public class MediaController : SpokesControllerBase
             currentUser = _userService.GetEmployee(User);
         }
 
-        bool isAuthorized = currentUser != null && currentUser.IsActive && !currentUser.IsSuspended && !currentUser.IsBanned;
+        bool isAuthorized = currentUser != null && currentUser.IsActive && !currentUser.IsBanned;
 
         // Validate token for push workers
         if (!isAuthorized && !string.IsNullOrEmpty(t))

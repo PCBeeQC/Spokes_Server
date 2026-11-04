@@ -108,10 +108,15 @@ public interface ISage50ExportService
     void MarkAsExported(IEnumerable<Invoice> invoices, IEnumerable<SagePayableExportItem> payables, string batchId, bool overwriteExistingBatch = false);
     void UnmarkExported(IEnumerable<Invoice> invoices, IEnumerable<SagePayableExportItem> payables);
 
-    // Client / Vendor Resolution & Sage 50 Baseline Import
+    // Client / Vendor Resolution, Self-Learning Assignments & Sage 50 Baseline Import
     ClientInfo? ResolveClientForInvoice(Invoice inv);
     string ResolveSageCustomerName(ClientInfo? client, Sage50ExportConfig config);
     string ResolveSageVendorName(string? vendorName, PartyContactInfo? contactInfo, Sage50ExportConfig config);
+    string ResolveInvoiceGlAccount(Invoice inv, Sage50ExportConfig config);
+    string ResolvePayableGlAccount(SagePayableExportItem payable, Sage50ExportConfig config);
+    void AssignInvoiceGlAndCustomer(Invoice invoice, string? glAccountCode, string? sageCustomerName, bool rememberForClient = true);
+    void AssignPayableGlAndVendor(SagePayableExportItem payable, string? glAccountCode, string? sageVendorName, bool rememberForVendor = true);
+    void UpdatePayableTaxBreakdown(SagePayableExportItem payable, bool isTaxExempt, decimal subTotal, decimal tpsAmount, decimal tvqAmount);
     SageBaselineImportSummary ImportSageBaselineFile(string fileContent, Sage50ExportConfig config, bool syncSuppliersToDatabase = true);
     SageBaselineImportSummary ImportSageBaselineBytes(byte[] fileBytes, Sage50ExportConfig config, bool syncSuppliersToDatabase = true);
     int AutoMapEntitiesToBaseline(Sage50ExportConfig config, bool syncSuppliersToDatabase = true);

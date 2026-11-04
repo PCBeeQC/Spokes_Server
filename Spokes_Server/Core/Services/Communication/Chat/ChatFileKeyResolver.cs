@@ -62,12 +62,23 @@ public class ChatFileKeyResolver : IFileKeyResolver
 
     public FileKeyResolutionResult ResolveChannelKey(string channelId, Employee user, string? tokenEncryptionKey = null, HttpContext? httpContext = null)
     {
-        if (!string.IsNullOrEmpty(tokenEncryptionKey))
-            return FileKeyResolutionResult.Success(tokenEncryptionKey);
-
         var channel = _channels.GetById(channelId);
         if (channel == null || !channel.IsEncrypted)
             return FileKeyResolutionResult.NotEncrypted();
+
+        if (!string.IsNullOrEmpty(tokenEncryptionKey))
+        {
+            bool hasEligibleKey = user != null &&
+                (channel.EncryptedChannelKeys.ContainsKey(user.Id) ||
+                 (!user.HasVaultPassword && channel.EncryptedChannelKeys.ContainsKey("ServerMaster")));
+
+            if (!hasEligibleKey)
+            {
+                return FileKeyResolutionResult.Failure("You do not have the encryption key for this channel.");
+            }
+
+            return FileKeyResolutionResult.Success(tokenEncryptionKey);
+        }
 
         if (!_keystore.IsUnlocked && httpContext != null && !string.IsNullOrEmpty(user.EncryptedPrivateKey))
         {

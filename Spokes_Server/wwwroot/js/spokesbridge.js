@@ -181,6 +181,57 @@
             return null;
         },
 
+        // Active voice call state reporting & cross-server single-call handoff
+        setVoiceCallState: function (state) {
+            state = state || {};
+            if (existing.setVoiceCallState) {
+                try {
+                    existing.setVoiceCallState(state);
+                    return;
+                } catch (e) {
+                    console.warn('[SpokesBridge] Error calling existing.setVoiceCallState():', e);
+                }
+            }
+            if (window.SpokesNative && typeof window.SpokesNative.setVoiceCallState === 'function') {
+                try {
+                    window.SpokesNative.setVoiceCallState(Boolean(state.active), Boolean(state.isMuted));
+                } catch (e) {
+                    console.warn('[SpokesBridge] Error calling SpokesNative.setVoiceCallState():', e);
+                }
+            }
+        },
+
+        prepareVoiceConnect: async function () {
+            if (existing.prepareVoiceConnect) {
+                try {
+                    await existing.prepareVoiceConnect();
+                    return;
+                } catch (e) {
+                    console.warn('[SpokesBridge] Error calling existing.prepareVoiceConnect():', e);
+                }
+            }
+            if (window.SpokesNative && typeof window.SpokesNative.prepareVoiceConnect === 'function') {
+                try {
+                    await window.SpokesNative.prepareVoiceConnect();
+                } catch (e) {
+                    console.warn('[SpokesBridge] Error calling SpokesNative.prepareVoiceConnect():', e);
+                }
+            }
+        },
+
+        focusVoiceWindow: async function () {
+            if (existing.focusVoiceWindow) {
+                try {
+                    return await existing.focusVoiceWindow();
+                } catch (e) {
+                    console.warn('[SpokesBridge] Error calling existing.focusVoiceWindow():', e);
+                }
+            }
+            try {
+                window.focus();
+            } catch (e) {}
+        },
+
         // Batched Blazor MainLayout initialization (single WebSocket round-trip on firstRender)
         initLayout: async function (dotNetRef, options) {
             options = options || {};
@@ -202,17 +253,21 @@
             }
 
             if (dotNetRef) {
+                window.spokesDotNetRef = dotNetRef;
                 if (options.chatDiagnostics) { try { window.spokesChatDiagnostics?.attachServer(dotNetRef); } catch (e) {} } // DIAG-TEMP
                 try { if (typeof window.registerCtrlK === 'function') window.registerCtrlK(dotNetRef); } catch (e) {}
                 try { if (typeof window.registerWindowFocus === 'function') window.registerWindowFocus(dotNetRef); } catch (e) {}
                 try { if (typeof window.registerActivityTracker === 'function') window.registerActivityTracker(dotNetRef); } catch (e) {}
-                try { if (typeof window.registerShareTarget === 'function') window.registerShareTarget(dotNetRef); } catch (e) {}
+                if (Boolean(window.SpokesBridge.isMobile) && typeof window.ensureShareScriptsLoaded === 'function') {
+                    window.ensureShareScriptsLoaded().then(function () {
+                        try { if (typeof window.registerShareTarget === 'function') window.registerShareTarget(dotNetRef); } catch (e) {}
+                    }).catch(function () {});
+                } else {
+                    try { if (typeof window.registerShareTarget === 'function') window.registerShareTarget(dotNetRef); } catch (e) {}
+                }
                 try { if (typeof window.registerImageRecoveryCoordinator === 'function') window.registerImageRecoveryCoordinator(dotNetRef); } catch (e) {}
                 if (window.pushNotifications) {
                     try {
-                        if (typeof window.pushNotifications.registerPresenceLayout === 'function') {
-                            window.pushNotifications.registerPresenceLayout(dotNetRef);
-                        }
                         if (typeof window.pushNotifications.initializeNativePushListeners === 'function') {
                             window.pushNotifications.initializeNativePushListeners(dotNetRef).catch(function () {});
                         }
@@ -244,26 +299,27 @@
             var permissionStatus = 'default';
             if (pn && typeof pn.getPermissionStatus === 'function') {
                 try {
-                    permissionStatus = String(await pn.getPermissionStatus());
-                } catch (e) {}
+                    var rawPerm = pn.getPermissionStatus();
+                    permissionStatus = (rawPerm && typeof rawPerm.then === 'function')
+                        ? String(await rawPerm)
+                        : String(rawPerm);
+                } catch (e) {
+                    permissionStatus = 'default';
+                }
+            }
+            var storedVaultObj = null;
+            if (options.needsVaultKey !== false && window.spokesVault && typeof window.spokesVault.getStoredVaultKey === 'function') {
+                try {
+                    storedVaultObj = await window.spokesVault.getStoredVaultKey();
+                } catch (e) {
+                    storedVaultObj = null;
+                }
             }
 
-            var existingSubscription = null;
-            if (pn && typeof pn.getExistingSubscription === 'function') {
-                try {
-                    existingSubscription = await pn.getExistingSubscription();
-                } catch (e) {}
-            }
-
-            var iosSoundDisabled = false;
-            if (isCapacitorApp && pn && typeof pn.getNativeSettings === 'function') {
-                try {
-                    var settings = await pn.getNativeSettings();
-                    if (settings && settings.authorizationStatus === 'authorized' && !settings.soundEnabled) {
-                        iosSoundDisabled = true;
-                    }
-                } catch (e) {}
-            }
+            var viewportWidth = Math.round(window.innerWidth || (document.documentElement && document.documentElement.clientWidth) || 0);
+            var storedVaultKey = (storedVaultObj && typeof storedVaultObj.key === 'string' && storedVaultObj.key.length > 0)
+                ? storedVaultObj.key
+                : null;
 
             return {
                 platform: window.SpokesBridge.platform,
@@ -271,27 +327,49 @@
                 isDesktopApp: isDesktopApp,
                 deviceType: deviceType,
                 isFocused: typeof window.isSpokesWindowFocused === 'function' ? Boolean(window.isSpokesWindowFocused()) : (document.visibilityState === 'visible'),
-                existingSubscription: existingSubscription,
+                existingSubscription: null,
                 permissionStatus: permissionStatus,
                 hasBeenPromptedForPush: hasBeenPromptedForPush,
                 isPushSupported: isPushSupported,
                 requiresPushRelay: requiresPushRelay,
-                iosSoundDisabled: iosSoundDisabled,
-                timeZone: (typeof Intl !== 'undefined' && Intl.DateTimeFormat) ? Intl.DateTimeFormat().resolvedOptions().timeZone : null
+                iosSoundDisabled: false,
+                timeZone: (typeof Intl !== 'undefined' && Intl.DateTimeFormat) ? Intl.DateTimeFormat().resolvedOptions().timeZone : null,
+                viewportWidth: viewportWidth,
+                storedVaultKey: storedVaultKey
+            };
+        },
+
+        // Deferred background probe for push subscription & native notification settings (post-TTI)
+        probePushState: async function (options) {
+            options = options || {};
+            var pn = window.pushNotifications;
+            var isCapacitorApp = (typeof options.isCapacitorApp === 'boolean')
+                ? options.isCapacitorApp
+                : Boolean(window.SpokesBridge.isMobile);
+            var [existingSubscription, nativeSettings] = await Promise.all([
+                (pn && typeof pn.getExistingSubscription === 'function')
+                    ? Promise.resolve(pn.getExistingSubscription()).catch(function () { return null; })
+                    : Promise.resolve(null),
+                (isCapacitorApp && pn && typeof pn.getNativeSettings === 'function')
+                    ? Promise.resolve(pn.getNativeSettings()).catch(function () { return null; })
+                    : Promise.resolve(null)
+            ]);
+            var iosSoundDisabled = Boolean(
+                nativeSettings && nativeSettings.authorizationStatus === 'authorized' && !nativeSettings.soundEnabled
+            );
+            return {
+                existingSubscription: existingSubscription,
+                iosSoundDisabled: iosSoundDisabled
             };
         },
 
         // Batched Blazor MainLayout disposal
         disposeLayout: function () {
+            window.spokesDotNetRef = null;
             try { if (typeof window.unregisterCtrlK === 'function') window.unregisterCtrlK(); } catch (e) {}
             try { if (typeof window.unregisterWindowFocus === 'function') window.unregisterWindowFocus(); } catch (e) {}
             try { if (typeof window.unregisterActivityTracker === 'function') window.unregisterActivityTracker(); } catch (e) {}
             try { if (typeof window.unregisterShareTarget === 'function') window.unregisterShareTarget(); } catch (e) {}
-            try {
-                if (window.pushNotifications && typeof window.pushNotifications.stopIdleDetector === 'function') {
-                    window.pushNotifications.stopIdleDetector();
-                }
-            } catch (e) {}
         },
 
         // External Display (Screen Mirroring / AirPlay to TV / Android Smart View)

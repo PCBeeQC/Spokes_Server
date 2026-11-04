@@ -15,6 +15,7 @@ public class CoreContext
     public virtual DeviceSessionRepository DeviceSessions { get; }
     public virtual DemoConfigRepository DemoConfigs { get; }
     public virtual StandardDocumentRepository StandardDocuments { get; }
+    public virtual TermsAndConditionsRepository TermsAndConditions { get; }
 
     protected CoreContext()
     {
@@ -26,6 +27,21 @@ public class CoreContext
         DeviceSessions = null!;
         DemoConfigs = null!;
         StandardDocuments = null!;
+        TermsAndConditions = null!;
+    }
+
+
+    public CoreContext(
+        CompanyProfileRepository companyProfile,
+        DocumentTemplateRepository documentTemplates,
+        OpenIdAccountRepository openIdAccounts,
+        ServerConfigRepository serverConfigs,
+        SystemConfigRepository systemConfigs,
+        DeviceSessionRepository deviceSessions,
+        DemoConfigRepository demoConfigs,
+        StandardDocumentRepository standardDocuments)
+        : this(companyProfile, documentTemplates, openIdAccounts, serverConfigs, systemConfigs, deviceSessions, demoConfigs, standardDocuments, null!)
+    {
     }
 
     [Microsoft.Extensions.DependencyInjection.ActivatorUtilitiesConstructor]
@@ -37,7 +53,8 @@ public class CoreContext
         SystemConfigRepository systemConfigs,
         DeviceSessionRepository deviceSessions,
         DemoConfigRepository demoConfigs,
-        StandardDocumentRepository standardDocuments)
+        StandardDocumentRepository standardDocuments,
+        TermsAndConditionsRepository? termsAndConditions = null)
     {
         CompanyProfile = companyProfile;
         DocumentTemplates = documentTemplates;
@@ -47,6 +64,7 @@ public class CoreContext
         DeviceSessions = deviceSessions;
         DemoConfigs = demoConfigs;
         StandardDocuments = standardDocuments;
+        TermsAndConditions = termsAndConditions!;
     }
 
     /// <summary>
@@ -96,7 +114,9 @@ public class CoreContext
             () => SystemConfigs.LoadFromDisk(),
             () => DeviceSessions.LoadFromDisk(),
             () => DemoConfigs.LoadFromDisk(),
-            () => StandardDocuments?.LoadFromDisk()
+            () => StandardDocuments?.LoadFromDisk(),
+            () => TermsAndConditions?.LoadFromDisk()
         );
     }
 }
+

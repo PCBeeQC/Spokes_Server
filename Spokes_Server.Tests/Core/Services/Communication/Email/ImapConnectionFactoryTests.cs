@@ -7,9 +7,10 @@ using Microsoft.Extensions.Logging;
 using Moq;
 using Xunit;
 using Spokes_Server.Core.Data;
+using Spokes_Server.Core.Data.Repositories.Communication;
 using Spokes_Server.Core.Data.Repositories.Core;
-using Spokes_Server.Core.Data.Repositories.HR;
-using Spokes_Server.Core.Models.HR;
+using Spokes_Server.Core.Models.Communication;
+using Spokes_Server.Core.Models.Core;
 using Spokes_Server.Core.Services.Communication.Email;
 
 namespace Spokes_Server.Tests.Core.Services.Communication.Email;
@@ -19,7 +20,7 @@ public class ImapConnectionFactoryTests : IDisposable
     private readonly string _testDataDir;
     private readonly IConfiguration _config;
     private readonly DiskPersistenceService _persistence;
-    private readonly EmployeeRepository _employees;
+    private readonly EmailAccountRepository _accounts;
     private readonly CompanyProfileRepository _companyProfiles;
     private readonly EncryptionService _encryptionService;
     private readonly ImapConnectionFactory _factory;
@@ -33,14 +34,14 @@ public class ImapConnectionFactoryTests : IDisposable
         _config = new ConfigurationBuilder().AddInMemoryCollection(configDict).Build();
 
         _persistence = new DiskPersistenceService(new Mock<ILogger<DiskPersistenceService>>().Object);
-        _employees = new EmployeeRepository(_persistence, _config);
+        _accounts = new EmailAccountRepository(_persistence, _config);
         _companyProfiles = new CompanyProfileRepository(_persistence, _config);
         _encryptionService = new EncryptionService(_config);
 
         _factory = new ImapConnectionFactory(
             _companyProfiles,
-            _employees,
             _encryptionService,
+            _accounts,
             new Mock<ILogger<ImapConnectionFactory>>().Object);
     }
 
@@ -55,7 +56,7 @@ public class ImapConnectionFactoryTests : IDisposable
     }
 
     [Fact]
-    public async Task ConnectAsync_WhenEmployeeNotFound_ReturnsMissingCredentials()
+    public async Task ConnectAsync_WhenAccountNotFound_ReturnsMissingCredentials()
     {
         var result = await _factory.ConnectAsync("non_existent_id");
 
@@ -65,19 +66,18 @@ public class ImapConnectionFactoryTests : IDisposable
     }
 
     [Fact]
-    public async Task ConnectAsync_WhenEmployeeHasNoEmail_ReturnsMissingCredentials()
+    public async Task ConnectAsync_WhenAccountHasNoEmail_ReturnsMissingCredentials()
     {
-        var emp = new Employee
+        var account = new EmailAccount
         {
-            Id = "emp1",
-            FirstName = "John",
-            LastName = "Doe",
-            Email = "",
-            EncryptedEmailPassword = _encryptionService.Encrypt("pass123")
+            Id = "acc1",
+            Name = "John Doe",
+            EmailAddress = "",
+            EncryptedPassword = _encryptionService.Encrypt("pass123")
         };
-        _employees.Save(emp);
+        _accounts.Save(account);
 
-        var result = await _factory.ConnectAsync(emp.Id);
+        var result = await _factory.ConnectAsync(account.Id);
 
         Assert.False(result.IsSuccess);
         Assert.Equal(ImapConnectionStatus.MissingCredentials, result.Status);
@@ -85,19 +85,18 @@ public class ImapConnectionFactoryTests : IDisposable
     }
 
     [Fact]
-    public async Task ConnectAsync_WhenEmployeeHasNoPassword_ReturnsMissingCredentials()
+    public async Task ConnectAsync_WhenAccountHasNoPassword_ReturnsMissingCredentials()
     {
-        var emp = new Employee
+        var account = new EmailAccount
         {
-            Id = "emp2",
-            FirstName = "John",
-            LastName = "Doe",
-            Email = "john@example.com",
-            EncryptedEmailPassword = ""
+            Id = "acc2",
+            Name = "John Doe",
+            EmailAddress = "john@example.com",
+            EncryptedPassword = ""
         };
-        _employees.Save(emp);
+        _accounts.Save(account);
 
-        var result = await _factory.ConnectAsync(emp);
+        var result = await _factory.ConnectAsync(account);
 
         Assert.False(result.IsSuccess);
         Assert.Equal(ImapConnectionStatus.MissingCredentials, result.Status);
@@ -107,21 +106,20 @@ public class ImapConnectionFactoryTests : IDisposable
     [Fact]
     public async Task ConnectAsync_WhenServerNotConfigured_ReturnsServerNotConfigured()
     {
-        var emp = new Employee
+        var account = new EmailAccount
         {
-            Id = "emp3",
-            FirstName = "John",
-            LastName = "Doe",
-            Email = "john@example.com",
-            EncryptedEmailPassword = _encryptionService.Encrypt("secret")
+            Id = "acc3",
+            Name = "John Doe",
+            EmailAddress = "john@example.com",
+            EncryptedPassword = _encryptionService.Encrypt("secret")
         };
-        _employees.Save(emp);
+        _accounts.Save(account);
 
         var profile = _companyProfiles.Get();
-        profile.EmailSettings.ImapHost = "";
+        profile.EmailSettings.IncomingServers.Clear();
         _companyProfiles.Save(profile);
 
-        var result = await _factory.ConnectAsync(emp.Id);
+        var result = await _factory.ConnectAsync(account.Id);
 
         Assert.False(result.IsSuccess);
         Assert.Equal(ImapConnectionStatus.ServerNotConfigured, result.Status);
@@ -131,21 +129,17 @@ public class ImapConnectionFactoryTests : IDisposable
     [Fact]
     public async Task ConnectAsync_WhenDecryptionFails_ReturnsDecryptionError()
     {
-        var emp = new Employee
+        var account = new EmailAccount
         {
-            Id = "emp4",
-            FirstName = "John",
-            LastName = "Doe",
-            Email = "john@example.com",
-            EncryptedEmailPassword = "not_valid_ciphertext_and_will_fail_mac"
+            Id = "acc4",
+            Name = "John Doe",
+            EmailAddress = "john@example.com",
+            CustomImapHost = "imap.example.com",
+            EncryptedPassword = "not_valid_ciphertext_and_will_fail_mac"
         };
-        _employees.Save(emp);
+        _accounts.Save(account);
 
-        var profile = _companyProfiles.Get();
-        profile.EmailSettings.ImapHost = "imap.example.com";
-        _companyProfiles.Save(profile);
-
-        var result = await _factory.ConnectAsync(emp.Id);
+        var result = await _factory.ConnectAsync(account.Id);
 
         Assert.False(result.IsSuccess);
         Assert.Equal(ImapConnectionStatus.DecryptionError, result.Status);
@@ -155,7 +149,7 @@ public class ImapConnectionFactoryTests : IDisposable
     [Fact]
     public async Task CreateAuthenticatedClientAsync_WhenMissingCredentials_ReturnsNull()
     {
-        var client = await _factory.CreateAuthenticatedClientAsync("missing_emp");
+        var client = await _factory.CreateAuthenticatedClientAsync("missing_acc");
         Assert.Null(client);
     }
 
@@ -169,23 +163,19 @@ public class ImapConnectionFactoryTests : IDisposable
     [Fact]
     public async Task ConnectAsync_WhenConnectionFails_ReturnsConnectionFailed()
     {
-        var emp = new Employee
+        var account = new EmailAccount
         {
-            Id = "emp_net_fail",
-            FirstName = "John",
-            LastName = "Doe",
-            Email = "john@example.com",
-            EncryptedEmailPassword = _encryptionService.Encrypt("secret")
+            Id = "acc_net_fail",
+            Name = "John Doe",
+            EmailAddress = "john@example.com",
+            CustomImapHost = "unresolvable-domain.invalid",
+            CustomImapPort = 143,
+            CustomImapSsl = false,
+            EncryptedPassword = _encryptionService.Encrypt("secret")
         };
-        _employees.Save(emp);
+        _accounts.Save(account);
 
-        var profile = _companyProfiles.Get();
-        profile.EmailSettings.ImapHost = "unresolvable-domain.invalid";
-        profile.EmailSettings.ImapPort = 143;
-        profile.EmailSettings.ImapSsl = false;
-        _companyProfiles.Save(profile);
-
-        var result = await _factory.ConnectAsync(emp.Id);
+        var result = await _factory.ConnectAsync(account.Id);
 
         Assert.False(result.IsSuccess);
         Assert.Equal(ImapConnectionStatus.ConnectionFailed, result.Status);

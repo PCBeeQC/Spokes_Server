@@ -30,7 +30,7 @@ public static class NotificationSoundCatalog
             DisplayName = "Spokes Chime",
             FileName = "spokesnotif1.wav",
             Description = "Classic Spokes chime sound.",
-            SupportedCategories = [NotificationCategories.Chat, NotificationCategories.Calendar]
+            SupportedCategories = [NotificationCategories.Chat, NotificationCategories.Calendar, NotificationCategories.Email]
         },
         new NotificationSoundDefinition
         {
@@ -54,7 +54,7 @@ public static class NotificationSoundCatalog
             DisplayName = "Cowbell Hit",
             FileName = "mixkit_cowbell_sharp_hit_1743.wav",
             Description = "Sharp, distinct percussion strike.",
-            SupportedCategories = [NotificationCategories.Chat, NotificationCategories.Calendar]
+            SupportedCategories = [NotificationCategories.Chat, NotificationCategories.Calendar, NotificationCategories.Email]
         },
         new NotificationSoundDefinition
         {
@@ -62,7 +62,7 @@ public static class NotificationSoundCatalog
             DisplayName = "Happy Bell",
             FileName = "mixkit_happy_bell_alert_601.wav",
             Description = "Warm, uplifting bell tone.",
-            SupportedCategories = [NotificationCategories.Chat, NotificationCategories.Calendar]
+            SupportedCategories = [NotificationCategories.Chat, NotificationCategories.Calendar, NotificationCategories.Email]
         },
         new NotificationSoundDefinition
         {

@@ -310,13 +310,21 @@ public class FileControllerAttachmentTests : TestDataTestBase
     }
 
     [Fact]
-    public void GetAttachment_UserIsSuspended_ReturnsUnauthorized()
+    public void GetAttachment_UserIsSuspended_AllowsReadOnlyDownload()
     {
+        var channel = new ChatChannel
+        {
+            Id = "chan-suspended-read",
+            ChannelType = ChatChannelType.General,
+            ParticipantIds = new List<string> { "suspended1" }
+        };
+        _channelsRepo.Save(channel);
+        var fullPath = CreateChannelAttachment("chan-suspended-read", "file.png");
+
         var suspendedController = CreateController(principal: CreateClaimsPrincipal("suspended1"));
-        var result = suspendedController.GetFile("chat", "chan1", "file.png");
-        var unauthorized = Assert.IsType<UnauthorizedObjectResult>(result);
-        var payload = Assert.IsType<SpokesResult>(unauthorized.Value);
-        Assert.False(payload.IsSuccess);
+        var result = suspendedController.GetFile("chat", "chan-suspended-read", "file.png");
+        var fileResult = Assert.IsType<PhysicalFileResult>(result);
+        Assert.Equal(fullPath, fileResult.FileName);
     }
 
     [Fact]
@@ -679,13 +687,13 @@ public class FileControllerAttachmentTests : TestDataTestBase
     }
 
     [Fact]
-    public void GetEmailAttachment_UserIsSuspended_ReturnsUnauthorized()
+    public void GetEmailAttachment_UserIsSuspended_AllowsReadOnlyDownload()
     {
+        var fullPath = CreateEmailAttachment("suspended1", "msg1", "att1.pdf");
         var suspendedController = CreateController(principal: CreateClaimsPrincipal("suspended1"));
-        var result = suspendedController.GetEmailAttachment("msg1", "att1", "suspended1", null, null);
-        var unauthorized = Assert.IsType<UnauthorizedObjectResult>(result);
-        var payload = Assert.IsType<SpokesResult>(unauthorized.Value);
-        Assert.False(payload.IsSuccess);
+        var result = suspendedController.GetEmailAttachment("msg1", "att1.pdf", "suspended1", null, null);
+        var fileResult = Assert.IsType<PhysicalFileResult>(result);
+        Assert.Equal(fullPath, fileResult.FileName);
     }
 
     [Fact]
@@ -751,6 +759,7 @@ public class FileControllerAttachmentTests : TestDataTestBase
     [InlineData("../user1")]
     [InlineData("user1/sub")]
     [InlineData("user1\\sub")]
+    [InlineData("user1:injected_msg")]
     public void GetEmailAttachment_EmployeeIdContainsPathTraversalOrInvalidChars_ReturnsBadRequest(string employeeId)
     {
         // Admin user to bypass the ownership check first
@@ -1000,5 +1009,66 @@ public class FileControllerAttachmentTests : TestDataTestBase
         var result = _controller.GetLegacyAttachmentThumb("chan-legacy-thumb", "legacy-pic.jpg");
         var fileResult = Assert.IsType<PhysicalFileResult>(result);
         Assert.Equal(thumbPath, fileResult.FileName);
+    }
+
+    [Fact]
+    public void GetEmailAttachment_PassesScopedAccountAndMessageIdToEmailAccessProvider()
+    {
+        CreateEmailAttachment("acct_shared", "msg_42", "invoice.pdf");
+
+        var mockEmailProvider = new Mock<IFileAccessProvider>();
+        mockEmailProvider.Setup(p => p.Category).Returns("email");
+        mockEmailProvider.Setup(p => p.CanAccess(It.Is<Employee>(e => e.Id == "user1"), "acct_shared:msg_42")).Returns(false);
+
+        var deniedController = CreateController(providers: new[] { mockEmailProvider.Object });
+        var deniedResult = deniedController.GetEmailAttachment("msg_42", "invoice.pdf", "acct_shared", null, null);
+        var forbidden = Assert.IsType<ObjectResult>(deniedResult);
+        Assert.Equal(403, forbidden.StatusCode);
+        mockEmailProvider.Verify(p => p.CanAccess(It.Is<Employee>(e => e.Id == "user1"), "acct_shared:msg_42"), Times.Once);
+
+        mockEmailProvider.Setup(p => p.CanAccess(It.Is<Employee>(e => e.Id == "user1"), "acct_shared:msg_42")).Returns(true);
+        var allowedController = CreateController(providers: new[] { mockEmailProvider.Object });
+        var allowedResult = allowedController.GetEmailAttachment("msg_42", "invoice.pdf", "acct_shared", null, null);
+        Assert.IsType<PhysicalFileResult>(allowedResult);
+    }
+
+    [Fact]
+    public void GetEmailAttachment_MimeExtraction_RequiresExactFnMatchAndNeverFallsBackToFirstAttachment()
+    {
+        var mimeDir = Path.Combine(_testDataPath, "EmailAccounts", "user1", "Mime");
+        Directory.CreateDirectory(mimeDir);
+        var mimePath = Path.Combine(mimeDir, "msg_mime.eml");
+
+        var message = new MimeKit.MimeMessage();
+        message.From.Add(new MimeKit.MailboxAddress("Sender", "sender@example.com"));
+        message.To.Add(new MimeKit.MailboxAddress("User 1", "user1@example.com"));
+        message.Subject = "MIME Test";
+
+        var attachment = new MimeKit.MimePart("application", "pdf")
+        {
+            Content = new MimeKit.MimeContent(new MemoryStream(System.Text.Encoding.UTF8.GetBytes("PDF-BYTES"))),
+            ContentDisposition = new MimeKit.ContentDisposition(MimeKit.ContentDisposition.Attachment),
+            ContentTransferEncoding = MimeKit.ContentEncoding.Base64,
+            FileName = "expected_report.pdf"
+        };
+        var multipart = new MimeKit.Multipart("mixed")
+        {
+            new MimeKit.TextPart("plain") { Text = "Hello" },
+            attachment
+        };
+        message.Body = multipart;
+        message.WriteTo(mimePath);
+
+        // Missing fn -> must NOT blindly extract first attachment
+        var missingFnResult = _controller.GetEmailAttachment("msg_mime", "att_blob", "user1", ct: "application/pdf", fn: null);
+        Assert.IsType<NotFoundObjectResult>(missingFnResult);
+
+        // Mismatched fn -> must NOT blindly extract first attachment
+        var mismatchedFnResult = _controller.GetEmailAttachment("msg_mime", "att_blob", "user1", ct: "application/pdf", fn: "wrong_name.pdf");
+        Assert.IsType<NotFoundObjectResult>(mismatchedFnResult);
+
+        // Exact fn match -> extracts and serves attachment
+        var matchedFnResult = _controller.GetEmailAttachment("msg_mime", "att_blob", "user1", ct: "application/pdf", fn: "expected_report.pdf");
+        Assert.IsType<PhysicalFileResult>(matchedFnResult);
     }
 }

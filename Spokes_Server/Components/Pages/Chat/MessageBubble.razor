@@ -61,6 +61,7 @@
                             IdSuffix="@Message.Id"
                             Employees="Employees"
                             Teams="Teams"
+                            ChannelKey="@ChannelKey"
                             OnSendMessage="@(async args => await OnSaveEdit.InvokeAsync((Message, args.Content)))"
                             OnCancelEdit="@(async () => await OnCancelEdit.InvokeAsync())" />
                     </div>
@@ -112,14 +113,7 @@
                 else if (!string.IsNullOrWhiteSpace(DecryptedContent ?? Message.Content))
                 {
                     var rawContent = DecryptedContent ?? Message.Content ?? "";
-                    bool isTruncated = !_isExpanded && rawContent.Length > MaxMessageLength;
-                    var displayContent = isTruncated ? rawContent.Substring(0, MaxMessageLength) + "..." : rawContent;
-                    if (isTruncated)
-                    {
-                        var codeStarts = System.Text.RegularExpressions.Regex.Matches(displayContent, @"\[code", System.Text.RegularExpressions.RegexOptions.IgnoreCase).Count;
-                        var codeEnds = System.Text.RegularExpressions.Regex.Matches(displayContent, @"\[/code\]", System.Text.RegularExpressions.RegexOptions.IgnoreCase).Count;
-                        if (codeStarts > codeEnds) displayContent += "\n[/code]";
-                    }
+                    var displayContent = GetDisplayContent(rawContent);
                     <ChatMarkdownRenderer Content="@displayContent" FullContent="@rawContent" CurrentUserId="@CurrentUserId" ChannelId="@Message.ChannelId" SessionId="@SessionId" Employees="Employees" IsEdited="@Message.EditedAt.HasValue" ChannelKey="@ChannelKey" />
                     if (rawContent.Length > MaxMessageLength)
                     {
@@ -138,6 +132,7 @@
                         }
                     </div>
                 }
+                @RenderAlbumConversionPrompt()
                 @if (Message.MentionedEventIds != null && Message.MentionedEventIds.Any())
                 {
                     <div class="d-flex flex-wrap gap-2 mt-2 w-100">
@@ -153,6 +148,15 @@
                         @foreach (var albumId in Message.MentionedAlbumIds)
                         {
                             <AlbumMentionCard AlbumId="@albumId" CurrentUserId="@CurrentUserId" SessionId="@SessionId" Employees="Employees" ChannelId="@Message.ChannelId" />
+                        }
+                    </div>
+                }
+                @if (Message.MentionedPollIds != null && Message.MentionedPollIds.Any())
+                {
+                    <div class="d-flex flex-wrap gap-2 mt-2 w-100">
+                        @foreach (var pollId in Message.MentionedPollIds)
+                        {
+                            <PollMentionCard PollId="@pollId" CurrentUserId="@CurrentUserId" ChannelId="@Message.ChannelId" ChannelKey="@ChannelKey" Employees="Employees" />
                         }
                     </div>
                 }
@@ -241,6 +245,7 @@ else
                             IdSuffix="@Message.Id"
                             Employees="Employees"
                             Teams="Teams"
+                            ChannelKey="@ChannelKey"
                             OnSendMessage="@(async args => await OnSaveEdit.InvokeAsync((Message, args.Content)))"
                             OnCancelEdit="@(async () => await OnCancelEdit.InvokeAsync())" />
                     </div>
@@ -292,15 +297,8 @@ else
                 else if (!string.IsNullOrWhiteSpace(DecryptedContent ?? Message.Content))
                 {
                     var rawContent = DecryptedContent ?? Message.Content ?? "";
-                    bool isTruncated = !_isExpanded && rawContent.Length > MaxMessageLength;
-                    var displayContent = isTruncated ? rawContent.Substring(0, MaxMessageLength) + "..." : rawContent;
-                    if (isTruncated)
-                    {
-                        var codeStarts = System.Text.RegularExpressions.Regex.Matches(displayContent, @"\[code", System.Text.RegularExpressions.RegexOptions.IgnoreCase).Count;
-                        var codeEnds = System.Text.RegularExpressions.Regex.Matches(displayContent, @"\[/code\]", System.Text.RegularExpressions.RegexOptions.IgnoreCase).Count;
-                        if (codeStarts > codeEnds) displayContent += "\n[/code]";
-                    }
-                    <ChatMarkdownRenderer Content="@displayContent" FullContent="@rawContent" CurrentUserId="@CurrentUserId" Employees="Employees" IsEdited="@Message.EditedAt.HasValue" ChannelKey="@ChannelKey" />
+                    var displayContent = GetDisplayContent(rawContent);
+                    <ChatMarkdownRenderer Content="@displayContent" FullContent="@rawContent" CurrentUserId="@CurrentUserId" ChannelId="@Message.ChannelId" SessionId="@SessionId" Employees="Employees" IsEdited="@Message.EditedAt.HasValue" ChannelKey="@ChannelKey" />
                     if (rawContent.Length > MaxMessageLength)
                     {
                         <MudButton Variant="Variant.Text" Color="Color.Primary" Size="Size.Small" OnClick="() => _isExpanded = !_isExpanded" Class="mt-1 px-1" Style="min-width: unset;">
@@ -318,6 +316,7 @@ else
                         }
                     </div>
                 }
+                @RenderAlbumConversionPrompt()
                 @if (Message.MentionedEventIds != null && Message.MentionedEventIds.Any())
                 {
                     <div class="d-flex flex-wrap gap-2 mt-2 w-100">
@@ -333,6 +332,15 @@ else
                         @foreach (var albumId in Message.MentionedAlbumIds)
                         {
                             <AlbumMentionCard AlbumId="@albumId" CurrentUserId="@CurrentUserId" SessionId="@SessionId" Employees="Employees" ChannelId="@Message.ChannelId" />
+                        }
+                    </div>
+                }
+                @if (Message.MentionedPollIds != null && Message.MentionedPollIds.Any())
+                {
+                    <div class="d-flex flex-wrap gap-2 mt-2 w-100">
+                        @foreach (var pollId in Message.MentionedPollIds)
+                        {
+                            <PollMentionCard PollId="@pollId" CurrentUserId="@CurrentUserId" ChannelId="@Message.ChannelId" ChannelKey="@ChannelKey" Employees="Employees" />
                         }
                     </div>
                 }
@@ -417,6 +425,8 @@ else
     [Parameter] public EventCallback<ChatMessage> OnReportMessage { get; set; }
     [Parameter] public EventCallback<ChatMessage> OnDownloadMedia { get; set; }
     [Parameter] public EventCallback<ChatMessage> OnShareMedia { get; set; }
+    [Parameter] public bool CanCreateAlbum { get; set; }
+    [Parameter] public EventCallback<ChatMessage> OnCreateAlbumFromMessage { get; set; }
     [Parameter]
     public string? ChannelKey { get; set; }
     [Parameter] public bool CanReact { get; set; } = true;
@@ -426,6 +436,35 @@ else
     private bool _isExpanded;
     private const int MaxMessageLength = 1000;
 
+    private string GetDisplayContent(string rawContent)
+    {
+        if (_isExpanded || rawContent.Length <= MaxMessageLength)
+            return rawContent;
+
+        int cutLength = MaxMessageLength;
+        if (cutLength < rawContent.Length && char.IsHighSurrogate(rawContent[cutLength - 1]))
+        {
+            cutLength--;
+        }
+
+        var displayContent = rawContent[..cutLength] + "...";
+
+        var codeStarts = System.Text.RegularExpressions.Regex.Matches(displayContent, @"\[code", System.Text.RegularExpressions.RegexOptions.IgnoreCase).Count;
+        var codeEnds = System.Text.RegularExpressions.Regex.Matches(displayContent, @"\[/code\]", System.Text.RegularExpressions.RegexOptions.IgnoreCase).Count;
+        if (codeStarts > codeEnds)
+        {
+            displayContent += "\n[/code]";
+        }
+
+        var fenceCount = System.Text.RegularExpressions.Regex.Matches(displayContent, @"(?m)^```").Count;
+        if (fenceCount % 2 == 1)
+        {
+            displayContent += "\n```";
+        }
+
+        return displayContent;
+    }
+
     private bool _showEmojiPicker;
     private List<LinkPreview> _linkPreviews = [];
     private int _skeletonCount;
@@ -433,6 +472,51 @@ else
     private CancellationTokenSource? _previewCts;
 
     private bool HasMediaAttachments => Message.Attachments?.Any(a => IsImageFile(a.FileName) || IsVideoFile(a.FileName)) ?? false;
+    private bool _dismissedAlbumPrompt;
+
+    private int ImageAttachmentCount => Message.Attachments?.Count(a =>
+        IsImageFile(a.FileName) || a.ContentType.StartsWith("image/", StringComparison.OrdinalIgnoreCase)) ?? 0;
+
+    private bool EligibleForAlbumConversion =>
+        CanCreateAlbum &&
+        IsOwnMessage &&
+        !Message.IsDeleted &&
+        !IsEditing &&
+        (!Message.IsEncrypted || !string.IsNullOrEmpty(ChannelKey)) &&
+        ImageAttachmentCount >= Spokes_Server.Core.Services.Communication.Chat.AlbumService.AlbumSuggestionPhotoThreshold &&
+        (Message.MentionedAlbumIds == null || Message.MentionedAlbumIds.Count == 0);
+
+    private void DismissAlbumPrompt()
+    {
+        _dismissedAlbumPrompt = true;
+        _forceRender = true;
+        StateHasChanged();
+    }
+
+    private RenderFragment RenderAlbumConversionPrompt() => __builder =>
+    {
+        if (!EligibleForAlbumConversion || _dismissedAlbumPrompt)
+        {
+            return;
+        }
+
+        <div class="chat-album-prompt d-flex align-center gap-2 mt-2 pa-2 rounded">
+            <MudIcon Icon="@Icons.Material.Filled.PhotoLibrary" Size="Size.Small" Color="Color.Primary" />
+            <MudText Typo="Typo.caption" Style="flex: 1;">
+                @string.Format(Loc["You posted {0} photos — organize them into an album?"].Value, ImageAttachmentCount)
+            </MudText>
+            <MudButton Variant="Variant.Filled"
+                       Color="Color.Primary"
+                       Size="Size.Small"
+                       StartIcon="@Icons.Material.Filled.PhotoLibrary"
+                       OnClick="@(() => OnCreateAlbumFromMessage.InvokeAsync(Message))">
+                @Loc["Create Album"]
+            </MudButton>
+            <MudIconButton Icon="@Icons.Material.Filled.Close"
+                           Size="Size.Small"
+                           OnClick="DismissAlbumPrompt" />
+        </div>
+    };
 
     private async Task CopyMessageText()
     {
@@ -491,7 +575,7 @@ else
             _isExpanded,
             VoiceService?.IsInVoiceCall,
             VoiceService?.CurrentChannelId,
-            IsMobile);
+            IsMobile) + $"|{CanCreateAlbum}|{_dismissedAlbumPrompt}|{ImageAttachmentCount}|{Message.MentionedAlbumIds?.Count ?? 0}";
 
     protected override bool ShouldRender()
     {
@@ -644,9 +728,16 @@ else
                 dimensionStyle = $"width: {targetWidth}px; max-width: 100%; aspect-ratio: {attachment.ImageWidth} / {attachment.ImageHeight}; max-height: 500px;";
             }
 
-            var token = FileTokens.GenerateAccessToken("chat", Message.ChannelId, attachment.FilePath, ChannelKey, CurrentUserId, CircuitContext?.SessionId);
-            var fullUrl = attachment.FilePath.Contains("?") ? $"{attachment.FilePath}&t={token}" : $"{attachment.FilePath}?t={token}";
-            var thumbUrl = attachment.ThumbnailUrl.Contains("?") ? $"{attachment.ThumbnailUrl}&t={token}" : $"{attachment.ThumbnailUrl}?t={token}";
+            var effectiveSessionId = EffectiveSessionId;
+            var token = !string.IsNullOrWhiteSpace(CurrentUserId) && !string.IsNullOrWhiteSpace(effectiveSessionId)
+                ? FileTokens.GenerateAccessToken("chat", Message.ChannelId, attachment.FilePath, ChannelKey, CurrentUserId, effectiveSessionId)
+                : null;
+            var fullUrl = string.IsNullOrEmpty(token)
+                ? attachment.FilePath
+                : (attachment.FilePath.Contains("?") ? $"{attachment.FilePath}&t={token}" : $"{attachment.FilePath}?t={token}");
+            var thumbUrl = string.IsNullOrEmpty(token)
+                ? attachment.ThumbnailUrl
+                : (attachment.ThumbnailUrl.Contains("?") ? $"{attachment.ThumbnailUrl}&t={token}" : $"{attachment.ThumbnailUrl}?t={token}");
 
             <div class="attachment-image" @onclick="@(() => OnOpenLightbox.InvokeAsync((Message, imageAttachments, imageIndex)))"
                 style="cursor: pointer; position: relative; display: inline-block; @dimensionStyle">
@@ -672,12 +763,11 @@ else
         }
         else if (IsVideoFile(attachment.FileName))
         {
-            <ChatVideoAttachment Attachment="attachment" CurrentUserId="@CurrentUserId" ChannelId="@Message.ChannelId" ChannelKey="@ChannelKey" />
+            <ChatVideoAttachment Attachment="attachment" CurrentUserId="@CurrentUserId" SessionId="@EffectiveSessionId" ChannelId="@Message.ChannelId" ChannelKey="@ChannelKey" />
         }
         else if (IsAudioFile(attachment.FileName) || (attachment.ContentType != null && attachment.ContentType.StartsWith("audio/")))
         {
-            var token = FileTokens.GenerateAccessToken("chat", Message.ChannelId, attachment.FilePath, ChannelKey, CurrentUserId, CircuitContext?.SessionId);
-            var audioUrl = attachment.FilePath.Contains("?") ? $"{attachment.FilePath}&t={token}" : $"{attachment.FilePath}?t={token}";
+            var audioUrl = GetTokenizedUrl(attachment);
             <VoiceMessagePlayer AudioUrl="@audioUrl" />
         }
         else
@@ -772,6 +862,13 @@ else
             }
             @if (IsOwnMessage)
             {
+                @if (EligibleForAlbumConversion)
+                {
+                    <MudMenuItem OnClick="@(() => OnCreateAlbumFromMessage.InvokeAsync(Message))">
+                        <MudIcon Icon="@Icons.Material.Filled.PhotoLibrary" Size="Size.Small" Class="mr-2" Color="Color.Primary" />
+                        @Loc["Create Album from Photos"]
+                    </MudMenuItem>
+                }
                 <MudMenuItem OnClick="@(() => OnEdit.InvokeAsync(Message))">
                     <MudIcon Icon="@Icons.Material.Filled.Edit" Size="Size.Small" Class="mr-2" />
                     @Loc["Edit"]
@@ -815,9 +912,14 @@ else
         }
     };
 
+    private string? EffectiveSessionId => !string.IsNullOrWhiteSpace(SessionId) ? SessionId : CircuitContext?.SessionId;
+
     private string GetTokenizedUrl(ChatAttachment attachment)
     {
-        var token = FileTokens.GenerateAccessToken("chat", Message.ChannelId, attachment.FilePath, ChannelKey, CurrentUserId, CircuitContext?.SessionId);
+        var effectiveSessionId = EffectiveSessionId;
+        if (string.IsNullOrWhiteSpace(CurrentUserId) || string.IsNullOrWhiteSpace(effectiveSessionId))
+            return attachment.FilePath;
+        var token = FileTokens.GenerateAccessToken("chat", Message.ChannelId, attachment.FilePath, ChannelKey, CurrentUserId, effectiveSessionId);
         return attachment.FilePath.Contains("?") ? $"{attachment.FilePath}&t={token}" : $"{attachment.FilePath}?t={token}";
     }
 

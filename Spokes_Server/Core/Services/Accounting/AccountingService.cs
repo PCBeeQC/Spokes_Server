@@ -1,4 +1,5 @@
-using System;
+﻿using System;
+using System.IO;
 using System.Linq;
 using Microsoft.Extensions.DependencyInjection;
 using Spokes_Server.Aggregate.Contexts;
@@ -145,6 +146,31 @@ public class AccountingService : IAccountingService
         _timelineEventService.SyncInvoiceStatusTimelineEvent(invoice, oldStatus, newStatus, user);
     }
 
+    public bool HasConsumedPrepaymentCredits(Invoice invoice)
+    {
+        if (invoice == null) return false;
+
+        var prepayLineIds = invoice.LineItems
+            .Where(l => l.IsPrepayment && !string.IsNullOrEmpty(l.Id))
+            .Select(l => l.Id)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (prepayLineIds.Count == 0) return false;
+
+        return _accounting.Invoices.GetAll()
+            .Where(i => i.Id != invoice.Id && i.Status != InvoiceStatus.Void)
+            .SelectMany(i => i.LineItems)
+            .Any(l => l.IsCreditUsed && !string.IsNullOrEmpty(l.SourceId) && prepayLineIds.Contains(l.SourceId));
+    }
+
+    private static void InvalidateCachedPdf(Invoice invoice)
+    {
+        if (!string.IsNullOrEmpty(invoice.PdfPath) && File.Exists(invoice.PdfPath))
+        {
+            try { File.Delete(invoice.PdfPath); } catch { }
+        }
+        invoice.PdfPath = string.Empty;
+    }
+
     public void RecordInvoicePayment(Invoice invoice, PaymentRecord payment, string? user = null)
     {
         ArgumentNullException.ThrowIfNull(invoice);
@@ -155,13 +181,115 @@ public class AccountingService : IAccountingService
         if (invoice.BalanceDue <= 0)
         {
             invoice.Status = InvoiceStatus.Paid;
-            invoice.DatePaid = payment.Date;
+            invoice.DatePaid = invoice.Payments.MaxBy(p => p.Date)?.Date ?? payment.Date;
         }
         else
         {
             invoice.Status = InvoiceStatus.Partial;
         }
 
+        InvalidateCachedPdf(invoice);
+        _accounting.Invoices.Save(invoice);
+        ProcessInvoiceStatusChange(invoice, oldStatus, invoice.Status, user);
+    }
+
+    public void UpdateInvoicePayment(Invoice invoice, PaymentRecord payment, string? user = null)
+    {
+        ArgumentNullException.ThrowIfNull(invoice);
+        ArgumentNullException.ThrowIfNull(payment);
+
+        var existing = invoice.Payments.FirstOrDefault(p => p.Id == payment.Id);
+        if (existing == null)
+        {
+            throw new InvalidOperationException($"Payment with ID '{payment.Id}' not found on invoice '{invoice.InvoiceNumber}'.");
+        }
+
+        var amountDifference = payment.Amount - existing.Amount;
+        var hypotheticalBalanceDue = invoice.BalanceDue - amountDifference;
+
+        if (hypotheticalBalanceDue > 0 && HasConsumedPrepaymentCredits(invoice))
+        {
+            throw new InvalidOperationException("Cannot reduce payments below the full amount because prepayment credits from this invoice have been applied to other invoices.");
+        }
+
+        var oldStatus = invoice.Status;
+
+        existing.Amount = payment.Amount;
+        existing.Date = payment.Date;
+        existing.Method = payment.Method;
+        existing.Reference = payment.Reference;
+        existing.Notes = payment.Notes;
+
+        if (invoice.BalanceDue <= 0)
+        {
+            invoice.Status = InvoiceStatus.Paid;
+            invoice.DatePaid = invoice.Payments.MaxBy(p => p.Date)?.Date ?? existing.Date;
+        }
+        else if (invoice.AmountPaid > 0)
+        {
+            invoice.Status = InvoiceStatus.Partial;
+            invoice.DatePaid = null;
+        }
+        else
+        {
+            invoice.DatePaid = null;
+            if (invoice.Status is InvoiceStatus.Paid or InvoiceStatus.Partial)
+            {
+                invoice.Status = InvoiceStatus.Final;
+            }
+        }
+
+        InvalidateCachedPdf(invoice);
+        _accounting.Invoices.Save(invoice);
+        ProcessInvoiceStatusChange(invoice, oldStatus, invoice.Status, user);
+    }
+
+    public void DeleteInvoicePayment(Invoice invoice, string paymentId, string? user = null)
+    {
+        ArgumentNullException.ThrowIfNull(invoice);
+        if (string.IsNullOrWhiteSpace(paymentId))
+        {
+            throw new ArgumentException("Payment ID cannot be null or empty.", nameof(paymentId));
+        }
+
+        var existing = invoice.Payments.FirstOrDefault(p => p.Id == paymentId);
+        if (existing == null)
+        {
+            throw new InvalidOperationException($"Payment with ID '{paymentId}' not found on invoice '{invoice.InvoiceNumber}'.");
+        }
+
+        var hypotheticalBalanceDue = invoice.BalanceDue + existing.Amount;
+        if (hypotheticalBalanceDue > 0 && HasConsumedPrepaymentCredits(invoice))
+        {
+            throw new InvalidOperationException("Cannot delete payment because prepayment credits from this invoice have been applied to other invoices.");
+        }
+
+        var oldStatus = invoice.Status;
+        invoice.Payments.Remove(existing);
+
+        if (invoice.Payments.Count > 0)
+        {
+            if (invoice.BalanceDue <= 0)
+            {
+                invoice.Status = InvoiceStatus.Paid;
+                invoice.DatePaid = invoice.Payments.MaxBy(p => p.Date)?.Date;
+            }
+            else
+            {
+                invoice.Status = InvoiceStatus.Partial;
+                invoice.DatePaid = null;
+            }
+        }
+        else
+        {
+            invoice.DatePaid = null;
+            if (invoice.Status is InvoiceStatus.Paid or InvoiceStatus.Partial)
+            {
+                invoice.Status = InvoiceStatus.Final;
+            }
+        }
+
+        InvalidateCachedPdf(invoice);
         _accounting.Invoices.Save(invoice);
         ProcessInvoiceStatusChange(invoice, oldStatus, invoice.Status, user);
     }

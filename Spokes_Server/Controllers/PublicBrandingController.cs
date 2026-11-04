@@ -9,6 +9,7 @@ namespace Spokes_Server.Controllers;
 [Route("spokesapi/branding")]
 [ApiController]
 [AllowAnonymous]
+[Spokes_Server.Core.Security.AllowDuringSetup]
 public class PublicBrandingController : SpokesControllerBase
 {
     private readonly CoreContext _coreContext;

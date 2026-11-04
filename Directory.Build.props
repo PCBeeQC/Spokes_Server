@@ -1,8 +1,13 @@
 <Project>
   <PropertyGroup>
-    <!-- Enable fast incremental build acceleration across project references -->
+    <_ParentDirectoryBuildProps>$([MSBuild]::GetPathOfFileAbove('Directory.Build.props', '$(MSBuildThisFileDirectory)../'))</_ParentDirectoryBuildProps>
+
+    <!-- Standalone defaults when built outside the monorepo (Docker context: Spokes_Server or public Spokes_Server repo) -->
     <AccelerateBuildsInVisualStudio>true</AccelerateBuildsInVisualStudio>
-    <!-- Produce reference assemblies to enable downstream projects to compile against API surface -->
     <ProduceReferenceAssembly>true</ProduceReferenceAssembly>
+    <UseSharedCompilation>false</UseSharedCompilation>
+    <UseRazorBuildServer>false</UseRazorBuildServer>
   </PropertyGroup>
+
+  <Import Project="$(_ParentDirectoryBuildProps)" Condition="'$(_ParentDirectoryBuildProps)' != '' and Exists('$(_ParentDirectoryBuildProps)')" />
 </Project>

@@ -2,11 +2,30 @@
 // Provides functions to manage push notification permissions and subscriptions
 
 window.pushNotifications = {
+    _resolvingDesktopDeviceId: false,
+
     // Get the physical DeviceId from the platform-appropriate store.
     // Native (Capacitor): Uses platform stable ID (ANDROID_ID / iOS Keychain) that survives reinstalls.
-    // Web: localStorage with web_ prefix.
+    // Desktop (Electron): Uses SpokesBridge.getDeviceId() (desk_<uuid>).
+    // Web: localStorage with standard UUID.
     getDeviceId: async function () {
         if (window._spokesCachedDeviceId) return window._spokesCachedDeviceId;
+
+        if (this.isDesktopApp() && window.SpokesBridge && typeof window.SpokesBridge.getDeviceId === 'function' && !this._resolvingDesktopDeviceId) {
+            this._resolvingDesktopDeviceId = true;
+            try {
+                const deskId = await window.SpokesBridge.getDeviceId();
+                if (deskId && !deskId.startsWith('dev_')) {
+                    localStorage.setItem('spokes_device_id', deskId);
+                    window._spokesCachedDeviceId = deskId;
+                    return deskId;
+                }
+            } catch (e) {
+                console.warn('[DeviceId] Desktop SpokesBridge.getDeviceId failed, falling back to localStorage', e);
+            } finally {
+                this._resolvingDesktopDeviceId = false;
+            }
+        }
 
         const native = this.isNativePlatform() && window.Capacitor?.Plugins;
 
@@ -69,6 +88,38 @@ window.pushNotifications = {
             localStorage.setItem('spokes_device_id', deviceId);
         }
         return deviceId;
+    },
+
+    // Authoritative hardware keystore public key query for native mobile (Capacitor).
+    // Always queries NotificationCrypto.getPublicKey() so localStorage never drifts from AndroidKeyStore / iOS Keychain.
+    _getNativePublicKeyInfo: async function (logFn) {
+        const log = typeof logFn === 'function' ? logFn : function () {};
+        try {
+            if (window.Capacitor) {
+                let cryptoPlugin = window.Capacitor.Plugins?.NotificationCrypto;
+                if (!cryptoPlugin && window.Capacitor.registerPlugin) {
+                    cryptoPlugin = window.Capacitor.registerPlugin('NotificationCrypto');
+                }
+                if (cryptoPlugin && typeof cryptoPlugin.getPublicKey === 'function') {
+                    const result = await cryptoPlugin.getPublicKey();
+                    if (result && result.publicKey) {
+                        localStorage.setItem('spokes_native_push_pubkey', result.publicKey);
+                        return {
+                            publicKey: result.publicKey,
+                            keyDirty: Boolean(result.keyDirty)
+                        };
+                    }
+                } else {
+                    log('Native: NotificationCrypto plugin not available.');
+                }
+            }
+        } catch (e) {
+            log('Native: Exception getting publicKey: ' + e.message);
+        }
+        return {
+            publicKey: localStorage.getItem('spokes_native_push_pubkey') || '',
+            keyDirty: false
+        };
     },
 
     // Safely copy text to clipboard with fallback for iOS WebViews
@@ -452,6 +503,7 @@ window.pushNotifications = {
         }
 
         if (this.isNativePlatform()) {
+             const self = this;
              log('Native: inside subscribe, initializing FirebaseMessaging...');
              return new Promise(async (resolve) => {
                  const pushPlugin = Capacitor.Plugins.FirebaseMessaging;
@@ -459,15 +511,7 @@ window.pushNotifications = {
                  // Generate and Register Native Android Notification Channels
                      log('Native: removed previous push listeners.');
                      
-                     // Generate and Register Native Android Notification Channels 
-                     if (window.Capacitor.getPlatform() === 'android') {
-                         log('Native: configuring android notification channels...');
-                         await pushPlugin.createChannel({ id: 'channel_default', name: 'General Notifications', description: 'General app notifications', importance: 3, visibility: 1 });
-                         await pushPlugin.createChannel({ id: 'channel_email', name: 'Emails', description: 'New email notifications', importance: 3, visibility: 1 });
-                         await pushPlugin.createChannel({ id: 'channel_chat', name: 'Chat Messages', description: 'Instant messages', importance: 4, visibility: 1, vibration: true });
-                         await pushPlugin.createChannel({ id: 'channel_calls', name: 'Incoming Calls', description: 'Voice and video call alerts', importance: 5, visibility: 1, vibration: true });
-                         await pushPlugin.createChannel({ id: 'channel_calendar', name: 'Calendar Reminders', description: 'Calendar event reminders', importance: 4, visibility: 1, vibration: true });
-                     }
+                     // Native Android notification channels (channel_call_v4, channel_chat_v3, etc.) are created directly by CustomPushService.java with full AudioAttributes.
 
                      // Add a 15-second timeout so the UI doesn't hang forever if APNs fails silently
                      const timeoutId = setTimeout(() => {
@@ -492,42 +536,13 @@ window.pushNotifications = {
                          log('Native: tokenReceived event fired. Token present: ' + (event.token ? 'yes' : 'no'));
                          localStorage.setItem('spokes_native_push_token', event.token);
 
-                         let publicKey = '';
-                         try {
-                             if (window.Capacitor) {
-                                 log('Native [tokenReceived]: Capacitor is available. Plugins: ' + Object.keys(window.Capacitor.Plugins || {}).join(', '));
-                                 let cryptoPlugin = window.Capacitor.Plugins?.NotificationCrypto;
-                                 if (!cryptoPlugin) {
-                                     log('Native [tokenReceived]: NotificationCrypto not in Plugins. Trying registerPlugin...');
-                                     if (window.Capacitor.registerPlugin) {
-                                         cryptoPlugin = window.Capacitor.registerPlugin('NotificationCrypto');
-                                         log('Native [tokenReceived]: registerPlugin called. Result: ' + !!cryptoPlugin);
-                                     } else {
-                                         log('Native [tokenReceived]: registerPlugin not available.');
-                                     }
-                                 } else {
-                                     log('Native [tokenReceived]: NotificationCrypto found in Plugins.');
-                                 }
-                                 
-                                 if (cryptoPlugin) {
-                                     log('Native [tokenReceived]: calling NotificationCrypto.getPublicKey()...');
-                                     const result = await cryptoPlugin.getPublicKey();
-                                     log('Native [tokenReceived]: crypto result: ' + JSON.stringify(result));
-                                     if (result && result.publicKey) publicKey = result.publicKey;
-                                 } else {
-                                     log('Native [tokenReceived]: cryptoPlugin is still null or undefined.');
-                                 }
-                             }
-                         } catch (e) {
-                             log('Native [tokenReceived]: Exception getting publicKey: ' + e.message + (e.stack ? ' | ' + e.stack : ''));
-                         }
-
+                         const keyInfo = await self._getNativePublicKeyInfo(log);
                          resolve({
                              success: true,
                              endpoint: event.token,
                              p256dh: '',
                              auth: '',
-                             publicKey: publicKey,
+                             publicKey: keyInfo.publicKey,
                              subscriptionType: 'NativeRelay'
                          });
                      });
@@ -557,44 +572,16 @@ window.pushNotifications = {
                              if (isResolved) return;
                              isResolved = true;
                              clearTimeout(timeoutId);
+                             cleanupListeners();
                              localStorage.setItem('spokes_native_push_token', result.token);
 
-                             let publicKey = '';
-                             try {
-                                 if (window.Capacitor) {
-                                     log('Native [getToken]: Capacitor is available. Plugins: ' + Object.keys(window.Capacitor.Plugins || {}).join(', '));
-                                     let cryptoPlugin = window.Capacitor.Plugins?.NotificationCrypto;
-                                     if (!cryptoPlugin) {
-                                         log('Native [getToken]: NotificationCrypto not in Plugins. Trying registerPlugin...');
-                                         if (window.Capacitor.registerPlugin) {
-                                             cryptoPlugin = window.Capacitor.registerPlugin('NotificationCrypto');
-                                             log('Native [getToken]: registerPlugin called. Result: ' + !!cryptoPlugin);
-                                         } else {
-                                             log('Native [getToken]: registerPlugin not available.');
-                                         }
-                                     } else {
-                                         log('Native [getToken]: NotificationCrypto found in Plugins.');
-                                     }
-                                     
-                                     if (cryptoPlugin) {
-                                         log('Native [getToken]: calling NotificationCrypto.getPublicKey()...');
-                                         const keyResult = await cryptoPlugin.getPublicKey();
-                                         log('Native [getToken]: crypto result: ' + JSON.stringify(keyResult));
-                                         if (keyResult && keyResult.publicKey) publicKey = keyResult.publicKey;
-                                     } else {
-                                         log('Native [getToken]: cryptoPlugin is still null or undefined.');
-                                     }
-                                 }
-                             } catch (e) {
-                                 log('Native [getToken]: Exception getting publicKey: ' + e.message + (e.stack ? ' | ' + e.stack : ''));
-                             }
-
+                             const keyInfo = await self._getNativePublicKeyInfo(log);
                              resolve({
                                  success: true,
                                  endpoint: result.token,
                                  p256dh: '',
                                  auth: '',
-                                 publicKey: publicKey,
+                                 publicKey: keyInfo.publicKey,
                                  subscriptionType: 'NativeRelay'
                              });
                          }
@@ -669,6 +656,7 @@ window.pushNotifications = {
         try {
             if (this.isNativePlatform()) {
                 localStorage.removeItem('spokes_native_push_token');
+                localStorage.removeItem('spokes_native_push_pubkey');
                 try {
                     const pushPlugin = Capacitor.Plugins.FirebaseMessaging;
                     if (pushPlugin && pushPlugin.deleteToken) {
@@ -782,31 +770,60 @@ window.pushNotifications = {
             }
 
             if (this.isNativePlatform()) {
+                const self = this;
                 let nativeToken = null;
                 const cachedToken = localStorage.getItem('spokes_native_push_token');
+                const previousCachedPubKey = localStorage.getItem('spokes_native_push_pubkey');
+
+                // Always query the authoritative native keystore public key (cached in-memory in NotificationCryptoPlugin)
+                // so a reinstall or AndroidKeyStore regeneration is detected immediately even when localStorage was restored by Auto Backup.
+                const keyInfo = await this._getNativePublicKeyInfo();
+                const authoritativePubKey = keyInfo.publicKey;
+                const pubKeyChanged = Boolean(authoritativePubKey && previousCachedPubKey && previousCachedPubKey !== authoritativePubKey);
+
+                if (cachedToken && authoritativePubKey) {
+                    if (keyInfo.keyDirty || pubKeyChanged) {
+                        self.sendSubscriptionToServer({
+                            success: true,
+                            endpoint: cachedToken,
+                            p256dh: '',
+                            auth: '',
+                            publicKey: authoritativePubKey,
+                            subscriptionType: 'NativeRelay'
+                        }).catch(function () {});
+                    }
+
+                    // Check for FCM/APNs token rotation asynchronously off the critical path.
+                    const pushPlugin = window.Capacitor?.Plugins?.FirebaseMessaging;
+                    if (pushPlugin && typeof pushPlugin.getToken === 'function') {
+                        Promise.resolve(pushPlugin.getToken())
+                            .then(function (result) {
+                                if (result && result.token && result.token !== cachedToken) {
+                                    localStorage.setItem('spokes_native_push_token', result.token);
+                                    self.sendSubscriptionToServer({
+                                        success: true,
+                                        endpoint: result.token,
+                                        p256dh: '',
+                                        auth: '',
+                                        publicKey: authoritativePubKey,
+                                        subscriptionType: 'NativeRelay'
+                                    }).catch(function () {});
+                                }
+                            })
+                            .catch(function () {});
+                    }
+                    return {
+                        success: true,
+                        endpoint: cachedToken,
+                        p256dh: '',
+                        auth: '',
+                        publicKey: authoritativePubKey,
+                        subscriptionType: 'NativeRelay'
+                    };
+                }
 
                 if (cachedToken) {
-                    // Always try to get a fresh token first (FCM/APNs may have rotated it)
-                    try {
-                        const pushPlugin = window.Capacitor?.Plugins?.FirebaseMessaging;
-                        if (pushPlugin) {
-                            const result = await pushPlugin.getToken();
-                            if (result && result.token) {
-                                nativeToken = result.token;
-                                // Update cache if token changed
-                                if (cachedToken !== nativeToken) {
-                                    localStorage.setItem('spokes_native_push_token', nativeToken);
-                                    console.log('Native [getExistingSubscription]: FCM token refreshed (was different from cache)');
-                                }
-                            }
-                        }
-                    } catch (e) {
-                        console.log('Native [getExistingSubscription]: fresh getToken() failed, using cached: ' + e.message);
-                    }
-                    // Fallback to cached token
-                    if (!nativeToken) {
-                        nativeToken = cachedToken;
-                    }
+                    nativeToken = cachedToken;
                 } else {
                     // Cache empty: attempt direct retrieval from FirebaseMessaging plugin
                     try {
@@ -825,41 +842,22 @@ window.pushNotifications = {
                 }
 
                 if (nativeToken) {
-                    let publicKey = '';
-                    try {
-                        if (window.Capacitor) {
-                            console.log('Native [getExistingSubscription]: Capacitor is available. Plugins: ' + Object.keys(window.Capacitor.Plugins || {}).join(', '));
-                            let cryptoPlugin = window.Capacitor.Plugins?.NotificationCrypto;
-                            if (!cryptoPlugin) {
-                                console.log('Native [getExistingSubscription]: NotificationCrypto not in Plugins. Trying registerPlugin...');
-                                if (window.Capacitor.registerPlugin) {
-                                    cryptoPlugin = window.Capacitor.registerPlugin('NotificationCrypto');
-                                    console.log('Native [getExistingSubscription]: registerPlugin called. Result: ' + !!cryptoPlugin);
-                                } else {
-                                    console.log('Native [getExistingSubscription]: registerPlugin not available.');
-                                }
-                            } else {
-                                console.log('Native [getExistingSubscription]: NotificationCrypto found in Plugins.');
-                            }
-                            
-                            if (cryptoPlugin) {
-                                console.log('Native [getExistingSubscription]: calling NotificationCrypto.getPublicKey()...');
-                                const result = await cryptoPlugin.getPublicKey();
-                                console.log('Native [getExistingSubscription]: crypto result: ' + JSON.stringify(result));
-                                if (result && result.publicKey) publicKey = result.publicKey;
-                            } else {
-                                console.log('Native [getExistingSubscription]: cryptoPlugin is still null or undefined.');
-                            }
-                        }
-                    } catch (e) {
-                        console.log('Native [getExistingSubscription]: Exception getting publicKey: ' + e.message + (e.stack ? ' | ' + e.stack : ''));
+                    if (keyInfo.keyDirty && authoritativePubKey) {
+                        self.sendSubscriptionToServer({
+                            success: true,
+                            endpoint: nativeToken,
+                            p256dh: '',
+                            auth: '',
+                            publicKey: authoritativePubKey,
+                            subscriptionType: 'NativeRelay'
+                        }).catch(function () {});
                     }
                     return {
                         success: true,
                         endpoint: nativeToken,
                         p256dh: '',
                         auth: '',
-                        publicKey: publicKey,
+                        publicKey: authoritativePubKey,
                         subscriptionType: 'NativeRelay'
                     };
                 }
@@ -880,12 +878,11 @@ window.pushNotifications = {
     },
 
     // Send subscription to the server API (with device type and name)
-    sendSubscriptionToServer: async function (subscription, deviceType, deviceName, isIdleDetectionEnabled) {
+    sendSubscriptionToServer: async function (subscription, deviceType, deviceName) {
         try {
             const isCapacitor = this.isNativePlatform();
             const isDesktop = this.isDesktopApp();
             const resolvedDeviceType = isDesktop ? 'Desktop' : (isCapacitor ? 'Mobile' : (deviceType || this.detectDeviceType()));
-            const resolvedIdleDetection = isDesktop ? true : (isCapacitor ? false : isIdleDetectionEnabled);
             const deviceId = await this.getDeviceId();
             
             var hdrs = await window.spokesAuth.getHeaders({ 'Content-Type': 'application/json' });
@@ -902,7 +899,6 @@ window.pushNotifications = {
                     subscriptionType: subscription.subscriptionType || subscription.SubscriptionType || (isCapacitor ? 'NativeRelay' : 'WebPush'),
                     deviceType: resolvedDeviceType,
                     deviceName: deviceName || '',
-                    isIdleDetectionEnabled: resolvedIdleDetection,
                     isCapacitor: isCapacitor,
                     deviceId: deviceId
                 })
@@ -930,6 +926,11 @@ window.pushNotifications = {
             if (contentType && contentType.includes("application/json")) {
                 const result = await response.json();
                 console.log('Subscription saved:', result);
+                if (isCapacitor && window.Capacitor?.Plugins?.NotificationCrypto?.clearKeyDirty) {
+                    try {
+                        await window.Capacitor.Plugins.NotificationCrypto.clearKeyDirty();
+                    } catch (e) {}
+                }
                 return true;
             } else {
                 console.error('Received non-JSON response from server. Session likely expired.');
@@ -979,35 +980,11 @@ window.pushNotifications = {
              console.log('Navigating to pending notification route:', route);
              try {
                  await dotNetRef.invokeMethodAsync('NavigateTo', route);
+                 window.spokesPendingNav = null;
              } catch(e) {
                  window.location.href = route;
              }
         }
-    },
-
-    // --- Idle Detection (handled automatically via window.registerActivityTracker in spokes-app.js) ---
-
-    registerPresenceLayout: function (dotNetRef) {
-        window.spokesPresenceDotNetRef = dotNetRef;
-    },
-
-    isIdleSupported: function () {
-        return !this.isNativePlatform();
-    },
-
-    requestIdlePermission: async function () {
-        return true;
-    },
-
-    stopIdleDetector: function () {
-        // Unified activity tracker is managed by spokes-app.js
-    },
-
-    startIdleDetector: async function (dotNetRef) {
-        if (dotNetRef) {
-            window.spokesPresenceDotNetRef = dotNetRef;
-        }
-        return true;
     },
 
     // Setup listener for service worker messages to report push results

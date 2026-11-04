@@ -5,6 +5,7 @@ using AngleSharp.Html.Dom;
 using AngleSharp.Html.Parser;
 using Microsoft.Extensions.DependencyInjection;
 using Spokes_Server.Core.Models.Core;
+using Spokes_Server.Core.Security;
 
 namespace Spokes_Server.Core.Services.Content;
 
@@ -98,7 +99,7 @@ public class LinkPreviewService : IDisposable
         }
         else
         {
-            _httpClient = new HttpClient();
+            _httpClient = new HttpClient(new SafeExternalHttpHandler());
             _httpClient.DefaultRequestHeaders.UserAgent.ParseAdd(
                 "Mozilla/5.0 (compatible; SpokesBot/1.0; +https://spokes.app)");
             _httpClient.Timeout = TimeSpan.FromSeconds(5);
@@ -256,7 +257,11 @@ public class LinkPreviewService : IDisposable
 
                 if (root.TryGetProperty("thumbnail_url", out var thumbProp) && !string.IsNullOrWhiteSpace(thumbProp.GetString()))
                 {
-                    preview.ImageUrl = thumbProp.GetString()!.Trim();
+                    var thumbCandidate = thumbProp.GetString()!.Trim();
+                    if (SafeExternalHttpHandler.IsSafeExternalUrl(thumbCandidate))
+                    {
+                        preview.ImageUrl = thumbCandidate;
+                    }
                 }
 
                 if (root.TryGetProperty("provider_name", out var providerProp) && !string.IsNullOrWhiteSpace(providerProp.GetString()))
@@ -279,6 +284,13 @@ public class LinkPreviewService : IDisposable
 
     private async Task<LinkPreview> FetchMetadataAsync(string url, CancellationToken cancellationToken)
     {
+        var preview = new LinkPreview { Url = url };
+        if (!SafeExternalHttpHandler.IsSafeExternalUrl(url))
+        {
+            preview.Failed = true;
+            return preview;
+        }
+
         var ytMatch = YouTubeRegex.Match(url);
         if (ytMatch.Success && ytMatch.Groups.Count > 1)
         {
@@ -288,8 +300,6 @@ public class LinkPreviewService : IDisposable
                 return await FetchYouTubePreviewAsync(url, videoId, cancellationToken);
             }
         }
-
-        var preview = new LinkPreview { Url = url };
 
         try
         {
@@ -353,11 +363,19 @@ public class LinkPreviewService : IDisposable
                     preview.Title = System.Net.WebUtility.HtmlDecode(titleText).Trim();
             }
 
-            // Resolve relative image URLs
-            if (!string.IsNullOrEmpty(preview.ImageUrl) && !preview.ImageUrl.StartsWith("http", StringComparison.OrdinalIgnoreCase))
+            // Resolve relative image URLs and validate external safety
+            if (!string.IsNullOrEmpty(preview.ImageUrl))
             {
-                if (Uri.TryCreate(new Uri(url), preview.ImageUrl, out var absUri))
-                    preview.ImageUrl = absUri.ToString();
+                if (!preview.ImageUrl.StartsWith("http", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (Uri.TryCreate(new Uri(url), preview.ImageUrl, out var absUri))
+                        preview.ImageUrl = absUri.ToString();
+                }
+
+                if (!SafeExternalHttpHandler.IsSafeExternalUrl(preview.ImageUrl))
+                {
+                    preview.ImageUrl = null;
+                }
             }
 
             // Extract favicon
@@ -383,11 +401,11 @@ public class LinkPreviewService : IDisposable
                     preview.FaviconUrl = $"{baseUri.Scheme}://{baseUri.Host}/favicon.ico";
             }
 
-            // Validate the favicon URL actually exists (HEAD request) to avoid
-            // flooding the client with 404 errors for broken favicon images.
+            // Validate the favicon URL is a safe public URL and actually exists (HEAD request)
             if (!string.IsNullOrEmpty(preview.FaviconUrl))
             {
-                if (!await ValidateFaviconAsync(preview.FaviconUrl, cancellationToken))
+                if (!SafeExternalHttpHandler.IsSafeExternalUrl(preview.FaviconUrl) ||
+                    !await ValidateFaviconAsync(preview.FaviconUrl, cancellationToken))
                 {
                     preview.FaviconUrl = null;
                 }
@@ -412,6 +430,9 @@ public class LinkPreviewService : IDisposable
 
     private async Task<bool> ValidateFaviconAsync(string faviconUrl, CancellationToken cancellationToken)
     {
+        if (!SafeExternalHttpHandler.IsSafeExternalUrl(faviconUrl))
+            return false;
+
         if (_faviconValidityCache.TryGetValue(faviconUrl, out var cachedValid))
             return cachedValid;
 

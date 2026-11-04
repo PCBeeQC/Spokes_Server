@@ -17,8 +17,10 @@ using Spokes_Server.Core.Constants;
 using Spokes_Server.Core.Configuration;
 using Spokes_Server.Core.Models.Accounting;
 using Spokes_Server.Core.Models.Communication;
+using Spokes_Server.Core.Models.HR;
 using Spokes_Server.Core.Services.Accounting.InvoiceExtraction;
 using Spokes_Server.Core.Services.Communication.Email;
+using Spokes_Server.Core.Services.Identity;
 using Spokes_Server.Core.Services.Security;
 using Spokes_Server.Core.Services.Storage;
 
@@ -32,6 +34,7 @@ public class CompanyBillInboxService
     private readonly IEmailCacheMaintenanceService? _cacheMaintenance;
     private readonly IEmailDeliveryService? _emailDeliveryService;
     private readonly ILogger<CompanyBillInboxService>? _logger;
+    private readonly UserService? _userService;
     public static event Action? OnInboxIngested;
     public static void NotifyInboxIngested() => OnInboxIngested?.Invoke();
 
@@ -43,7 +46,8 @@ public class CompanyBillInboxService
         EncryptionService encryptionService,
         IEmailCacheMaintenanceService? cacheMaintenance = null,
         IEmailDeliveryService? emailDeliveryService = null,
-        ILogger<CompanyBillInboxService>? logger = null)
+        ILogger<CompanyBillInboxService>? logger = null,
+        UserService? userService = null)
     {
         _db = db;
         _fileService = fileService;
@@ -53,6 +57,7 @@ public class CompanyBillInboxService
         _cacheMaintenance = cacheMaintenance;
         _emailDeliveryService = emailDeliveryService;
         _logger = logger;
+        _userService = userService;
     }
 
     public CompanyBillInboxSettings GetSettings()
@@ -75,17 +80,72 @@ public class CompanyBillInboxService
     /// <summary>
     /// Tests the IMAP connection with provided credentials.
     /// </summary>
-    public async Task<(bool Success, string Message)> TestConnectionAsync(CompanyBillInboxSettings settings, string? plainPassword = null, CancellationToken cancellationToken = default)
+    public async Task<(bool Success, string Message)> TestConnectionAsync(
+        CompanyBillInboxSettings settings,
+        string? plainPassword = null,
+        CancellationToken cancellationToken = default)
     {
-        var emailSettings = _db.CompanyProfile.GetEmailSettings();
-        var host = !string.IsNullOrWhiteSpace(settings.ImapHost) ? settings.ImapHost : emailSettings.ImapHost;
-        var port = settings.ImapPort > 0 ? settings.ImapPort : emailSettings.ImapPort;
-        var useSsl = settings.ImapSsl;
+        Employee? inferredCaller = null;
+        if (_userService != null)
+        {
+            try
+            {
+                inferredCaller = await _userService.GetEmployeeAsync();
+            }
+            catch (InvalidOperationException)
+            {
+                // Called outside an interactive Blazor circuit scope.
+            }
+        }
+
+        return await TestConnectionInternalAsync(settings, plainPassword, inferredCaller, explicitCallerProvided: false, cancellationToken);
+    }
+
+    public Task<(bool Success, string Message)> TestConnectionAsync(
+        CompanyBillInboxSettings settings,
+        string? plainPassword,
+        Employee? caller,
+        CancellationToken cancellationToken = default)
+    {
+        return TestConnectionInternalAsync(settings, plainPassword, caller, explicitCallerProvided: true, cancellationToken);
+    }
+
+    private async Task<(bool Success, string Message)> TestConnectionInternalAsync(
+        CompanyBillInboxSettings settings,
+        string? plainPassword,
+        Employee? caller,
+        bool explicitCallerProvided,
+        CancellationToken cancellationToken)
+    {
+        if (explicitCallerProvided || caller != null)
+        {
+            if (caller == null || !caller.IsActive || caller.IsBanned || caller.IsSuspended ||
+                !(caller.IsAdmin ||
+                  caller.HasPermission(AppPermissions.Admin.ManageSettings) ||
+                  caller.HasPermission(AppPermissions.Finance.AccessAccounting) ||
+                  caller.HasPermission(AppPermissions.Purchases.ManageBills)))
+            {
+                return (false, "Not authorized to test Company Bill Inbox settings.");
+            }
+        }
+
+        bool callerIsAdmin = caller == null || caller.IsAdmin || caller.HasPermission(AppPermissions.Admin.ManageSettings);
+
+        var (host, port, options) = ResolveBillInboxImapEndpoint(settings);
         var user = !string.IsNullOrWhiteSpace(settings.ImapUsername) ? settings.ImapUsername : settings.EmailAddress;
 
-        var password = !string.IsNullOrEmpty(plainPassword)
-            ? plainPassword
-            : (!string.IsNullOrEmpty(settings.EncryptedImapPassword) ? _encryptionService.Decrypt(settings.EncryptedImapPassword) : "");
+        string password;
+        try
+        {
+            password = !string.IsNullOrEmpty(plainPassword)
+                ? plainPassword
+                : (!string.IsNullOrEmpty(settings.EncryptedImapPassword) ? _encryptionService.Decrypt(settings.EncryptedImapPassword) : "");
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(ex, "Bill inbox test connection failed to decrypt stored password");
+            return (false, MailTransportSecurityHelper.FormatConnectionError(ex, callerIsAdmin, "Failed to decrypt stored password: "));
+        }
 
         if (string.IsNullOrWhiteSpace(host) || string.IsNullOrWhiteSpace(user) || string.IsNullOrWhiteSpace(password))
         {
@@ -95,8 +155,13 @@ public class CompanyBillInboxService
         try
         {
             using var client = new ImapClient();
-            var options = useSsl ? SecureSocketOptions.SslOnConnect : SecureSocketOptions.StartTlsWhenAvailable;
-            await client.ConnectAsync(host, port, options, cancellationToken);
+            await MailTransportSecurityHelper.ConnectMailServiceAsync(
+                client,
+                host,
+                port,
+                options,
+                requireSafeExternalHost: false,
+                cancellationToken);
             await client.AuthenticateAsync(user, password, cancellationToken);
             await client.DisconnectAsync(true, cancellationToken);
             return (true, "Connection successful!");
@@ -104,16 +169,36 @@ public class CompanyBillInboxService
         catch (Exception ex)
         {
             _logger?.LogWarning(ex, "Bill inbox test connection failed for {User}@{Host}", user, host);
-            return (false, $"Connection failed: {ex.Message}");
+            return (false, MailTransportSecurityHelper.FormatConnectionError(ex, callerIsAdmin));
         }
+    }
+
+    private (string Host, int Port, SecureSocketOptions Options) ResolveBillInboxImapEndpoint(CompanyBillInboxSettings settings)
+    {
+        var emailSettings = _db.CompanyProfile.GetEmailSettings();
+        if (!string.IsNullOrWhiteSpace(settings.ImapHost))
+        {
+            var effectivePort = MailTransportSecurityHelper.NormalizeImapPort(settings.ImapPort, settings.ImapSsl);
+            var options = MailTransportSecurityHelper.ResolveBillInboxImapTlsOptions(settings);
+            return (settings.ImapHost, effectivePort, options);
+        }
+
+        var fallback = emailSettings.IncomingServers.FirstOrDefault(s => !string.IsNullOrWhiteSpace(s.Host));
+        if (fallback != null)
+        {
+            var effectivePort = MailTransportSecurityHelper.NormalizeImapPort(
+                settings.ImapPort > 0 ? settings.ImapPort : fallback.Port,
+                fallback.UseSsl);
+            var options = MailTransportSecurityHelper.ResolveImapTlsOptions(effectivePort, fallback.UseSsl, allowPlaintext: true);
+            return (fallback.Host, effectivePort, options);
+        }
+
+        return (string.Empty, MailTransportSecurityHelper.NormalizeImapPort(settings.ImapPort, settings.ImapSsl), MailTransportSecurityHelper.ResolveBillInboxImapTlsOptions(settings));
     }
 
     private async Task<(ImapClient? Client, string? Error)> ConnectImapClientAsync(CompanyBillInboxSettings settings, CancellationToken cancellationToken = default)
     {
-        var emailSettings = _db.CompanyProfile.GetEmailSettings();
-        var host = !string.IsNullOrWhiteSpace(settings.ImapHost) ? settings.ImapHost : emailSettings.ImapHost;
-        var port = settings.ImapPort > 0 ? settings.ImapPort : emailSettings.ImapPort;
-        var useSsl = settings.ImapSsl;
+        var (host, port, options) = ResolveBillInboxImapEndpoint(settings);
         var user = !string.IsNullOrWhiteSpace(settings.ImapUsername) ? settings.ImapUsername : settings.EmailAddress;
 
         string password;
@@ -136,8 +221,13 @@ public class CompanyBillInboxService
         {
             var client = new ImapClient();
             client.Timeout = 10000;
-            var options = useSsl ? SecureSocketOptions.SslOnConnect : SecureSocketOptions.StartTlsWhenAvailable;
-            await client.ConnectAsync(host, port, options, cancellationToken);
+            await MailTransportSecurityHelper.ConnectMailServiceAsync(
+                client,
+                host,
+                port,
+                options,
+                requireSafeExternalHost: false,
+                cancellationToken);
             await client.AuthenticateAsync(user, password, cancellationToken);
             return (client, null);
         }
@@ -365,7 +455,7 @@ public class CompanyBillInboxService
     {
         var email = new EmailMessage
         {
-            EmployeeId = CompanyBillInboxConstants.SystemEmployeeId,
+            AccountId = CompanyBillInboxConstants.SystemEmployeeId,
             FolderPath = CompanyBillInboxConstants.DefaultFolder,
             UniqueId = uid,
             GlobalMessageId = mimeMessage.MessageId ?? Guid.NewGuid().ToString(),
@@ -2088,22 +2178,43 @@ public class CompanyBillInboxService
     {
         if (_emailDeliveryService != null)
         {
-            await _emailDeliveryService.SendEmailAsync(new SendEmailRequest
+            await _emailDeliveryService.SendSystemBillInboxEmailAsync(new SendEmailRequest
             {
-                EmployeeId = CompanyBillInboxConstants.SystemEmployeeId,
+                AccountId = CompanyBillInboxConstants.SystemEmployeeId,
                 To = to,
                 Subject = subject,
                 Body = bodyHtml,
-                FileAttachmentPaths = attachmentPaths?.Where(File.Exists).Select(p => (p, Path.GetFileName(p))).ToList()
+                FileAttachmentPaths = attachmentPaths?.Where(File.Exists).Select(p => (p, Path.GetFileName(p))).ToList(),
+                IsSystemAutomatedSend = true
             }, cancellationToken);
             return;
         }
 
         var settings = GetSettings();
         var emailSettings = _db.CompanyProfile.GetEmailSettings();
-        var host = !string.IsNullOrWhiteSpace(settings.SmtpHost) ? settings.SmtpHost : emailSettings.SmtpHost;
-        var port = settings.SmtpPort > 0 ? settings.SmtpPort : emailSettings.SmtpPort;
-        var useSsl = settings.SmtpSsl;
+        string host;
+        int port;
+        SecureSocketOptions options;
+
+        if (!string.IsNullOrWhiteSpace(settings.SmtpHost))
+        {
+            host = settings.SmtpHost;
+            port = MailTransportSecurityHelper.NormalizeSmtpPort(settings.SmtpPort, settings.SmtpSsl);
+            options = MailTransportSecurityHelper.ResolveBillInboxSmtpTlsOptions(settings);
+        }
+        else if (emailSettings.SendingServers.FirstOrDefault(s => !string.IsNullOrWhiteSpace(s.Host)) is { } fallbackServer)
+        {
+            host = fallbackServer.Host;
+            port = MailTransportSecurityHelper.NormalizeSmtpPort(fallbackServer.Port, fallbackServer.UseSsl);
+            options = MailTransportSecurityHelper.ResolveSmtpTlsOptions(port, fallbackServer.UseSsl, allowPlaintext: true);
+        }
+        else
+        {
+            host = string.Empty;
+            port = 587;
+            options = SecureSocketOptions.StartTls;
+        }
+
         var user = !string.IsNullOrWhiteSpace(settings.SmtpUsername) ? settings.SmtpUsername : settings.EmailAddress;
 
         string password;
@@ -2135,8 +2246,13 @@ public class CompanyBillInboxService
         message.Body = builder.ToMessageBody();
 
         using var client = new SmtpClient();
-        var options = useSsl ? SecureSocketOptions.SslOnConnect : SecureSocketOptions.StartTlsWhenAvailable;
-        await client.ConnectAsync(host, port, options, cancellationToken);
+        await MailTransportSecurityHelper.ConnectMailServiceAsync(
+            client,
+            host,
+            port,
+            options,
+            requireSafeExternalHost: false,
+            cancellationToken);
         if (!string.IsNullOrEmpty(user) && !string.IsNullOrEmpty(password))
         {
             await client.AuthenticateAsync(user, password, cancellationToken);
@@ -2147,7 +2263,7 @@ public class CompanyBillInboxService
         // Record in sent items
         var sentEmail = new EmailMessage
         {
-            EmployeeId = CompanyBillInboxConstants.SystemEmployeeId,
+            AccountId = CompanyBillInboxConstants.SystemEmployeeId,
             FolderPath = "Sent",
             Subject = subject,
             FromAddress = settings.EmailAddress,
@@ -3183,16 +3299,20 @@ public class CompanyBillInboxService
 
         try
         {
-            var host = !string.IsNullOrWhiteSpace(settings.ImapHost) ? settings.ImapHost : _db.CompanyProfile.GetEmailSettings().ImapHost;
-            var port = settings.ImapPort > 0 ? settings.ImapPort : _db.CompanyProfile.GetEmailSettings().ImapPort;
+            var (host, port, options) = ResolveBillInboxImapEndpoint(settings);
             var user = !string.IsNullOrWhiteSpace(settings.ImapUsername) ? settings.ImapUsername : settings.EmailAddress;
             var password = _encryptionService.Decrypt(settings.EncryptedImapPassword);
 
             if (!string.IsNullOrWhiteSpace(host) && !string.IsNullOrWhiteSpace(user) && !string.IsNullOrWhiteSpace(password))
             {
                 using var client = new ImapClient();
-                var options = settings.ImapSsl ? SecureSocketOptions.SslOnConnect : SecureSocketOptions.StartTlsWhenAvailable;
-                await client.ConnectAsync(host, port, options, cancellationToken);
+                await MailTransportSecurityHelper.ConnectMailServiceAsync(
+                    client,
+                    host,
+                    port,
+                    options,
+                    requireSafeExternalHost: false,
+                    cancellationToken);
                 await client.AuthenticateAsync(user, password, cancellationToken);
 
                 var sourceFolder = await client.GetFolderAsync(string.IsNullOrWhiteSpace(email.FolderPath) ? "INBOX" : email.FolderPath, cancellationToken);
@@ -3248,8 +3368,7 @@ public class CompanyBillInboxService
 
         try
         {
-            var host = !string.IsNullOrWhiteSpace(settings.ImapHost) ? settings.ImapHost : _db.CompanyProfile.GetEmailSettings().ImapHost;
-            var port = settings.ImapPort > 0 ? settings.ImapPort : _db.CompanyProfile.GetEmailSettings().ImapPort;
+            var (host, port, options) = ResolveBillInboxImapEndpoint(settings);
             var user = !string.IsNullOrWhiteSpace(settings.ImapUsername) ? settings.ImapUsername : settings.EmailAddress;
             var password = _encryptionService.Decrypt(settings.EncryptedImapPassword);
 
@@ -3260,8 +3379,13 @@ public class CompanyBillInboxService
 
                 using var client = new ImapClient();
                 client.Timeout = 5000;
-                var options = settings.ImapSsl ? SecureSocketOptions.SslOnConnect : SecureSocketOptions.StartTlsWhenAvailable;
-                await client.ConnectAsync(host, port, options, timeoutCts.Token);
+                await MailTransportSecurityHelper.ConnectMailServiceAsync(
+                    client,
+                    host,
+                    port,
+                    options,
+                    requireSafeExternalHost: false,
+                    timeoutCts.Token);
                 await client.AuthenticateAsync(user, password, timeoutCts.Token);
 
                 var sourceFolder = await client.GetFolderAsync(string.IsNullOrWhiteSpace(email.FolderPath) ? "INBOX" : email.FolderPath, timeoutCts.Token);
@@ -4204,7 +4328,7 @@ public class CompanyBillInboxService
         var result = new DuplicateScanResult();
 
         // Get candidate emails in the Bill Inbox
-        var candidateEmails = _db.EmailMessages.GetAllForEmployee(CompanyBillInboxConstants.SystemEmployeeId)
+        var candidateEmails = _db.EmailMessages.GetAllForAccount(CompanyBillInboxConstants.SystemEmployeeId)
             .Where(e => e.BillingStatus == CompanyBillInboxConstants.BillingStatus.Unprocessed ||
                         e.BillingStatus == CompanyBillInboxConstants.BillingStatus.AutoDrafted)
             .ToList();

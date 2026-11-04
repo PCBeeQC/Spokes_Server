@@ -1,11 +1,13 @@
-namespace Spokes_Server.Core.Models.Communication;
-
+using System;
+using System.Collections.Generic;
 using Spokes_Server.Core.Data;
+
+namespace Spokes_Server.Core.Models.Communication;
 
 public class EmailMessage : IDataEntity
 {
     public string Id { get; set; } = Guid.NewGuid().ToString();
-    public string EmployeeId { get; set; } = string.Empty;
+    public string AccountId { get; set; } = string.Empty;
     public string FolderPath { get; set; } = string.Empty; // Links to EmailFolder.Path
 
     // IMAP Metadata
@@ -20,13 +22,33 @@ public class EmailMessage : IDataEntity
     public List<string> ToAddresses { get; set; } = [];
     public List<string> CcAddresses { get; set; } = [];
     public List<string> BccAddresses { get; set; } = [];
+    public List<string> ReplyToAddresses { get; set; } = [];
+
+    /// <summary>
+    /// Normalized lowercase receiving email addresses extracted from To, Cc, Delivered-To, X-Forwarded-To, X-Original-To, and Envelope-To.
+    /// Used to sort and route messages into Address Inboxes.
+    /// </summary>
+    public List<string> ReceivingAddresses { get; set; } = [];
+
+    // Reply Threading Headers
+    public string? InReplyTo { get; set; }
+    public List<string> References { get; set; } = [];
+
+    // Draft / Sent Identity Tracking
+    public string? SendingIdentityId { get; set; }
+    public string? CreatedByEmployeeId { get; set; }
+
+    // Privacy Shield & Newsletter Screener
+    public string? UnsubscribeUrl { get; set; }
+    public string? UnsubscribeMailto { get; set; }
+    public bool AllowRemoteImages { get; set; }
 
     public DateTimeOffset Date { get; set; }
 
     // Preview
     public string Snippet { get; set; } = string.Empty; // First 100 chars of body text
 
-    // Content Storage (Body is stored in a separate file: Data/Emails/{Id}.html)
+    // Content Storage
     public bool HasAttachments { get; set; }
     public List<EmailAttachmentMeta> Attachments { get; set; } = [];
 

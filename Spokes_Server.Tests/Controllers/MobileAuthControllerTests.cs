@@ -29,6 +29,7 @@ using Xunit;
 
 namespace Spokes_Server.Tests.Controllers;
 
+[Collection("OpenIdConfigurationCache")]
 public class MobileAuthControllerTests : TestDataTestBase
 {
     private readonly ServiceProvider _serviceProvider;
@@ -86,7 +87,7 @@ public class MobileAuthControllerTests : TestDataTestBase
 
     public override void Dispose()
     {
-        OpenIdConfigurationProvider.ClearAllCaches();
+        _serviceProvider.GetService<IOpenIdConfigurationProvider>()?.ClearCache();
         _rsa.Dispose();
         _serviceProvider.Dispose();
         base.Dispose();
@@ -207,10 +208,18 @@ public class MobileAuthControllerTests : TestDataTestBase
 
     private MobileAuthController CreateController(Func<HttpRequestMessage, HttpResponseMessage>? handler = null, ILogger<MobileAuthController>? logger = null)
     {
-        OpenIdConfigurationProvider.ClearAllCaches();
+        _serviceProvider.GetService<IOpenIdConfigurationProvider>()?.ClearCache();
         var h = handler ?? CreateDefaultIdpHandler();
         var factory = CreateHttpClientFactory(h);
-        var controller = new MobileAuthController(_db.CoreContext, _db.HrContext, factory, _sessionService, _userService, logger)
+        var oidcProvider = _serviceProvider.GetRequiredService<IOpenIdConfigurationProvider>();
+        var controller = new MobileAuthController(
+            _db.CoreContext,
+            _db.HrContext,
+            factory,
+            _sessionService,
+            _userService,
+            logger,
+            openIdConfigurationProvider: oidcProvider)
         {
             ControllerContext = new ControllerContext
             {
@@ -902,7 +911,7 @@ public class MobileAuthControllerTests : TestDataTestBase
         var unauthResult = Assert.IsType<UnauthorizedObjectResult>(result);
         var res = Assert.IsType<SpokesResult>(unauthResult.Value);
         Assert.False(res.IsSuccess);
-        Assert.Equal("Account is inactive, suspended, banned, or pending approval.", res.ErrorMessage);
+        Assert.Equal("Account is inactive, banned, or pending approval.", res.ErrorMessage);
     }
 
     #endregion
@@ -992,18 +1001,19 @@ public class MobileAuthControllerTests : TestDataTestBase
     }
 
     [Fact]
-    public async Task Exchange_ExistingEmployeeMatchedByEmail_LinksAccount()
+    public async Task Exchange_ExistingEmployeeWithSameEmail_CreatesSeparateAccountAndNeverAutoLinksByEmail()
     {
         var emp = new Employee
         {
             FirstName = "Email",
             LastName = "Match",
             Email = "MATCHME@example.com",
+            IsAdmin = true,
             IsActive = true
         };
         _db.Employees.Save(emp);
 
-        // Token has same email in lowercase
+        // Unlinked sub with matching email must provision a brand-new non-admin Employee instead of taking over emp.Id
         var idToken = GenerateIdToken(sub: "sub_by_email", name: "Email Match", email: "matchme@example.com");
         var controller = CreateController(CreateDefaultIdpHandler(idToken));
 
@@ -1021,7 +1031,11 @@ public class MobileAuthControllerTests : TestDataTestBase
 
         var account = _db.OpenIdAccounts.GetBySub("sub_by_email");
         Assert.NotNull(account);
-        Assert.Equal(emp.Id, account.LinkedEmployeeId);
+        Assert.False(string.IsNullOrEmpty(account.LinkedEmployeeId));
+        Assert.NotEqual(emp.Id, account.LinkedEmployeeId);
+        var provisionedEmp = _db.Employees.GetById(account.LinkedEmployeeId);
+        Assert.NotNull(provisionedEmp);
+        Assert.False(provisionedEmp!.IsAdmin);
     }
 
     [Fact]
@@ -1101,11 +1115,11 @@ public class MobileAuthControllerTests : TestDataTestBase
         var unauth = Assert.IsType<UnauthorizedObjectResult>(result);
         var res = Assert.IsType<SpokesResult>(unauth.Value);
         Assert.False(res.IsSuccess);
-        Assert.Equal("Account is inactive, suspended, banned, or pending approval.", res.ErrorMessage);
+        Assert.Equal("Account is inactive, banned, or pending approval.", res.ErrorMessage);
     }
 
     [Fact]
-    public async Task Exchange_SuspendedEmployee_ReturnsUnauthorized()
+    public async Task Exchange_SuspendedEmployee_AllowsReadOnlyExchange()
     {
         var emp = new Employee
         {
@@ -1137,10 +1151,8 @@ public class MobileAuthControllerTests : TestDataTestBase
 
         var result = await controller.Exchange(req);
 
-        var unauth = Assert.IsType<UnauthorizedObjectResult>(result);
-        var res = Assert.IsType<SpokesResult>(unauth.Value);
-        Assert.False(res.IsSuccess);
-        Assert.Equal("Account is inactive, suspended, banned, or pending approval.", res.ErrorMessage);
+        Assert.IsType<OkObjectResult>(result);
+        Assert.NotEmpty(_db.DeviceSessions.GetByEmployeeId(emp.Id));
     }
 
     [Fact]
@@ -1179,7 +1191,7 @@ public class MobileAuthControllerTests : TestDataTestBase
         var unauth = Assert.IsType<UnauthorizedObjectResult>(result);
         var res = Assert.IsType<SpokesResult>(unauth.Value);
         Assert.False(res.IsSuccess);
-        Assert.Equal("Account is inactive, suspended, banned, or pending approval.", res.ErrorMessage);
+        Assert.Equal("Account is inactive, banned, or pending approval.", res.ErrorMessage);
     }
 
     #endregion
@@ -1384,7 +1396,7 @@ public class MobileAuthControllerTests : TestDataTestBase
                 Interlocked.Increment(ref jwksRequestCount);
             }
             return defaultHandler(req);
-        }), _sessionService, _userService)
+        }), _sessionService, _userService, openIdConfigurationProvider: _serviceProvider.GetRequiredService<IOpenIdConfigurationProvider>())
         {
             ControllerContext = new ControllerContext
             {

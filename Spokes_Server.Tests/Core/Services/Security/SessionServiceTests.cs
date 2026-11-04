@@ -3,6 +3,9 @@ using System.Security.Cryptography;
 using System.Text;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
+using Microsoft.AspNetCore.DataProtection;
+using Microsoft.Extensions.Caching.Memory;
+using Spokes_Server.Core.Services.Security;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Configuration;
@@ -229,8 +232,8 @@ public class SessionServiceTests : IDisposable
 
     [Theory]
     [InlineData(false, false, false)] // Inactive
-    [InlineData(true, true, false)]  // Suspended
-    [InlineData(true, false, true)]  // Banned
+    [InlineData(false, true, false)]  // Inactive + Suspended
+    [InlineData(true, false, true)]   // Banned
     public void ValidateToken_WhenEmployeeDisabled_ReturnsNull(bool isActive, bool isSuspended, bool isBanned)
     {
         var rawToken = "test_token_disabled";
@@ -1322,5 +1325,290 @@ public class SessionServiceTests : IDisposable
         var endpoint = await _service.ResolveEndSessionEndpointAsync(context);
 
         Assert.Equal("/api/logout", endpoint);
+    }
+
+    [Fact]
+    public void ValidateToken_WhenEmployeeSuspended_SucceedsForReadOnlyMode()
+    {
+        var rawToken = "test_token_suspended_ro";
+        var tokenHash = Convert.ToBase64String(SHA256.HashData(Encoding.UTF8.GetBytes(rawToken)));
+
+        var employee = new Employee
+        {
+            Id = "emp_suspended_ro",
+            FirstName = "Suspended",
+            IsActive = true,
+            IsSuspended = true,
+            IsBanned = false
+        };
+        _employeeRepo.Save(employee);
+
+        var session = new DeviceSession
+        {
+            Id = "sess_suspended_ro",
+            EmployeeId = employee.Id,
+            TokenHash = tokenHash,
+            ExpiresAt = DateTime.UtcNow.AddDays(7)
+        };
+        _sessionRepo.Save(session);
+
+        var result = _service.ValidateToken(rawToken);
+        Assert.NotNull(result);
+        Assert.Equal(session.Id, result.Value.Session.Id);
+        Assert.True(result.Value.Employee.IsSuspended);
+    }
+
+    [Fact]
+    public void BuildIdentity_WhenEmployeeBanned_OmitsAdminRoleAndPermissions()
+    {
+        var employee = new Employee
+        {
+            Id = "emp_banned_claims",
+            FirstName = "Banned",
+            LastName = "Admin",
+            Email = "banned@example.com",
+            IsAdmin = true,
+            IsActive = true,
+            IsBanned = true,
+            Permissions = new List<string> { "Projects.View", "Chat.Use" }
+        };
+
+        var identity = _service.BuildIdentity(employee, "sess_banned");
+
+        Assert.Equal("emp_banned_claims", identity.FindFirst("EmployeeId")?.Value);
+        Assert.Equal("sess_banned", identity.FindFirst("SessionId")?.Value);
+        Assert.True(identity.HasClaim("Banned", "true"));
+        Assert.Null(identity.FindFirst(ClaimTypes.Role));
+        Assert.Empty(identity.FindAll("Permission"));
+
+        employee.IsBanned = false;
+        var unbannedIdentity = _service.BuildIdentity(employee, "sess_banned");
+        Assert.False(unbannedIdentity.HasClaim("Banned", "true"));
+        Assert.NotNull(unbannedIdentity.FindFirst(ClaimTypes.Role));
+    }
+
+    private static (GlobalKeystoreService Keystore, FileTokenService FileTokens) CreateVaultSecurityServices()
+    {
+        var services = new ServiceCollection();
+        services.AddMemoryCache();
+        services.AddDataProtection().UseEphemeralDataProtectionProvider();
+        var sp = services.BuildServiceProvider();
+
+        var keystore = new GlobalKeystoreService();
+        var fileTokens = new FileTokenService(
+            sp.GetRequiredService<IDataProtectionProvider>(),
+            sp.GetRequiredService<IMemoryCache>());
+        return (keystore, fileTokens);
+    }
+
+    private static void UnlockKeystoreForTest(GlobalKeystoreService keystore, string employeeId)
+    {
+        var mockCrypto = new Mock<ICryptoService>();
+        mockCrypto.Setup(c => c.DeriveKeyFromPassword(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<int>())).Returns("kek");
+        mockCrypto.Setup(c => c.DecryptAes(It.IsAny<string>(), "kek")).Returns("<RSAKeyValue><Modulus>abc</Modulus></RSAKeyValue>");
+        Assert.True(keystore.UnlockVault(employeeId, "enc_priv_key", "vault_pwd", mockCrypto.Object));
+        Assert.True(keystore.IsUserUnlocked(employeeId));
+    }
+
+    [Fact]
+    public void EvictGlobalKeystoreIfNoUnlockedSessions_KeepsKeyWhileOtherSessionUnlocked_AndEvictsWhenLastSessionClears()
+    {
+        var (keystore, fileTokens) = CreateVaultSecurityServices();
+        var service = new SessionService(
+            _sessionRepo,
+            _employeeRepo,
+            globalKeystore: keystore,
+            fileTokenService: fileTokens);
+
+        const string employeeId = "emp_vault_multi";
+        _employeeRepo.Save(new Employee { Id = employeeId, FirstName = "Vault", IsActive = true });
+        UnlockKeystoreForTest(keystore, employeeId);
+
+        var session1 = new DeviceSession
+        {
+            Id = "sess_vault_1",
+            EmployeeId = employeeId,
+            HasVaultCookie = true,
+            ExpiresAt = DateTime.UtcNow.AddDays(30)
+        };
+        var session2 = new DeviceSession
+        {
+            Id = "sess_vault_2",
+            EmployeeId = employeeId,
+            HasVaultCookie = true,
+            ExpiresAt = DateTime.UtcNow.AddDays(30)
+        };
+        _sessionRepo.Save(session1);
+        _sessionRepo.Save(session2);
+
+        // Locking session1 while session2 still has HasVaultCookie == true keeps GlobalKeystore unlocked
+        session1.HasVaultCookie = false;
+        _sessionRepo.Save(session1);
+        service.EvictGlobalKeystoreIfNoUnlockedSessions(employeeId);
+        Assert.True(keystore.IsUserUnlocked(employeeId));
+
+        // Locking/revoking session2 leaves zero active unlocked sessions and evicts GlobalKeystore
+        session2.HasVaultCookie = false;
+        _sessionRepo.Save(session2);
+        service.EvictGlobalKeystoreIfNoUnlockedSessions(employeeId);
+        Assert.False(keystore.IsUserUnlocked(employeeId));
+    }
+
+    [Fact]
+    public void RevokeAllUserSessions_RevokesSessionsClearsVaultAndPushEvictsKeystoreAndInvalidatesTokens_EvenWithZeroSessions()
+    {
+        var (keystore, fileTokens) = CreateVaultSecurityServices();
+        var service = new SessionService(
+            _sessionRepo,
+            _employeeRepo,
+            globalKeystore: keystore,
+            fileTokenService: fileTokens);
+
+        const string employeeId = "emp_revoke_all";
+        _employeeRepo.Save(new Employee { Id = employeeId, FirstName = "RevokeAll", IsActive = true });
+        UnlockKeystoreForTest(keystore, employeeId);
+
+        var session = new DeviceSession
+        {
+            Id = "sess_revoke_all_1",
+            EmployeeId = employeeId,
+            HasVaultCookie = true,
+            PushEndpoint = "https://push.example/ep1",
+            PushEnabled = true,
+            ExpiresAt = DateTime.UtcNow.AddDays(30)
+        };
+        _sessionRepo.Save(session);
+
+        var tokenBefore = fileTokens.GenerateAccessToken("chat", "ch1", "secret.png", "aesKey", employeeId, session.Id);
+        Assert.True(fileTokens.ValidateAccessToken("chat", "ch1", "secret.png", tokenBefore, employeeId, session.Id).IsSuccess);
+
+        var revokedSessionIds = new List<string>();
+        service.OnSessionRevoked += id => revokedSessionIds.Add(id);
+
+        service.RevokeAllUserSessions(employeeId);
+
+        var updated = _sessionRepo.GetById(session.Id);
+        Assert.NotNull(updated);
+        Assert.NotNull(updated.RevokedAt);
+        Assert.False(updated.HasVaultCookie);
+        Assert.False(updated.HasPush);
+        Assert.Contains(session.Id, revokedSessionIds);
+        Assert.False(keystore.IsUserUnlocked(employeeId));
+        Assert.False(fileTokens.ValidateAccessToken("chat", "ch1", "secret.png", tokenBefore, employeeId, session.Id).IsSuccess);
+
+        // Even when the user already has 0 active sessions, RevokeAllUserSessions still evicts GlobalKeystore!
+        UnlockKeystoreForTest(keystore, employeeId);
+        service.RevokeAllUserSessions(employeeId);
+        Assert.False(keystore.IsUserUnlocked(employeeId));
+    }
+
+    [Fact]
+    public async Task InitiateLogoutAsync_WithRevokeActiveSession_ClearsHasVaultCookieInvalidatesFileTokensAndEvictsKeystore()
+    {
+        var (keystore, fileTokens) = CreateVaultSecurityServices();
+        var service = new SessionService(
+            _sessionRepo,
+            _employeeRepo,
+            globalKeystore: keystore,
+            fileTokenService: fileTokens);
+
+        var (session, _) = SetupValidSession();
+        session.HasVaultCookie = true;
+        _sessionRepo.Save(session);
+        UnlockKeystoreForTest(keystore, session.EmployeeId);
+
+        var fileToken = fileTokens.GenerateAccessToken("chat", "ch9", "doc.pdf", "aesKey", session.EmployeeId, session.Id);
+        Assert.True(fileTokens.ValidateAccessToken("chat", "ch9", "doc.pdf", fileToken, session.EmployeeId, session.Id).IsSuccess);
+
+        var context = new DefaultHttpContext();
+        context.User = new ClaimsPrincipal(new ClaimsIdentity(new[]
+        {
+            new Claim("SessionId", session.Id),
+            new Claim("EmployeeId", session.EmployeeId)
+        }, "TestAuth"));
+
+        await service.InitiateLogoutAsync(context, revokeActiveSession: true);
+
+        var persisted = _sessionRepo.GetById(session.Id);
+        Assert.NotNull(persisted?.RevokedAt);
+        Assert.False(persisted!.HasVaultCookie);
+        Assert.False(keystore.IsUserUnlocked(session.EmployeeId));
+        Assert.False(fileTokens.ValidateAccessToken("chat", "ch9", "doc.pdf", fileToken, session.EmployeeId, session.Id).IsSuccess);
+    }
+
+    [Fact]
+    public void QuarantineUserSessionsForBan_PreservesSessionAndIdToken_ClearsRefreshPushAndVault_AndFiresOnSessionBanned()
+    {
+        var (keystore, fileTokens) = CreateVaultSecurityServices();
+        var service = new SessionService(
+            _sessionRepo,
+            _employeeRepo,
+            globalKeystore: keystore,
+            fileTokenService: fileTokens);
+
+        const string employeeId = "emp_quarantine_ban";
+        _employeeRepo.Save(new Employee { Id = employeeId, FirstName = "Quarantined", IsActive = true, IsBanned = true });
+        UnlockKeystoreForTest(keystore, employeeId);
+
+        const string rawToken1 = "raw_refresh_ban_1";
+        var tokenHash1 = Convert.ToBase64String(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(rawToken1)));
+
+        var sessionWithPush = new DeviceSession
+        {
+            Id = "sess_quarantine_1",
+            EmployeeId = employeeId,
+            TokenHash = tokenHash1,
+            IdToken = "oidc_id_token_1",
+            HasVaultCookie = true,
+            PushEndpoint = "https://push.example/quarantine1",
+            PushEnabled = true,
+            ExpiresAt = DateTime.UtcNow.AddDays(30)
+        };
+        var sessionWithoutPush = new DeviceSession
+        {
+            Id = "sess_quarantine_2",
+            EmployeeId = employeeId,
+            TokenHash = "hash_2",
+            IdToken = "oidc_id_token_2",
+            HasVaultCookie = true,
+            ExpiresAt = DateTime.UtcNow.AddDays(30)
+        };
+        _sessionRepo.Save(sessionWithPush);
+        _sessionRepo.Save(sessionWithoutPush);
+
+        var tokenBefore = fileTokens.GenerateAccessToken("chat", "ch1", "secret.png", "aesKey", employeeId, sessionWithPush.Id);
+        Assert.True(fileTokens.ValidateAccessToken("chat", "ch1", "secret.png", tokenBefore, employeeId, sessionWithPush.Id).IsSuccess);
+
+        var bannedSessionIds = new List<string>();
+        var revokedSessionIds = new List<string>();
+        service.OnSessionBanned += id => bannedSessionIds.Add(id);
+        service.OnSessionRevoked += id => revokedSessionIds.Add(id);
+
+        service.QuarantineUserSessionsForBan(employeeId);
+
+        foreach (var id in new[] { sessionWithPush.Id, sessionWithoutPush.Id })
+        {
+            var updated = _sessionRepo.GetById(id);
+            Assert.NotNull(updated);
+            Assert.Null(updated!.RevokedAt);
+            Assert.False(updated.HasVaultCookie);
+            Assert.False(updated.HasPush);
+            Assert.Equal(string.Empty, updated.TokenHash);
+            Assert.False(string.IsNullOrEmpty(updated.IdToken));
+            Assert.Contains(id, bannedSessionIds);
+        }
+
+        Assert.Empty(revokedSessionIds);
+        Assert.Null(_sessionRepo.GetByTokenHash(string.Empty));
+        Assert.Null(_sessionRepo.GetActiveByTokenHash(string.Empty));
+        Assert.Null(service.ValidateToken(rawToken1));
+        Assert.False(keystore.IsUserUnlocked(employeeId));
+        Assert.False(fileTokens.ValidateAccessToken("chat", "ch1", "secret.png", tokenBefore, employeeId, sessionWithPush.Id).IsSuccess);
+
+        // Even when 0 active sessions exist, QuarantineUserSessionsForBan still evicts GlobalKeystore
+        const string zeroSessEmp = "emp_quarantine_zero";
+        UnlockKeystoreForTest(keystore, zeroSessEmp);
+        service.QuarantineUserSessionsForBan(zeroSessEmp);
+        Assert.False(keystore.IsUserUnlocked(zeroSessEmp));
     }
 }

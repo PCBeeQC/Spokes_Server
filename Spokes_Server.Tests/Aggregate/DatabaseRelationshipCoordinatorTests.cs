@@ -14,7 +14,9 @@ using Spokes_Server.Core.Data.Repositories.HR;
 using Spokes_Server.Core.Models.Accounting;
 using Spokes_Server.Core.Models.Core;
 using Spokes_Server.Core.Models.HR;
+using Spokes_Server.Core.Models.Communication;
 using Spokes_Server.Core.Models.Projects;
+using Spokes_Server.Core.Services.Communication.Email;
 using Spokes_Server.Core.Data;
 using Xunit;
 
@@ -24,6 +26,7 @@ public class DatabaseRelationshipCoordinatorTests : TestDataTestBase
 {
     private readonly ServiceProvider _serviceProvider;
     private readonly Database _db;
+    private readonly EmailSyncStateService _syncStateService;
     private readonly DatabaseRelationshipCoordinator _coordinator;
 
     public DatabaseRelationshipCoordinatorTests()
@@ -36,10 +39,12 @@ public class DatabaseRelationshipCoordinatorTests : TestDataTestBase
 
         services.AddLogging(builder => builder.AddConsole());
         services.AddSingleton<EncryptionService>();
+        services.AddSingleton<EmailSyncStateService>();
         services.AddSpokesDatabase();
 
         _serviceProvider = services.BuildServiceProvider();
         _db = _serviceProvider.GetRequiredService<Database>();
+        _syncStateService = _serviceProvider.GetRequiredService<EmailSyncStateService>();
         _coordinator = _serviceProvider.GetRequiredService<DatabaseRelationshipCoordinator>();
         _coordinator.RegisterSubscriptions();
     }
@@ -307,5 +312,24 @@ public class DatabaseRelationshipCoordinatorTests : TestDataTestBase
         // StartAsync can be awaited cleanly
         await _coordinator.StartAsync(CancellationToken.None);
         await _coordinator.StopAsync(CancellationToken.None);
+    }
+
+    [Fact]
+    public void EmailRepositories_OnSavedAndDeleted_NotifiesEmailSyncStateUnreadCountChanged()
+    {
+        var notifiedAccounts = new List<string>();
+        _syncStateService.OnUnreadCountChanged += accId => notifiedAccounts.Add(accId);
+
+        _db.EmailAccounts.Save(new EmailAccount { Id = "acc-coord-1", EmailAddress = "info@test.com", Enabled = true });
+        Assert.Contains("acc-coord-1", notifiedAccounts);
+
+        notifiedAccounts.Clear();
+        _db.EmailInboxes.Save(new EmailInbox { Id = "inbox-coord-1", AccountId = "acc-coord-1", Name = "Support" });
+        Assert.Contains("acc-coord-1", notifiedAccounts);
+
+        notifiedAccounts.Clear();
+        _db.EmailFolders.Save(new EmailFolder { Id = "folder-coord-1", AccountId = "acc-coord-1", Name = "Inbox", Path = "INBOX", IsInbox = true });
+        _db.EmailFolders.Delete("folder-coord-1");
+        Assert.Contains("acc-coord-1", notifiedAccounts);
     }
 }

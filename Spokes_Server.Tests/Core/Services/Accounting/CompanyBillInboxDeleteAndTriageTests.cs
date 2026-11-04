@@ -66,7 +66,7 @@ public class CompanyBillInboxDeleteAndTriageTests : TestDataTestBase
         var msg = new EmailMessage
         {
             Id = Guid.NewGuid().ToString(),
-            EmployeeId = CompanyBillInboxConstants.SystemEmployeeId,
+            AccountId = CompanyBillInboxConstants.SystemEmployeeId,
             Subject = "Invoice from Acme",
             FromAddress = "billing@acme.com",
             FromName = "Acme Corp",
@@ -103,7 +103,7 @@ public class CompanyBillInboxDeleteAndTriageTests : TestDataTestBase
         // Assert
         Assert.True(result.Success);
         Assert.Null(_db.EmailMessages.GetById(msg.Id));
-        Assert.DoesNotContain(_db.EmailMessages.GetAllForEmployee(CompanyBillInboxConstants.SystemEmployeeId), m => m.Id == msg.Id);
+        Assert.DoesNotContain(_db.EmailMessages.GetAllForAccount(CompanyBillInboxConstants.SystemEmployeeId), m => m.Id == msg.Id);
         Assert.Null(_db.Bills.GetById(draft1.Id));
         Assert.Null(_db.Bills.GetById(draft2.Id));
     }
@@ -115,7 +115,7 @@ public class CompanyBillInboxDeleteAndTriageTests : TestDataTestBase
         var msg = new EmailMessage
         {
             Id = Guid.NewGuid().ToString(),
-            EmployeeId = CompanyBillInboxConstants.SystemEmployeeId,
+            AccountId = CompanyBillInboxConstants.SystemEmployeeId,
             Subject = "Approved Invoice & Second Draft",
             FromAddress = "billing@supplier.com",
             FromName = "Supplier Inc",
@@ -167,7 +167,7 @@ public class CompanyBillInboxDeleteAndTriageTests : TestDataTestBase
         var msg = new EmailMessage
         {
             Id = Guid.NewGuid().ToString(),
-            EmployeeId = CompanyBillInboxConstants.SystemEmployeeId,
+            AccountId = CompanyBillInboxConstants.SystemEmployeeId,
             Subject = "Spam Invoice",
             FromAddress = "spammer@junk-invoices.com",
             FromName = "Junk Invoices",
@@ -214,7 +214,7 @@ public class CompanyBillInboxDeleteAndTriageTests : TestDataTestBase
         var msg = new EmailMessage
         {
             Id = Guid.NewGuid().ToString(),
-            EmployeeId = CompanyBillInboxConstants.SystemEmployeeId,
+            AccountId = CompanyBillInboxConstants.SystemEmployeeId,
             Subject = "Monthly Server Invoice",
             FromAddress = "billing@cloudhost.com",
             FromName = "CloudHost",
@@ -258,7 +258,7 @@ public class CompanyBillInboxDeleteAndTriageTests : TestDataTestBase
         var msg = new EmailMessage
         {
             Id = Guid.NewGuid().ToString(),
-            EmployeeId = CompanyBillInboxConstants.SystemEmployeeId,
+            AccountId = CompanyBillInboxConstants.SystemEmployeeId,
             Subject = "Multiple Invoices in Email",
             FromAddress = "billing@supplier.com",
             FromName = "Supplier Inc",
@@ -317,7 +317,7 @@ public class CompanyBillInboxDeleteAndTriageTests : TestDataTestBase
         var msg = new EmailMessage
         {
             Id = Guid.NewGuid().ToString(),
-            EmployeeId = CompanyBillInboxConstants.SystemEmployeeId,
+            AccountId = CompanyBillInboxConstants.SystemEmployeeId,
             Subject = "Invalid invoice flyer",
             FromAddress = "flyers@marketing.com",
             FromName = "Flyer Marketing",
@@ -366,7 +366,7 @@ public class CompanyBillInboxDeleteAndTriageTests : TestDataTestBase
         var msg = new EmailMessage
         {
             Id = Guid.NewGuid().ToString(),
-            EmployeeId = CompanyBillInboxConstants.SystemEmployeeId,
+            AccountId = CompanyBillInboxConstants.SystemEmployeeId,
             Subject = "Two Invoices in Email",
             FromAddress = "billing@supplier.com",
             FromName = "Supplier Inc",
@@ -430,7 +430,7 @@ public class CompanyBillInboxDeleteAndTriageTests : TestDataTestBase
         var msg = new EmailMessage
         {
             Id = Guid.NewGuid().ToString(),
-            EmployeeId = CompanyBillInboxConstants.SystemEmployeeId,
+            AccountId = CompanyBillInboxConstants.SystemEmployeeId,
             Subject = "Duplicate bill from Hydro",
             FromAddress = "facturation@hydro.qc.ca",
             FromName = "Hydro-Quebec",
@@ -501,7 +501,7 @@ public class CompanyBillInboxDeleteAndTriageTests : TestDataTestBase
         var msg = new EmailMessage
         {
             Id = Guid.NewGuid().ToString(),
-            EmployeeId = CompanyBillInboxConstants.SystemEmployeeId,
+            AccountId = CompanyBillInboxConstants.SystemEmployeeId,
             Subject = "Second invoice on PO",
             FromAddress = "billing@supplier.com",
             BillingStatus = CompanyBillInboxConstants.BillingStatus.AutoDrafted
@@ -549,7 +549,7 @@ public class CompanyBillInboxDeleteAndTriageTests : TestDataTestBase
         var msg = new EmailMessage
         {
             Id = Guid.NewGuid().ToString(),
-            EmployeeId = CompanyBillInboxConstants.SystemEmployeeId,
+            AccountId = CompanyBillInboxConstants.SystemEmployeeId,
             Subject = "Invoice",
             FromAddress = "billing@acme.com",
             BillingStatus = CompanyBillInboxConstants.BillingStatus.Approved
@@ -579,7 +579,7 @@ public class CompanyBillInboxDeleteAndTriageTests : TestDataTestBase
         var msg = new EmailMessage
         {
             Id = Guid.NewGuid().ToString(),
-            EmployeeId = CompanyBillInboxConstants.SystemEmployeeId,
+            AccountId = CompanyBillInboxConstants.SystemEmployeeId,
             Subject = "Invoice #INV-999 for order",
             FromAddress = "invoicing@acme.com",
             FromName = "Acme Supplies Inc",
@@ -620,7 +620,7 @@ public class CompanyBillInboxDeleteAndTriageTests : TestDataTestBase
         var msg = new EmailMessage
         {
             Id = Guid.NewGuid().ToString(),
-            EmployeeId = CompanyBillInboxConstants.SystemEmployeeId,
+            AccountId = CompanyBillInboxConstants.SystemEmployeeId,
             Subject = "Your bill is attached",
             FromAddress = "billing@supplier.com",
             FromName = "Supplier Co",
@@ -676,7 +676,7 @@ public class CompanyBillInboxDeleteAndTriageTests : TestDataTestBase
         var msg = new EmailMessage
         {
             Id = Guid.NewGuid().ToString(),
-            EmployeeId = CompanyBillInboxConstants.SystemEmployeeId,
+            AccountId = CompanyBillInboxConstants.SystemEmployeeId,
             Subject = "Text only reminder",
             FromAddress = "billing@supplier.com",
             FromName = "Supplier Co",
@@ -703,7 +703,7 @@ public class CompanyBillInboxDeleteAndTriageTests : TestDataTestBase
         var msg = new EmailMessage
         {
             Id = Guid.NewGuid().ToString(),
-            EmployeeId = CompanyBillInboxConstants.SystemEmployeeId,
+            AccountId = CompanyBillInboxConstants.SystemEmployeeId,
             Subject = "Test",
             FromAddress = "test@example.com",
             BillingStatus = CompanyBillInboxConstants.BillingStatus.Unprocessed
@@ -728,7 +728,7 @@ public class CompanyBillInboxDeleteAndTriageTests : TestDataTestBase
         var msg = new EmailMessage
         {
             Id = Guid.NewGuid().ToString(),
-            EmployeeId = CompanyBillInboxConstants.SystemEmployeeId,
+            AccountId = CompanyBillInboxConstants.SystemEmployeeId,
             Subject = "Monthly Statement of Account",
             FromAddress = "billing@vendor.com",
             BillingStatus = CompanyBillInboxConstants.BillingStatus.Statement
@@ -762,7 +762,7 @@ public class CompanyBillInboxDeleteAndTriageTests : TestDataTestBase
         var msg = new EmailMessage
         {
             Id = Guid.NewGuid().ToString(),
-            EmployeeId = CompanyBillInboxConstants.SystemEmployeeId,
+            AccountId = CompanyBillInboxConstants.SystemEmployeeId,
             Subject = "Payment Receipt #12345",
             FromAddress = "billing@vendor.com",
             BillingStatus = CompanyBillInboxConstants.BillingStatus.Receipt

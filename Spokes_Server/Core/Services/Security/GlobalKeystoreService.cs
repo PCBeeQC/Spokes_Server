@@ -66,5 +66,10 @@ public class GlobalKeystoreService
     /// Forgets the user's private key from memory.
     /// </summary>
     public void LockVault(string employeeId)
-        => _unlockedPrivateKeys.TryRemove(employeeId, out _);
+    {
+        if (!string.IsNullOrEmpty(employeeId))
+        {
+            _unlockedPrivateKeys.TryRemove(employeeId, out _);
+        }
+    }
 }

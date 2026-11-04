@@ -999,5 +999,176 @@ namespace Spokes_Server.Tests.Core.Services.Communication.Voice;
             Assert.DoesNotContain("user2", _service.RemoteScreenAudioParticipants);
             Assert.DoesNotContain("user2", _service.MutedRemoteScreenAudioParticipants);
         }
+
+        [Fact]
+        public async Task OnLocalHardwareMuteChanged_True_SetsHardwareAndEffectiveMuteAndSyncsChannel()
+        {
+            await ConnectVoiceAsync("token", "url", "ch1", "user1");
+            _service.OnActiveSpeakersChanged(new[] { "user1" });
+            Assert.Contains("user1", _service.ActiveSpeakers);
+
+            _service.OnLocalHardwareMuteChanged(true);
+
+            Assert.True(_service.IsHardwareMuted);
+            Assert.False(_service.IsSoftwareMuted);
+            Assert.True(_service.IsMuted);
+            Assert.DoesNotContain("user1", _service.ActiveSpeakers);
+            Assert.Contains("user1", _service.MutedParticipants);
+            Assert.Contains("user1", _chatState.GetMutedUsers("ch1"));
+        }
+
+        [Fact]
+        public async Task OnLocalHardwareMuteChanged_False_ClearsMuteWhenNotSoftwareMuted_PreservesMuteWhenSoftwareMuted()
+        {
+            await ConnectVoiceAsync("token", "url", "ch1", "user1");
+
+            // Case 1: Only hardware-muted -> lowering headset boom unmutes cleanly
+            _service.OnLocalHardwareMuteChanged(true);
+            Assert.True(_service.IsMuted);
+
+            _service.OnLocalHardwareMuteChanged(false);
+            Assert.False(_service.IsHardwareMuted);
+            Assert.False(_service.IsSoftwareMuted);
+            Assert.False(_service.IsMuted);
+            Assert.DoesNotContain("user1", _service.MutedParticipants);
+            Assert.DoesNotContain("user1", _chatState.GetMutedUsers("ch1"));
+
+            // Case 2: Both software-muted and hardware-muted -> lowering boom preserves software mute
+            await _service.ToggleMuteAsync();
+            _service.OnLocalHardwareMuteChanged(true);
+            Assert.True(_service.IsSoftwareMuted);
+            Assert.True(_service.IsHardwareMuted);
+            Assert.True(_service.IsMuted);
+
+            _service.OnLocalHardwareMuteChanged(false);
+            Assert.False(_service.IsHardwareMuted);
+            Assert.True(_service.IsSoftwareMuted);
+            Assert.True(_service.IsMuted);
+            Assert.Contains("user1", _service.MutedParticipants);
+            Assert.Contains("user1", _chatState.GetMutedUsers("ch1"));
+        }
+
+        [Fact]
+        public async Task ToggleMuteAsync_WhileHardwareMuted_FiresOnHardwareMuteBlockedUnmuteAndShowsWarningToast()
+        {
+            await ConnectVoiceAsync("token", "url", "ch1", "user1");
+            _service.OnLocalHardwareMuteChanged(true);
+            Assert.True(_service.IsHardwareMuted);
+            Assert.True(_service.IsMuted);
+
+            int blockedEventCount = 0;
+            _service.OnHardwareMuteBlockedUnmute += () => blockedEventCount++;
+
+            // Clicking Unmute while hardware boom is flipped up keeps IsMuted == true and warns user
+            await _service.ToggleMuteAsync();
+
+            Assert.True(_service.IsHardwareMuted);
+            Assert.False(_service.IsSoftwareMuted);
+            Assert.True(_service.IsMuted);
+            Assert.Equal(1, blockedEventCount);
+            _snackbarMock.Verify(
+                x => x.Add("Microphone is muted by hardware switch", Severity.Warning, It.IsAny<Action<SnackbarOptions>>(), It.IsAny<string>()),
+                Times.Once);
+        }
+
+        [Fact]
+        public async Task RequestExternalDisconnect_DisconnectsActiveCallCleanly()
+        {
+            await ConnectVoiceAsync("token", "url", "ch1", "user1");
+            Assert.True(_service.IsInVoiceCall);
+
+            await _service.RequestExternalDisconnect();
+
+            Assert.False(_service.IsInVoiceCall);
+            Assert.DoesNotContain("user1", _chatState.GetVoiceParticipants("ch1"));
+            _voiceModuleMock.Verify(x => x.InvokeAsync<IJSVoidResult>("disconnectFromVoice", It.IsAny<object[]>()), Times.Once);
+        }
+
+        [Fact]
+        public async Task SetNoiseSuppressionAsync_WhileConnectedAndUnmuted_CallsReinitializeMicrophoneWithoutMuteFlicker()
+        {
+            await ConnectVoiceAsync("token", "url", "ch1", "user1", 64, "webrtc");
+            _voiceModuleMock.Invocations.Clear();
+
+            await _service.SetNoiseSuppressionAsync("deepfilternet");
+
+            Assert.Equal("deepfilternet", _service.CurrentNoiseSuppression);
+            Assert.False(_service.IsMuted);
+            _voiceModuleMock.Verify(x => x.InvokeAsync<IJSVoidResult>("setNoiseSuppressionType", It.Is<object[]>(args => (string)args[0] == "deepfilternet")), Times.Once);
+            _voiceModuleMock.Verify(x => x.InvokeAsync<IJSVoidResult>("reinitializeMicrophone", It.IsAny<object[]>()), Times.Once);
+            _voiceModuleMock.Verify(x => x.InvokeAsync<IJSVoidResult>("setMicrophoneEnabled", It.IsAny<object[]>()), Times.Never);
+        }
+
+        [Fact]
+        public async Task RequestCameraCompanionToken_WhenConnected_ReturnsCompanionJwt()
+        {
+            _voiceChannelServiceMock
+                .Setup(x => x.GenerateCameraCompanionToken("ch1", "user1", It.IsAny<string>(), It.IsAny<string>()))
+                .Returns("companion-jwt-token");
+
+            await ConnectVoiceAsync("token", "url", "ch1", "user1");
+
+            var companionToken = _service.RequestCameraCompanionToken();
+            Assert.Equal("companion-jwt-token", companionToken);
+        }
+
+        [Fact]
+        public void RequestCameraCompanionToken_WhenDisconnected_ReturnsEmptyString()
+        {
+            var companionToken = _service.RequestCameraCompanionToken();
+            Assert.Equal(string.Empty, companionToken);
+        }
+
+        [Fact]
+        public async Task SyntheticParticipantFiltering_ExcludesCamCompanionAndBotIdentities()
+        {
+            await ConnectVoiceAsync("token", "url", "ch1", "user1");
+
+            _service.OnRoomConnected(new[] { "user2", "user2:cam", "bot:room1" });
+            Assert.Contains("user2", _service.CallParticipants);
+            Assert.DoesNotContain("user2:cam", _service.CallParticipants);
+            Assert.DoesNotContain("bot:room1", _service.CallParticipants);
+
+            _service.OnParticipantConnected("user3:cam");
+            Assert.DoesNotContain("user3:cam", _service.CallParticipants);
+
+            _service.OnActiveSpeakersChanged(new[] { "user2", "user2:cam", "bot:room1" });
+            Assert.Contains("user2", _service.ActiveSpeakers);
+            Assert.DoesNotContain("user2:cam", _service.ActiveSpeakers);
+            Assert.DoesNotContain("bot:room1", _service.ActiveSpeakers);
+        }
+
+        [Fact]
+        public async Task ConnectAsync_WhenJsReturnsFalse_ResetsStateAndDisconnectsJsRoom()
+        {
+            _voiceModuleMock.Setup(x => x.InvokeAsync<bool>("connectToVoice", It.IsAny<object[]>()))
+                .Returns(new ValueTask<bool>(false));
+
+            await ConnectVoiceAsync("token", "url", "ch1", "user1");
+
+            Assert.False(_service.IsInVoiceCall);
+            Assert.False(_service.IsConnecting);
+            Assert.Null(_service.CurrentChannelId);
+            Assert.Null(_service.CurrentUserId);
+            Assert.Empty(_service.CallParticipants);
+            _voiceModuleMock.Verify(x => x.InvokeAsync<IJSVoidResult>("disconnectFromVoice", It.IsAny<object[]>()), Times.Once);
+        }
+
+        [Fact]
+        public async Task UpdateVideoSettingsAsync_WhenVideoOn_CallsUpdateCameraSettingsInPlace()
+        {
+            await ConnectVoiceAsync("token", "url", "ch1", "user1");
+            await _service.ToggleVideoAsync("Auto", 30, "cam1");
+            Assert.True(_service.IsVideoOn);
+
+            await _service.UpdateVideoSettingsAsync("1080p", 60, "cam1");
+
+            Assert.True(_service.IsVideoOn);
+            _voiceModuleMock.Verify(
+                x => x.InvokeAsync<IJSVoidResult>(
+                    "updateCameraSettings",
+                    It.Is<object[]>(args => (string)args[0] == "1080p" && (int)args[1] == 60 && (string)args[2] == "cam1")),
+                Times.Once);
+        }
     }
 

@@ -1,27 +1,52 @@
 @* 
     ParticipantVideoSlot — Render-once container for JS-managed LiveKit video elements.
     
-    After the first render places the <div id="participant-video-{pId}"> in the DOM,
+    After the first render places the <video> elements in the DOM,
     ShouldRender() permanently returns false. This prevents Blazor's diff algorithm
-    from stripping <video> elements injected by voiceInterop.js attachTrack().
+    from stripping <video> streams attached by voiceInterop.js attachTrack().
 *@
 
+<video id="@($"participant-screen-{ParticipantId}")"
+       class="livekit-screenshare"
+       autoplay playsinline webkit-playsinline muted disablepictureinpicture
+       style="position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+              object-fit: contain; background: #000; z-index: 2; opacity: 0; pointer-events: none; transition: opacity 0.3s ease;
+              transform: translateZ(0); will-change: transform;">
+</video>
 <video id="@($"participant-video-{ParticipantId}")"
-       autoplay playsinline webkit-playsinline muted
+       class="livekit-camera"
+       autoplay playsinline webkit-playsinline muted disablepictureinpicture
        style="position: absolute; top: 0; left: 0; width: 100%; height: 100%;
               object-fit: contain; background: #000; z-index: 1; opacity: 0; pointer-events: none; transition: opacity 0.3s ease;
               transform: translateZ(0); will-change: transform;">
 </video>
 
+@using Spokes_Server.Core.Services.Communication.Voice
+
 @code {
     [Parameter] public string ParticipantId { get; set; } = "";
+    [Inject] public IVoiceDeviceService? VoiceDeviceService { get; set; }
 
     private bool _rendered;
 
     protected override bool ShouldRender() => !_rendered;
 
-    protected override void OnAfterRender(bool firstRender)
+    protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (firstRender) _rendered = true;
+        if (firstRender)
+        {
+            _rendered = true;
+            if (VoiceDeviceService != null)
+            {
+                try
+                {
+                    await VoiceDeviceService.ReattachTracksAsync();
+                }
+                catch
+                {
+                    // Ignore transient JS interop disconnects on mount
+                }
+            }
+        }
     }
 }

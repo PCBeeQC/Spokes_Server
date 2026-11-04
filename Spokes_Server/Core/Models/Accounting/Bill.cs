@@ -89,5 +89,7 @@ public class BillLineItem
     public string Description { get; set; } = string.Empty;
     public decimal Quantity { get; set; } = 1;
     public decimal UnitPrice { get; set; } = 0;
+    public string? GlAccountCode { get; set; }
+    public string? SageItemCode { get; set; }
     public decimal Total => Quantity * UnitPrice;
 }

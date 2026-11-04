@@ -1,0 +1,16 @@
+<div class="scroll-to-bottom-anchor">
+    <div class="scroll-to-bottom-wrapper @(Visible ? "visible" : "")"
+         aria-hidden="@(Visible ? "false" : "true")">
+        <MudFab Color="Color.Primary"
+                StartIcon="@Icons.Material.Filled.ArrowDownward"
+                Size="Size.Small"
+                OnClick="OnClick"
+                tabindex="@(Visible ? 0 : -1)"
+                aria-label="@Loc["Scroll to bottom"]" />
+    </div>
+</div>
+
+@code {
+    [Parameter] public bool Visible { get; set; }
+    [Parameter] public EventCallback OnClick { get; set; }
+}

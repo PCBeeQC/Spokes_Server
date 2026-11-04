@@ -1,5 +1,7 @@
 @using Spokes_Server.Core.Constants
+@using Spokes_Server.Core.Models.HR
 @inject Database Db
+@inject UserService UserService
 
 <MudDialog>
     <DialogContent>
@@ -25,10 +27,12 @@
                                     <div class="d-flex flex-column gap-1 align-start">
                                         @foreach (var perm in category.Value)
                                         {
+                                            bool callerCanGrant = _currentUserIsAdmin || _callerPermissions.Contains(perm);
                                             <MudTooltip Text="@AppPermissions.GetDescription(perm)" Delay="300" Placement="Placement.Top">
                                                 <MudCheckBox T="bool" Value="@HasPerm(perm)"
                                                              ValueChanged="@((v) => TogglePerm(perm, v))" Label="@GetShortPermName(category.Key, perm)" Dense="true"
-                                                             Color="Color.Primary" />
+                                                             Color="Color.Primary"
+                                                             Disabled="@(!callerCanGrant)" />
                                             </MudTooltip>
                                         }
                                     </div>
@@ -53,10 +57,18 @@
     private MudForm form = default!;
     private bool success;
     private bool IsFriendEdition = false;
+    private Employee? _currentEmployee;
+    private bool _currentUserIsAdmin;
+    private HashSet<string> _callerPermissions = new(StringComparer.OrdinalIgnoreCase);
+    private List<string> _initialPermissions = [];
 
-    protected override void OnInitialized()
+    protected override async Task OnInitializedAsync()
     {
         IsFriendEdition = Db.CompanyProfile.Get()?.Edition == "Family";
+        _currentEmployee = await UserService.GetEmployeeAsync();
+        _currentUserIsAdmin = _currentEmployee?.IsAdmin ?? false;
+        _callerPermissions = UserService.GetCallerEffectivePermissions(_currentEmployee);
+        _initialPermissions = Group.Permissions?.ToList() ?? [];
     }
 
     private void Close() => MudDialog.Cancel();
@@ -66,6 +78,18 @@
         await form.ValidateAsync();
         if (success)
         {
+            if (!_currentUserIsAdmin)
+            {
+                var allowed = UserService.FilterAllowedPermissions(_currentEmployee, Group.Permissions);
+                foreach (var existing in _initialPermissions)
+                {
+                    if (Group.Permissions.Contains(existing) && !allowed.Contains(existing, StringComparer.OrdinalIgnoreCase))
+                    {
+                        allowed.Add(existing);
+                    }
+                }
+                Group.Permissions = allowed;
+            }
             MudDialog.Close(DialogResult.Ok(Group));
         }
     }
@@ -79,6 +103,9 @@
 
     private void TogglePerm(string p, bool hasIt)
     {
+        if (!_currentUserIsAdmin && !_callerPermissions.Contains(p))
+            return;
+
         if (hasIt && !Group.Permissions.Contains(p))
             Group.Permissions.Add(p);
         else if (!hasIt && Group.Permissions.Contains(p))
@@ -87,7 +114,7 @@
 
     private static readonly HashSet<string> BusinessCategories = new(StringComparer.OrdinalIgnoreCase)
     {
-        "Projects", "Email", "Address Book", "Finance",
+        "Email", "Projects", "Address Book", "Finance",
         "Purchases", "Timesheets", "Business Documents", "My Week"
     };
 

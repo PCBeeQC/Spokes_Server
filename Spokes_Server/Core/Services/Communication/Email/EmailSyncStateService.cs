@@ -5,29 +5,35 @@ using Spokes_Server.Core.Models.Communication;
 namespace Spokes_Server.Core.Services.Communication.Email;
 
 /// <summary>
-/// Singleton service to track the real-time background sync state of an employee's email.
-/// Components like the EmailSidebar can subscribe to OnStateChanged to update the UI.
+/// Singleton service to track real-time background sync state per EmailAccount.
 /// </summary>
 public class EmailSyncStateService
 {
-    private readonly ConcurrentDictionary<string, string> _employeeStates = new();
+    private readonly ConcurrentDictionary<string, string> _accountStates = new();
 
     public event Action<string>? OnStateChanged;
     public event Action<string, EmailMessage>? OnNewEmailReceived;
     public event Action<string>? OnUnreadCountChanged;
 
-    public void NotifyNewEmail(string employeeId, EmailMessage message)
-        => OnNewEmailReceived?.Invoke(employeeId, message);
+    public void NotifyNewEmail(string accountId, EmailMessage message)
+        => OnNewEmailReceived?.Invoke(accountId, message);
 
-    public void NotifyUnreadCountChanged(string employeeId)
-        => OnUnreadCountChanged?.Invoke(employeeId);
+    public void NotifyUnreadCountChanged(string accountId)
+        => OnUnreadCountChanged?.Invoke(accountId);
 
-    public void SetState(string employeeId, string state)
+    public void SetState(string accountId, string state)
     {
-        _employeeStates[employeeId] = state;
-        OnStateChanged?.Invoke(employeeId);
+        _accountStates[accountId] = state;
+        OnStateChanged?.Invoke(accountId);
     }
 
-    public string GetState(string employeeId)
-        => _employeeStates.TryGetValue(employeeId, out var state) ? state : "Idle";
+    public string GetState(string accountId)
+        => _accountStates.TryGetValue(accountId, out var state) ? state : "Idle";
+
+    public void RemoveAccount(string accountId)
+    {
+        if (string.IsNullOrWhiteSpace(accountId)) return;
+        _accountStates.TryRemove(accountId, out _);
+        NotifyUnreadCountChanged(accountId);
+    }
 }

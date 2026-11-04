@@ -230,8 +230,17 @@
 
             if (template != null)
             {
-                newQuote.TermsAndConditions = template.DefaultTermsAndConditions;
+                if (!string.IsNullOrEmpty(template.DefaultTermsAndConditionsId))
+                {
+                    var terms = Db.TermsAndConditions.GetById(template.DefaultTermsAndConditionsId);
+                    newQuote.TermsAndConditions = terms?.Content ?? template.DefaultTermsAndConditions;
+                }
+                else
+                {
+                    newQuote.TermsAndConditions = template.DefaultTermsAndConditions;
+                }
                 newQuote.TaxRate = template.TaxRate;
+                newQuote.TermsStartOnNewPage = template.TermsStartOnNewPage;
             }
         }
 

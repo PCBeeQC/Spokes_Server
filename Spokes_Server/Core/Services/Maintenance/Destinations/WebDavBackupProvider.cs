@@ -5,11 +5,13 @@ using System.Linq;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text;
+using System.Xml;
 using System.Xml.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using Spokes_Server.Core.Data.Repositories.Core;
+using Spokes_Server.Core.Services.Security;
 
 namespace Spokes_Server.Core.Services.Maintenance.Destinations;
 
@@ -17,6 +19,7 @@ public class WebDavBackupProvider : IBackupDestinationProvider
 {
     private readonly CompanyProfileRepository _profiles;
     private readonly IHttpClientFactory _httpClientFactory;
+    private readonly EncryptionService _encryptionService;
     private readonly ILogger<WebDavBackupProvider>? _logger;
 
     public BackupDestinationType DestinationType => BackupDestinationType.WebDav;
@@ -24,20 +27,95 @@ public class WebDavBackupProvider : IBackupDestinationProvider
     public WebDavBackupProvider(
         CompanyProfileRepository profiles,
         IHttpClientFactory httpClientFactory,
-        ILogger<WebDavBackupProvider>? logger = null)
+        ILogger<WebDavBackupProvider>? logger = null,
+        EncryptionService? encryptionService = null)
     {
         _profiles = profiles;
         _httpClientFactory = httpClientFactory;
+        _encryptionService = encryptionService ?? profiles?.EncryptionService ?? new EncryptionService();
         _logger = logger;
     }
 
-    private (HttpClient client, string baseUrl) CreateClient()
+    internal static bool TryParseConfiguredBaseUri(string? serverUrl, out Uri baseUri)
+    {
+        baseUri = null!;
+        if (string.IsNullOrWhiteSpace(serverUrl))
+        {
+            return false;
+        }
+
+        var normalized = serverUrl.Trim().TrimEnd('/') + "/";
+        if (!Uri.TryCreate(normalized, UriKind.Absolute, out var parsed) || !parsed.IsAbsoluteUri)
+        {
+            return false;
+        }
+
+        if (!string.Equals(parsed.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(parsed.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        if (!string.IsNullOrEmpty(parsed.UserInfo))
+        {
+            return false;
+        }
+
+        baseUri = parsed;
+        return true;
+    }
+
+    internal static bool TryResolveSameOriginUri(Uri baseUri, string? hrefOrUrl, out Uri resolvedUri)
+    {
+        resolvedUri = null!;
+        if (baseUri == null || !baseUri.IsAbsoluteUri || string.IsNullOrWhiteSpace(hrefOrUrl))
+        {
+            return false;
+        }
+
+        var trimmed = hrefOrUrl.Trim();
+        if (trimmed.Contains('\\'))
+        {
+            return false;
+        }
+
+        if (!Uri.TryCreate(baseUri, trimmed, out var candidate) || !candidate.IsAbsoluteUri)
+        {
+            return false;
+        }
+
+        if (!string.Equals(candidate.Scheme, baseUri.Scheme, StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(candidate.Host, baseUri.Host, StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(candidate.IdnHost, baseUri.IdnHost, StringComparison.OrdinalIgnoreCase) ||
+            candidate.Port != baseUri.Port ||
+            !string.IsNullOrEmpty(candidate.UserInfo))
+        {
+            return false;
+        }
+
+        resolvedUri = candidate;
+        return true;
+    }
+
+    private string ResolveCredential(string? value) =>
+        string.IsNullOrEmpty(value)
+            ? string.Empty
+            : (_encryptionService.TryDecrypt(value, out var decrypted) ? decrypted : value);
+
+    private (HttpClient client, Uri baseUri) CreateClient()
     {
         var config = _profiles.Get()?.Backup.WebDav ?? throw new InvalidOperationException("WebDAV is not configured.");
+        if (!TryParseConfiguredBaseUri(config.ServerUrl, out var baseUri))
+        {
+            throw new InvalidOperationException("WebDAV Server URL must be a valid HTTP or HTTPS URL.");
+        }
+
         var client = _httpClientFactory.CreateClient("WebDavBackup");
-        var authHeader = Convert.ToBase64String(Encoding.UTF8.GetBytes($"{config.Username}:{config.Password}"));
+        var username = ResolveCredential(config.Username);
+        var password = ResolveCredential(config.Password);
+        var authHeader = Convert.ToBase64String(Encoding.UTF8.GetBytes($"{username}:{password}"));
         client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", authHeader);
-        return (client, config.ServerUrl.TrimEnd('/') + "/");
+        return (client, baseUri);
     }
 
     public async Task<BackupUploadResult> UploadAsync(
@@ -54,8 +132,17 @@ public class WebDavBackupProvider : IBackupDestinationProvider
 
         try
         {
-            var (client, baseUrl) = CreateClient();
-            var targetUrl = baseUrl + remoteFileName;
+            var safeFileName = Path.GetFileName(remoteFileName);
+            if (string.IsNullOrWhiteSpace(safeFileName))
+            {
+                return BackupUploadResult.Failed("Remote backup file name cannot be empty.");
+            }
+
+            var (client, baseUri) = CreateClient();
+            if (!TryResolveSameOriginUri(baseUri, Uri.EscapeDataString(safeFileName), out var targetUri))
+            {
+                return BackupUploadResult.Failed("Resolved WebDAV upload URL did not match the configured server origin.");
+            }
 
             var fileInfo = new FileInfo(localBackupPath);
             progress?.Report(new BackupUploadProgress(0, fileInfo.Length, 0));
@@ -65,7 +152,7 @@ public class WebDavBackupProvider : IBackupDestinationProvider
             using var content = new StreamContent(reportingStream, 81920);
             content.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
 
-            using var response = await client.PutAsync(targetUrl, content, cancellationToken);
+            using var response = await client.PutAsync(targetUri, content, cancellationToken);
             if (!response.IsSuccessStatusCode)
             {
                 var err = await response.Content.ReadAsStringAsync(cancellationToken);
@@ -73,8 +160,9 @@ public class WebDavBackupProvider : IBackupDestinationProvider
                 return BackupUploadResult.Failed($"HTTP {(int)response.StatusCode} {response.ReasonPhrase}");
             }
 
+            var targetUrl = targetUri.AbsoluteUri;
             progress?.Report(new BackupUploadProgress(fileInfo.Length, fileInfo.Length, 100.0));
-            _logger?.LogInformation("[WebDavBackup] Successfully uploaded {File} to WebDAV target {Url}", remoteFileName, targetUrl);
+            _logger?.LogInformation("[WebDavBackup] Successfully uploaded {File} to WebDAV target {Url}", safeFileName, targetUrl);
             return BackupUploadResult.Succeeded(targetUrl, fileInfo.Length);
         }
         catch (Exception ex)
@@ -143,8 +231,8 @@ public class WebDavBackupProvider : IBackupDestinationProvider
 
         try
         {
-            var (client, baseUrl) = CreateClient();
-            using var req = new HttpRequestMessage(new HttpMethod("PROPFIND"), baseUrl);
+            var (client, baseUri) = CreateClient();
+            using var req = new HttpRequestMessage(new HttpMethod("PROPFIND"), baseUri);
             req.Headers.Add("Depth", "1");
             req.Content = new StringContent(
                 "<?xml version=\"1.0\" encoding=\"utf-8\" ?><d:propfind xmlns:d=\"DAV:\"><d:prop><d:getcontentlength/><d:getlastmodified/><d:resourcetype/></d:prop></d:propfind>",
@@ -155,18 +243,35 @@ public class WebDavBackupProvider : IBackupDestinationProvider
             if (!res.IsSuccessStatusCode) return new List<RemoteBackupItem>();
 
             var xml = await res.Content.ReadAsStringAsync(cancellationToken);
-            var doc = XDocument.Parse(xml);
+            using var stringReader = new StringReader(xml);
+            using var xmlReader = XmlReader.Create(stringReader, new XmlReaderSettings
+            {
+                DtdProcessing = DtdProcessing.Prohibit,
+                XmlResolver = null
+            });
+            var doc = XDocument.Load(xmlReader);
             XNamespace d = "DAV:";
 
             var items = new List<RemoteBackupItem>();
             foreach (var responseElem in doc.Descendants(d + "response"))
             {
                 var href = responseElem.Element(d + "href")?.Value;
-                if (string.IsNullOrEmpty(href)) continue;
+                if (string.IsNullOrWhiteSpace(href)) continue;
 
-                var fileName = Path.GetFileName(Uri.UnescapeDataString(href.TrimEnd('/')));
+                if (!TryResolveSameOriginUri(baseUri, href, out var resolvedUri))
+                {
+                    _logger?.LogWarning(
+                        "[WebDavBackup] Skipping cross-origin or invalid WebDAV href '{Href}' (expected origin {Origin}).",
+                        href,
+                        baseUri.GetLeftPart(UriPartial.Authority));
+                    continue;
+                }
+
+                var fileName = Path.GetFileName(Uri.UnescapeDataString(resolvedUri.AbsolutePath.TrimEnd('/')));
                 if (!fileName.StartsWith("Spokes_Backup_", StringComparison.OrdinalIgnoreCase)) continue;
-                if (!fileName.EndsWith(".zip", StringComparison.OrdinalIgnoreCase) && !fileName.EndsWith(".spkbackup", StringComparison.OrdinalIgnoreCase)) continue;
+                if (fileName.EndsWith(".tmp.zip", StringComparison.OrdinalIgnoreCase)) continue;
+                if (!fileName.EndsWith(".zip", StringComparison.OrdinalIgnoreCase) &&
+                    !fileName.EndsWith(".spkbackup", StringComparison.OrdinalIgnoreCase)) continue;
 
                 var prop = responseElem.Descendants(d + "prop").FirstOrDefault();
                 long size = 0;
@@ -178,8 +283,7 @@ public class WebDavBackupProvider : IBackupDestinationProvider
                     DateTime.TryParse(prop.Element(d + "getlastmodified")?.Value, out modified);
                 }
 
-                var fullUrl = href.StartsWith("http", StringComparison.OrdinalIgnoreCase) ? href : new Uri(new Uri(baseUrl), href).ToString();
-                items.Add(new RemoteBackupItem(fullUrl, fileName, size, modified.ToUniversalTime(), "WebDAV"));
+                items.Add(new RemoteBackupItem(resolvedUri.AbsoluteUri, fileName, size, modified.ToUniversalTime(), "WebDAV"));
             }
 
             return items.OrderByDescending(i => i.CreatedAtUtc).ToList();
@@ -195,9 +299,23 @@ public class WebDavBackupProvider : IBackupDestinationProvider
     {
         try
         {
-            var (client, _) = CreateClient();
-            var response = await client.GetAsync(remoteFileId, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
-            if (!response.IsSuccessStatusCode) return null;
+            var (client, baseUri) = CreateClient();
+            if (!TryResolveSameOriginUri(baseUri, remoteFileId, out var targetUri))
+            {
+                _logger?.LogWarning(
+                    "[WebDavBackup] Blocked cross-origin or invalid WebDAV download URL '{Url}' (expected origin {Origin}).",
+                    remoteFileId,
+                    baseUri.GetLeftPart(UriPartial.Authority));
+                return null;
+            }
+
+            var response = await client.GetAsync(targetUri, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+            if (!response.IsSuccessStatusCode)
+            {
+                response.Dispose();
+                return null;
+            }
+
             return await response.Content.ReadAsStreamAsync(cancellationToken);
         }
         catch (Exception ex)
@@ -211,9 +329,18 @@ public class WebDavBackupProvider : IBackupDestinationProvider
     {
         try
         {
-            var (client, _) = CreateClient();
-            using var response = await client.DeleteAsync(remoteFileId, cancellationToken);
-            _logger?.LogInformation("[WebDavBackup] Deleted {Url} (Status: {Status})", remoteFileId, response.StatusCode);
+            var (client, baseUri) = CreateClient();
+            if (!TryResolveSameOriginUri(baseUri, remoteFileId, out var targetUri))
+            {
+                _logger?.LogWarning(
+                    "[WebDavBackup] Blocked cross-origin or invalid WebDAV delete URL '{Url}' (expected origin {Origin}).",
+                    remoteFileId,
+                    baseUri.GetLeftPart(UriPartial.Authority));
+                return;
+            }
+
+            using var response = await client.DeleteAsync(targetUri, cancellationToken);
+            _logger?.LogInformation("[WebDavBackup] Deleted {Url} (Status: {Status})", targetUri.AbsoluteUri, response.StatusCode);
         }
         catch (Exception ex)
         {
@@ -252,10 +379,10 @@ public class WebDavBackupProvider : IBackupDestinationProvider
 
         try
         {
-            var (client, baseUrl) = CreateClient();
+            var (client, baseUri) = CreateClient();
 
             // 1. Verify endpoint accessibility
-            using var req = new HttpRequestMessage(new HttpMethod("PROPFIND"), baseUrl);
+            using var req = new HttpRequestMessage(new HttpMethod("PROPFIND"), baseUri);
             req.Headers.Add("Depth", "0");
             using var res = await client.SendAsync(req, cancellationToken);
 
@@ -265,9 +392,13 @@ public class WebDavBackupProvider : IBackupDestinationProvider
             }
 
             // 2. Verify write and delete permissions with a small probe file
-            var probeUrl = baseUrl + $".spokes_probe_{Guid.NewGuid():N}";
+            if (!TryResolveSameOriginUri(baseUri, $".spokes_probe_{Guid.NewGuid():N}", out var probeUri))
+            {
+                return TestConnectionResult.Fail("Failed to construct same-origin probe URL.");
+            }
+
             using var content = new ByteArrayContent(new byte[] { 1 });
-            using var putRes = await client.PutAsync(probeUrl, content, cancellationToken);
+            using var putRes = await client.PutAsync(probeUri, content, cancellationToken);
             if (!putRes.IsSuccessStatusCode)
             {
                 return TestConnectionResult.Fail($"WebDAV connected, but write permission test failed: HTTP {(int)putRes.StatusCode} {putRes.ReasonPhrase}");
@@ -275,7 +406,7 @@ public class WebDavBackupProvider : IBackupDestinationProvider
 
             try
             {
-                using var delRes = await client.DeleteAsync(probeUrl, cancellationToken);
+                using var delRes = await client.DeleteAsync(probeUri, cancellationToken);
             }
             catch (Exception ex)
             {

@@ -1,4 +1,5 @@
 using System;
+using System.IO.Compression;
 using System.Linq;
 using Microsoft.AspNetCore.Components.Server;
 using Microsoft.AspNetCore.Components.Server.Circuits;
@@ -67,7 +68,30 @@ public static class WebUiExtensions
         services.AddResponseCompression(opts =>
         {
             opts.EnableForHttps = true;
-            opts.MimeTypes = ResponseCompressionDefaults.MimeTypes;
+            // .NET 9 MapStaticAssets() serves JS with RFC 9239 "text/javascript", which is omitted
+            // from ResponseCompressionDefaults.MimeTypes ("application/javascript" only).
+            opts.MimeTypes = ResponseCompressionDefaults.MimeTypes.Concat([
+                "text/javascript",
+                "application/x-javascript",
+                "text/ecmascript",
+                "application/ecmascript",
+                "application/manifest+json",
+                "audio/wav",
+                "audio/x-wav",
+                "image/svg+xml",
+                "image/x-icon",
+                "font/ttf",
+                "application/x-font-ttf",
+                "font/otf"
+            ]);
+        });
+        services.Configure<BrotliCompressionProviderOptions>(opts =>
+        {
+            opts.Level = CompressionLevel.Optimal;
+        });
+        services.Configure<GzipCompressionProviderOptions>(opts =>
+        {
+            opts.Level = CompressionLevel.Optimal;
         });
 
         services.AddSignalR(options =>

@@ -5,6 +5,7 @@
 @inject Database Db
 @inject BackupDestinationCoordinator DestinationCoordinator
 @inject LicenseValidationService LicenseValidationService
+@inject Spokes_Server.Core.Services.Security.EncryptionService EncryptionService
 @inject NavigationManager Nav
 @inject ISnackbar Snackbar
 
@@ -201,6 +202,13 @@
                         </MudChip>
                     }
 
+                    else if (hasExistingGDriveSetup)
+                    {
+                        <MudChip T="string" Size="Size.Small" Color="Color.Warning" Variant="Variant.Outlined">
+                            @Loc["Connected (Disabled)"]
+                        </MudChip>
+                    }
+
                     <MudSwitch T="bool" Value="@Profile.Backup.GoogleDrive.IsEnabled"
                                ValueChanged="@((bool v) => ToggleDestination(BackupDestinationType.GoogleDrive, v))"
                                Disabled="@(!isGDrivePassActive && !hasExistingGDriveSetup)"
@@ -254,6 +262,13 @@
                 <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-3 d-block">
                     @Loc["Upload backups directly to your Google Drive. Requires an active Spokes Pass."]
                 </MudText>
+
+                @if (hasExistingGDriveSetup && !Profile.Backup.GoogleDrive.IsEnabled)
+                {
+                    <MudAlert Severity="Severity.Warning" Dense="true" Variant="Variant.Outlined" Class="mb-3">
+                        @Loc["Google Drive is connected, but this backup destination is currently disabled. Enable the switch above to include it in backups."]
+                    </MudAlert>
+                }
 
                 @if (!isGDrivePassActive)
                 {
@@ -333,7 +348,212 @@
             </MudCollapse>
         </MudPaper>
 
-        @* --- 3. S3 / Compatible --- *@
+        @* --- 3. GitHub --- *@
+        <MudPaper Elevation="0" Outlined="true" Class="pa-4 rounded-lg">
+            @{
+                var githubStatus = DestinationCoordinator.GetStatus(BackupDestinationType.GitHub);
+                bool isGitHubOpen = _expanded.GetValueOrDefault(BackupDestinationType.GitHub, false);
+                bool isGitHubConnected = !string.IsNullOrWhiteSpace(Profile.Backup.GitHub.PersonalAccessToken);
+            }
+            <div class="d-flex align-center justify-space-between gap-3 cursor-pointer" @onclick="() => ToggleOpenAsync(BackupDestinationType.GitHub)">
+                <div class="d-flex align-center gap-3">
+                    <MudIcon Icon="@Icons.Custom.Brands.GitHub" Color="@(Profile.Backup.GitHub.IsEnabled ? Color.Primary : Color.Default)" />
+                    <div>
+                        <MudText Typo="Typo.subtitle2" Style="font-weight: 600;">@Loc["GitHub"]</MudText>
+                        <MudText Typo="Typo.caption" Color="Color.Secondary" Class="d-none d-sm-block">
+                            @Loc["Sync individual server data files to a GitHub repository folder so Git tracks file changes."]
+                        </MudText>
+                    </div>
+                </div>
+                <div class="d-flex align-center gap-2" @onclick:stopPropagation="true">
+                    @if (githubStatus.State == RemoteUploadState.Uploading)
+                    {
+                        <MudChip T="string" Size="Size.Small" Color="Color.Info" Variant="Variant.Outlined">
+                            @($"{githubStatus.Percent:F0}%")
+                        </MudChip>
+                    }
+                    else if (githubStatus.State == RemoteUploadState.Success)
+                    {
+                        <MudChip T="string" Size="Size.Small" Color="Color.Success" Variant="Variant.Outlined" Icon="@Icons.Material.Filled.Check">
+                            @Loc["Uploaded"]
+                        </MudChip>
+                    }
+                    else if (githubStatus.State == RemoteUploadState.Failed)
+                    {
+                        <MudChip T="string" Size="Size.Small" Color="Color.Error" Variant="Variant.Outlined" Icon="@Icons.Material.Filled.Error">
+                            @Loc["Upload Failed"]
+                        </MudChip>
+                    }
+                    else if (Profile.Backup.GitHub.IsEnabled)
+                    {
+                        <MudChip T="string" Size="Size.Small" Color="Color.Default" Variant="Variant.Text">
+                            @Loc["Enabled"]
+                        </MudChip>
+                    }
+
+                    else if (isGitHubConnected)
+                    {
+                        <MudChip T="string" Size="Size.Small" Color="Color.Warning" Variant="Variant.Outlined">
+                            @Loc["Connected (Disabled)"]
+                        </MudChip>
+                    }
+
+                    <MudSwitch T="bool" Value="@Profile.Backup.GitHub.IsEnabled"
+                               ValueChanged="@((bool v) => ToggleDestination(BackupDestinationType.GitHub, v))"
+                               Color="Color.Primary" Class="ma-0" />
+                    <MudIconButton Icon="@(isGitHubOpen ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)"
+                                   Size="Size.Small"
+                                   OnClick="() => ToggleOpenAsync(BackupDestinationType.GitHub)" />
+                </div>
+            </div>
+
+            @if (githubStatus.State == RemoteUploadState.Uploading)
+            {
+                <div class="mt-3">
+                    <div class="d-flex justify-space-between mb-1">
+                        <MudText Typo="Typo.caption" Color="Color.Primary">
+                            @Loc["Syncing backup files to GitHub repository..."]
+                        </MudText>
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">
+                            @githubStatus.FormattedProgress
+                        </MudText>
+                    </div>
+                    <MudProgressLinear Color="Color.Primary" Value="@githubStatus.Percent" Rounded="true" Size="Size.Medium" />
+                </div>
+            }
+            else if (githubStatus.State == RemoteUploadState.Success)
+            {
+                <div class="mt-3">
+                    <div class="d-flex justify-space-between align-center mb-1">
+                        <div class="d-flex align-center gap-1">
+                            <MudIcon Icon="@Icons.Material.Filled.CheckCircle" Color="Color.Success" Size="Size.Small" />
+                            <MudText Typo="Typo.caption" Color="Color.Success" Style="font-weight: 600;">
+                                @Loc["Upload complete"]
+                            </MudText>
+                        </div>
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">
+                            @githubStatus.FormattedProgress
+                        </MudText>
+                    </div>
+                    <MudProgressLinear Color="Color.Success" Value="100" Rounded="true" Size="Size.Medium" />
+                </div>
+            }
+            else if (githubStatus.State == RemoteUploadState.Failed && !string.IsNullOrEmpty(githubStatus.ErrorMessage))
+            {
+                <MudAlert Severity="Severity.Error" Dense="true" Class="mt-3">
+                    @Loc["Upload failed:"] @githubStatus.ErrorMessage
+                </MudAlert>
+            }
+
+            <MudCollapse Expanded="@isGitHubOpen">
+                <MudDivider Class="my-3" />
+                <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-3 d-block">
+                    @Loc["Copy all server data files directly into a GitHub repository folder so Git can track individual file changes across commits."]
+                </MudText>
+                <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Dense="true" Class="mb-3">
+                    @Loc["GitHub backups store individual data files directly in the repository for version tracking and external tool access. Files synced to GitHub are not encrypted with the backup archive password, regardless of the backup encryption setting."]
+                </MudAlert>
+
+                @if (isGitHubConnected && !Profile.Backup.GitHub.IsEnabled)
+                {
+                    <MudAlert Severity="Severity.Warning" Dense="true" Variant="Variant.Outlined" Class="mb-3">
+                        @Loc["GitHub is connected, but this backup destination is currently disabled. Enable the switch above to include it in backups."]
+                    </MudAlert>
+                }
+
+                @if (!isGitHubConnected)
+                {
+                    <MudGrid Spacing="3" Class="mt-1">
+                        <MudItem xs="12" sm="8">
+                            <MudTextField ShrinkLabel="true" Variant="Variant.Outlined" Margin="Margin.Dense"
+                                          @bind-Value="_githubTokenInput"
+                                          InputType="InputType.Password"
+                                          Label="@Loc["Personal Access Token (PAT)"]"
+                                          HelperText="@Loc["Requires 'repo' scope (classic) or 'Contents: Read and write' permission (fine-grained)."]" />
+                        </MudItem>
+                        <MudItem xs="12" sm="4" Class="d-flex align-center">
+                            <MudButton Class="mt-n3" Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                                       StartIcon="@Icons.Custom.Brands.GitHub"
+                                       Disabled="@(_isConnectingGitHub || string.IsNullOrWhiteSpace(_githubTokenInput))"
+                                       OnClick="ConnectGitHub">
+                                @if (_isConnectingGitHub)
+                                {
+                                    <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" />
+                                    <span>@Loc["Connecting..."]</span>
+                                }
+                                else
+                                {
+                                    <span>@Loc["Connect GitHub"]</span>
+                                }
+                            </MudButton>
+                        </MudItem>
+                    </MudGrid>
+                }
+
+                <MudGrid Spacing="3" Class="mt-1">
+                    <MudItem xs="12" sm="6">
+                        <MudAutocomplete T="string" ShrinkLabel="true" Variant="Variant.Outlined" Margin="Margin.Dense"
+                                         Value="@Profile.Backup.GitHub.Repository"
+                                         ValueChanged="OnGitHubRepositoryChanged"
+                                         SearchFunc="SearchGitHubRepositories"
+                                         CoerceText="false" CoerceValue="true" ResetValueOnEmptyText="true" Clearable="true" MaxItems="100"
+                                         Label="@Loc["Repository"]"
+                                         Placeholder="owner/repo"
+                                         HelperText="@(_isLoadingGitHubRepos ? Loc["Loading repositories..."].Value : Loc["Select a repository or enter owner/repo"])"
+                                         Adornment="@(isGitHubConnected ? Adornment.End : Adornment.None)"
+                                         AdornmentIcon="@Icons.Material.Filled.Refresh"
+                                         OnAdornmentClick="RefreshGitHubRepositoriesAsync" />
+                    </MudItem>
+                    <MudItem xs="12" sm="6">
+                        <MudAutocomplete T="string" @ref="_githubFolderAutocomplete" ShrinkLabel="true" Variant="Variant.Outlined" Margin="Margin.Dense"
+                                         Value="@Profile.Backup.GitHub.TargetFolder"
+                                         ValueChanged="OnGitHubFolderChanged"
+                                         SearchFunc="SearchGitHubFolders"
+                                         CoerceText="false" CoerceValue="true" ResetValueOnEmptyText="true" Clearable="true" MaxItems="100"
+                                         Label="@Loc["Target Folder in Repository"]"
+                                         HelperText="@(_isLoadingGitHubFolders ? Loc["Loading folders from repository..."].Value : Loc["Select an existing folder or type a new folder path (created automatically)"])" />
+                    </MudItem>
+                </MudGrid>
+
+                <div class="d-flex flex-wrap align-center gap-3 mt-3 pt-2">
+                    @if (isGitHubConnected)
+                    {
+                        <MudChip T="string" Color="Color.Success" Size="Size.Small" Icon="@Icons.Material.Filled.CheckCircle">
+                            @(string.IsNullOrWhiteSpace(Profile.Backup.GitHub.AccountUsername)
+                                ? Loc["Connected to GitHub"].Value
+                                : $"{Loc["Connected to GitHub"].Value} (@{Profile.Backup.GitHub.AccountUsername})")
+                        </MudChip>
+                        <MudButton Variant="Variant.Text" Color="Color.Error" Size="Size.Small"
+                                   OnClick="DisconnectGitHub">
+                            @Loc["Disconnect"]
+                        </MudButton>
+                        <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small"
+                                   StartIcon="@Icons.Material.Filled.CheckCircle"
+                                   Disabled="@_isTestingGitHub"
+                                   OnClick="TestGitHubConnection">
+                            @if (_isTestingGitHub)
+                            {
+                                <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" />
+                                <span>@Loc["Testing..."]</span>
+                            }
+                            else
+                            {
+                                <span>@Loc["Test Connection"]</span>
+                            }
+                        </MudButton>
+                    }
+
+                    @if (!string.IsNullOrEmpty(_githubTestMessage))
+                    {
+                        <MudText Typo="Typo.caption" Color="@(_githubTestSuccess ? Color.Success : Color.Error)">
+                            @_githubTestMessage
+                        </MudText>
+                    }
+                </div>
+            </MudCollapse>
+        </MudPaper>
+
+        @* --- 4. S3 / Compatible --- *@
         <MudPaper Elevation="0" Outlined="true" Class="pa-4 rounded-lg">
             @{
                 var s3Status = DestinationCoordinator.GetStatus(BackupDestinationType.S3);
@@ -766,6 +986,21 @@
                                       @bind-Value="Profile.Backup.Sftp.RemotePath"
                                       Label="@Loc["Remote Directory"]" HelperText="@Loc["e.g. /backups"]" />
                     </MudItem>
+                    <MudItem xs="12" sm="8">
+                        <MudTextField ShrinkLabel="true" Variant="Variant.Outlined" Margin="Margin.Dense"
+                                      @bind-Value="Profile.Backup.Sftp.TrustedHostKeyFingerprint"
+                                      Placeholder="SHA256:..."
+                                      Label="@Loc["Trusted SSH Host Key Fingerprint"]"
+                                      HelperText="@Loc["Pinned automatically on first connection (TOFU), or enter an expected SHA256:... fingerprint manually."]" />
+                    </MudItem>
+                    <MudItem xs="12" sm="4" Class="d-flex align-start pt-4">
+                        <MudButton Variant="Variant.Outlined" Color="Color.Warning" Size="Size.Small"
+                                   StartIcon="@Icons.Material.Filled.RestartAlt"
+                                   Disabled="@(_isTestingSftp || string.IsNullOrWhiteSpace(Profile.Backup.Sftp.TrustedHostKeyFingerprint))"
+                                   OnClick="ResetSftpHostKey">
+                            @Loc["Reset / Re-trust Host Key"]
+                        </MudButton>
+                    </MudItem>
                 </MudGrid>
 
                 <div class="d-flex flex-wrap align-center gap-3 mt-3 pt-2">
@@ -813,6 +1048,18 @@
     private string? _gdriveTestMessage;
     private bool _gdriveTestSuccess;
 
+    private bool _isConnectingGitHub;
+    private bool _isTestingGitHub;
+    private string? _githubTestMessage;
+    private bool _githubTestSuccess;
+    private string _githubTokenInput = string.Empty;
+    private bool _isLoadingGitHubRepos;
+    private bool _isLoadingGitHubFolders;
+    private bool _githubReposLoaded;
+    private List<GitHubRepoItem> _githubRepos = new();
+    private List<string> _githubFolders = new();
+    private MudAutocomplete<string>? _githubFolderAutocomplete;
+
     private bool _isTestingWebDav;
     private string? _webdavTestMessage;
     private bool _webdavTestSuccess;
@@ -827,15 +1074,40 @@
         _expanded[BackupDestinationType.LocalMount] = Profile?.Backup.SecondaryMount.IsEnabled ?? false;
         _expanded[BackupDestinationType.S3] = Profile?.Backup.S3.IsEnabled ?? false;
         _expanded[BackupDestinationType.GoogleDrive] = Profile?.Backup.GoogleDrive.IsEnabled ?? false;
+        _expanded[BackupDestinationType.GitHub] = Profile?.Backup.GitHub.IsEnabled ?? false;
         _expanded[BackupDestinationType.WebDav] = Profile?.Backup.WebDav.IsEnabled ?? false;
         _expanded[BackupDestinationType.Sftp] = Profile?.Backup.Sftp.IsEnabled ?? false;
 
         DestinationCoordinator.OnDestinationStatusChanged += HandleDestinationStatusChanged;
     }
 
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender && _expanded.GetValueOrDefault(BackupDestinationType.GitHub, false) &&
+            !string.IsNullOrWhiteSpace(Profile?.Backup.GitHub.PersonalAccessToken))
+        {
+            await EnsureGitHubMetadataLoadedAsync();
+        }
+    }
+
     private void HandleDestinationStatusChanged(BackupDestinationType type, DestinationUploadStatus status)
     {
+        SyncPersistedBackupSecrets(type);
         _ = InvokeAsync(StateHasChanged);
+    }
+
+    private void SyncPersistedBackupSecrets(BackupDestinationType type)
+    {
+        var persisted = Db.CompanyProfile.Get();
+        if (persisted == null || Profile == null)
+        {
+            return;
+        }
+
+        if (type == BackupDestinationType.Sftp && !string.IsNullOrWhiteSpace(persisted.Backup.Sftp.TrustedHostKeyFingerprint))
+        {
+            Profile.Backup.Sftp.TrustedHostKeyFingerprint = persisted.Backup.Sftp.TrustedHostKeyFingerprint;
+        }
     }
 
     public void Dispose()
@@ -846,6 +1118,16 @@
     private void ToggleOpen(BackupDestinationType type)
     {
         _expanded[type] = !_expanded.GetValueOrDefault(type, false);
+    }
+
+    private async Task ToggleOpenAsync(BackupDestinationType type)
+    {
+        bool newState = !_expanded.GetValueOrDefault(type, false);
+        _expanded[type] = newState;
+        if (type == BackupDestinationType.GitHub && newState && !string.IsNullOrWhiteSpace(Profile.Backup.GitHub.PersonalAccessToken))
+        {
+            await EnsureGitHubMetadataLoadedAsync();
+        }
     }
 
     private async Task ToggleDestination(BackupDestinationType type, bool isEnabled)
@@ -861,6 +1143,9 @@
             case BackupDestinationType.GoogleDrive:
                 Profile.Backup.GoogleDrive.IsEnabled = isEnabled;
                 break;
+            case BackupDestinationType.GitHub:
+                Profile.Backup.GitHub.IsEnabled = isEnabled;
+                break;
             case BackupDestinationType.WebDav:
                 Profile.Backup.WebDav.IsEnabled = isEnabled;
                 break;
@@ -874,6 +1159,11 @@
 
         Db.CompanyProfile.Save(Profile);
         await OnProfileChanged.InvokeAsync();
+
+        if (type == BackupDestinationType.GitHub && isEnabled && !string.IsNullOrWhiteSpace(Profile.Backup.GitHub.PersonalAccessToken))
+        {
+            await EnsureGitHubMetadataLoadedAsync();
+        }
     }
 
     private async Task TestMountConnection()
@@ -971,7 +1261,21 @@
         }
         finally
         {
+            SyncPersistedBackupSecrets(BackupDestinationType.Sftp);
             _isTestingSftp = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task ResetSftpHostKey()
+    {
+        Profile.Backup.Sftp.TrustedHostKeyFingerprint = string.Empty;
+        Db.CompanyProfile.Save(Profile);
+        await OnProfileChanged.InvokeAsync();
+        _sftpTestMessage = null;
+        Snackbar.Add(Loc["Pinned SSH host key cleared. The next SFTP connection will trust and pin the host key."].Value, Severity.Info);
+        if (Profile != null)
+        {
             StateHasChanged();
         }
     }
@@ -1007,5 +1311,230 @@
         _gdriveTestMessage = null;
         Snackbar.Add(Loc["Disconnected from Google Drive."].Value, Severity.Info);
         StateHasChanged();
+    }
+
+    private async Task ConnectGitHub()
+    {
+        if (string.IsNullOrWhiteSpace(_githubTokenInput))
+        {
+            return;
+        }
+
+        _isConnectingGitHub = true;
+        _githubTestMessage = null;
+        StateHasChanged();
+
+        try
+        {
+            var token = _githubTokenInput.Trim();
+            var verify = await DestinationCoordinator.VerifyGitHubTokenAsync(token);
+            if (!verify.Success)
+            {
+                _githubTestSuccess = false;
+                _githubTestMessage = verify.ErrorMessage ?? Loc["GitHub authentication failed."].Value;
+                return;
+            }
+
+            Profile.Backup.GitHub.PersonalAccessToken = token;
+            Profile.Backup.GitHub.IsEnabled = true;
+            _expanded[BackupDestinationType.GitHub] = true;
+            Profile.Backup.GitHub.AccountUsername = verify.Username;
+            _githubTokenInput = string.Empty;
+            Db.CompanyProfile.Save(Profile);
+            await OnProfileChanged.InvokeAsync();
+
+            Snackbar.Add(Loc["GitHub connected successfully!"].Value, Severity.Success);
+            await RefreshGitHubRepositoriesAsync();
+        }
+        finally
+        {
+            _isConnectingGitHub = false;
+            StateHasChanged();
+        }
+    }
+
+    private void DisconnectGitHub()
+    {
+        Profile.Backup.GitHub.PersonalAccessToken = string.Empty;
+        Profile.Backup.GitHub.AccountUsername = null;
+        Profile.Backup.GitHub.IsEnabled = false;
+        _githubRepos.Clear();
+        _githubFolders.Clear();
+        _githubReposLoaded = false;
+        _githubTestMessage = null;
+        _expanded[BackupDestinationType.GitHub] = false;
+        Db.CompanyProfile.Save(Profile);
+        Snackbar.Add(Loc["Disconnected from GitHub."].Value, Severity.Info);
+        StateHasChanged();
+    }
+
+    private async Task EnsureGitHubMetadataLoadedAsync()
+    {
+        if (_githubReposLoaded || _isLoadingGitHubRepos)
+        {
+            return;
+        }
+
+        await RefreshGitHubRepositoriesAsync();
+    }
+
+    private async Task RefreshGitHubRepositoriesAsync()
+    {
+        if (string.IsNullOrWhiteSpace(Profile.Backup.GitHub.PersonalAccessToken))
+        {
+            return;
+        }
+
+        _isLoadingGitHubRepos = true;
+        StateHasChanged();
+
+        try
+        {
+            _githubRepos = await DestinationCoordinator.ListGitHubRepositoriesAsync();
+            _githubReposLoaded = true;
+
+            if (!string.IsNullOrWhiteSpace(Profile.Backup.GitHub.Repository))
+            {
+                await LoadGitHubFoldersAsync(Profile.Backup.GitHub.Repository);
+            }
+        }
+        finally
+        {
+            _isLoadingGitHubRepos = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task LoadGitHubFoldersAsync(string repository)
+    {
+        if (string.IsNullOrWhiteSpace(repository) || string.IsNullOrWhiteSpace(Profile.Backup.GitHub.PersonalAccessToken))
+        {
+            _githubFolders.Clear();
+            return;
+        }
+
+        _isLoadingGitHubFolders = true;
+        StateHasChanged();
+
+        try
+        {
+            _githubFolders = await DestinationCoordinator.ListGitHubFoldersAsync(repository);
+        }
+        finally
+        {
+            _isLoadingGitHubFolders = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task OnGitHubRepositoryChanged(string value)
+    {
+        var newRepo = value ?? string.Empty;
+        bool repoChanged = !string.Equals(Profile.Backup.GitHub.Repository, newRepo, StringComparison.Ordinal);
+
+        Profile.Backup.GitHub.Repository = newRepo;
+        if (repoChanged)
+        {
+            Profile.Backup.GitHub.TargetFolder = string.Empty;
+            _githubFolders.Clear();
+            if (_githubFolderAutocomplete != null)
+            {
+                await _githubFolderAutocomplete.ClearAsync();
+            }
+        }
+
+        Db.CompanyProfile.Save(Profile);
+        await OnProfileChanged.InvokeAsync();
+
+        if (!string.IsNullOrWhiteSpace(Profile.Backup.GitHub.Repository))
+        {
+            await LoadGitHubFoldersAsync(Profile.Backup.GitHub.Repository);
+        }
+        else
+        {
+            _githubFolders.Clear();
+        }
+    }
+
+    private async Task OnGitHubFolderChanged(string value)
+    {
+        Profile.Backup.GitHub.TargetFolder = value ?? string.Empty;
+        Db.CompanyProfile.Save(Profile);
+        await OnProfileChanged.InvokeAsync();
+    }
+
+    private Task<IEnumerable<string>> SearchGitHubRepositories(string value, CancellationToken token)
+    {
+        var allNames = _githubRepos.Select(r => r.FullName).ToList();
+        if (!string.IsNullOrWhiteSpace(Profile.Backup.GitHub.Repository) &&
+            !allNames.Contains(Profile.Backup.GitHub.Repository, StringComparer.OrdinalIgnoreCase))
+        {
+            allNames.Insert(0, Profile.Backup.GitHub.Repository);
+        }
+
+        if (string.IsNullOrWhiteSpace(value) ||
+            string.Equals(value.Trim(), Profile.Backup.GitHub.Repository, StringComparison.OrdinalIgnoreCase))
+        {
+            return Task.FromResult<IEnumerable<string>>(allNames);
+        }
+
+        var filtered = allNames
+            .Where(r => r.Contains(value.Trim(), StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        if (!filtered.Contains(value.Trim(), StringComparer.OrdinalIgnoreCase) && value.Contains('/'))
+        {
+            filtered.Add(value.Trim());
+        }
+
+        return Task.FromResult<IEnumerable<string>>(filtered);
+    }
+
+    private Task<IEnumerable<string>> SearchGitHubFolders(string value, CancellationToken token)
+    {
+        var options = new List<string>(_githubFolders);
+        if (!string.IsNullOrWhiteSpace(Profile.Backup.GitHub.TargetFolder) &&
+            !options.Contains(Profile.Backup.GitHub.TargetFolder, StringComparer.OrdinalIgnoreCase))
+        {
+            options.Insert(0, Profile.Backup.GitHub.TargetFolder);
+        }
+
+        if (string.IsNullOrWhiteSpace(value) ||
+            string.Equals(value.Trim(), Profile.Backup.GitHub.TargetFolder, StringComparison.OrdinalIgnoreCase))
+        {
+            return Task.FromResult<IEnumerable<string>>(options);
+        }
+
+        var trimmed = value.Trim();
+        var filtered = options
+            .Where(f => f.Contains(trimmed, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        if (!filtered.Contains(trimmed, StringComparer.OrdinalIgnoreCase))
+        {
+            filtered.Insert(0, trimmed);
+        }
+
+        return Task.FromResult<IEnumerable<string>>(filtered);
+    }
+
+    private async Task TestGitHubConnection()
+    {
+        _isTestingGitHub = true;
+        _githubTestMessage = Loc["Testing connection..."].Value;
+        Db.CompanyProfile.Save(Profile);
+        StateHasChanged();
+
+        try
+        {
+            var res = await DestinationCoordinator.TestConnectionAsync(BackupDestinationType.GitHub);
+            _githubTestSuccess = res.Success;
+            _githubTestMessage = res.Message;
+        }
+        finally
+        {
+            _isTestingGitHub = false;
+            StateHasChanged();
+        }
     }
 }

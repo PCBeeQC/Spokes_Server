@@ -40,23 +40,7 @@
                         @if (!IsFriendEdition)
                         {
                             
-                            <MudItem xs="12">
-                                @if (!string.IsNullOrEmpty(Employee.EncryptedEmailPassword))
-                                {
-                                    <MudTextField Variant="Variant.Outlined" Margin="Margin.Dense" ShrinkLabel="true" Value="@("********")" Label="Email Password" ReadOnly="true"
-                                                  Adornment="Adornment.End" AdornmentIcon="@Icons.Material.Filled.Lock" />
-                                    <MudButton Variant="Variant.Text" Color="Color.Primary" OnClick="@(() => _showPasswordInput = true)">
-                                        Change Password
-                                    </MudButton>
-                                }
 
-                                @if (string.IsNullOrEmpty(Employee.EncryptedEmailPassword) || _showPasswordInput)
-                                {
-                                    <MudTextField Variant="Variant.Outlined" Margin="Margin.Dense" ShrinkLabel="true" @bind-Value="_newPassword" Label="@(string.IsNullOrEmpty(Employee.EncryptedEmailPassword) ? BizLoc["Email Password"].Value : BizLoc["New Email Password"].Value)"
-                                                  InputType="InputType.Password"
-                                                  HelperText="@Loc["Password is encrypted before storage"]" />
-                                }
-                            </MudItem>
                             <MudItem xs="12">
                                 <MudTextField Variant="Variant.Outlined" Margin="Margin.Dense" ShrinkLabel="true" @bind-Value="Employee.Position" Label="@BizLoc["Position / Title"]" />
                             </MudItem>
@@ -178,7 +162,8 @@
                                            AnchorOrigin="Origin.BottomLeft" TransformOrigin="Origin.TopLeft">
                                     @foreach(var group in Profile?.PermissionGroups ?? new())
                                     {
-                                        <MudSelectItem Value="@group.Id">@group.Name</MudSelectItem>
+                                        bool canAssignGroup = CurrentUserIsAdmin || UserService.CanAssignPermissionGroup(_currentEmployee, group);
+                                        <MudSelectItem Value="@group.Id" Disabled="@(!canAssignGroup)">@group.Name</MudSelectItem>
                                     }
                                 </MudSelect>
                                 <MudText Typo="Typo.caption" Class="mt-1 d-block text-muted">@Loc["Select one or more roles to dynamically inherit permissions, or customize granular permissions below."]</MudText>
@@ -197,13 +182,14 @@
                                             @foreach (var perm in category.Value)
                                             {
                                                 bool isAdminOnlyPerm = perm == AppPermissions.Admin.ManageUsers || perm == AppPermissions.Admin.ManageSettings;
+                                                bool callerHasPerm = CurrentUserIsAdmin || _callerPermissions.Contains(perm);
                                                 
                                                 bool groupHasPerm = Profile?.PermissionGroups
                                                     .Where(g => Employee.PermissionGroupIds.Contains(g.Id))
                                                     .Any(g => g.Permissions.Contains(perm)) ?? false;
                                                 
                                                 bool hasIt = groupHasPerm || HasPerm(perm);
-                                                bool disabled = Employee.IsAdmin || (isAdminOnlyPerm && !CurrentUserIsAdmin) || groupHasPerm;
+                                                bool disabled = Employee.IsAdmin || (isAdminOnlyPerm && !CurrentUserIsAdmin) || !callerHasPerm || groupHasPerm;
 
                                                 <MudTooltip Text="@AppPermissions.GetDescription(perm)" Delay="300" Placement="Placement.Top">
                                                     <MudCheckBox T="bool" Value="@hasIt"
@@ -346,19 +332,22 @@
 
     private MudForm form = default!;
     private bool success;
+    private Employee? _currentEmployee;
+    private HashSet<string> _callerPermissions = new(StringComparer.OrdinalIgnoreCase);
+    private List<string> _initialPermissions = [];
+    private List<string> _initialGroupIds = [];
     private bool CurrentUserIsAdmin;
     private CompanyProfile Profile = default!;
     private int activeTabIndex;
     private bool IsFriendEdition => Profile?.Edition == "Family";
 
-    // Email Password Handling
-    private string _newPassword = "";
-    private bool _showPasswordInput;
-
     protected override async Task OnInitializedAsync()
     {
-        var currentEmp = await UserService.GetEmployeeAsync();
-        CurrentUserIsAdmin = currentEmp?.IsAdmin ?? false;
+        _currentEmployee = await UserService.GetEmployeeAsync();
+        CurrentUserIsAdmin = _currentEmployee?.IsAdmin ?? false;
+        _callerPermissions = UserService.GetCallerEffectivePermissions(_currentEmployee);
+        _initialPermissions = Employee.Permissions?.ToList() ?? [];
+        _initialGroupIds = Employee.PermissionGroupIds?.ToList() ?? [];
         if (!CurrentUserIsAdmin && activeTabIndex == 3)
         {
             activeTabIndex = 0;
@@ -401,10 +390,27 @@
         await form.ValidateAsync();
         if (success)
         {
-            if (!string.IsNullOrWhiteSpace(_newPassword))
+            if (!CurrentUserIsAdmin)
             {
-                Employee.EncryptedEmailPassword = EncryptionService.Encrypt(_newPassword);
+                Employee.IsAdmin = false;
+                var allowed = UserService.FilterAllowedPermissions(_currentEmployee, Employee.Permissions);
+                foreach (var existing in _initialPermissions)
+                {
+                    if (Employee.Permissions.Contains(existing) && !allowed.Contains(existing, StringComparer.OrdinalIgnoreCase))
+                    {
+                        allowed.Add(existing);
+                    }
+                }
+                Employee.Permissions = allowed;
+
+                var allGroups = Profile?.PermissionGroups ?? [];
+                Employee.PermissionGroupIds = Employee.PermissionGroupIds
+                    .Where(gid => _initialGroupIds.Contains(gid) ||
+                                  (allGroups.FirstOrDefault(g => g.Id == gid) is { } grp &&
+                                   UserService.CanAssignPermissionGroup(_currentEmployee, grp)))
+                    .ToList();
             }
+
             MudDialog.Close(DialogResult.Ok(Employee));
         }
     }
@@ -417,6 +423,9 @@
 
     private void TogglePerm(string p, bool hasIt)
     {
+        if (!CurrentUserIsAdmin && !_callerPermissions.Contains(p))
+            return;
+
         if (hasIt && !Employee.Permissions.Contains(p))
             Employee.Permissions.Add(p);
         else if (!hasIt && Employee.Permissions.Contains(p))
@@ -457,7 +466,7 @@
     }
 
     private static readonly string[] BusinessCategories = [
-        "Projects", "Email", "Address Book", "Finance", 
+        "Email", "Projects", "Address Book", "Finance", 
         "Purchases", "Timesheets", "Business Documents", "My Week" 
     ];
 
@@ -478,4 +487,3 @@
         Employee.WorkSchedules?.Remove(schedule);
     }
 }
-

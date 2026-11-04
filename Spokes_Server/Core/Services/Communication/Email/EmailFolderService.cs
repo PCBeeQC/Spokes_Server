@@ -3,12 +3,9 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using MailKit;
-using MailKit.Net.Imap;
-using MailKit.Security;
 using Microsoft.Extensions.Logging;
 using Spokes_Server.Core.Data.Repositories.Communication;
 using Spokes_Server.Core.Data.Repositories.Core;
-using Spokes_Server.Core.Data.Repositories.HR;
 using Spokes_Server.Core.Helpers;
 using Spokes_Server.Core.Models.Communication;
 using Spokes_Server.Core.Services.Security;
@@ -17,43 +14,46 @@ namespace Spokes_Server.Core.Services.Communication.Email;
 
 public class EmailFolderService : IEmailFolderService
 {
-    private readonly EmployeeRepository _employees;
+    private readonly EmailAccountRepository? _accounts;
     private readonly CompanyProfileRepository _companyProfile;
     private readonly EmailFolderRepository _emailFolders;
     private readonly EmailMessageRepository _emailMessages;
     private readonly EncryptionService _encryptionService;
+    private readonly EmailSyncStateService? _syncStateService;
     private readonly ILogger<EmailFolderService>? _logger;
     private readonly IImapConnectionFactory _imapFactory;
 
     public EmailFolderService(
-        EmployeeRepository employees,
         CompanyProfileRepository companyProfile,
         EmailFolderRepository emailFolders,
         EmailMessageRepository emailMessages,
         EncryptionService encryptionService,
+        EmailAccountRepository? accounts = null,
         ILogger<EmailFolderService>? logger = null,
-        IImapConnectionFactory? imapFactory = null)
+        IImapConnectionFactory? imapFactory = null,
+        EmailSyncStateService? syncStateService = null)
     {
-        _employees = employees;
+        _accounts = accounts;
         _companyProfile = companyProfile;
         _emailFolders = emailFolders;
         _emailMessages = emailMessages;
         _encryptionService = encryptionService;
+        _syncStateService = syncStateService;
         _logger = logger;
-        _imapFactory = imapFactory ?? new ImapConnectionFactory(companyProfile, employees, encryptionService);
+        _imapFactory = imapFactory ?? new ImapConnectionFactory(companyProfile, encryptionService, accounts);
     }
 
-    public async Task<SpokesResult<EmailFolder>> CreateFolderAsync(string employeeId, string parentFolderPath, string newFolderName, CancellationToken cancellationToken = default)
+    public async Task<SpokesResult<EmailFolder>> CreateFolderAsync(string accountId, string parentFolderPath, string newFolderName, CancellationToken cancellationToken = default)
     {
-        if (string.IsNullOrWhiteSpace(employeeId))
-            return SpokesResult<EmailFolder>.Failure("Employee ID is required.");
+        if (string.IsNullOrWhiteSpace(accountId))
+            return SpokesResult<EmailFolder>.Failure("Account ID is required.");
 
         if (string.IsNullOrWhiteSpace(newFolderName))
             return SpokesResult<EmailFolder>.Failure("Folder name cannot be empty.");
 
         try
         {
-            using var client = await _imapFactory.CreateAuthenticatedClientAsync(employeeId, cancellationToken);
+            using var client = await _imapFactory.CreateAuthenticatedClientAsync(accountId, cancellationToken);
             if (client == null)
             {
                 return SpokesResult<EmailFolder>.Failure("Unable to connect or authenticate to the email server. Please check your credentials.");
@@ -75,24 +75,24 @@ public class EmailFolderService : IEmailFolderService
 
             if (parentFolder == null)
             {
-                _logger?.LogWarning("Failed to create folder '{FolderName}' for Employee {EmployeeId}: parent folder was not found on IMAP server.", newFolderName, employeeId);
+                _logger?.LogWarning("Failed to create folder '{FolderName}' for Account {AccountId}: parent folder was not found on IMAP server.", newFolderName, accountId);
                 return SpokesResult<EmailFolder>.Failure($"Parent folder '{parentFolderPath}' was not found on the email server.");
             }
 
             var newFolder = await parentFolder.CreateAsync(newFolderName, true, cancellationToken);
             if (newFolder == null)
             {
-                _logger?.LogWarning("Failed to create folder '{FolderName}' for Employee {EmployeeId}: IMAP folder creation returned null.", newFolderName, employeeId);
+                _logger?.LogWarning("Failed to create folder '{FolderName}' for Account {AccountId}: IMAP folder creation returned null.", newFolderName, accountId);
                 return SpokesResult<EmailFolder>.Failure($"Email server failed to create folder '{newFolderName}'.");
             }
 
-            var existingFolders = _emailFolders.GetByEmployee(employeeId);
+            var existingFolders = _emailFolders.GetByAccount(accountId);
             var localFolder = existingFolders.FirstOrDefault(f => f.Path == newFolder.FullName);
             if (localFolder == null)
             {
                 localFolder = new EmailFolder
                 {
-                    EmployeeId = employeeId,
+                    AccountId = accountId,
                     Name = newFolder.Name,
                     Path = newFolder.FullName,
                     ParentPath = GetParentPath(newFolder),
@@ -110,7 +110,7 @@ public class EmailFolderService : IEmailFolderService
 
             await client.DisconnectAsync(true, cancellationToken);
 
-            var localFolders = _emailFolders.GetByEmployee(employeeId);
+            var localFolders = _emailFolders.GetByAccount(accountId);
             var created = localFolders.FirstOrDefault(f => f.Path == newFolder.FullName);
             return created != null
                 ? SpokesResult<EmailFolder>.Success(created)
@@ -123,17 +123,17 @@ public class EmailFolderService : IEmailFolderService
         }
     }
 
-    public async Task<SpokesResult> DeleteFolderAsync(string employeeId, string folderPath, CancellationToken cancellationToken = default)
+    public async Task<SpokesResult> DeleteFolderAsync(string accountId, string folderPath, CancellationToken cancellationToken = default)
     {
-        if (string.IsNullOrWhiteSpace(employeeId))
-            return SpokesResult.Failure("Employee ID is required.");
+        if (string.IsNullOrWhiteSpace(accountId))
+            return SpokesResult.Failure("Account ID is required.");
 
         if (string.IsNullOrWhiteSpace(folderPath))
             return SpokesResult.Failure("Folder path cannot be empty.");
 
         try
         {
-            using var client = await _imapFactory.CreateAuthenticatedClientAsync(employeeId, cancellationToken);
+            using var client = await _imapFactory.CreateAuthenticatedClientAsync(accountId, cancellationToken);
             if (client == null)
             {
                 return SpokesResult.Failure("Unable to connect or authenticate to the email server.");
@@ -142,15 +142,17 @@ public class EmailFolderService : IEmailFolderService
             var folder = await client.GetFolderAsync(folderPath, cancellationToken);
             if (folder == null)
             {
-                _logger?.LogWarning("Failed to delete folder '{FolderPath}' for Employee {EmployeeId}: folder not found on IMAP server.", folderPath, employeeId);
+                _logger?.LogWarning("Failed to delete folder '{FolderPath}' for Account {AccountId}: folder not found on IMAP server.", folderPath, accountId);
                 return SpokesResult.Failure($"Folder '{folderPath}' not found on email server.");
             }
             await folder.DeleteAsync(cancellationToken);
             await client.DisconnectAsync(true, cancellationToken);
 
-            var folders = _emailFolders.GetByEmployee(employeeId);
+            var folders = _emailFolders.GetByAccount(accountId);
             var local = folders.FirstOrDefault(f => f.Path == folderPath);
             if (local != null) _emailFolders.Delete(local.Id);
+
+            _syncStateService?.NotifyUnreadCountChanged(accountId);
 
             return SpokesResult.Success();
         }
@@ -161,10 +163,10 @@ public class EmailFolderService : IEmailFolderService
         }
     }
 
-    public async Task<SpokesResult> RenameFolderAsync(string employeeId, string folderPath, string newName, CancellationToken cancellationToken = default)
+    public async Task<SpokesResult> RenameFolderAsync(string accountId, string folderPath, string newName, CancellationToken cancellationToken = default)
     {
-        if (string.IsNullOrWhiteSpace(employeeId))
-            return SpokesResult.Failure("Employee ID is required.");
+        if (string.IsNullOrWhiteSpace(accountId))
+            return SpokesResult.Failure("Account ID is required.");
 
         if (string.IsNullOrWhiteSpace(folderPath))
             return SpokesResult.Failure("Folder path cannot be empty.");
@@ -174,7 +176,7 @@ public class EmailFolderService : IEmailFolderService
 
         try
         {
-            using var client = await _imapFactory.CreateAuthenticatedClientAsync(employeeId, cancellationToken);
+            using var client = await _imapFactory.CreateAuthenticatedClientAsync(accountId, cancellationToken);
             if (client == null)
             {
                 return SpokesResult.Failure("Unable to connect or authenticate to the email server.");
@@ -183,7 +185,7 @@ public class EmailFolderService : IEmailFolderService
             var folder = await client.GetFolderAsync(folderPath, cancellationToken);
             if (folder == null)
             {
-                _logger?.LogWarning("Failed to rename folder '{FolderPath}' for Employee {EmployeeId}: folder not found on IMAP server.", folderPath, employeeId);
+                _logger?.LogWarning("Failed to rename folder '{FolderPath}' for Account {AccountId}: folder not found on IMAP server.", folderPath, accountId);
                 return SpokesResult.Failure($"Folder '{folderPath}' not found on email server.");
             }
             var parentPath = GetParentPath(folder);
@@ -200,7 +202,7 @@ public class EmailFolderService : IEmailFolderService
 
             if (parentFolder == null)
             {
-                _logger?.LogWarning("Failed to rename folder '{FolderPath}' for Employee {EmployeeId}: parent folder not found on IMAP server.", folderPath, employeeId);
+                _logger?.LogWarning("Failed to rename folder '{FolderPath}' for Account {AccountId}: parent folder not found on IMAP server.", folderPath, accountId);
                 return SpokesResult.Failure("Parent folder not found on email server.");
             }
 
@@ -208,13 +210,13 @@ public class EmailFolderService : IEmailFolderService
             var renamedFolder = await parentFolder.GetSubfolderAsync(newName, cancellationToken);
             if (renamedFolder == null)
             {
-                _logger?.LogWarning("Failed to retrieve renamed folder '{NewName}' for Employee {EmployeeId}.", newName, employeeId);
+                _logger?.LogWarning("Failed to retrieve renamed folder '{NewName}' for Account {AccountId}.", newName, accountId);
                 return SpokesResult.Failure($"Failed to retrieve renamed folder '{newName}' from email server.");
             }
 
             await client.DisconnectAsync(true, cancellationToken);
 
-            var folders = _emailFolders.GetByEmployee(employeeId);
+            var folders = _emailFolders.GetByAccount(accountId);
             var local = folders.FirstOrDefault(f => f.Path == folderPath);
             if (local != null)
             {
@@ -227,7 +229,8 @@ public class EmailFolderService : IEmailFolderService
                 _emailFolders.Delete(local.Id);
                 _emailFolders.Save(local);
 
-                _emailMessages.RenameFolder(employeeId, oldPath, renamedFolder.FullName);
+                _emailMessages.RenameFolder(accountId, oldPath, renamedFolder.FullName);
+                _syncStateService?.NotifyUnreadCountChanged(accountId);
             }
 
             return SpokesResult.Success();
@@ -244,6 +247,6 @@ public class EmailFolderService : IEmailFolderService
         if (string.IsNullOrEmpty(folder.FullName)) return string.Empty;
         var sep = folder.DirectorySeparator.ToString();
         var lastIdx = folder.FullName.LastIndexOf(sep, StringComparison.Ordinal);
-        return lastIdx > 0 ? folder.FullName.Substring(0, lastIdx) : string.Empty;
+        return lastIdx > 0 ? folder.FullName[..lastIdx] : string.Empty;
     }
 }

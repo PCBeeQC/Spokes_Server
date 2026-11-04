@@ -37,6 +37,7 @@ public class DocumentTemplate : IDataEntity
     public string Label_Quote { get; set; } = "QUOTE";
     public string Label_PurchaseOrder { get; set; } = "PURCHASE ORDER";
 
+    public string Label_ItemNumber { get; set; } = "#";
     public string Label_Description { get; set; } = "Description";
     public string Label_Quantity { get; set; } = "Qty";
     public string Label_Price { get; set; } = "Price";
@@ -48,6 +49,8 @@ public class DocumentTemplate : IDataEntity
     public string Label_QuoteTotal { get; set; } = "Total Budget"; // Used for Quote
     public string Label_BalanceDue { get; set; } = "Balance Due";
     public string Label_AmountPaid { get; set; } = "Amount Paid";
+    public string Label_Paid { get; set; } = "PAID";
+    public string Label_DateReceived { get; set; } = "Date Received";
 
     public string Label_ClientBoughtTag { get; set; } = " (Client Responsibility)";
     public string Label_ClientBoughtTotal { get; set; } = "Client Bought Items";
@@ -66,6 +69,7 @@ public class DocumentTemplate : IDataEntity
 
     // NEW: Content Defaults
     public string DefaultTermsAndConditions { get; set; } = "1. Validity: This quote is valid for 30 days.\n2. Payment: 30% deposit required.";
+    public string? DefaultTermsAndConditionsId { get; set; } = string.Empty;
     public bool TermsStartOnNewPage { get; set; }
     public string DefaultPaymentTerms { get; set; } = "Net 30 days.";
 

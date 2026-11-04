@@ -1,0 +1,331 @@
+@using Spokes_Server.Components.Dialogs
+@using Spokes_Server.Components.Shared
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Services.Communication.Email
+@inject IDialogService DialogService
+@inject IEmailFolderService FolderService
+@inject ISnackbar Snackbar
+@inject IStringLocalizer<AppResources> Loc
+
+<div class="d-inline-flex align-center" @onclick:stopPropagation="true">
+    @if (ShowLabelButton)
+    {
+        <MudButton Variant="Variant.Outlined"
+                   Size="Size.Small"
+                   Color="@(_isOpen ? Color.Primary : Color.Default)"
+                   StartIcon="@Icons.Material.Outlined.Folder"
+                   EndIcon="@Icons.Material.Filled.KeyboardArrowDown"
+                   OnClick="ToggleFlyout"
+                   Class="rounded-pill px-2.5 py-0.5"
+                   Style="text-transform: none; font-size: 0.75rem;">
+            @(SelectedFolder?.Name ?? Loc["INBOX"].Value)
+        </MudButton>
+    }
+    else
+    {
+        <MudTooltip Text="@Loc["Browse Folders"]">
+            <MudIconButton Icon="@Icons.Material.Outlined.Folder"
+                           Size="Size.Small"
+                           Color="@(_isOpen ? Color.Primary : Color.Default)"
+                           OnClick="ToggleFlyout" />
+        </MudTooltip>
+    }
+
+    @if (_isOpen)
+    {
+        <MudPopover Open="true"
+                    AnchorOrigin="@AnchorOrigin"
+                    TransformOrigin="@TransformOrigin"
+                    Fixed="true"
+                    Class="pa-3 rounded-lg"
+                    Style="width: 280px; max-height: 420px; overflow-y: auto; z-index: 1400; border: 1px solid var(--mud-palette-divider);">
+            <div class="d-flex align-center justify-space-between mb-2">
+                <div class="d-flex flex-column" style="min-width: 0;">
+                    <MudText Typo="Typo.subtitle2" Class="text-truncate" Style="font-weight: 600;">
+                        @(!string.IsNullOrWhiteSpace(AccountName) ? AccountName : Loc["Mailbox"].Value)
+                    </MudText>
+                    <MudText Typo="Typo.caption" Color="Color.Secondary" Class="text-truncate">@Loc["Mailbox Folders"]</MudText>
+                </div>
+                <div class="d-flex align-center gap-1">
+                    @if (!string.IsNullOrEmpty(AccountId))
+                    {
+                        <MudTooltip Text="@Loc["New Folder"]">
+                            <MudIconButton Icon="@Icons.Material.Filled.CreateNewFolder"
+                                           Size="Size.Small"
+                                           Color="Color.Primary"
+                                           OnClick="CreateRootFolder" />
+                        </MudTooltip>
+                    }
+                    <MudIconButton Icon="@Icons.Material.Filled.Close"
+                                   Size="Size.Small"
+                                   OnClick="CloseFlyout" />
+                </div>
+            </div>
+
+            <MudTextField @bind-Value="_folderSearchText"
+                          Placeholder="@Loc["Filter folders..."]"
+                          Adornment="Adornment.Start"
+                          AdornmentIcon="@Icons.Material.Filled.Search"
+                          Variant="Variant.Outlined"
+                          Margin="Margin.Dense"
+                          Immediate="true"
+                          Class="mb-2" />
+
+            @{
+                var flyoutFolders = GetFilteredFolders();
+                var flyoutTree = BuildTree(flyoutFolders);
+            }
+
+            @if (!flyoutTree.Any())
+            {
+                <MudText Typo="Typo.caption" Color="Color.Secondary" Class="pa-2">
+                    @Loc["No folders found."]
+                </MudText>
+            }
+            else
+            {
+                <MudTreeView Hover="true"
+                             Width="100%"
+                             Class="px-0"
+                             T="EmailFolder"
+                             Items="flyoutTree"
+                             SelectedValue="SelectedFolder"
+                             SelectedValueChanged="HandleFolderSelected">
+                    <ItemTemplate Context="treeItem">
+                        <MudTreeViewItem @bind-Expanded="@treeItem.Expanded"
+                                         Items="@treeItem.Children"
+                                         Value="@treeItem.Value"
+                                         Disabled="@(treeItem.Value != null && !treeItem.Value.IsSelectable)"
+                                         Class="@($"my-0{((treeItem.Value?.Id != null && (treeItem.Value.Id == SelectedNodeKey || treeItem.Value.Id == SelectedFolder?.Id)) ? " email-folder-selected" : "")}")">
+                            <Content>
+                                <MudIcon Icon="@treeItem.Icon" Class="ml-0 mr-2" Color="@Color.Default" Size="Size.Small" />
+                                <MudText Typo="Typo.body2" Class="flex-grow-1 text-truncate">@treeItem.Text</MudText>
+                                @if (treeItem.Value is { } f)
+                                {
+                                    <div class="folder-actions" @onclick:stopPropagation="true">
+                                        <MudMenu Icon="@Icons.Material.Filled.MoreVert"
+                                                 Size="Size.Small"
+                                                 Dense="true"
+                                                 AnchorOrigin="Origin.BottomRight"
+                                                 TransformOrigin="Origin.TopRight"
+                                                 ListClass="pa-0">
+                                            <MudMenuItem Icon="@Icons.Material.Filled.CreateNewFolder"
+                                                         OnClick="@(() => CreateSubfolder(f))">
+                                                @Loc["New Subfolder"]
+                                            </MudMenuItem>
+                                            @if (!f.IsInbox && !f.IsSent && !f.IsTrash && !f.IsDrafts && !f.IsArchive && !f.IsJunk)
+                                            {
+                                                <MudMenuItem Icon="@Icons.Material.Filled.DriveFileRenameOutline"
+                                                             OnClick="@(() => RenameFolder(f))">
+                                                    @Loc["Rename"]
+                                                </MudMenuItem>
+                                                <MudMenuItem Icon="@Icons.Material.Filled.Delete"
+                                                             IconColor="Color.Error"
+                                                             OnClick="@(() => DeleteFolder(f))">
+                                                    @Loc["Delete"]
+                                                </MudMenuItem>
+                                            }
+                                        </MudMenu>
+                                    </div>
+                                    @if (f.UnreadCount > 0 && !f.IsDrafts)
+                                    {
+                                        <NotificationBadge Count="@f.UnreadCount" Class="ml-1" />
+                                    }
+                                }
+                            </Content>
+                        </MudTreeViewItem>
+                    </ItemTemplate>
+                </MudTreeView>
+            }
+        </MudPopover>
+    }
+</div>
+
+@if (_isOpen)
+{
+    <MudOverlay Visible="true" OnClick="CloseFlyout" AutoClose="true" ZIndex="1350" />
+}
+
+@code {
+    [Parameter] public string AccountId { get; set; } = string.Empty;
+    [Parameter] public string? AccountName { get; set; }
+    [Parameter] public List<EmailFolder> Folders { get; set; } = [];
+    [Parameter] public EmailFolder? SelectedFolder { get; set; }
+    [Parameter] public string? SelectedNodeKey { get; set; }
+    [Parameter] public bool ShowLabelButton { get; set; }
+    [Parameter] public Origin AnchorOrigin { get; set; } = Origin.TopRight;
+    [Parameter] public Origin TransformOrigin { get; set; } = Origin.TopLeft;
+    [Parameter] public EventCallback<EmailFolder> OnSelectFolder { get; set; }
+    [Parameter] public EventCallback OnFoldersChanged { get; set; }
+
+    private bool _isOpen;
+    private string _folderSearchText = string.Empty;
+
+    private void ToggleFlyout()
+    {
+        _isOpen = !_isOpen;
+        if (_isOpen)
+        {
+            _folderSearchText = string.Empty;
+        }
+    }
+
+    private void CloseFlyout()
+    {
+        _isOpen = false;
+        _folderSearchText = string.Empty;
+    }
+
+    private List<EmailFolder> GetFilteredFolders()
+    {
+        var list = Folders
+            .Where(f => (string.IsNullOrEmpty(AccountId) || f.AccountId == AccountId) && f.Path != "LocalDrafts")
+            .ToList();
+
+        if (!string.IsNullOrWhiteSpace(_folderSearchText))
+        {
+            list = list.Where(f => f.Name.Contains(_folderSearchText, StringComparison.OrdinalIgnoreCase) ||
+                                   f.Path.Contains(_folderSearchText, StringComparison.OrdinalIgnoreCase))
+                       .ToList();
+        }
+
+        return list;
+    }
+
+    private async Task HandleFolderSelected(EmailFolder folder)
+    {
+        if (folder != null && !folder.IsSelectable) return;
+        CloseFlyout();
+        if (folder != null && OnSelectFolder.HasDelegate)
+        {
+            await OnSelectFolder.InvokeAsync(folder);
+        }
+    }
+
+    private List<TreeItemData<EmailFolder>> BuildTree(List<EmailFolder> folders)
+    {
+        var allPaths = new HashSet<string>(folders.Select(f => f.Path));
+        var roots = folders
+            .Where(f => string.IsNullOrEmpty(f.ParentPath) || !allPaths.Contains(f.ParentPath))
+            .OrderByDescending(f => f.IsInbox)
+            .ThenBy(f => f.Name)
+            .ToList();
+
+        return roots.Select(r => BuildNode(r, folders)).ToList();
+    }
+
+    private TreeItemData<EmailFolder> BuildNode(EmailFolder folder, List<EmailFolder> allFolders)
+    {
+        var children = allFolders
+            .Where(f => f.ParentPath == folder.Path)
+            .OrderBy(f => f.Name)
+            .ToList();
+
+        return new TreeItemData<EmailFolder>
+        {
+            Value = folder,
+            Text = folder.Name,
+            Icon = GetFolderIcon(folder),
+            Expanded = true,
+            Children = children.Select(c => BuildNode(c, allFolders)).ToList()
+        };
+    }
+
+    private static string GetFolderIcon(EmailFolder folder) =>
+        folder.IsInbox ? Icons.Material.Filled.Inbox :
+        folder.IsSent ? Icons.Material.Filled.Send :
+        folder.IsTrash ? Icons.Material.Filled.Delete :
+        folder.IsDrafts ? Icons.Material.Filled.Drafts :
+        folder.IsArchive ? Icons.Material.Filled.Inventory2 :
+        folder.IsJunk ? Icons.Material.Filled.Report :
+        Icons.Material.Filled.Folder;
+
+    private async Task CreateRootFolder()
+    {
+        if (string.IsNullOrEmpty(AccountId)) return;
+        var parameters = new DialogParameters { ["SubmitText"] = Loc["Create"].Value };
+        var dialog = await DialogService.ShowAsync<FolderManageDialog>(Loc["New Folder"], parameters);
+        var result = await dialog.Result;
+
+        if (result is { Canceled: false, Data: string name })
+        {
+            var createResult = await FolderService.CreateFolderAsync(AccountId, "", name);
+            if (createResult.IsSuccess && createResult.Value != null)
+            {
+                Snackbar.Add(string.Format(Loc["Folder '{0}' created."].Value, name), Severity.Success);
+                if (OnFoldersChanged.HasDelegate) await OnFoldersChanged.InvokeAsync();
+            }
+            else
+            {
+                Snackbar.Add(createResult.ErrorMessage ?? Loc["Failed to create folder."], Severity.Error);
+            }
+        }
+    }
+
+    private async Task CreateSubfolder(EmailFolder? parentFolder)
+    {
+        if (parentFolder == null) return;
+        var parameters = new DialogParameters { ["SubmitText"] = Loc["Create"].Value };
+        var dialog = await DialogService.ShowAsync<FolderManageDialog>(string.Format(Loc["New subfolder in {0}"].Value, parentFolder.Name), parameters);
+        var result = await dialog.Result;
+
+        if (result is { Canceled: false, Data: string name })
+        {
+            var createResult = await FolderService.CreateFolderAsync(parentFolder.AccountId, parentFolder.Path, name);
+            if (createResult.IsSuccess && createResult.Value != null)
+            {
+                Snackbar.Add(string.Format(Loc["Folder '{0}' created."].Value, name), Severity.Success);
+                if (OnFoldersChanged.HasDelegate) await OnFoldersChanged.InvokeAsync();
+            }
+            else
+            {
+                Snackbar.Add(createResult.ErrorMessage ?? Loc["Failed to create folder."], Severity.Error);
+            }
+        }
+    }
+
+    private async Task RenameFolder(EmailFolder? folder)
+    {
+        if (folder == null) return;
+        var parameters = new DialogParameters { ["CurrentFolderName"] = folder.Name, ["SubmitText"] = Loc["Rename"].Value };
+        var dialog = await DialogService.ShowAsync<FolderManageDialog>(string.Format(Loc["Rename {0}"].Value, folder.Name), parameters);
+        var result = await dialog.Result;
+
+        if (result is { Canceled: false, Data: string name } && name != folder.Name)
+        {
+            var renameResult = await FolderService.RenameFolderAsync(folder.AccountId, folder.Path, name);
+            if (renameResult.IsSuccess)
+            {
+                Snackbar.Add(string.Format(Loc["Folder renamed to '{0}'."].Value, name), Severity.Success);
+                if (OnFoldersChanged.HasDelegate) await OnFoldersChanged.InvokeAsync();
+            }
+            else
+            {
+                Snackbar.Add(renameResult.ErrorMessage ?? Loc["Failed to rename folder."], Severity.Error);
+            }
+        }
+    }
+
+    private async Task DeleteFolder(EmailFolder? folder)
+    {
+        if (folder == null) return;
+        bool? result = await DialogService.ShowMessageBoxAsync(
+            Loc["Delete Folder"],
+            string.Format(Loc["Are you sure you want to delete '{0}' and all its contents? This cannot be undone."].Value, folder.Name),
+            yesText: Loc["Delete"], cancelText: Loc["Cancel"]);
+
+        if (result == true)
+        {
+            var deleteResult = await FolderService.DeleteFolderAsync(folder.AccountId, folder.Path);
+            if (deleteResult.IsSuccess)
+            {
+                Snackbar.Add(Loc["Folder deleted."], Severity.Success);
+                if (OnFoldersChanged.HasDelegate) await OnFoldersChanged.InvokeAsync();
+            }
+            else
+            {
+                Snackbar.Add(deleteResult.ErrorMessage ?? Loc["Failed to delete folder."], Severity.Error);
+            }
+        }
+    }
+}

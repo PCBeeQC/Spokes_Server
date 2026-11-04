@@ -1,18 +1,85 @@
+@using Spokes_Server.Core.Services.Communication.Chat
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Models.HR
 @inject ChatSecurityService ChatSecurityService
 @inject ScopedKeystoreService ScopedKeystore
 
-<div style="position: relative;">
-    <MudTextField @bind-Value="_searchQuery" Placeholder="@Loc["Search messages..."]" Variant="Variant.Outlined"
-        Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search"
-        DebounceInterval="500" Margin="Margin.Dense"
-        OnDebounceIntervalElapsed="OnSearchChanged"
-        Clearable="true" OnClearButtonClick="ClearSearch"
-        Class="my-n2"
-        Style="min-width: 340px;" UserAttributes="@_inputAttributes" />
+<div style="position: relative;" @onclick="OnSearchContainerClicked" @onfocusin="OnSearchContainerClicked">
+    <MudTextField T="string"
+                  Value="@_searchQuery"
+                  ValueChanged="OnSearchInputChanged"
+                  Placeholder="@Loc["Search messages (try from: or isPicture:)..."]"
+                  Variant="Variant.Outlined"
+                  Adornment="Adornment.Start"
+                  AdornmentIcon="@Icons.Material.Filled.Search"
+                  DebounceInterval="400"
+                  Margin="Margin.Dense"
+                  OnDebounceIntervalElapsed="OnSearchChanged"
+                  OnKeyDown="HandleKeyDown"
+                  OnBlur="HandleBlur"
+                  Clearable="true"
+                  OnClearButtonClick="ClearSearch"
+                  Class="my-n2"
+                  Style="min-width: 340px;"
+                  UserAttributes="@_inputAttributes" />
 
+    @* Smart Autocomplete Suggestions Popover *@
+    @if (_showSuggestions && _suggestions != null && _suggestions.Any())
+    {
+        <MudPaper Elevation="6" Class="pa-1"
+                  @onmousedown:preventDefault="true"
+                  @onclick:stopPropagation="true"
+                  @onfocusin:stopPropagation="true"
+                  Style="position: absolute; top: 100%; left: 0; right: 0; z-index: 120; min-width: 340px; max-height: 320px; overflow-y: auto; margin-top: 4px; border-radius: 8px;">
+            <MudText Typo="Typo.caption" Color="Color.Secondary" Class="px-3 pt-1 pb-1" Style="font-weight: 600;">
+                @Loc["Filter Suggestions"]
+            </MudText>
+            <MudList T="SearchSuggestion" Dense="true" Class="py-0">
+                @for (int i = 0; i < _suggestions.Count; i++)
+                {
+                    var index = i;
+                    var s = _suggestions[i];
+                    bool isSelected = index == _selectedSuggestionIndex;
+
+                    <MudListItem T="SearchSuggestion" Dense="true"
+                                 OnClick="@(() => ApplySuggestion(s))"
+                                 Style="@(isSelected ? "background-color: var(--mud-palette-action-default-hover); border-radius: 4px;" : "border-radius: 4px;")">
+                        <div class="d-flex align-center gap-2 py-1">
+                            @if (s.Employee != null)
+                            {
+                                <EmployeeAvatar Employee="@s.Employee" Size="Size.Small" ShowPresence="false"
+                                                Style="width: 22px; height: 22px; min-width: 22px; min-height: 22px; flex-shrink: 0;" />
+                            }
+                            else
+                            {
+                                <MudIcon Icon="@s.Icon" Size="Size.Small" Color="Color.Primary" Style="flex-shrink: 0;" />
+                            }
+
+                            <div class="d-flex flex-column flex-grow-1" style="min-width: 0;">
+                                <MudText Typo="Typo.body2" Style="font-weight: 600; line-height: 1.2;">
+                                    @s.DisplayText
+                                </MudText>
+                                <MudText Typo="Typo.caption" Color="Color.Secondary" Class="text-truncate" Style="line-height: 1.1;">
+                                    @s.Description
+                                </MudText>
+                            </div>
+                            <MudChip T="string" Size="Size.Small" Variant="Variant.Text" Color="Color.Default" Class="my-0">
+                                @Loc["Tab ↵"]
+                            </MudChip>
+                        </div>
+                    </MudListItem>
+                }
+            </MudList>
+        </MudPaper>
+    }
+
+    @* Search Results Dropdown *@
     @if (_searchResults != null && _searchResults.Any())
     {
-        <MudPaper Elevation="4" Class="pa-0" Style="position: absolute; top: 100%; right: 0; z-index: 100; min-width: 360px; max-width: 480px; max-height: 400px; overflow-y: auto; margin-top: 4px; border-radius: 8px;">
+        <MudPaper Elevation="6" Class="pa-0"
+                  @onclick:stopPropagation="true"
+                  @onfocusin:stopPropagation="true"
+                  Style="position: absolute; top: 100%; right: 0; z-index: 100; min-width: 360px; max-width: 520px; max-height: 420px; overflow-y: auto; margin-top: 4px; border-radius: 8px;">
             <MudList T="string" Dense="true" Class="py-1">
                 <MudText Typo="Typo.caption" Color="Color.Secondary" Class="px-3 py-1">
                     @string.Format(Loc["{0} results found"].Value, _searchResults.Count)
@@ -22,17 +89,28 @@
                     var sender = Employees.FirstOrDefault(e => e.Id == msg.SenderId);
                     var senderName = sender?.FullName ?? Loc["Unknown"].Value;
                     var timeStr = msg.SentAt.ToLocalTime().ToString("MMM d, yyyy h:mm tt");
+                    var hasImg = msg.Attachments?.Any(a => a.ContentType?.StartsWith("image/", StringComparison.OrdinalIgnoreCase) == true) == true;
+                    var hasFiles = msg.Attachments?.Any(a => a.ContentType?.StartsWith("image/", StringComparison.OrdinalIgnoreCase) != true) == true;
+
                     var content = string.IsNullOrEmpty(msg.Content)
                         ? Loc["[Attachment]"].Value
                         : msg.Content;
                     content = System.Text.RegularExpressions.Regex.Replace(content, @"!\[gif\]\([^)]+\)|\[gif\]", Loc["Sent a GIF"].Value, System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-                    content = content.Length > 80 ? content[..77] + "..." : content;
+                    content = content.Length > 85 ? content[..82] + "..." : content;
 
                     <MudListItem T="string" Dense="true" OnClick="@(() => SelectResult(msg.Id))">
                         <div>
                             <div class="d-flex align-center gap-2">
                                 <MudText Typo="Typo.body2" Style="font-weight: 600;">@senderName</MudText>
                                 <MudText Typo="Typo.caption" Color="Color.Secondary">@timeStr</MudText>
+                                @if (hasImg)
+                                {
+                                    <MudIcon Icon="@Icons.Material.Filled.Image" Size="Size.Small" Color="Color.Info" Title="@Loc["Image"]" />
+                                }
+                                @if (hasFiles)
+                                {
+                                    <MudIcon Icon="@Icons.Material.Filled.AttachFile" Size="Size.Small" Color="Color.Secondary" Title="@Loc["Attachment"]" />
+                                }
                             </div>
                             <MudText Typo="Typo.body2" Color="Color.Secondary" Class="text-truncate" Style="display: block;">
                                 @HighlightMatch(content)
@@ -61,6 +139,9 @@
 
     private string _searchQuery = "";
     private List<ChatMessage>? _searchResults;
+    private List<SearchSuggestion> _suggestions = [];
+    private bool _showSuggestions;
+    private int _selectedSuggestionIndex = -1;
 
     private Dictionary<string, object> _inputAttributes = new()
     {
@@ -70,6 +151,90 @@
         ["data-bwignore"] = "true",
         ["data-form-type"] = "other"
     };
+
+    private void OnSearchContainerClicked()
+    {
+        if (!_showSuggestions && (_searchResults == null || !_searchResults.Any()))
+        {
+            _suggestions = ChatSearchSuggestionService.GetSuggestions(_searchQuery, _searchQuery.Length, CurrentUserId, Employees);
+            _showSuggestions = _suggestions.Count > 0;
+            _selectedSuggestionIndex = _suggestions.Count > 0 ? 0 : -1;
+        }
+    }
+
+    private void OnSearchInputChanged(string value)
+    {
+        _searchQuery = value;
+        _suggestions = ChatSearchSuggestionService.GetSuggestions(_searchQuery, _searchQuery.Length, CurrentUserId, Employees);
+        _showSuggestions = _suggestions.Count > 0;
+        _selectedSuggestionIndex = _suggestions.Count > 0 ? 0 : -1;
+    }
+
+    private async Task HandleKeyDown(KeyboardEventArgs e)
+    {
+        if (!_showSuggestions || _suggestions.Count == 0) return;
+
+        if (e.Key == "ArrowDown")
+        {
+            _selectedSuggestionIndex = (_selectedSuggestionIndex + 1) % _suggestions.Count;
+            StateHasChanged();
+        }
+        else if (e.Key == "ArrowUp")
+        {
+            _selectedSuggestionIndex = (_selectedSuggestionIndex - 1 + _suggestions.Count) % _suggestions.Count;
+            StateHasChanged();
+        }
+        else if (e.Key is "Enter" or "Tab")
+        {
+            if (_selectedSuggestionIndex >= 0 && _selectedSuggestionIndex < _suggestions.Count)
+            {
+                await ApplySuggestion(_suggestions[_selectedSuggestionIndex]);
+            }
+        }
+        else if (e.Key == "Escape")
+        {
+            _showSuggestions = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task ApplySuggestion(SearchSuggestion suggestion)
+    {
+        if (suggestion.ReplaceStart >= 0 && suggestion.ReplaceStart + suggestion.ReplaceLength <= _searchQuery.Length)
+        {
+            var before = _searchQuery[..suggestion.ReplaceStart];
+            var after = _searchQuery[(suggestion.ReplaceStart + suggestion.ReplaceLength)..];
+            _searchQuery = before + suggestion.ReplacementText + after;
+        }
+        else
+        {
+            _searchQuery = (_searchQuery.TrimEnd() + " " + suggestion.ReplacementText).TrimStart();
+        }
+
+        // If the applied suggestion is an opening filter tag prefix (e.g. "from:", "before:", "after:", "mentions:", "has:", "is:"),
+        // keep autocomplete active and immediately populate child suggestions (e.g. members, dates, sub-tags)
+        if (suggestion.ReplacementText.EndsWith(':'))
+        {
+            _suggestions = ChatSearchSuggestionService.GetSuggestions(_searchQuery, _searchQuery.Length, CurrentUserId, Employees);
+            _showSuggestions = _suggestions.Count > 0;
+            _selectedSuggestionIndex = _suggestions.Count > 0 ? 0 : -1;
+            StateHasChanged();
+            return;
+        }
+
+        _showSuggestions = false;
+        _selectedSuggestionIndex = -1;
+
+        await OnSearchChanged(_searchQuery);
+    }
+
+    private async Task HandleBlur(FocusEventArgs e)
+    {
+        // Small delay to allow click on suggestion item to register before closing
+        await Task.Delay(200);
+        _showSuggestions = false;
+        StateHasChanged();
+    }
 
     private async Task OnSearchChanged(string query)
     {
@@ -82,12 +247,20 @@
 
         string? privateKey = ScopedKeystore.IsUnlocked ? ScopedKeystore.GetPrivateKey() : null;
         _searchResults = await ChatSecurityService.SecureSearchMessagesAsync(ChannelId, query, CurrentUserId, privateKey);
+
+        // Hide autocomplete when search results arrive
+        if (_searchResults != null && _searchResults.Any())
+        {
+            _showSuggestions = false;
+        }
     }
 
     private void ClearSearch()
     {
         _searchQuery = "";
         _searchResults = null;
+        _showSuggestions = false;
+        _selectedSuggestionIndex = -1;
     }
 
     private async Task SelectResult(string messageId)
@@ -101,20 +274,29 @@
         if (string.IsNullOrWhiteSpace(_searchQuery))
             return new MarkupString(System.Net.WebUtility.HtmlEncode(text));
 
-        var escaped = System.Net.WebUtility.HtmlEncode(text);
-        var escapedQuery = System.Net.WebUtility.HtmlEncode(_searchQuery);
+        var parsed = ChatSearchQueryParser.Parse(_searchQuery);
+        var terms = parsed.TextTerms;
 
-        // Case-insensitive highlight
-        var idx = escaped.IndexOf(escapedQuery, StringComparison.OrdinalIgnoreCase);
-        if (idx >= 0)
+        if (terms.Count == 0)
         {
-            var before = escaped[..idx];
-            var match = escaped.Substring(idx, escapedQuery.Length);
-            var after = escaped[(idx + escapedQuery.Length)..];
-            return new MarkupString($"{before}<mark style=\"background: var(--mud-palette-warning-lighten); padding: 0 2px; border-radius: 2px;\">{match}</mark>{after}");
+            return new MarkupString(System.Net.WebUtility.HtmlEncode(text));
+        }
+
+        var escaped = System.Net.WebUtility.HtmlEncode(text);
+
+        foreach (var term in terms)
+        {
+            var escapedTerm = System.Net.WebUtility.HtmlEncode(term);
+            var idx = escaped.IndexOf(escapedTerm, StringComparison.OrdinalIgnoreCase);
+            if (idx >= 0)
+            {
+                var before = escaped[..idx];
+                var match = escaped.Substring(idx, escapedTerm.Length);
+                var after = escaped[(idx + escapedTerm.Length)..];
+                escaped = $"{before}<mark style=\"background: var(--mud-palette-warning-lighten); padding: 0 2px; border-radius: 2px;\">{match}</mark>{after}";
+            }
         }
 
         return new MarkupString(escaped);
     }
 }
-

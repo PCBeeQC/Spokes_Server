@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
@@ -123,7 +123,7 @@ public class UserClientStateServiceTests : IDisposable
     }
 
     [Fact]
-    public void FlushToDiskIfUnsent_PersistsUnsentDraftToDisk_AndStopsTyping()
+    public void FlushToDiskIfUnsent_KeepsDraftOnlyInMemory_NeverWritesToDisk_AndStopsTyping()
     {
         // Arrange
         bool stoppedEventFired = false;
@@ -138,9 +138,9 @@ public class UserClientStateServiceTests : IDisposable
         // Act: user backgrounds or disconnects before sending
         _service.FlushToDiskIfUnsent("user1");
 
-        // Assert: draft is now persisted to disk
-        var persistedDraft = _clientStatesRepo.GetDraft("user1", "chan1");
-        Assert.Equal("Unsent message before backgrounding", persistedDraft);
+        // Assert: draft remains in RAM and is never persisted to disk
+        Assert.Equal("Unsent message before backgrounding", _service.GetDraft("user1", "chan1"));
+        Assert.Null(_clientStatesRepo.GetDraft("user1", "chan1"));
 
         // Assert: typing was immediately stopped
         Assert.True(stoppedEventFired);
@@ -149,10 +149,10 @@ public class UserClientStateServiceTests : IDisposable
     [Fact]
     public void ClearDraft_RemovesMemoryAndDisk_AndStopsTyping()
     {
-        // Arrange: prepare draft and flush to disk
+        // Arrange: prepare draft in memory
         _service.UpdateDraftInMemory("user1", "chan1", "Message to send");
         _service.FlushToDiskIfUnsent("user1");
-        Assert.NotNull(_clientStatesRepo.GetDraft("user1", "chan1"));
+        Assert.NotNull(_service.GetDraft("user1", "chan1"));
 
         // Act: message is sent
         _service.ClearDraft("user1", "chan1");

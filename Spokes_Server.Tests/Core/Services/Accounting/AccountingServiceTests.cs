@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using System.Linq;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -1293,4 +1293,287 @@ public class AccountingServiceTests : TestDataTestBase
     }
 
     #endregion
+
+    [Fact]
+    public void UpdateInvoicePayment_EditsAmount_UpdatesStatusAndPersistence()
+    {
+        const string projectId = "proj-upd-pay";
+        _db.Projects.Save(new Project { Id = projectId, Name = "Payment Update Project" });
+
+        var invoice = new Invoice
+        {
+            Id = "inv-upd-pay-1",
+            ProjectId = projectId,
+            InvoiceNumber = "INV-UPD-001",
+            Status = InvoiceStatus.Final,
+            Lines = [new() { Description = "Services", Quantity = 1, UnitPrice = 1000m }]
+        };
+        _db.Invoices.Save(invoice);
+
+        var payment = new PaymentRecord
+        {
+            Id = "pay-1",
+            Amount = 500m,
+            Date = DateTime.Today.AddDays(-2),
+            Method = "Check",
+            Reference = "CHK-101",
+            Notes = "First half"
+        };
+        _service.RecordInvoicePayment(invoice, payment, "Admin");
+
+        var intermediate = _db.Invoices.GetById(invoice.Id);
+        Assert.NotNull(intermediate);
+        Assert.Equal(InvoiceStatus.Partial, intermediate.Status);
+        Assert.Null(intermediate.DatePaid);
+
+        // Now edit payment to full amount
+        var updatedPayment = new PaymentRecord
+        {
+            Id = "pay-1",
+            Amount = invoice.GrandTotal,
+            Date = DateTime.Today,
+            Method = "Wire",
+            Reference = "WIRE-999",
+            Notes = "Updated to full"
+        };
+        _service.UpdateInvoicePayment(intermediate, updatedPayment, "Admin");
+
+        var finalInv = _db.Invoices.GetById(invoice.Id);
+        Assert.NotNull(finalInv);
+        Assert.Equal(InvoiceStatus.Paid, finalInv.Status);
+        Assert.NotNull(finalInv.DatePaid);
+        Assert.Equal(DateTime.Today, finalInv.DatePaid);
+        Assert.Equal("Wire", finalInv.Payments[0].Method);
+        Assert.Equal("WIRE-999", finalInv.Payments[0].Reference);
+    }
+
+    [Fact]
+    public void UpdateInvoicePayment_ReducesBelowPaid_RevertsToPartial()
+    {
+        const string projectId = "proj-upd-revert";
+        _db.Projects.Save(new Project { Id = projectId, Name = "Revert Payment Project" });
+
+        var invoice = new Invoice
+        {
+            Id = "inv-upd-revert-1",
+            ProjectId = projectId,
+            InvoiceNumber = "INV-UPD-002",
+            Status = InvoiceStatus.Final,
+            Lines = [new() { Description = "Consulting", Quantity = 1, UnitPrice = 1000m }]
+        };
+        _db.Invoices.Save(invoice);
+
+        var fullAmount = invoice.GrandTotal;
+        var payment = new PaymentRecord
+        {
+            Id = "pay-revert-1",
+            Amount = fullAmount,
+            Date = DateTime.Today,
+            Method = "ACH"
+        };
+        _service.RecordInvoicePayment(invoice, payment, "BillingUser");
+
+        var paidInv = _db.Invoices.GetById(invoice.Id);
+        Assert.NotNull(paidInv);
+        Assert.Equal(InvoiceStatus.Paid, paidInv.Status);
+        Assert.NotNull(paidInv.DatePaid);
+
+        // Reduce payment to partial amount
+        var reducedPayment = new PaymentRecord
+        {
+            Id = "pay-revert-1",
+            Amount = fullAmount / 2,
+            Date = DateTime.Today,
+            Method = "ACH"
+        };
+        _service.UpdateInvoicePayment(paidInv, reducedPayment, "BillingUser");
+
+        var revertedInv = _db.Invoices.GetById(invoice.Id);
+        Assert.NotNull(revertedInv);
+        Assert.Equal(InvoiceStatus.Partial, revertedInv.Status);
+        Assert.Null(revertedInv.DatePaid);
+    }
+
+    [Fact]
+    public void DeleteInvoicePayment_RemovesPayment_RevertsStatusToFinalWhenEmpty()
+    {
+        const string projectId = "proj-del-pay";
+        _db.Projects.Save(new Project { Id = projectId, Name = "Delete Payment Project" });
+
+        var invoice = new Invoice
+        {
+            Id = "inv-del-pay-1",
+            ProjectId = projectId,
+            InvoiceNumber = "INV-DEL-001",
+            Status = InvoiceStatus.Final,
+            Lines = [new() { Description = "Design", Quantity = 1, UnitPrice = 500m }]
+        };
+        _db.Invoices.Save(invoice);
+
+        var payment = new PaymentRecord
+        {
+            Id = "pay-del-1",
+            Amount = invoice.GrandTotal,
+            Date = DateTime.Today
+        };
+        _service.RecordInvoicePayment(invoice, payment, "Admin");
+
+        var paidInv = _db.Invoices.GetById(invoice.Id);
+        Assert.NotNull(paidInv);
+        Assert.Equal(InvoiceStatus.Paid, paidInv.Status);
+
+        // Delete the payment
+        _service.DeleteInvoicePayment(paidInv, "pay-del-1", "Admin");
+
+        var emptyInv = _db.Invoices.GetById(invoice.Id);
+        Assert.NotNull(emptyInv);
+        Assert.Empty(emptyInv.Payments);
+        Assert.Equal(InvoiceStatus.Final, emptyInv.Status);
+        Assert.Null(emptyInv.DatePaid);
+        Assert.Equal(emptyInv.GrandTotal, emptyInv.BalanceDue);
+    }
+
+    [Fact]
+    public void DeleteInvoicePayment_BlockedWhenPrepaymentCreditsConsumed()
+    {
+        const string projectId = "proj-prepay-guard";
+        _db.Projects.Save(new Project { Id = projectId, Name = "Prepayment Guard Project" });
+
+        // Prepayment invoice
+        var prepayInvoice = new Invoice
+        {
+            Id = "inv-prepay-source",
+            ProjectId = projectId,
+            InvoiceNumber = "INV-PREPAY-001",
+            Status = InvoiceStatus.Paid,
+            Lines =
+            [
+                new()
+                {
+                    Id = "line-prepay-1",
+                    Description = "Deposit",
+                    Quantity = 1,
+                    UnitPrice = 1000m,
+                    IsPrepayment = true
+                }
+            ],
+            Payments =
+            [
+                new()
+                {
+                    Id = "pay-prepay-1",
+                    Amount = 1000m * (1 + FinancialCalculationEngine.QuebecCombinedTaxRate),
+                    Date = DateTime.Today
+                }
+            ]
+        };
+        _db.Invoices.Save(prepayInvoice);
+
+        // Consuming invoice
+        var consumingInvoice = new Invoice
+        {
+            Id = "inv-prepay-consumer",
+            ProjectId = projectId,
+            InvoiceNumber = "INV-CONSUMER-001",
+            Status = InvoiceStatus.Final,
+            Lines =
+            [
+                new()
+                {
+                    Id = "line-credit-used-1",
+                    Description = "Applied Deposit",
+                    Quantity = 1,
+                    UnitPrice = -1000m,
+                    IsCreditUsed = true,
+                    SourceId = "line-prepay-1"
+                }
+            ]
+        };
+        _db.Invoices.Save(consumingInvoice);
+
+        // Attempting to delete the payment from the prepayment invoice must throw
+        Assert.Throws<InvalidOperationException>(() =>
+            _service.DeleteInvoicePayment(prepayInvoice, "pay-prepay-1", "Admin"));
+    }
+
+    [Fact]
+    public void UpdateInvoicePayment_BlockedWhenPrepaymentCreditsConsumedAndReduced()
+    {
+        const string projectId = "proj-prepay-upd-guard";
+        _db.Projects.Save(new Project { Id = projectId, Name = "Prepayment Update Guard Project" });
+
+        var prepayInvoice = new Invoice
+        {
+            Id = "inv-prepay-upd-source",
+            ProjectId = projectId,
+            InvoiceNumber = "INV-PREPAY-002",
+            Status = InvoiceStatus.Paid,
+            Lines =
+            [
+                new()
+                {
+                    Id = "line-prepay-2",
+                    Description = "Deposit",
+                    Quantity = 1,
+                    UnitPrice = 1000m,
+                    IsPrepayment = true
+                }
+            ],
+            Payments =
+            [
+                new()
+                {
+                    Id = "pay-prepay-2",
+                    Amount = 1000m * (1 + FinancialCalculationEngine.QuebecCombinedTaxRate),
+                    Date = DateTime.Today
+                }
+            ]
+        };
+        _db.Invoices.Save(prepayInvoice);
+
+        var consumingInvoice = new Invoice
+        {
+            Id = "inv-prepay-upd-consumer",
+            ProjectId = projectId,
+            InvoiceNumber = "INV-CONSUMER-002",
+            Status = InvoiceStatus.Final,
+            Lines =
+            [
+                new()
+                {
+                    Id = "line-credit-used-2",
+                    Description = "Applied Deposit",
+                    Quantity = 1,
+                    UnitPrice = -1000m,
+                    IsCreditUsed = true,
+                    SourceId = "line-prepay-2"
+                }
+            ]
+        };
+        _db.Invoices.Save(consumingInvoice);
+
+        var reducedPayment = new PaymentRecord
+        {
+            Id = "pay-prepay-2",
+            Amount = 100m,
+            Date = DateTime.Today
+        };
+
+        Assert.Throws<InvalidOperationException>(() =>
+            _service.UpdateInvoicePayment(prepayInvoice, reducedPayment, "Admin"));
+    }
+
+    [Fact]
+    public void UpdateInvoicePayment_And_DeleteInvoicePayment_ValidationChecks()
+    {
+        Assert.Throws<ArgumentNullException>(() => _service.UpdateInvoicePayment(null!, new PaymentRecord()));
+        Assert.Throws<ArgumentNullException>(() => _service.UpdateInvoicePayment(new Invoice(), null!));
+        Assert.Throws<ArgumentNullException>(() => _service.DeleteInvoicePayment(null!, "pay-1"));
+        Assert.Throws<ArgumentException>(() => _service.DeleteInvoicePayment(new Invoice(), ""));
+        Assert.Throws<ArgumentException>(() => _service.DeleteInvoicePayment(new Invoice(), "   "));
+
+        var emptyInvoice = new Invoice { InvoiceNumber = "INV-EMPTY" };
+        Assert.Throws<InvalidOperationException>(() => _service.UpdateInvoicePayment(emptyInvoice, new PaymentRecord { Id = "nonexistent" }));
+        Assert.Throws<InvalidOperationException>(() => _service.DeleteInvoicePayment(emptyInvoice, "nonexistent"));
+    }
 }

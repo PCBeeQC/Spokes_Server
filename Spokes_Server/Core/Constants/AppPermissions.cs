@@ -125,6 +125,26 @@ public static class AppPermissions
         _ => "Unknown permission."
     };
 
+    /// <summary>
+    /// Returns true strictly for read-only/view permissions permitted while an employee account is suspended ("Read-Only Mode").
+    /// All admin, create, edit, delete, manage, and approve permissions return false.
+    /// </summary>
+    public static bool IsReadOnlyAllowed(string? permission) => permission switch
+    {
+        Chat.Use => true,
+        Chat.ViewArchive => true,
+        Albums.View => true,
+        Calendar.View => true,
+        Projects.View => true,
+        AddressBook.View => true,
+        Purchases.ViewPOs => true,
+        Purchases.ViewBills => true,
+        BusinessDocuments.View => true,
+        Timesheets.ViewReport => true,
+        Email.Use => true,
+        _ => false
+    };
+
     public static class MyWeek
     {
         public const string Edit = "MyWeek.Edit";

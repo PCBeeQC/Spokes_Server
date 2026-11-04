@@ -1,0 +1,582 @@
+@using Spokes_Server.Components.Shared
+@using Spokes_Server.Core.Configuration
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Services.Communication.Email
+@using Spokes_Server.Core.Services.Security
+@inject Database Db
+@inject EncryptionService EncryptionService
+@inject IEmailInboxService EmailInboxService
+@inject IImapConnectionFactory ImapConnectionFactory
+@inject ISnackbar Snackbar
+
+<MudDialog>
+    <DialogContent>
+        <MudStack Spacing="3">
+            @* 1. Step 1: Incoming Server Selector *@
+            <MudSelect T="string"
+                       Value="@_selectedSourceKey"
+                       ValueChanged="OnSourceKeyChanged"
+                       Label="@Loc["Incoming Server"]"
+                       Variant="Variant.Outlined"
+                       Margin="Margin.Dense">
+                @foreach (var server in _incomingServers)
+                {
+                    <MudSelectItem Value="@($"server:{server.Id}")">
+                        @server.Name @(!string.IsNullOrWhiteSpace(server.Domain) ? $"(@{server.Domain})" : $"({server.Host})")
+                    </MudSelectItem>
+                }
+                @if (AllowCustomServer)
+                {
+                    <MudSelectItem Value="@CustomSourceKey">
+                        @Loc["Custom / External Email Provider"]
+                    </MudSelectItem>
+                }
+            </MudSelect>
+
+            @* 1b. Step 2: Email Provider Preset Selector (Only shown when Custom / External Email Provider is selected) *@
+            @if (_selectedSourceKey == CustomSourceKey)
+            {
+                <MudSelect T="string"
+                           Value="@_selectedPresetId"
+                           ValueChanged="OnPresetChanged"
+                           Label="@Loc["Email Provider Preset"]"
+                           Variant="Variant.Outlined"
+                           Margin="Margin.Dense">
+                    <MudSelectItem Value="@EmailProviderPresets.CustomPresetId">
+                        @Loc["Custom IMAP / SMTP Server"]
+                    </MudSelectItem>
+                    @foreach (var preset in EmailProviderPresets.MailboxProviders)
+                    {
+                        <MudSelectItem Value="@preset.Id">
+                            @preset.Name (@preset.ImapHost)
+                        </MudSelectItem>
+                    }
+                </MudSelect>
+            }
+
+            @* 2. Provider Setup Instructions Alert *@
+            @if (ActiveProviderPreset != null && !string.IsNullOrWhiteSpace(ActiveProviderPreset.InstructionsText))
+            {
+                <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true">
+                    <div class="d-flex flex-column gap-1">
+                        <span>@Loc[ActiveProviderPreset.InstructionsText]</span>
+                        @if (!string.IsNullOrWhiteSpace(ActiveProviderPreset.HelpUrl))
+                        {
+                            <div>
+                                <MudLink Href="@ActiveProviderPreset.HelpUrl" Target="_blank" Typo="Typo.caption" Style="font-weight: 600;">
+                                    @( !string.IsNullOrWhiteSpace(ActiveProviderPreset.HelpLinkLabel) ? Loc[ActiveProviderPreset.HelpLinkLabel].Value : ActiveProviderPreset.HelpUrl )
+                                </MudLink>
+                            </div>
+                        }
+                    </div>
+                </MudAlert>
+            }
+
+            @* 3. Essential Mailbox Fields (Inbox Name, Sender Display Name, Email Address, Password) *@
+            <MudGrid Spacing="2">
+                <MudItem xs="12" sm="6">
+                    <MudTextField @bind-Value="Account.Name"
+                                  Label="@Loc["Inbox Name (UI Label)"]"
+                                  Placeholder="e.g. Work Email, Support Mailbox"
+                                  HelperText="@Loc["Only visible inside Spokes to organize your sidebar"]"
+                                  Variant="Variant.Outlined"
+                                  Margin="Margin.Dense"
+                                  Required="true" />
+                </MudItem>
+                <MudItem xs="12" sm="6">
+                    <MudTextField @bind-Value="_senderDisplayName"
+                                  Label="@Loc["Sender Display Name"]"
+                                  Placeholder="e.g. Jane Doe"
+                                  HelperText="@Loc["Shown to recipients when you send emails"]"
+                                  Adornment="Adornment.End"
+                                  AdornmentIcon="@Icons.Material.Filled.Sync"
+                                  AdornmentAriaLabel="@Loc["Detect from IMAP Sent folder"]"
+                                  OnAdornmentClick="DetectSenderNameFromImapAsync"
+                                  Variant="Variant.Outlined"
+                                  Margin="Margin.Dense" />
+                </MudItem>
+                <MudItem xs="12" sm="6">
+                    <MudTextField @bind-Value="Account.EmailAddress"
+                                  Label="@Loc["Email Address"]"
+                                  Placeholder="@EmailPlaceholder"
+                                  Variant="Variant.Outlined"
+                                  Margin="Margin.Dense"
+                                  Required="true" />
+                </MudItem>
+                <MudItem xs="12" sm="6">
+                    <MudTextField @bind-Value="_plainPassword"
+                                  Label="@PasswordFieldLabel"
+                                  Placeholder="@PasswordPlaceholder"
+                                  InputType="InputType.Password"
+                                  Variant="Variant.Outlined"
+                                  Margin="Margin.Dense"
+                                  HelperText="@Loc["Encrypted with server master password before storage on disk"]" />
+                </MudItem>
+            </MudGrid>
+
+            @* 4. Custom Server Connection Details (Only shown when Custom IMAP / SMTP Server is selected) *@
+            @if (_selectedSourceKey == CustomSourceKey && _selectedPresetId == EmailProviderPresets.CustomPresetId)
+            {
+                <MudPaper Elevation="0" Outlined="true" Class="pa-3 rounded-lg">
+                    <MudText Typo="Typo.subtitle2" Class="mb-2">@Loc["Custom Server Connection"]</MudText>
+                    <MudGrid Spacing="2">
+                        <MudItem xs="12" sm="6">
+                            <MudTextField @bind-Value="Account.CustomImapHost"
+                                          Label="@Loc["Incoming IMAP Host"]"
+                                          Placeholder="imap.example.com"
+                                          Variant="Variant.Outlined"
+                                          Margin="Margin.Dense"
+                                          Required="true" />
+                        </MudItem>
+                        <MudItem xs="6" sm="3">
+                            <MudNumericField @bind-Value="Account.CustomImapPort"
+                                             Label="@Loc["IMAP Port"]"
+                                             Variant="Variant.Outlined"
+                                             Margin="Margin.Dense" />
+                        </MudItem>
+                        <MudItem xs="6" sm="3" Class="d-flex align-center">
+                            <MudSwitch @bind-Value="Account.CustomImapSsl"
+                                       Color="Color.Primary"
+                                       Label="@Loc["SSL / TLS"]" />
+                        </MudItem>
+
+                        <MudItem xs="12" sm="6">
+                            <MudTextField @bind-Value="Account.CustomSmtpHost"
+                                          Label="@Loc["Outgoing SMTP Host"]"
+                                          Placeholder="smtp.example.com"
+                                          Variant="Variant.Outlined"
+                                          Margin="Margin.Dense"
+                                          Required="true" />
+                        </MudItem>
+                        <MudItem xs="6" sm="3">
+                            <MudNumericField @bind-Value="Account.CustomSmtpPort"
+                                             Label="@Loc["SMTP Port"]"
+                                             Variant="Variant.Outlined"
+                                             Margin="Margin.Dense" />
+                        </MudItem>
+                        <MudItem xs="6" sm="3" Class="d-flex align-center">
+                            <MudSwitch @bind-Value="Account.CustomSmtpSsl"
+                                       Color="Color.Primary"
+                                       Label="@Loc["SSL / TLS"]" />
+                        </MudItem>
+
+                        <MudItem xs="12">
+                            <MudTextField @bind-Value="Account.Username"
+                                          Label="@Loc["Login Username (Optional)"]"
+                                          Placeholder="@Loc["Leave blank if same as email address"]"
+                                          Variant="Variant.Outlined"
+                                          Margin="Margin.Dense" />
+                        </MudItem>
+                    </MudGrid>
+                </MudPaper>
+            }
+
+            <MudSwitch @bind-Value="Account.Enabled"
+                       Color="Color.Primary"
+                       Label="@Loc["Enable Background IMAP Sync"]" />
+
+            @if (AllowSharing)
+            {
+                <MudDivider />
+                <div>
+                    <MudText Typo="Typo.subtitle2" Class="mb-1">@Loc["Share Real Inbox With Users & Groups"]</MudText>
+                    <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-2 d-block">
+                        @Loc["Shared users can monitor and reply from this inbox without duplicating messages on disk."]
+                    </MudText>
+                    <UserGroupPicker Target="UserGroupPickerTarget.Both"
+                                     SelectedUserIdsList="Account.AllowedUserIds"
+                                     SelectedGroupIdsList="Account.AllowedTeamIds" />
+                </div>
+            }
+        </MudStack>
+    </DialogContent>
+    <DialogActions>
+        <MudButton Variant="Variant.Outlined"
+                   Color="Color.Secondary"
+                   OnClick="TestConnectionAsync"
+                   Disabled="_isTesting">
+            @if (_isTesting)
+            {
+                <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" />
+                <span>@Loc["Testing..."]</span>
+            }
+            else
+            {
+                <span>@Loc["Test Connection"]</span>
+            }
+        </MudButton>
+        <MudSpacer />
+        <MudButton OnClick="Cancel">@Loc["Cancel"]</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="SaveAsync" Disabled="_isSaving">@Loc["Save"]</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    private const string CustomSourceKey = "custom";
+
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
+    [Parameter] public EmailAccount Account { get; set; } = new();
+    [Parameter] public bool IsNew { get; set; }
+    [Parameter] public bool AllowSharing { get; set; } = true;
+    [Parameter] public bool AllowCustomServer { get; set; } = true;
+    [Parameter] public string? CurrentUserId { get; set; }
+    [Parameter] public bool IsAdmin { get; set; }
+
+    private List<IncomingServerConfig> _incomingServers = [];
+    private List<SendingServerConfig> _outgoingServers = [];
+    private string _selectedSourceKey = string.Empty;
+    private string _selectedPresetId = EmailProviderPresets.CustomPresetId;
+    private string _plainPassword = string.Empty;
+    private string _senderDisplayName = string.Empty;
+    private string _defaultSenderDisplayName = string.Empty;
+    private bool _isTesting;
+    private bool _isSaving;
+
+    private IncomingServerConfig? SelectedIncomingServer
+    {
+        get
+        {
+            if (_selectedSourceKey.StartsWith("server:", StringComparison.OrdinalIgnoreCase))
+            {
+                var id = _selectedSourceKey["server:".Length..];
+                return _incomingServers.FirstOrDefault(s => s.Id == id);
+            }
+            return null;
+        }
+    }
+
+    private EmailProviderPreset? ActiveProviderPreset
+    {
+        get
+        {
+            if (_selectedSourceKey == CustomSourceKey)
+            {
+                return EmailProviderPresets.GetById(_selectedPresetId);
+            }
+            if (SelectedIncomingServer != null)
+            {
+                return EmailProviderPresets.DetectByImapHost(SelectedIncomingServer.Host);
+            }
+            return EmailProviderPresets.DetectByImapHost(Account.CustomImapHost);
+        }
+    }
+
+    private string EmailPlaceholder
+    {
+        get
+        {
+            if (SelectedIncomingServer != null && !string.IsNullOrWhiteSpace(SelectedIncomingServer.Domain))
+            {
+                return $"you@{SelectedIncomingServer.Domain.Trim().TrimStart('@')}";
+            }
+            if (ActiveProviderPreset != null && !string.IsNullOrWhiteSpace(ActiveProviderPreset.DefaultDomain))
+            {
+                return $"you@{ActiveProviderPreset.DefaultDomain}";
+            }
+            return "you@company.com";
+        }
+    }
+
+    private string PasswordFieldLabel
+    {
+        get
+        {
+            var baseLabel = ActiveProviderPreset != null && !string.IsNullOrWhiteSpace(ActiveProviderPreset.CredentialLabel)
+                ? Loc[ActiveProviderPreset.CredentialLabel].Value
+                : Loc["App Password / Mailbox Password"].Value;
+
+            return !string.IsNullOrEmpty(Account.EncryptedPassword)
+                ? $"{baseLabel} ({Loc["Saved - enter to change"].Value})"
+                : baseLabel;
+        }
+    }
+
+    private string PasswordPlaceholder
+    {
+        get
+        {
+            if (!string.IsNullOrEmpty(Account.EncryptedPassword)) return "••••••••";
+            return ActiveProviderPreset?.CredentialPlaceholder ?? string.Empty;
+        }
+    }
+
+    protected override void OnInitialized()
+    {
+        var settings = Db.CompanyProfile.GetEmailSettings();
+        var userId = CurrentUserId ?? Account.OwnerEmployeeId ?? string.Empty;
+        var userTeamIds = EmailInboxService.GetUserTeamIds(userId);
+        _incomingServers = (settings.IncomingServers ?? [])
+            .Where(s => s.CanUserAccess(userId, userTeamIds, IsAdmin))
+            .ToList();
+        _outgoingServers = (settings.SendingServers ?? [])
+            .Where(s => s.CanUserAccess(userId, userTeamIds, IsAdmin))
+            .ToList();
+
+        if (Account.CustomImapPort <= 0) Account.CustomImapPort = 993;
+        if (Account.CustomSmtpPort <= 0) Account.CustomSmtpPort = 587;
+
+        var ownerId = !string.IsNullOrWhiteSpace(Account.OwnerEmployeeId) ? Account.OwnerEmployeeId : CurrentUserId;
+        var ownerEmp = !string.IsNullOrWhiteSpace(ownerId) ? Db.Employees.GetById(ownerId) : null;
+        _defaultSenderDisplayName = !string.IsNullOrWhiteSpace(ownerEmp?.FullName)
+            ? ownerEmp.FullName.Trim()
+            : (Db.CompanyProfile.Get()?.CompanyName?.Trim() ?? string.Empty);
+
+        EmailSendingIdentity? existingIdentity = null;
+        if (!string.IsNullOrWhiteSpace(Account.AutoCreatedIdentityId))
+        {
+            existingIdentity = Db.EmailSendingIdentities.GetById(Account.AutoCreatedIdentityId);
+        }
+        existingIdentity ??= Db.EmailSendingIdentities.GetAll().FirstOrDefault(i =>
+            i.SourceType == EmailIdentitySourceType.RealInbox &&
+            string.Equals(i.SourceAccountId, Account.Id, StringComparison.OrdinalIgnoreCase));
+
+        if (existingIdentity != null &&
+            !string.IsNullOrWhiteSpace(existingIdentity.DisplayName) &&
+            !string.Equals(existingIdentity.DisplayName.Trim(), Account.Name?.Trim(), StringComparison.OrdinalIgnoreCase))
+        {
+            _senderDisplayName = existingIdentity.DisplayName.Trim();
+        }
+        else
+        {
+            _senderDisplayName = _defaultSenderDisplayName;
+        }
+
+        if (!string.IsNullOrEmpty(Account.IncomingServerConfigId) &&
+            _incomingServers.Any(s => s.Id == Account.IncomingServerConfigId))
+        {
+            OnSourceKeyChanged($"server:{Account.IncomingServerConfigId}");
+        }
+        else if (!string.IsNullOrEmpty(Account.CustomImapHost))
+        {
+            _selectedSourceKey = CustomSourceKey;
+            var matchedPreset = EmailProviderPresets.DetectByImapHost(Account.CustomImapHost);
+            OnPresetChanged(matchedPreset?.Id ?? EmailProviderPresets.CustomPresetId);
+        }
+        else if (_incomingServers.Count > 0)
+        {
+            OnSourceKeyChanged($"server:{_incomingServers[0].Id}");
+        }
+        else
+        {
+            _selectedSourceKey = CustomSourceKey;
+            OnPresetChanged("gmail");
+        }
+    }
+
+    private void OnSourceKeyChanged(string key)
+    {
+        _selectedSourceKey = key ?? CustomSourceKey;
+
+        if (_selectedSourceKey.StartsWith("server:", StringComparison.OrdinalIgnoreCase))
+        {
+            var serverId = _selectedSourceKey["server:".Length..];
+            var server = _incomingServers.FirstOrDefault(s => s.Id == serverId);
+            Account.IncomingServerConfigId = server?.Id;
+            Account.OutgoingServerConfigId = ResolvePairedOutgoingServerId(server);
+            Account.CustomImapHost = string.Empty;
+            Account.CustomSmtpHost = string.Empty;
+        }
+        else
+        {
+            Account.IncomingServerConfigId = null;
+            Account.OutgoingServerConfigId = null;
+            OnPresetChanged(_selectedPresetId);
+        }
+    }
+
+    private void OnPresetChanged(string presetId)
+    {
+        _selectedPresetId = string.IsNullOrWhiteSpace(presetId)
+            ? EmailProviderPresets.CustomPresetId
+            : presetId;
+
+        Account.IncomingServerConfigId = null;
+        Account.OutgoingServerConfigId = null;
+
+        var preset = EmailProviderPresets.GetById(_selectedPresetId);
+        if (preset != null)
+        {
+            Account.CustomImapHost = preset.ImapHost;
+            Account.CustomImapPort = preset.ImapPort;
+            Account.CustomImapSsl = preset.ImapSsl;
+            Account.CustomSmtpHost = preset.SmtpHost;
+            Account.CustomSmtpPort = preset.SmtpPort;
+            Account.CustomSmtpSsl = preset.SmtpSsl;
+
+            if (string.IsNullOrWhiteSpace(Account.Name))
+            {
+                Account.Name = preset.Name;
+            }
+        }
+    }
+
+    private string? ResolvePairedOutgoingServerId(IncomingServerConfig? server)
+    {
+        if (server == null) return null;
+
+        var incomingDom = server.Domain?.Trim().TrimStart('@') ?? string.Empty;
+
+        if (!string.IsNullOrWhiteSpace(server.DefaultOutgoingServerId))
+        {
+            var paired = _outgoingServers.FirstOrDefault(o => o.Id == server.DefaultOutgoingServerId);
+            if (paired != null)
+            {
+                var pairedDom = paired.Domain?.Trim().TrimStart('@') ?? string.Empty;
+                if (string.IsNullOrWhiteSpace(incomingDom) ||
+                    string.IsNullOrWhiteSpace(pairedDom) ||
+                    string.Equals(incomingDom, pairedDom, StringComparison.OrdinalIgnoreCase))
+                {
+                    return paired.Id;
+                }
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(incomingDom))
+        {
+            var match = _outgoingServers.FirstOrDefault(o =>
+                !string.IsNullOrWhiteSpace(o.Domain) &&
+                string.Equals(o.Domain.Trim().TrimStart('@'), incomingDom, StringComparison.OrdinalIgnoreCase));
+            return match?.Id;
+        }
+
+        return _outgoingServers.FirstOrDefault(o => string.IsNullOrWhiteSpace(o.Domain))?.Id;
+    }
+
+    private async Task DetectSenderNameFromImapAsync()
+    {
+        try
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            var detected = await ImapConnectionFactory.TryDetectSenderDisplayNameAsync(
+                Account,
+                string.IsNullOrWhiteSpace(_plainPassword) ? null : _plainPassword,
+                cts.Token);
+
+            if (!string.IsNullOrWhiteSpace(detected))
+            {
+                _senderDisplayName = detected;
+                Snackbar.Add(string.Format(Loc["Detected sender name: {0}"].Value, detected), Severity.Success);
+                StateHasChanged();
+            }
+            else
+            {
+                Snackbar.Add(Loc["No sender display name found in IMAP Sent folder; using default name."].Value, Severity.Info);
+            }
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add(ex.Message, Severity.Warning);
+        }
+    }
+
+    private async Task TestConnectionAsync()
+    {
+        _isTesting = true;
+        StateHasChanged();
+        try
+        {
+            var (success, message) = await ImapConnectionFactory.TestConnectionAsync(
+                Account,
+                string.IsNullOrWhiteSpace(_plainPassword) ? null : _plainPassword);
+
+            if (success && (string.IsNullOrWhiteSpace(_senderDisplayName) ||
+                            string.Equals(_senderDisplayName.Trim(), _defaultSenderDisplayName, StringComparison.OrdinalIgnoreCase)))
+            {
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(4));
+                var detected = await ImapConnectionFactory.TryDetectSenderDisplayNameAsync(
+                    Account,
+                    string.IsNullOrWhiteSpace(_plainPassword) ? null : _plainPassword,
+                    cts.Token);
+                if (!string.IsNullOrWhiteSpace(detected))
+                {
+                    _senderDisplayName = detected;
+                }
+            }
+
+            Snackbar.Add(message, success ? Severity.Success : Severity.Error);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add(ex.Message, Severity.Error);
+        }
+        finally
+        {
+            _isTesting = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task SaveAsync()
+    {
+        if (SelectedIncomingServer != null &&
+            !string.IsNullOrWhiteSpace(SelectedIncomingServer.Domain) &&
+            !string.IsNullOrWhiteSpace(Account.EmailAddress) &&
+            !Account.EmailAddress.Contains('@'))
+        {
+            Account.EmailAddress = $"{Account.EmailAddress.Trim()}@{SelectedIncomingServer.Domain.Trim().TrimStart('@')}";
+        }
+
+        if (string.IsNullOrWhiteSpace(Account.EmailAddress) && string.IsNullOrWhiteSpace(Account.Username))
+        {
+            Snackbar.Add(Loc["Email address is required."].Value, Severity.Warning);
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(Account.Name))
+        {
+            Account.Name = Account.EmailAddress;
+        }
+
+        if (!string.IsNullOrWhiteSpace(_plainPassword))
+        {
+            Account.EncryptedPassword = EncryptionService.Encrypt(_plainPassword);
+        }
+
+        if (string.IsNullOrEmpty(Account.EncryptedPassword))
+        {
+            Snackbar.Add(Loc["Password is required."].Value, Severity.Warning);
+            return;
+        }
+
+        _isSaving = true;
+        StateHasChanged();
+        try
+        {
+            if (IsNew && (string.IsNullOrWhiteSpace(_senderDisplayName) ||
+                          string.Equals(_senderDisplayName.Trim(), _defaultSenderDisplayName, StringComparison.OrdinalIgnoreCase)))
+            {
+                try
+                {
+                    using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+                    var detected = await ImapConnectionFactory.TryDetectSenderDisplayNameAsync(
+                        Account,
+                        string.IsNullOrWhiteSpace(_plainPassword) ? null : _plainPassword,
+                        cts.Token);
+                    if (!string.IsNullOrWhiteSpace(detected))
+                    {
+                        _senderDisplayName = detected;
+                    }
+                }
+                catch
+                {
+                    // Fallback to _senderDisplayName / _defaultSenderDisplayName
+                }
+            }
+
+            var finalSenderName = !string.IsNullOrWhiteSpace(_senderDisplayName)
+                ? _senderDisplayName.Trim()
+                : _defaultSenderDisplayName;
+
+            // Automatically create/update the Real Inbox's Sending Identity with its dedicated Sender Display Name
+            EmailInboxService.EnsureRealInboxSendingIdentity(Account, finalSenderName);
+
+            MudDialog.Close(DialogResult.Ok(Account));
+        }
+        finally
+        {
+            _isSaving = false;
+        }
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+}

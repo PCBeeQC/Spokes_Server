@@ -1,3 +1,5 @@
+using System;
+using System.Text.Encodings.Web;
 using Microsoft.AspNetCore.Http;
 
 namespace Spokes_Server.Core.Security;
@@ -28,27 +30,39 @@ public static class MobileSsoHelper
     }
 
     /// <summary>
-    /// Creates a minimal HTML page that clears the mobile session cookies and redirects to the server base URL.
+    /// Creates a minimal HTML page that clears the mobile session cookies/preferences and redirects to the server base URL.
     /// </summary>
     public static string CreateMobileLocalLogoutPage(string serverBaseUrl)
     {
+        var safeBaseUrl = JavaScriptEncoder.Default.Encode(serverBaseUrl ?? "/");
+        var cleanupScript = BuildMobileStorageCleanupScript();
         return $@"
             <!DOCTYPE html>
             <html>
+            <head>
+                <meta charset='utf-8' />
+                <script src='/js/capacitor-init.js'></script>
+            </head>
             <body>
                 <script>
                     window._ssoAttempts = 0;
-                    document.cookie = 'Spokes_Refresh=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;';
-                    window.location.href = '{serverBaseUrl}?client=mobile&cb=' + Date.now();
+                    document.addEventListener('DOMContentLoaded', async () => {{
+                        await new Promise(r => setTimeout(r, 150));
+                        {cleanupScript}
+                        window.location.href = '{safeBaseUrl}?client=mobile&cb=' + Date.now();
+                    }});
                 </script>
             </body>
             </html>
         ";
     }
 
-    public static string CreateMobileLogoutPage(HttpContext context, string reqId)
+    public static string CreateMobileLogoutPage(HttpContext context, string reqId, string? configuredPublicUrl = null)
     {
-        var serverBase = $"{context.Request.Scheme}://{context.Request.Host}";
+        var serverBase = ServerUrlResolver.GetSafeServerBaseUrl(context, configuredPublicUrl);
+        var jsServerBase = JavaScriptEncoder.Default.Encode(serverBase);
+        var jsReqId = JavaScriptEncoder.Default.Encode(Uri.EscapeDataString(reqId ?? string.Empty));
+        var cleanupScript = BuildMobileStorageCleanupScript();
 
         return $@"
             <!DOCTYPE html>
@@ -97,23 +111,45 @@ public static class MobileSsoHelper
                             // Wait briefly for capacitor-init.js to register
                             await new Promise(r => setTimeout(r, 300));
 
+                            {cleanupScript}
+
+                            // Open the IdP end-session URL via the native auth browser
+                            // (ASWebAuthenticationSession / AuthTabIntent) — same browser mechanism
+                            // used for login, so the request carries the IdP's session cookie.
+                            var targetUrl = '{jsServerBase}/sso/mobile-logout-post?reqId={jsReqId}';
+                            if (window.openSsoLogout) {{
+                                await window.openSsoLogout(targetUrl);
+                            }} else if (window.openCapacitorBrowser) {{
+                                await window.openCapacitorBrowser(targetUrl);
+                            }}
+
+                            // Navigate to login after logout completes
+                            window.location.href = '{jsServerBase}/sso/login/auto?client=mobile';
+                        }});
+                    </script>
+                </body>
+            </html>
+        ";
+    }
+
+    private static string BuildMobileStorageCleanupScript() => @"
                             // Clear native persistent storage for the refresh token
-                            try {{
-                                if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.Preferences) {{
+                            try {
+                                if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.Preferences) {
                                     const refreshKey = 'spokes_refresh_' + window.location.hostname;
-                                    await window.Capacitor.Plugins.Preferences.remove({{ key: refreshKey }});
+                                    await window.Capacitor.Plugins.Preferences.remove({ key: refreshKey });
                                     const vaultKey = 'chat_vault_key_' + window.location.hostname;
-                                    await window.Capacitor.Plugins.Preferences.remove({{ key: vaultKey }});
+                                    await window.Capacitor.Plugins.Preferences.remove({ key: vaultKey });
                                     // Also clear legacy un-namespaced keys from pre-migration installs
-                                    await window.Capacitor.Plugins.Preferences.remove({{ key: 'spokes_refresh' }});
-                                    await window.Capacitor.Plugins.Preferences.remove({{ key: 'chat_vault_key' }});
+                                    await window.Capacitor.Plugins.Preferences.remove({ key: 'spokes_refresh' });
+                                    await window.Capacitor.Plugins.Preferences.remove({ key: 'chat_vault_key' });
                                     console.log('[SSO] Cleared ' + refreshKey + ', ' + vaultKey + ', and legacy keys from Preferences.');
-                                }}
-                            }} catch(e) {{ console.error('[SSO] Error clearing Preferences:', e); }}
+                                }
+                            } catch(e) { console.error('[SSO] Error clearing Preferences:', e); }
 
                             // Clear specific HTTP cookies from the native store for THIS origin only
-                            try {{
-                                if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.CapacitorCookies) {{
+                            try {
+                                if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.CapacitorCookies) {
                                     const cookiesToClear = [
                                         'Spokes_Refresh',
                                         'Spokes_Session',
@@ -123,12 +159,12 @@ public static class MobileSsoHelper
                                         'chat_vault_key'
                                     ];
                                     const targetUrl = window.location.origin;
-                                    for (const key of cookiesToClear) {{
-                                        await window.Capacitor.Plugins.CapacitorCookies.deleteCookie({{ url: targetUrl, key: key }});
-                                    }}
+                                    for (const key of cookiesToClear) {
+                                        await window.Capacitor.Plugins.CapacitorCookies.deleteCookie({ url: targetUrl, key: key });
+                                    }
                                     console.log('[SSO] Cleared native cookies for origin:', targetUrl);
-                                }}
-                            }} catch(e) {{ console.error('[SSO] Error clearing native cookies:', e); }}
+                                }
+                            } catch(e) { console.error('[SSO] Error clearing native cookies:', e); }
 
                             // Fallback JS clear
                             document.cookie = 'Spokes_Refresh=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;';
@@ -143,24 +179,5 @@ public static class MobileSsoHelper
                             document.cookie = 'chat_vault_key=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;';
 
                             // Set explicit logout flag to halt auto-login loops
-                            localStorage.setItem('spokes_explicit_logout', 'true');
-
-                            // Open the IdP end-session URL via the native auth browser
-                            // (ASWebAuthenticationSession / AuthTabIntent) — same browser mechanism
-                            // used for login, so the request carries the IdP's session cookie.
-                            var targetUrl = '{serverBase}/sso/mobile-logout-post?reqId={reqId}';
-                            if (window.openSsoLogout) {{
-                                await window.openSsoLogout(targetUrl);
-                            }} else if (window.openCapacitorBrowser) {{
-                                await window.openCapacitorBrowser(targetUrl);
-                            }}
-
-                            // Navigate to login after logout completes
-                            window.location.href = '{serverBase}/sso/login/auto?client=mobile';
-                        }});
-                    </script>
-                </body>
-            </html>
-        ";
-    }
+                            localStorage.setItem('spokes_explicit_logout', 'true');";
 }

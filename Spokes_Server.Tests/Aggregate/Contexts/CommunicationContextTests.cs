@@ -52,6 +52,9 @@ public class CommunicationContextTests : TestDataTestBase
         Assert.NotNull(_context.ClientStates);
         Assert.NotNull(_context.ReportedMessages);
         Assert.NotNull(_context.Albums);
+        Assert.NotNull(_context.EmailAccounts);
+        Assert.NotNull(_context.EmailInboxes);
+        Assert.NotNull(_context.EmailSendingIdentities);
         Assert.NotNull(_context.EmailFolders);
         Assert.NotNull(_context.EmailMessages);
         Assert.NotNull(_context.PublicContacts);
@@ -64,7 +67,7 @@ public class CommunicationContextTests : TestDataTestBase
         var profile = _companyProfileRepo.GetOrCreate();
         profile.Chat.MaxChatCacheSizeMb = 42;
         profile.Push.VapidSubject = "mailto:custom@spokes.local";
-        profile.EmailSettings.ImapHost = "imap.custom.local";
+        profile.EmailSettings.IncomingServers.Add(new IncomingServerConfig { Name = "Custom", Host = "imap.custom.local" });
         _companyProfileRepo.Save(profile);
 
         Assert.Equal(42, _context.GetChatConfig().MaxChatCacheSizeMb);
@@ -73,8 +76,8 @@ public class CommunicationContextTests : TestDataTestBase
         Assert.Equal("mailto:custom@spokes.local", _context.GetPushConfig().VapidSubject);
         Assert.Equal("mailto:custom@spokes.local", _context.PushConfig.VapidSubject);
 
-        Assert.Equal("imap.custom.local", _context.GetEmailSettings().ImapHost);
-        Assert.Equal("imap.custom.local", _context.EmailSettings.ImapHost);
+        Assert.Single(_context.GetEmailSettings().IncomingServers);
+        Assert.Equal("imap.custom.local", _context.EmailSettings.IncomingServers[0].Host);
     }
 
     [Fact]

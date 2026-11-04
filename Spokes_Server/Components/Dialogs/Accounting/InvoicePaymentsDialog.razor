@@ -1,0 +1,252 @@
+@using Spokes_Server.Core.Constants
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Services.Accounting
+@using Spokes_Server.Core.Services.Identity
+@using Spokes_Server.Core.Data
+@inject Database Db
+@inject IAccountingService AccountingService
+@inject UserService UserService
+@inject IDialogService DialogService
+@inject ISnackbar Snackbar
+
+<MudDialog>
+    <TitleContent>
+        <div class="d-flex align-center gap-2">
+            <MudIcon Icon="@Icons.Material.Filled.Payments" Color="Color.Primary" />
+            <MudText Typo="Typo.h6">@string.Format(BizLoc["Payments - Invoice #{0}"].Value, Invoice.InvoiceNumber)</MudText>
+        </div>
+    </TitleContent>
+    <DialogContent>
+        @if (!_canManageAccounting)
+        {
+            <MudAlert Severity="Severity.Error">@BizLoc["You do not have permission to manage invoice payments."]</MudAlert>
+        }
+        else
+        {
+            <!-- Financial Summary Bar -->
+            <MudPaper Class="pa-4 mb-4" Elevation="0" Outlined="true" Style="background-color: var(--mud-palette-background-grey);">
+                <MudGrid Spacing="2" Class="align-center">
+                    <MudItem xs="6" sm="3">
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">@BizLoc["Grand Total"]</MudText>
+                        <MudText Typo="Typo.subtitle1" Style="font-weight: 600;">@Invoice.GrandTotal.ToString("C2")</MudText>
+                    </MudItem>
+                    <MudItem xs="6" sm="3">
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">@BizLoc["Amount Paid"]</MudText>
+                        <MudText Typo="Typo.subtitle1" Color="Color.Success" Style="font-weight: 600;">@Invoice.AmountPaid.ToString("C2")</MudText>
+                    </MudItem>
+                    <MudItem xs="6" sm="3">
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">@BizLoc["Balance Due"]</MudText>
+                        <MudText Typo="Typo.subtitle1" Color="@(Invoice.BalanceDue > 0 ? Color.Error : Color.Default)" Style="font-weight: 600;">@Invoice.BalanceDue.ToString("C2")</MudText>
+                    </MudItem>
+                    <MudItem xs="6" sm="3" Class="d-flex flex-column align-end">
+                        <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-1">@BizLoc["Status"]</MudText>
+                        <StatusChip Status="@Invoice.Status" />
+                    </MudItem>
+                </MudGrid>
+            </MudPaper>
+
+            <!-- Actions Header -->
+            <div class="d-flex justify-space-between align-center mb-3">
+                <MudText Typo="Typo.subtitle2">@BizLoc["Recorded Payments"] (@Invoice.Payments.Count)</MudText>
+                @if (_canManageAccounting)
+                {
+                    <MudButton Variant="Variant.Filled"
+                               Color="Color.Primary"
+                               Size="Size.Small"
+                               StartIcon="@Icons.Material.Filled.Add"
+                               OnClick="AddPayment">
+                        @BizLoc["Record Payment"]
+                    </MudButton>
+                }
+            </div>
+
+            <!-- Payments List -->
+            @if (Invoice.Payments.Count == 0)
+            {
+                <MudAlert Severity="Severity.Info" Class="my-2">
+                    @BizLoc["No payments recorded yet for this invoice."]
+                </MudAlert>
+            }
+            else
+            {
+                <MudTable Items="@Invoice.Payments" Dense="true" Elevation="0" Outlined="true" Hover="true">
+                    <HeaderContent>
+                        <MudTh>@BizLoc["Date"]</MudTh>
+                        <MudTh>@BizLoc["Amount"]</MudTh>
+                        <MudTh>@BizLoc["Method"]</MudTh>
+                        <MudTh>@BizLoc["Reference"]</MudTh>
+                        <MudTh>@BizLoc["Notes"]</MudTh>
+                        <MudTh Style="width: 110px; text-align: right;">@Loc["Actions"]</MudTh>
+                    </HeaderContent>
+                    <RowTemplate Context="payment">
+                        <MudTd DataLabel="Date">@payment.Date.ToShortDateString()</MudTd>
+                        <MudTd DataLabel="Amount">
+                            <span style="font-weight: 600; color: var(--mud-palette-success);">@payment.Amount.ToString("C2")</span>
+                        </MudTd>
+                        <MudTd DataLabel="Method">@payment.Method</MudTd>
+                        <MudTd DataLabel="Reference">@(string.IsNullOrWhiteSpace(payment.Reference) ? "-" : payment.Reference)</MudTd>
+                        <MudTd DataLabel="Notes">
+                            @if (!string.IsNullOrWhiteSpace(payment.Notes))
+                            {
+                                <MudText Typo="Typo.body2" Style="max-width: 250px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                                    @payment.Notes
+                                </MudText>
+                            }
+                            else
+                            {
+                                <MudText Typo="Typo.body2" Color="Color.Secondary">-</MudText>
+                            }
+                        </MudTd>
+                        <MudTd Style="text-align: right; white-space: nowrap;">
+                            <div class="d-flex justify-end align-center gap-1">
+                                <MudTooltip Text="@BizLoc["Edit Payment"]">
+                                    <MudIconButton Icon="@Icons.Material.Filled.Edit"
+                                                   Size="Size.Small"
+                                                   Color="Color.Primary"
+                                                   OnClick="@(() => EditPayment(payment))" />
+                                </MudTooltip>
+                                <MudTooltip Text="@BizLoc["Delete Payment"]">
+                                    <MudIconButton Icon="@Icons.Material.Filled.Delete"
+                                                   Size="Size.Small"
+                                                   Color="Color.Error"
+                                                   OnClick="@(() => DeletePayment(payment))" />
+                                </MudTooltip>
+                                <MudMenu Icon="@Icons.Material.Filled.MoreVert" Size="Size.Small" Dense="true" AnchorOrigin="Origin.BottomRight" TransformOrigin="Origin.TopRight">
+                                    <MudMenuItem Icon="@Icons.Material.Filled.Edit" OnClick="@(() => EditPayment(payment))">
+                                        @BizLoc["Edit Payment"]
+                                    </MudMenuItem>
+                                    <MudMenuItem Icon="@Icons.Material.Filled.Delete" IconColor="Color.Error" OnClick="@(() => DeletePayment(payment))">
+                                        @BizLoc["Delete Payment"]
+                                    </MudMenuItem>
+                                </MudMenu>
+                            </div>
+                        </MudTd>
+                    </RowTemplate>
+                </MudTable>
+            }
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Close">@Loc["Close"]</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
+
+    [Parameter] public Invoice Invoice { get; set; } = default!;
+
+    private bool _canManageAccounting;
+    private string? _currentUser;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var emp = await UserService.GetEmployeeAsync();
+        _canManageAccounting = emp != null && (emp.IsAdmin || emp.HasPermission(AppPermissions.Finance.AccessAccounting));
+        _currentUser = emp?.FullName ?? emp?.Email;
+
+        if (!_canManageAccounting)
+        {
+            MudDialog.Cancel();
+            Snackbar.Add(BizLoc["You do not have permission to manage invoice payments."], Severity.Error);
+            return;
+        }
+
+        // Fresh load from DB
+        var fresh = Db.Invoices.GetById(Invoice.Id);
+        if (fresh != null)
+        {
+            Invoice = fresh;
+        }
+    }
+
+    private async Task AddPayment()
+    {
+        if (!_canManageAccounting) return;
+
+        var parameters = new DialogParameters<RecordPaymentDialog>
+        {
+            { x => x.MaxAmount, Math.Max(0, Invoice.BalanceDue) },
+            { x => x.Message, string.Format(BizLoc["Record payment for invoice #{0}."].Value, Invoice.InvoiceNumber) },
+            { x => x.ExistingPayments, Invoice.Payments }
+        };
+
+        var dialog = await DialogService.ShowAsync<RecordPaymentDialog>(BizLoc["Record Payment"].Value, parameters);
+        var result = await dialog.Result;
+
+        if (result is { Canceled: false, Data: PaymentRecord newPayment })
+        {
+            try
+            {
+                AccountingService.RecordInvoicePayment(Invoice, newPayment, _currentUser);
+                Invoice = Db.Invoices.GetById(Invoice.Id) ?? Invoice;
+                Snackbar.Add(string.Format(BizLoc["Payment of {0} recorded successfully."].Value, newPayment.Amount.ToString("C2")), Severity.Success);
+            }
+            catch (Exception ex)
+            {
+                Snackbar.Add(ex.Message, Severity.Warning);
+            }
+        }
+    }
+
+    private async Task EditPayment(PaymentRecord payment)
+    {
+        if (!_canManageAccounting) return;
+
+        var maxAmount = Math.Max(0, Invoice.BalanceDue + payment.Amount);
+        var parameters = new DialogParameters<RecordPaymentDialog>
+        {
+            { x => x.PaymentToEdit, payment },
+            { x => x.MaxAmount, maxAmount },
+            { x => x.Message, string.Format(BizLoc["Edit payment for invoice #{0}."].Value, Invoice.InvoiceNumber) },
+            { x => x.SubmitButtonText, BizLoc["Save Changes"].Value }
+        };
+
+        var dialog = await DialogService.ShowAsync<RecordPaymentDialog>(BizLoc["Edit Payment"].Value, parameters);
+        var result = await dialog.Result;
+
+        if (result is { Canceled: false, Data: PaymentRecord updatedPayment })
+        {
+            try
+            {
+                AccountingService.UpdateInvoicePayment(Invoice, updatedPayment, _currentUser);
+                Invoice = Db.Invoices.GetById(Invoice.Id) ?? Invoice;
+                Snackbar.Add(BizLoc["Payment updated successfully."], Severity.Success);
+            }
+            catch (Exception ex)
+            {
+                Snackbar.Add(ex.Message, Severity.Warning);
+            }
+        }
+    }
+
+    private async Task DeletePayment(PaymentRecord payment)
+    {
+        if (!_canManageAccounting) return;
+
+        var confirm = await DialogService.ShowMessageBoxAsync(
+            BizLoc["Delete Payment"].Value,
+            string.Format(BizLoc["Are you sure you want to delete the payment of {0} received on {1}?"].Value, payment.Amount.ToString("C2"), payment.Date.ToShortDateString()),
+            yesText: Loc["Delete"].Value,
+            cancelText: Loc["Cancel"].Value);
+
+        if (confirm == true)
+        {
+            try
+            {
+                AccountingService.DeleteInvoicePayment(Invoice, payment.Id, _currentUser);
+                Invoice = Db.Invoices.GetById(Invoice.Id) ?? Invoice;
+                Snackbar.Add(BizLoc["Payment deleted successfully."], Severity.Success);
+            }
+            catch (Exception ex)
+            {
+                Snackbar.Add(ex.Message, Severity.Warning);
+            }
+        }
+    }
+
+    private void Close()
+    {
+        MudDialog.Close(DialogResult.Ok(Invoice));
+    }
+}

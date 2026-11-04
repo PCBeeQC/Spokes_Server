@@ -1,5 +1,6 @@
 @page "/setup"
 @attribute [AllowAnonymous]
+@attribute [Spokes_Server.Core.Security.AllowDuringSetup]
 @layout LoginLayout
 @using Microsoft.AspNetCore.Authorization
 @using Microsoft.Extensions.Hosting
@@ -279,7 +280,7 @@
                             </MudItem>
                             <MudItem xs="12" sm="4">
                                 <MudText Typo="Typo.caption" Color="Color.Secondary">@Loc["Push Notifications Expiry Date"]</MudText>
-                                <MudText Typo="Typo.body2">@license.ValidForUpdatesUntil.ToString("yyyy-MM-dd")</MudText>
+                                <MudText Typo="Typo.body2">@(LicenseValidationService.IsLifetimeExpiry(license.ValidForUpdatesUntil) ? Loc["Never"].Value : license.ValidForUpdatesUntil.ToString("yyyy-MM-dd"))</MudText>
                             </MudItem>
                             <MudItem xs="12" sm="4">
                                 <MudText Typo="Typo.caption" Color="Color.Secondary">@Loc["Time Until Expiry"]</MudText>
@@ -723,6 +724,11 @@
         config.LiveKitFallbackPort = _fallbackPort;
         config.LiveKitUdpStartPort = _udpStartPort;
         config.LiveKitUdpEndPort = _udpEndPort;
+        var envLogLevel = Environment.GetEnvironmentVariable("Spokes_LiveKit_Log_Level");
+        if (!string.IsNullOrWhiteSpace(envLogLevel))
+        {
+            config.LiveKitLogLevel = Spokes_Server.Core.Services.Communication.Voice.LiveKitService.NormalizeLogLevel(envLogLevel);
+        }
         config.EnableAutoUpdate = _enableAutoUpdate;
         Db.SystemConfigs.Save(config);
 
@@ -947,6 +953,9 @@
 
     private string GetTimeUntilExpiry(DateTime expiry)
     {
+        if (LicenseValidationService.IsLifetimeExpiry(expiry))
+            return Loc["Lifetime"].Value;
+
         var span = expiry - DateTime.UtcNow;
         if (span.TotalDays < 0) return string.Format(Loc["Expired {0} days ago"].Value, (int)Math.Abs(span.TotalDays));
         

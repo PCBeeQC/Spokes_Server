@@ -713,5 +713,34 @@ window.spokesUpload = {
             };
             img.src = url;
         });
+    },
+
+    /**
+     * Imports an existing sample file from Data/DemoMedia on the server into the target category/context.
+     * @param {string} uploadUrl The target upload URL (containing category, contextId, and optional token)
+     * @param {string} fileName The name of the sample file in Data/DemoMedia
+     */
+    importDemoMedia: async function(uploadUrl, fileName) {
+        let importUrl = uploadUrl.replace('/spokesapi/files/', '/spokesapi/files/demo-media/import/');
+        const separator = importUrl.includes('?') ? '&' : '?';
+        importUrl += `${separator}fileName=${encodeURIComponent(fileName)}`;
+
+        let headers = {};
+        if (window.spokesAuth?.getHeaders) {
+            headers = await window.spokesAuth.getHeaders();
+        }
+
+        const response = await fetch(importUrl, {
+            method: 'POST',
+            headers: headers,
+            credentials: 'include'
+        });
+
+        if (!response.ok) {
+            const errText = await response.text();
+            throw new Error(errText || 'Failed to import sample media.');
+        }
+
+        return await response.text();
     }
 };

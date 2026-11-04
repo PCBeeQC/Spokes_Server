@@ -16,6 +16,7 @@ using Spokes_Server.Core.Models.Communication.Notifications;
 using Spokes_Server.Core.Models.Core;
 using Spokes_Server.Core.Models.HR;
 using Spokes_Server.Core.Services.Communication.Chat;
+using Spokes_Server.Core.Services.Communication.Email;
 using Spokes_Server.Core.Services.Communication.Notifications.InApp;
 using Spokes_Server.Core.Services.Communication.Notifications.Presentation;
 using Spokes_Server.Core.Services.Communication.Notifications.WebPush;
@@ -41,8 +42,10 @@ public class NotificationRoutingService : INotificationRoutingService
     private readonly PushTokenService? _pushTokenService;
     private readonly EmailFolderRepository _emailFolders;
     private readonly EmailMessageRepository _emailMessages;
+    private readonly IEmailInboxService _emailInboxService;
     private readonly ChatChannelRepository _chatChannels;
     private readonly ChatMessageRepository _chatMessages;
+    private readonly ReportedMessageRepository? _reportedMessages;
     private readonly CompanyProfileRepository _companyProfile;
     private readonly ILogger<NotificationRoutingService> _logger;
     private readonly IChatChannelAccessService _chatAccess;
@@ -71,7 +74,8 @@ public class NotificationRoutingService : INotificationRoutingService
         ILogger<NotificationRoutingService>? logger = null,
         PushTokenService? pushTokenService = null,
         IPushDecisionService? pushDecision = null,
-        IInAppNotificationDispatcher? inAppDispatcher = null)
+        IInAppNotificationDispatcher? inAppDispatcher = null,
+        IEmailInboxService? emailInboxService = null)
     {
         ArgumentNullException.ThrowIfNull(communicationContext);
         ArgumentNullException.ThrowIfNull(hrContext);
@@ -89,8 +93,17 @@ public class NotificationRoutingService : INotificationRoutingService
         _pushTokenService = pushTokenService ?? (dataProtection != null ? new PushTokenService(dataProtection) : null);
         _emailFolders = communicationContext.EmailFolders;
         _emailMessages = communicationContext.EmailMessages;
+        _emailInboxService = emailInboxService ?? new EmailInboxService(
+            communicationContext.EmailAccounts,
+            communicationContext.EmailInboxes,
+            communicationContext.EmailSendingIdentities,
+            communicationContext.EmailFolders,
+            communicationContext.EmailMessages,
+            hrContext.Employees,
+            hrContext.Teams);
         _chatChannels = communicationContext.ChatChannels;
         _chatMessages = communicationContext.ChatMessages;
+        _reportedMessages = communicationContext.ReportedMessages;
         _companyProfile = coreContext.CompanyProfile;
         _logger = logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<NotificationRoutingService>.Instance;
         _chatAccess = chatAccess;
@@ -104,21 +117,41 @@ public class NotificationRoutingService : INotificationRoutingService
     public virtual int GetTotalBadgeCount(string userId)
     {
         int total = 0;
+        var employee = _employees.GetById(userId);
+        var lastEmailVisitedAt = employee?.LastEmailVisitedAt;
 
-        // 1. Email Unread (using folder cache / index metadata)
-        var folders = _emailFolders.GetByEmployee(userId);
-        foreach (var folder in folders)
+        // 1. Email Unseen Unread (since the user last visited the Email page)
+        var inboxes = _emailInboxService.GetAccessibleInboxes(userId);
+        var realInboxes = _emailInboxService.GetAccessibleRealInboxes(userId);
+        if (inboxes.Count > 0 || realInboxes.Count > 0)
         {
-            if (folder.IsTrash || folder.IsDrafts) continue;
-            var unread = folder.UnreadCount > 0
-                ? folder.UnreadCount
-                : _emailMessages.GetUnreadCount(userId, folder.Path);
-            total += unread;
+            total += _emailInboxService.GetUnseenUnreadCountForUser(userId);
+        }
+        else
+        {
+            var accountIds = _emailInboxService.GetAccessibleAccounts(userId)
+                .Select(a => a.Id)
+                .Append(userId)
+                .Distinct(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var accId in accountIds)
+            {
+                var folders = _emailFolders.GetByAccount(accId);
+                foreach (var folder in folders)
+                {
+                    if (folder.IsTrash || folder.IsDrafts) continue;
+                    var unread = lastEmailVisitedAt.HasValue
+                        ? _emailMessages.GetUnreadCount(accId, folder.Path, m => m.Date > lastEmailVisitedAt.Value)
+                        : (folder.UnreadCount > 0
+                            ? folder.UnreadCount
+                            : _emailMessages.GetUnreadCount(accId, folder.Path));
+                    total += unread;
+                }
+            }
         }
 
         // 2. Chat Notified Unread
         var channels = _chatAccess.GetChannelsForUser(userId).Where(c => !c.IsArchived).ToList();
-        var employee = _employees.GetById(userId);
         foreach (var channel in channels)
         {
             var notifLevel = _readStates.GetNotificationLevel(userId, channel.Id, channel.ChannelType.ToString(), channel.IsVoiceChannel);
@@ -150,32 +183,80 @@ public class NotificationRoutingService : INotificationRoutingService
     public virtual BadgeBreakdownResult GetBadgeBreakdown(string userId)
     {
         int total = 0;
+        int emailUnseenTotal = 0;
         var breakdown = new Dictionary<string, int>();
+        var unreadByThread = new Dictionary<string, int>();
+        var readWatermarksUtc = new Dictionary<string, DateTime>();
+        var employee = _employees.GetById(userId);
+        var lastEmailVisitedAt = employee?.LastEmailVisitedAt;
 
-        // 1. Email Unread
-        var folders = _emailFolders.GetByEmployee(userId);
-        foreach (var folder in folders)
+        var emailThreadId = $"email-{userId}";
+        if (lastEmailVisitedAt.HasValue)
         {
-            if (folder.IsTrash || folder.IsDrafts) continue;
-            var unreadCount = folder.UnreadCount > 0
-                ? folder.UnreadCount
-                : _emailMessages.GetUnreadCount(userId, folder.Path);
-            if (unreadCount > 0)
+            readWatermarksUtc[emailThreadId] = lastEmailVisitedAt.Value.UtcDateTime;
+        }
+
+        // 1. Email Unseen Unread (since the user last visited the Email page)
+        var inboxes = _emailInboxService.GetAccessibleInboxes(userId);
+        var realInboxes = _emailInboxService.GetAccessibleRealInboxes(userId);
+        if (inboxes.Count > 0 || realInboxes.Count > 0)
+        {
+            var unseenCount = _emailInboxService.GetUnseenUnreadCountForUser(userId);
+            if (unseenCount > 0)
             {
-                total += unreadCount;
-                breakdown[$"Email_{folder.Path}"] = unreadCount;
+                total += unseenCount;
+                emailUnseenTotal += unseenCount;
+                breakdown["Email_Unseen"] = unseenCount;
             }
+        }
+        else
+        {
+            var accountIds = _emailInboxService.GetAccessibleAccounts(userId)
+                .Select(a => a.Id)
+                .Append(userId)
+                .Distinct(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var accId in accountIds)
+            {
+                var folders = _emailFolders.GetByAccount(accId);
+                foreach (var folder in folders)
+                {
+                    if (folder.IsTrash || folder.IsDrafts) continue;
+                    var unreadCount = lastEmailVisitedAt.HasValue
+                        ? _emailMessages.GetUnreadCount(accId, folder.Path, m => m.Date > lastEmailVisitedAt.Value)
+                        : (folder.UnreadCount > 0
+                            ? folder.UnreadCount
+                            : _emailMessages.GetUnreadCount(accId, folder.Path));
+                    if (unreadCount > 0)
+                    {
+                        total += unreadCount;
+                        emailUnseenTotal += unreadCount;
+                        breakdown[$"Email_{folder.Path}"] = unreadCount;
+                    }
+                }
+            }
+        }
+
+        if (emailUnseenTotal > 0)
+        {
+            unreadByThread[emailThreadId] = emailUnseenTotal;
         }
 
         // 2. Chat Notified Unread
         var channels = _chatAccess.GetChannelsForUser(userId).Where(c => !c.IsArchived).ToList();
-        var employee = _employees.GetById(userId);
         foreach (var channel in channels)
         {
             var notifLevel = _readStates.GetNotificationLevel(userId, channel.Id, channel.ChannelType.ToString(), channel.IsVoiceChannel);
             if (notifLevel == ChatNotificationLevel.None) continue;
 
             var lastReadAt = _readStates.GetLastReadAt(userId, channel.Id);
+            if (lastReadAt > DateTime.MinValue)
+            {
+                readWatermarksUtc[channel.Id] = lastReadAt.Kind == DateTimeKind.Utc
+                    ? lastReadAt
+                    : (lastReadAt.Kind == DateTimeKind.Local ? lastReadAt.ToUniversalTime() : DateTime.SpecifyKind(lastReadAt, DateTimeKind.Utc));
+            }
+
             int channelTotal = 0;
             if (notifLevel == ChatNotificationLevel.All)
             {
@@ -198,12 +279,36 @@ public class NotificationRoutingService : INotificationRoutingService
             if (channelTotal > 0)
             {
                 total += channelTotal;
+                unreadByThread[channel.Id] = channelTotal;
                 var channelName = !string.IsNullOrEmpty(channel.Name) ? channel.Name : channel.Id;
                 breakdown[$"Chat_{channelName}"] = channelTotal;
             }
         }
 
-        return new BadgeBreakdownResult { Count = total, Breakdown = breakdown };
+        // 3. Open Moderation Reports (populated in UnreadByThread for wake push reconciliation without altering email+chat badge total)
+        if (_reportedMessages != null &&
+            employee != null &&
+            employee.IsActive &&
+            employee.ModerationNotificationsEnabled &&
+            employee.HasPermission(Spokes_Server.Core.Constants.AppPermissions.Chat.Moderator))
+        {
+            foreach (var report in _reportedMessages.GetAll())
+            {
+                if (string.Equals(report.Status, ReportedMessageStatus.Open, StringComparison.OrdinalIgnoreCase))
+                {
+                    unreadByThread[$"mod-{report.Id}"] = 1;
+                }
+            }
+        }
+
+        return new BadgeBreakdownResult
+        {
+            Count = total,
+            Breakdown = breakdown,
+            UnreadByThread = unreadByThread,
+            ReadWatermarksUtc = readWatermarksUtc,
+            ServerTimeUtc = DateTime.UtcNow
+        };
     }
 
     /// <summary>
@@ -263,8 +368,9 @@ public class NotificationRoutingService : INotificationRoutingService
             }
 
             // 2. Dispatch Push Notification only if user is away/offline and has push enabled
+            IReadOnlyCollection<string>? excludedSessionIds = null;
             var tier = _pushDecision?.DetermineNotificationTier(userId) ?? PresenceTier.All;
-            if (tier == PresenceTier.None)
+            if (!ApplyChatPushRouting(userId, isCall, ref tier, out excludedSessionIds))
             {
                 return;
             }
@@ -302,6 +408,8 @@ public class NotificationRoutingService : INotificationRoutingService
                 Badge = badgeCount,
                 IsSilent = isSilent,
                 Sound = sound,
+                ExcludedSessionIds = excludedSessionIds,
+                SentAtUtc = message.SentAt == default ? DateTime.UtcNow : message.SentAt,
                 IsEncrypted = message.IsEncrypted,
                 MaskedBody = maskedBody
             };
@@ -318,6 +426,43 @@ public class NotificationRoutingService : INotificationRoutingService
         await Task.WhenAll(tasks);
     }
 
+    private bool ApplyChatPushRouting(
+        string userId,
+        bool isCall,
+        ref PresenceTier tier,
+        out IReadOnlyCollection<string>? excludedSessionIds)
+    {
+        excludedSessionIds = null;
+        if (isCall)
+        {
+            if (tier == PresenceTier.DesktopOnly)
+            {
+                // Incoming voice calls are time-critical: notify mobile devices immediately instead of delaying 60s
+                tier = PresenceTier.All;
+                return true;
+            }
+
+            if (tier == PresenceTier.None)
+            {
+                var focusedSessions = _pushDecision?.GetFocusedSessionIds(userId);
+                if (focusedSessions is { Count: > 0 })
+                {
+                    // Exclude only the actively focused device session(s) (which already play the in-app ringtone)
+                    // so any other connected phones/devices still ring via push.
+                    tier = PresenceTier.All;
+                    excludedSessionIds = focusedSessions;
+                    return true;
+                }
+
+                return false;
+            }
+
+            return true;
+        }
+
+        return tier != PresenceTier.None;
+    }
+
     public async Task ClearChannelNotificationsAsync(string channelId)
     {
         var participantIds = _chatAccess.GetUsersForChannel(channelId);
@@ -325,7 +470,7 @@ public class NotificationRoutingService : INotificationRoutingService
         {
             try
             {
-                await _webPush.SendClearNotificationAsync(userId, channelId);
+                await _webPush.SendClearNotificationAsync(userId, $"call_{channelId}");
             }
             catch (Exception ex)
             {
@@ -401,6 +546,7 @@ public class NotificationRoutingService : INotificationRoutingService
             IsGroupChat = isGroupChat,
             Badge = badgeCount,
             IsSilent = isSilent,
+            SentAtUtc = DateTime.UtcNow,
             IsEncrypted = message.IsEncrypted,
             MaskedBody = maskedBody
         };
@@ -418,46 +564,64 @@ public class NotificationRoutingService : INotificationRoutingService
     /// </summary>
     public async Task RouteEmailNotificationAsync(EmailMessage emailObj)
     {
-        var employee = _employees.GetById(emailObj.EmployeeId);
-        if (employee == null || !employee.PushNotificationsEnabled || !employee.EmailNotificationsEnabled) return;
-
-        var tier = _pushDecision?.DetermineNotificationTier(emailObj.EmployeeId) ?? PresenceTier.All;
-        var title = $"New Email from {emailObj.FromName}";
-        var body = emailObj.Subject;
-
-        var folder = _emailFolders.GetAll().FirstOrDefault(f => f.EmployeeId == emailObj.EmployeeId && f.Path == emailObj.FolderPath);
-        var url = folder != null ? $"/email/{folder.Id}/{emailObj.Id}" : "/email";
-
-        var icon = _pushTokenService?.GetDefaultIconUrl(emailObj.EmployeeId) ?? "/spokesapi/Media/Icon";
-        var tag = $"email-{emailObj.EmployeeId}";
-        var actions = new object[] { new { action = "open", title = "Read Email" } };
-
-        if (tier == PresenceTier.None)
+        var recipientIds = _emailInboxService.GetAuthorizedEmployeeIdsForMessage(emailObj);
+        if (recipientIds.Count == 0 && !string.IsNullOrEmpty(emailObj.AccountId))
         {
-            return;
+            // Fallback when AccountId matches a direct employee ID (e.g. unit tests)
+            var directEmployee = _employees.GetById(emailObj.AccountId);
+            if (directEmployee != null)
+            {
+                recipientIds.Add(directEmployee.Id);
+            }
         }
 
-        var badgeCount = GetTotalBadgeCount(emailObj.EmployeeId);
-        var request = new PushNotificationRequest
-        {
-            UserId = emailObj.EmployeeId,
-            Title = title,
-            Body = body,
-            Url = url,
-            Icon = icon,
-            Tier = tier,
-            Tag = tag,
-            Actions = actions,
-            Category = "email",
-            Badge = badgeCount
-        };
+        if (recipientIds.Count == 0) return;
 
-        await _webPush.SendNotificationAsync(request);
+        var folder = _emailFolders.GetByAccount(emailObj.AccountId).FirstOrDefault(f => f.Path == emailObj.FolderPath);
+        var url = folder != null ? $"/email/{folder.Id}/{emailObj.Id}" : "/email";
+        var title = $"New Email from {(!string.IsNullOrWhiteSpace(emailObj.FromName) ? emailObj.FromName : emailObj.FromAddress)}";
+        var body = emailObj.Subject;
+        var actions = new object[] { new { action = "open", title = "Read Email" } };
 
-        if (tier == PresenceTier.DesktopOnly)
+        foreach (var userId in recipientIds)
         {
-            // Queue a Delayed Mobile Push
-            _queue.EnqueueDelayedMobilePush(new DelayedMobileNotification(request, emailObj.Id, "email", "Email", TimeSpan.FromMinutes(1)));
+            var employee = _employees.GetById(userId);
+            if (employee == null || !employee.PushNotificationsEnabled || !employee.EmailNotificationsEnabled) continue;
+
+            var tier = _pushDecision?.DetermineNotificationTier(userId) ?? PresenceTier.All;
+            if (tier == PresenceTier.None) continue;
+
+            var icon = _pushTokenService?.GetDefaultIconUrl(userId) ?? "/spokesapi/Media/Icon";
+            var tag = $"email-{userId}";
+            var badgeCount = GetTotalBadgeCount(userId);
+
+            var userSoundChoice = employee.GetNotificationSound(NotificationCategories.Email);
+            var sound = NotificationSoundCatalog.GetEffectivePushSound(NotificationCategories.Email, userSoundChoice);
+
+            var request = new PushNotificationRequest
+            {
+                UserId = userId,
+                Title = title,
+                Body = body,
+                Url = url,
+                Icon = icon,
+                Tier = tier,
+                Tag = tag,
+                ThreadId = tag,
+                Actions = actions,
+                Category = NotificationCategories.Email,
+                Sound = sound,
+                Badge = badgeCount,
+                SentAtUtc = emailObj.Date == default ? DateTime.UtcNow : emailObj.Date.UtcDateTime
+            };
+
+            await _webPush.SendNotificationAsync(request);
+
+            if (tier == PresenceTier.DesktopOnly)
+            {
+                var contextChannelId = !string.IsNullOrEmpty(emailObj.AccountId) ? emailObj.AccountId : "email";
+                _queue.EnqueueDelayedMobilePush(new DelayedMobileNotification(request, emailObj.Id, contextChannelId, "Email", TimeSpan.FromMinutes(1)));
+            }
         }
     }
 
@@ -492,9 +656,11 @@ public class NotificationRoutingService : INotificationRoutingService
                 Icon = icon,
                 Tier = tier,
                 Tag = tag,
+                ThreadId = tag,
                 Actions = actions,
                 Category = "moderation",
-                Badge = badgeCount
+                Badge = badgeCount,
+                SentAtUtc = report.ReportedAt == default ? DateTime.UtcNow : report.ReportedAt
             };
 
             await _webPush.SendNotificationAsync(request);

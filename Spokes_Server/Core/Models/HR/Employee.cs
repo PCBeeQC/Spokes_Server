@@ -83,7 +83,7 @@ public class Employee : IDataEntity, IHasAssociatedFiles
         NotificationSounds[categoryId] = soundId;
 
     public string? LastSeenUpdateVersion { get; set; }
-
+    public DateTimeOffset? LastEmailVisitedAt { get; set; }
 
     // Custom Sidebar Ordering
     public bool UsesCustomSidebarOrder { get; set; }
@@ -91,15 +91,14 @@ public class Employee : IDataEntity, IHasAssociatedFiles
     public Dictionary<string, int> CustomChannelOrder { get; set; } = [];
 
     public string? AvatarBase64 { get; set; }
-
     public string? AvatarFile { get; set; }
-
     public uint AvatarVersion { get; set; } = 1;
 
     [JsonIgnore]
     public bool HasCustomAvatar => !string.IsNullOrEmpty(AvatarFile) || !string.IsNullOrEmpty(AvatarBase64);
 
     public string? ProfileColor { get; set; }
+    public string? LandingPage { get; set; }
     public List<string> FavoriteLinks { get; set; } = [];
     public List<string> RecentEmojis { get; set; } = [];
     public List<string> RecentGifs { get; set; } = [];
@@ -145,9 +144,7 @@ public class Employee : IDataEntity, IHasAssociatedFiles
     public bool DismissedLicenseBannerPermanently { get; set; }
     public DateTimeOffset? LicenseBannerRemindLaterDate { get; set; }
 
-    // Email Credentials (Portable Encrypted)
-    public string EncryptedEmailPassword { get; set; } = string.Empty;
-    public string SignatureHtml { get; set; } = string.Empty;
+    // Handwritten Document Signature
     public string? SignatureImageBase64 { get; set; }
 
     // The Flexible Permission List
@@ -167,7 +164,7 @@ public class Employee : IDataEntity, IHasAssociatedFiles
                 PermissionGroupIds.Clear();
                 PermissionGroups.Clear();
             }
-            else
+            else if (!PermissionGroupIds.Contains(value))
             {
                 PermissionGroupIds = [value];
             }
@@ -202,15 +199,15 @@ public class Employee : IDataEntity, IHasAssociatedFiles
     // Blocked Users
     public List<string> BlockedUserIds { get; set; } = [];
 
-    // The Logic: Admin can do anything. Others check the list.
+    // The Logic: Admin can do anything. Others check assigned PermissionGroups and granular Permissions.
     public bool HasPermission(string permission)
     {
         if (!IsActive || IsSuspended || IsBanned) return false;
         if (IsAdmin) return true;
         
-        if (PermissionGroupIds.Count > 0)
+        if (PermissionGroupIds.Count > 0 && PermissionGroups.Any(g => g != null && g.Permissions.Contains(permission)))
         {
-            return PermissionGroups.Any(g => g != null && g.Permissions.Contains(permission));
+            return true;
         }
 
         return Permissions.Contains(permission);
@@ -224,6 +221,3 @@ public class Employee : IDataEntity, IHasAssociatedFiles
         }
     }
 }
-
-
-

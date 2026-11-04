@@ -3,6 +3,7 @@ using System.Text.RegularExpressions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Spokes_Server.Aggregate.Contexts;
+using Spokes_Server.Core.Constants;
 using Spokes_Server.Core.Data.Repositories.Communication;
 using Spokes_Server.Core.Data.Repositories.HR;
 using Spokes_Server.Core.Data.Repositories.Projects;
@@ -42,6 +43,7 @@ public class ChatService : IChatService
     private readonly MarkdownSanitizerService _markdownSanitizer;
     private readonly IChatAuthorizationService _chatAuth;
     private readonly IUserPrivacyService? _privacyService;
+    private readonly FileTokenService? _fileTokenService;
 
     [ActivatorUtilitiesConstructor]
     public ChatService(
@@ -59,7 +61,8 @@ public class ChatService : IChatService
         ILogger<ChatService> logger,
         IChatAuthorizationService? chatAuth = null,
         ICryptoService? crypto = null,
-        IUserPrivacyService? privacyService = null)
+        IUserPrivacyService? privacyService = null,
+        FileTokenService? fileTokenService = null)
     {
         ArgumentNullException.ThrowIfNull(communicationContext);
         ArgumentNullException.ThrowIfNull(hrContext);
@@ -84,6 +87,7 @@ public class ChatService : IChatService
         ArgumentNullException.ThrowIfNull(logger);
         _logger = logger;
         _privacyService = privacyService;
+        _fileTokenService = fileTokenService;
         _chatAuth = chatAuth ?? new ChatAuthorizationService(_channels, _projects, _teams, _employees, privacyService);
     }
 
@@ -119,6 +123,12 @@ public class ChatService : IChatService
         {
             _logger.LogWarning("SendMessage failed: Employee not found: {SenderId}", senderId);
             return SpokesResult<ChatMessage>.Failure($"User '{senderId}' not found.", "NOT_FOUND");
+        }
+
+        if (!employee.IsActive || employee.IsSuspended || employee.IsBanned)
+        {
+            _logger.LogWarning("SendMessage failed: Employee {SenderId} is inactive, suspended, or banned", senderId);
+            return SpokesResult<ChatMessage>.Failure("User is not authorized to send messages.", "FORBIDDEN");
         }
 
         var channel = _channels.GetById(channelId);
@@ -161,14 +171,18 @@ public class ChatService : IChatService
             }
         }
 
-        // Process Attachments - Save to Disk
+        // Process Attachments - Save to Disk and Validate Channel Ownership
         var processedAttachments = new List<ChatAttachment>();
         if (attachments != null)
         {
+            var expectedChannelPrefix = $"/spokesapi/files/chat/{channelId}/";
             foreach (var att in attachments)
             {
+                if (string.IsNullOrEmpty(att.FilePath))
+                    continue;
+
                 // Check if it's base64 (starts with "data:")
-                if (!string.IsNullOrEmpty(att.FilePath) && att.FilePath.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
+                if (att.FilePath.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
                 {
                     try
                     {
@@ -181,12 +195,27 @@ public class ChatService : IChatService
                             // Update attachment to point to valid API URL returned by FileService
                             att.FilePath = url;
                         }
+                        else
+                        {
+                            continue;
+                        }
                     }
                     catch (Exception ex)
                     {
                         _logger.LogError(ex, "Failed to save attachment {FileName}", att.FileName);
                         continue; // Skip failed attachment
                     }
+                }
+                else
+                {
+                    var normalizedPath = att.FilePath.StartsWith('/') ? att.FilePath : "/" + att.FilePath;
+                    if (normalizedPath.Contains("..", StringComparison.Ordinal) ||
+                        !normalizedPath.StartsWith(expectedChannelPrefix, StringComparison.OrdinalIgnoreCase))
+                    {
+                        _logger.LogWarning("Rejected invalid or cross-channel attachment path {FilePath} for channel {ChannelId}", att.FilePath, channelId);
+                        continue;
+                    }
+                    att.FilePath = normalizedPath;
                 }
                 processedAttachments.Add(att);
             }
@@ -321,14 +350,20 @@ public class ChatService : IChatService
 
     public async Task MarkMessagesAsReadAsync(string userId, string channelId, IReadOnlyCollection<string> messageIds, CancellationToken cancellationToken = default)
     {
-        if (messageIds == null || messageIds.Count == 0) return;
+        if (string.IsNullOrWhiteSpace(userId) || string.IsNullOrWhiteSpace(channelId) || messageIds == null || messageIds.Count == 0)
+            return;
+
+        var channel = _channels.GetById(channelId);
+        var employee = _employees.GetById(userId);
+        if (channel == null || employee == null || !employee.IsActive || employee.IsSuspended || employee.IsBanned || !_chatAuth.CanUserAccessChannel(channel, employee))
+            return;
 
         var updatedMessages = new List<ChatMessage>();
         foreach (var messageId in messageIds.Distinct())
         {
             if (string.IsNullOrWhiteSpace(messageId)) continue;
             var message = _messages.GetById(messageId);
-            if (message == null || message.ChannelId != channelId) continue;
+            if (message == null || !string.Equals(message.ChannelId, channelId, StringComparison.Ordinal)) continue;
 
             if (!message.ReadBy.Contains(userId))
             {
@@ -365,11 +400,22 @@ public class ChatService : IChatService
 
     public async Task MarkChannelMessagesAsReadAsync(string userId, string channelId, int count = 50, CancellationToken cancellationToken = default)
     {
+        if (string.IsNullOrWhiteSpace(userId) || string.IsNullOrWhiteSpace(channelId))
+            return;
+
+        var channel = _channels.GetById(channelId);
+        var employee = _employees.GetById(userId);
+        if (channel == null || employee == null || !employee.IsActive || employee.IsSuspended || employee.IsBanned || !_chatAuth.CanUserAccessChannel(channel, employee))
+            return;
+
         var messages = await _messages.GetByChannelAsync(channelId, count, cancellationToken);
         var unreadMessages = new List<ChatMessage>();
 
         foreach (var msg in messages)
         {
+            if (!string.Equals(msg.ChannelId, channelId, StringComparison.Ordinal))
+                continue;
+
             if (msg.SenderId != userId && !msg.ReadBy.Contains(userId))
             {
                 msg.ReadBy.Add(userId);
@@ -397,7 +443,11 @@ public class ChatService : IChatService
     public async Task StartTypingAsync(string userId, string channelId, CancellationToken cancellationToken = default)
     {
         var employee = _employees.GetById(userId);
-        if (employee == null) return;
+        if (employee == null || !employee.IsActive || employee.IsSuspended || employee.IsBanned) return;
+
+        var channel = _channels.GetById(channelId);
+        if (channel != null && (!_chatAuth.CanUserAccessChannel(channel, employee) || !_chatAuth.CanUserPostToChannel(channel, employee)))
+            return;
 
         // Local
         _chatState.NotifyUserTyping(channelId, employee.Id, employee.FullName);
@@ -415,6 +465,13 @@ public class ChatService : IChatService
 
     public async Task StopTypingAsync(string userId, string channelId, CancellationToken cancellationToken = default)
     {
+        var employee = _employees.GetById(userId);
+        if (employee == null || !employee.IsActive || employee.IsSuspended || employee.IsBanned) return;
+
+        var channel = _channels.GetById(channelId);
+        if (channel != null && !_chatAuth.CanUserAccessChannel(channel, employee))
+            return;
+
         // Local
         _chatState.NotifyUserStoppedTyping(channelId, userId);
 
@@ -549,12 +606,185 @@ public class ChatService : IChatService
         return SpokesResult.Success();
     }
 
+    public virtual async Task<SpokesResult<ChatMessage>> ConvertMessageImagesToAlbumAsync(
+        string userId,
+        string messageId,
+        string? targetAlbumId,
+        string? newAlbumTitle,
+        string? privateKey = null,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(userId) || string.IsNullOrWhiteSpace(messageId))
+        {
+            return SpokesResult<ChatMessage>.Failure("UserId and MessageId are required.", "INVALID_ARGUMENT");
+        }
+
+        var message = _messages.GetById(messageId);
+        if (message == null || message.IsDeleted)
+        {
+            return SpokesResult<ChatMessage>.Failure($"Message '{messageId}' not found.", "NOT_FOUND");
+        }
+
+        var channel = _channels.GetById(message.ChannelId);
+        if (channel == null)
+        {
+            return SpokesResult<ChatMessage>.Failure($"Channel '{message.ChannelId}' not found.", "NOT_FOUND");
+        }
+
+        var employee = _employees.GetById(userId);
+        if (!string.Equals(message.SenderId, userId, StringComparison.OrdinalIgnoreCase) ||
+            !_chatAuth.CanUserModifyMessage(message, channel, employee))
+        {
+            _logger.LogWarning("ConvertMessageImagesToAlbum failed: User {UserId} denied access to Message {MessageId}", userId, messageId);
+            return SpokesResult<ChatMessage>.Failure("User is not authorized to convert this message's photos into an album.", "FORBIDDEN");
+        }
+
+        var imageAttachments = message.Attachments
+            .Where(a => FileHelper.IsImageFile(a.FileName) || a.ContentType.StartsWith("image/", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        if (imageAttachments.Count == 0)
+        {
+            return SpokesResult<ChatMessage>.Failure("Message does not contain any image attachments.", "INVALID_ARGUMENT");
+        }
+
+        var remainingAttachments = message.Attachments
+            .Where(a => !FileHelper.IsImageFile(a.FileName) && !a.ContentType.StartsWith("image/", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        string? plainChannelKey = null;
+        string plainContent = message.Content ?? "";
+
+        if (channel.IsEncrypted)
+        {
+            if (string.IsNullOrEmpty(privateKey))
+            {
+                return SpokesResult<ChatMessage>.Failure("Vault is locked. Cannot convert encrypted message attachments.", "VAULT_LOCKED");
+            }
+
+            if (!channel.EncryptedChannelKeys.TryGetValue(userId, out var cipherChannelKey))
+            {
+                return SpokesResult<ChatMessage>.Failure("Channel encryption key unavailable for user.", "KEY_NOT_FOUND");
+            }
+
+            try
+            {
+                plainChannelKey = _crypto.DecryptRsa(cipherChannelKey, privateKey);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "ConvertMessageImagesToAlbum failed: RSA decryption of channel key failed for User {UserId}", userId);
+                return SpokesResult<ChatMessage>.Failure($"Failed to decrypt channel key: {ex.Message}", "CRYPTO_FAILED");
+            }
+
+            if (message.IsEncrypted && !string.IsNullOrEmpty(message.Content))
+            {
+                try
+                {
+                    plainContent = _crypto.DecryptAes(message.Content, plainChannelKey);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "ConvertMessageImagesToAlbum failed: AES decryption of message content failed for Message {MessageId}", messageId);
+                    return SpokesResult<ChatMessage>.Failure($"Failed to decrypt message content: {ex.Message}", "CRYPTO_FAILED");
+                }
+            }
+        }
+
+        var importResult = await _albumService.ImportChatAttachmentsToAlbumAsync(
+            userId,
+            channel.Id,
+            imageAttachments,
+            targetAlbumId,
+            newAlbumTitle,
+            privateKey,
+            plainChannelKey,
+            deleteSourceFiles: true);
+
+        if (!importResult.IsSuccess || importResult.Value == null)
+        {
+            return SpokesResult<ChatMessage>.Failure(
+                importResult.ErrorMessage ?? "Failed to import attachments into album.",
+                importResult.Code ?? "ALBUM_IMPORT_FAILED");
+        }
+
+        var album = importResult.Value;
+        var cleanTitle = album.Title.Replace("[", "(").Replace("]", ")");
+        var albumToken = $"#[{cleanTitle}](album:{album.Id})";
+
+        if (!plainContent.Contains($"(album:{album.Id})", StringComparison.OrdinalIgnoreCase))
+        {
+            plainContent = string.IsNullOrWhiteSpace(plainContent)
+                ? albumToken
+                : $"{plainContent.TrimEnd()} {albumToken}";
+        }
+
+        string finalContent = plainContent;
+        if (channel.IsEncrypted)
+        {
+            try
+            {
+                finalContent = _crypto.EncryptAes(plainContent, plainChannelKey!);
+                message.IsEncrypted = true;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "ConvertMessageImagesToAlbum failed: Failed to re-encrypt message {MessageId}", messageId);
+                return SpokesResult<ChatMessage>.Failure($"Failed to re-encrypt message: {ex.Message}", "CRYPTO_FAILED");
+            }
+        }
+
+        var previousUserIds = message.MentionedUserIds.ToList();
+        var previousAlbumIds = message.MentionedAlbumIds.ToList();
+        var previousMentionsTeam = message.MentionsTeam;
+        var previousMentionsEveryone = message.MentionsEveryone;
+
+        message.Content = finalContent;
+        message.Attachments = remainingAttachments;
+        message.EditedAt = DateTime.UtcNow;
+
+        var tokens = ExtractMessageTokens(plainContent);
+        ApplyTokensAndResolveMentions(message, tokens);
+        var syncResult = SynchronizeMentionedAlbums(message, channel, previousAlbumIds, privateKey);
+        if (!syncResult.IsSuccess)
+        {
+            return SpokesResult<ChatMessage>.Failure(syncResult.ErrorMessage ?? "Failed to synchronize album share.", syncResult.Code);
+        }
+        RouteEditMentionNotifications(message, channel, previousUserIds, previousMentionsTeam, previousMentionsEveryone);
+
+        try
+        {
+            _messages.Save(message);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to save message {MessageId} after converting images to album", message.Id);
+            return SpokesResult<ChatMessage>.Failure("Failed to persist updated message.", "SAVE_FAILED");
+        }
+
+        _chatState.NotifyMessageEdited(message);
+
+        await _realtimeGateway.SendToChannelAsync(message.ChannelId, "MessageEdited", new
+        {
+            Id = message.Id,
+            MessageId = message.Id,
+            message.ChannelId,
+            message.Content,
+            message.EditedAt,
+            MentionedAlbumIds = message.MentionedAlbumIds,
+            Attachments = message.Attachments.Select(a => new { a.Id, a.FileName, a.FilePath, a.ContentType, a.FileSizeBytes })
+        }, cancellationToken);
+
+        return SpokesResult<ChatMessage>.Success(message);
+    }
+
     internal sealed class ParsedMessageTokens
     {
         public List<string> MentionedDisplayNames { get; set; } = [];
         public bool MentionsEveryone { get; set; }
         public List<string> MentionedEventIds { get; set; } = [];
         public List<string> MentionedAlbumIds { get; set; } = [];
+        public List<string> MentionedPollIds { get; set; } = [];
     }
 
     internal static ParsedMessageTokens ExtractMessageTokens(string? plainContent)
@@ -595,6 +825,16 @@ public class ChatService : IChatService
             }
         }
 
+        var pollMatches = System.Text.RegularExpressions.Regex.Matches(plainContent, @"#\[([^\]]+)\]\(poll:([^\)]+)\)");
+        foreach (System.Text.RegularExpressions.Match match in pollMatches)
+        {
+            var pollId = match.Groups[2].Value;
+            if (!tokens.MentionedPollIds.Contains(pollId))
+            {
+                tokens.MentionedPollIds.Add(pollId);
+            }
+        }
+
         return tokens;
     }
 
@@ -603,11 +843,13 @@ public class ChatService : IChatService
         message.MentionedUserIds.Clear();
         message.MentionedEventIds.Clear();
         message.MentionedAlbumIds.Clear();
+        message.MentionedPollIds.Clear();
         message.MentionsTeam = false;
         message.MentionsEveryone = tokens.MentionsEveryone;
 
         message.MentionedEventIds.AddRange(tokens.MentionedEventIds);
         message.MentionedAlbumIds.AddRange(tokens.MentionedAlbumIds);
+        message.MentionedPollIds.AddRange(tokens.MentionedPollIds);
 
         if (tokens.MentionedDisplayNames.Count == 0)
             return;
@@ -772,45 +1014,26 @@ public class ChatService : IChatService
         _ = SafeDispatchNotificationAsync(() => _notificationRouting.RouteChatNotificationAsync(notificationMessage, channel, sender), "chat message edit");
     }
 
-    public async Task<SpokesResult> AdminDeleteMessageAsync(string messageId, CancellationToken cancellationToken = default)
+    public async Task<SpokesResult> AdminDeleteMessageAsync(string messageId, string requestingUserId, CancellationToken cancellationToken = default)
     {
+        if (string.IsNullOrWhiteSpace(requestingUserId))
+        {
+            return SpokesResult.Failure("Requesting user ID is required.", "ACCESS_DENIED");
+        }
+
+        var actor = _employees.GetById(requestingUserId);
+        if (actor == null || !actor.IsActive || actor.IsSuspended || actor.IsBanned ||
+            (!actor.IsAdmin && !actor.HasPermission(AppPermissions.Chat.Moderator)))
+        {
+            _logger.LogWarning("AdminDeleteMessageAsync rejected: user {UserId} lacks moderation privileges", requestingUserId);
+            return SpokesResult.Failure("User is not authorized to perform moderation message deletion.", "ACCESS_DENIED");
+        }
+
         var message = _messages.GetById(messageId);
         if (message == null) return SpokesResult.Failure($"Message '{messageId}' not found.", "NOT_FOUND");
 
-        if (message.Attachments != null && message.Attachments.Any())
-        {
-            foreach (var att in message.Attachments)
-            {
-                if (!string.IsNullOrEmpty(att.FilePath))
-                {
-                    try
-                    {
-                        await _fileService.DeleteAsync(att.FilePath);
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogError(ex, "AdminDeleteMessageAsync: Failed to delete attachment {FilePath}", att.FilePath);
-                    }
-                }
-            }
-            message.Attachments.Clear();
-        }
-
-        message.IsDeleted = true;
-        message.Content = "content deleted";
-        _messages.Save(message);
-
-        // Local
-        _chatState.NotifyMessageDeleted(message.ChannelId, messageId);
-
-        // SignalR
-        await _realtimeGateway.SendToChannelAsync(message.ChannelId, "MessageDeleted", new
-        {
-            Id = message.Id,
-            MessageId = message.Id,
-            message.ChannelId
-        }, cancellationToken);
-
+        var channel = _channels.GetById(message.ChannelId);
+        await ScrubAndDeleteMessageCoreAsync(message, channel, cancellationToken);
         return SpokesResult.Success();
     }
 
@@ -828,11 +1051,64 @@ public class ChatService : IChatService
             return SpokesResult.Failure("User is not authorized to delete this message.", "FORBIDDEN");
         }
 
+        await ScrubAndDeleteMessageCoreAsync(message, channel, cancellationToken);
+        return SpokesResult.Success();
+    }
+
+    private async Task ScrubAndDeleteMessageCoreAsync(ChatMessage message, ChatChannel? channel, CancellationToken cancellationToken)
+    {
+        var previousAlbumIds = message.MentionedAlbumIds?.ToList() ?? [];
+
+        if (message.Attachments != null && message.Attachments.Count > 0)
+        {
+            foreach (var att in message.Attachments)
+            {
+                if (!string.IsNullOrEmpty(att.FilePath))
+                {
+                    try
+                    {
+                        await _fileService.DeleteAsync(att.FilePath);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, "ScrubAndDeleteMessageCoreAsync: Failed to delete attachment {FilePath}", att.FilePath);
+                    }
+                }
+            }
+            message.Attachments.Clear();
+        }
+
+        message.Reactions?.Clear();
+        message.MentionedUserIds?.Clear();
+        message.MentionedAlbumIds?.Clear();
+        message.MentionedPollIds?.Clear();
+        message.MentionedEventIds?.Clear();
+        message.MentionsTeam = false;
+        message.MentionsEveryone = false;
         message.IsDeleted = true;
+        message.Content = string.Empty;
         _messages.Save(message);
 
+        if (channel != null && previousAlbumIds.Count > 0)
+        {
+            foreach (var albumId in previousAlbumIds)
+            {
+                if (!HasOtherAlbumMentionsInChannel(channel.Id, message.Id, albumId))
+                {
+                    try
+                    {
+                        _albumService.UnshareAlbumWithChannel(albumId, message.SenderId, channel.Id);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "ScrubAndDeleteMessageCoreAsync: Failed to unshare album {AlbumId} from channel {ChannelId}", albumId, channel.Id);
+                    }
+                }
+            }
+        }
+
         // Local
-        _chatState.NotifyMessageDeleted(message.ChannelId, messageId);
+        _chatState.NotifyMessageDeleted(message.ChannelId, message.Id);
 
         // SignalR
         await _realtimeGateway.SendToChannelAsync(message.ChannelId, "MessageDeleted", new
@@ -841,14 +1117,16 @@ public class ChatService : IChatService
             MessageId = message.Id,
             message.ChannelId
         }, cancellationToken);
-
-        return SpokesResult.Success();
     }
 
     public virtual async Task<SpokesResult> ToggleReactionAsync(string userId, string messageId, string emoji, CancellationToken cancellationToken = default)
     {
         var employee = _employees.GetById(userId);
         if (employee == null) return SpokesResult.Failure($"User '{userId}' not found.", "NOT_FOUND");
+        if (!employee.IsActive || employee.IsSuspended || employee.IsBanned)
+        {
+            return SpokesResult.Failure("User is not authorized to react in this channel.", "FORBIDDEN");
+        }
 
         var message = _messages.GetById(messageId);
         if (message == null) return SpokesResult.Failure($"Message '{messageId}' not found.", "NOT_FOUND");
@@ -925,6 +1203,13 @@ public class ChatService : IChatService
 
     public virtual Task<SpokesResult> AddReactionAsync(string userId, string messageId, string emoji, CancellationToken cancellationToken = default)
     {
+        var employee = _employees.GetById(userId);
+        if (employee == null) return Task.FromResult(SpokesResult.Failure($"User '{userId}' not found.", "NOT_FOUND"));
+        if (!employee.IsActive || employee.IsSuspended || employee.IsBanned)
+        {
+            return Task.FromResult(SpokesResult.Failure("User is not authorized to react in this channel.", "FORBIDDEN"));
+        }
+
         var message = _messages.GetById(messageId);
         if (message != null && message.Reactions.Contains($"{emoji}:{userId}"))
         {
@@ -935,6 +1220,13 @@ public class ChatService : IChatService
 
     public virtual Task<SpokesResult> RemoveReactionAsync(string userId, string messageId, string emoji, CancellationToken cancellationToken = default)
     {
+        var employee = _employees.GetById(userId);
+        if (employee == null) return Task.FromResult(SpokesResult.Failure($"User '{userId}' not found.", "NOT_FOUND"));
+        if (!employee.IsActive || employee.IsSuspended || employee.IsBanned)
+        {
+            return Task.FromResult(SpokesResult.Failure("User is not authorized to react in this channel.", "FORBIDDEN"));
+        }
+
         var message = _messages.GetById(messageId);
         if (message != null && !message.Reactions.Contains($"{emoji}:{userId}"))
         {
@@ -943,9 +1235,24 @@ public class ChatService : IChatService
         return ToggleReactionAsync(userId, messageId, emoji, cancellationToken);
     }
 
+    private void EnsureActorCanCreateChannel(string? actorUserId)
+    {
+        if (string.IsNullOrWhiteSpace(actorUserId))
+            return;
+
+        var actor = _employees.GetById(actorUserId);
+        if (actor != null && (!actor.IsActive || actor.IsSuspended || actor.IsBanned))
+        {
+            throw new UnauthorizedAccessException("Inactive, suspended, or banned users cannot create channels.");
+        }
+    }
 
     public ChatChannel CreateDirectMessageChannel(string initiatorUserId, string targetUserId)
     {
+        if (string.IsNullOrWhiteSpace(initiatorUserId))
+            throw new UnauthorizedAccessException("Initiator user ID is required.");
+
+        EnsureActorCanCreateChannel(initiatorUserId);
         var channel = _channels.GetOrCreateDirectChannel(initiatorUserId, targetUserId, false, createdById: initiatorUserId);
         _chatState.NotifyChannelCreated(channel);
         return channel;
@@ -958,6 +1265,10 @@ public class ChatService : IChatService
 
     public ChatChannel CreateGroupDirectMessageChannel(string initiatorUserId, List<string> targetUserIds)
     {
+        if (string.IsNullOrWhiteSpace(initiatorUserId))
+            throw new UnauthorizedAccessException("Initiator user ID is required.");
+
+        EnsureActorCanCreateChannel(initiatorUserId);
         var allParticipantIds = new List<string> { initiatorUserId };
         allParticipantIds.AddRange(targetUserIds);
         allParticipantIds = allParticipantIds.Distinct().ToList();
@@ -969,6 +1280,10 @@ public class ChatService : IChatService
 
     public ChatChannel CreateTeamChannel(string initiatorUserId, List<string> teamIds)
     {
+        if (string.IsNullOrWhiteSpace(initiatorUserId))
+            throw new UnauthorizedAccessException("Initiator user ID is required.");
+
+        EnsureActorCanCreateChannel(initiatorUserId);
         var teamNames = teamIds
             .Select(id => _teams.GetById(id))
             .Where(t => t != null)
@@ -995,6 +1310,8 @@ public class ChatService : IChatService
 
     public ChatChannel CreateChannel(ChatChannel channel)
     {
+        ArgumentNullException.ThrowIfNull(channel);
+        EnsureActorCanCreateChannel(channel.CreatedById);
         channel.Normalize();
         channel.IsEncrypted = false;
         _channels.Save(channel);
@@ -1002,24 +1319,42 @@ public class ChatService : IChatService
         return channel;
     }
 
-    public SpokesResult UpdateChannel(ChatChannel channel, string? requestingUserId = null, bool isSessionUnlocked = true)
+    public SpokesResult UpdateChannel(ChatChannel channel, string requestingUserId, bool isSessionUnlocked = true)
     {
         ArgumentNullException.ThrowIfNull(channel);
 
-        if (channel.IsEncrypted && !isSessionUnlocked)
+        if (string.IsNullOrWhiteSpace(requestingUserId))
+        {
+            return SpokesResult.Failure("Requesting user ID is required.", "ACCESS_DENIED");
+        }
+
+        var employee = _employees.GetById(requestingUserId);
+        if (employee == null || !employee.IsActive || employee.IsSuspended || employee.IsBanned)
+        {
+            _logger.LogWarning("UpdateChannel rejected: user {UserId} is missing, inactive, suspended, or banned", requestingUserId);
+            return SpokesResult.Failure("User is not authorized to modify this channel.", "ACCESS_DENIED");
+        }
+
+        var existing = !string.IsNullOrEmpty(channel.Id) ? _channels.GetById(channel.Id) : null;
+        var authTarget = existing ?? channel;
+
+        if ((authTarget.IsEncrypted || channel.IsEncrypted) && !isSessionUnlocked)
         {
             _logger.LogWarning("UpdateChannel rejected: session vault is locked for encrypted channel {ChannelId}", channel.Id);
             return SpokesResult.Failure("Session must have secure chat unlocked to modify an encrypted channel.", "VAULT_LOCKED");
         }
 
-        if (!string.IsNullOrEmpty(requestingUserId))
+        if (existing != null && !string.Equals(existing.ChannelType, channel.ChannelType, StringComparison.Ordinal) &&
+            (existing.ChannelType == ChatChannelType.Direct || existing.ChannelType == ChatChannelType.Group || channel.ChannelType == ChatChannelType.Direct))
         {
-            var employee = _employees.GetById(requestingUserId);
-            if (employee == null || !_chatAuth.CanUserManageChannel(channel, employee, isSessionUnlocked))
-            {
-                _logger.LogWarning("UpdateChannel rejected: user {UserId} not authorized to manage channel {ChannelId}", requestingUserId, channel.Id);
-                return SpokesResult.Failure("User is not authorized to modify this channel.", "ACCESS_DENIED");
-            }
+            _logger.LogWarning("UpdateChannel rejected: attempted ChannelType mutation on private channel {ChannelId}", channel.Id);
+            return SpokesResult.Failure("Channel type cannot be altered on direct or group channels.", "ACCESS_DENIED");
+        }
+
+        if (!_chatAuth.CanUserManageChannel(authTarget, employee, isSessionUnlocked))
+        {
+            _logger.LogWarning("UpdateChannel rejected: user {UserId} not authorized to manage channel {ChannelId}", requestingUserId, channel.Id);
+            return SpokesResult.Failure("User is not authorized to modify this channel.", "ACCESS_DENIED");
         }
 
         channel.Normalize();
@@ -1033,16 +1368,16 @@ public class ChatService : IChatService
         return SpokesResult.Success();
     }
 
-    public void UpdateChannel(ChatChannel channel)
-    {
-        UpdateChannel(channel, null, true);
-    }
-
-    public SpokesResult DeleteChannel(string channelId, string? requestingUserId = null, bool isSessionUnlocked = true)
+    public SpokesResult DeleteChannel(string channelId, string requestingUserId, bool isSessionUnlocked = true)
     {
         if (string.IsNullOrEmpty(channelId))
         {
             return SpokesResult.Failure("Channel ID is required.", "INVALID_INPUT");
+        }
+
+        if (string.IsNullOrWhiteSpace(requestingUserId))
+        {
+            return SpokesResult.Failure("Requesting user ID is required.", "ACCESS_DENIED");
         }
 
         var channel = _channels.GetById(channelId);
@@ -1051,20 +1386,23 @@ public class ChatService : IChatService
             return SpokesResult.Failure($"Channel '{channelId}' not found.", "NOT_FOUND");
         }
 
+        var employee = _employees.GetById(requestingUserId);
+        if (employee == null || !employee.IsActive || employee.IsSuspended || employee.IsBanned)
+        {
+            _logger.LogWarning("DeleteChannel rejected: user {UserId} is missing, inactive, suspended, or banned", requestingUserId);
+            return SpokesResult.Failure("User is not authorized to delete this channel.", "ACCESS_DENIED");
+        }
+
         if (channel.IsEncrypted && !isSessionUnlocked)
         {
             _logger.LogWarning("DeleteChannel rejected: session vault is locked for encrypted channel {ChannelId}", channelId);
             return SpokesResult.Failure("Session must have secure chat unlocked to delete an encrypted channel.", "VAULT_LOCKED");
         }
 
-        if (!string.IsNullOrEmpty(requestingUserId))
+        if (!_chatAuth.CanUserDeleteChannel(channel, employee, isSessionUnlocked))
         {
-            var employee = _employees.GetById(requestingUserId);
-            if (employee == null || !_chatAuth.CanUserDeleteChannel(channel, employee, isSessionUnlocked))
-            {
-                _logger.LogWarning("DeleteChannel rejected: user {UserId} not authorized to delete channel {ChannelId}", requestingUserId, channelId);
-                return SpokesResult.Failure("User is not authorized to delete this channel.", "ACCESS_DENIED");
-            }
+            _logger.LogWarning("DeleteChannel rejected: user {UserId} not authorized to delete channel {ChannelId}", requestingUserId, channelId);
+            return SpokesResult.Failure("User is not authorized to delete this channel.", "ACCESS_DENIED");
         }
 
         // Delete channel
@@ -1089,11 +1427,16 @@ public class ChatService : IChatService
         return SpokesResult.Success();
     }
 
-    public SpokesResult ArchiveChannel(string channelId, bool archive, string? requestingUserId = null, bool isSessionUnlocked = true)
+    public SpokesResult ArchiveChannel(string channelId, bool archive, string requestingUserId, bool isSessionUnlocked = true)
     {
         if (string.IsNullOrEmpty(channelId))
         {
             return SpokesResult.Failure("Channel ID is required.", "INVALID_INPUT");
+        }
+
+        if (string.IsNullOrWhiteSpace(requestingUserId))
+        {
+            return SpokesResult.Failure("Requesting user ID is required.", "ACCESS_DENIED");
         }
 
         var channel = _channels.GetById(channelId);
@@ -1102,20 +1445,23 @@ public class ChatService : IChatService
             return SpokesResult.Failure($"Channel '{channelId}' not found.", "NOT_FOUND");
         }
 
+        var employee = _employees.GetById(requestingUserId);
+        if (employee == null || !employee.IsActive || employee.IsSuspended || employee.IsBanned)
+        {
+            _logger.LogWarning("ArchiveChannel rejected: user {UserId} is missing, inactive, suspended, or banned", requestingUserId);
+            return SpokesResult.Failure("User is not authorized to archive this channel.", "ACCESS_DENIED");
+        }
+
         if (channel.IsEncrypted && !isSessionUnlocked)
         {
             _logger.LogWarning("ArchiveChannel rejected: session vault is locked for encrypted channel {ChannelId}", channelId);
             return SpokesResult.Failure("Session must have secure chat unlocked to archive an encrypted channel.", "VAULT_LOCKED");
         }
 
-        if (!string.IsNullOrEmpty(requestingUserId))
+        if (!_chatAuth.CanUserManageChannel(channel, employee, isSessionUnlocked))
         {
-            var employee = _employees.GetById(requestingUserId);
-            if (employee == null || !_chatAuth.CanUserManageChannel(channel, employee, isSessionUnlocked))
-            {
-                _logger.LogWarning("ArchiveChannel rejected: user {UserId} not authorized to archive channel {ChannelId}", requestingUserId, channelId);
-                return SpokesResult.Failure("User is not authorized to archive this channel.", "ACCESS_DENIED");
-            }
+            _logger.LogWarning("ArchiveChannel rejected: user {UserId} not authorized to archive channel {ChannelId}", requestingUserId, channelId);
+            return SpokesResult.Failure("User is not authorized to archive this channel.", "ACCESS_DENIED");
         }
 
         channel.IsArchived = archive;
@@ -1126,18 +1472,94 @@ public class ChatService : IChatService
         return SpokesResult.Success();
     }
 
-    public void UpdateChannelOrders(Dictionary<string, int> channelOrders)
+    public SpokesResult UpdateChannelOrders(Dictionary<string, int> channelOrders, string requestingUserId)
     {
+        if (channelOrders == null)
+        {
+            return SpokesResult.Failure("Channel orders are required.", "INVALID_INPUT");
+        }
+
+        if (string.IsNullOrWhiteSpace(requestingUserId))
+        {
+            return SpokesResult.Failure("Requesting user ID is required.", "ACCESS_DENIED");
+        }
+
+        var employee = _employees.GetById(requestingUserId);
+        if (employee == null || !employee.IsActive || employee.IsSuspended || employee.IsBanned ||
+            (!employee.IsAdmin && !employee.HasPermission(AppPermissions.Chat.EditAllPublicChannels)))
+        {
+            _logger.LogWarning("UpdateChannelOrders rejected: user {UserId} lacks channel ordering permissions", requestingUserId);
+            return SpokesResult.Failure("User is not authorized to reorder channels.", "ACCESS_DENIED");
+        }
+
         foreach (var kvp in channelOrders)
         {
             var channel = _channels.GetById(kvp.Key);
-            if (channel != null)
+            if (channel != null &&
+                channel.ChannelType != ChatChannelType.Direct &&
+                channel.ChannelType != ChatChannelType.Group)
             {
                 channel.DisplayOrder = kvp.Value;
                 _channels.Save(channel);
                 _chatState.NotifyChannelCreated(channel);
             }
         }
+
+        return SpokesResult.Success();
+    }
+
+    public SpokesResult LeaveGroupChannel(string channelId, string requestingUserId)
+    {
+        if (string.IsNullOrWhiteSpace(channelId))
+        {
+            return SpokesResult.Failure("Channel ID is required.", "INVALID_INPUT");
+        }
+
+        if (string.IsNullOrWhiteSpace(requestingUserId))
+        {
+            return SpokesResult.Failure("Requesting user ID is required.", "ACCESS_DENIED");
+        }
+
+        var employee = _employees.GetById(requestingUserId);
+        if (employee == null || !employee.IsActive || employee.IsSuspended || employee.IsBanned)
+        {
+            return SpokesResult.Failure("User is not authorized to modify group membership.", "ACCESS_DENIED");
+        }
+
+        var channel = _channels.GetById(channelId);
+        if (channel == null)
+        {
+            return SpokesResult.Failure($"Channel '{channelId}' not found.", "NOT_FOUND");
+        }
+
+        if (channel.ChannelType != ChatChannelType.Group)
+        {
+            return SpokesResult.Failure("Only group channels support leaving.", "INVALID_OPERATION");
+        }
+
+        bool isParticipant = (channel.ParticipantIds != null && channel.ParticipantIds.Contains(requestingUserId)) ||
+                             string.Equals(channel.CreatedById, requestingUserId, StringComparison.Ordinal);
+        if (!isParticipant)
+        {
+            return SpokesResult.Failure("User is not a participant of this group channel.", "ACCESS_DENIED");
+        }
+
+        channel.ParticipantIds?.RemoveAll(id => string.Equals(id, requestingUserId, StringComparison.Ordinal));
+        channel.EncryptedChannelKeys?.Remove(requestingUserId);
+        channel.AllowedPostUserIds?.RemoveAll(id => string.Equals(id, requestingUserId, StringComparison.Ordinal));
+
+        if (string.Equals(channel.CreatedById, requestingUserId, StringComparison.Ordinal))
+        {
+            channel.CreatedById = channel.ParticipantIds != null && channel.ParticipantIds.Count > 0
+                ? channel.ParticipantIds[0]
+                : string.Empty;
+        }
+
+        _channels.Save(channel);
+        _fileTokenService?.InvalidateUserEncryptedTokens(requestingUserId);
+        _chatState.NotifyChannelCreated(channel);
+
+        return SpokesResult.Success();
     }
 
     internal Task SafeDispatchNotificationAsync(Func<Task> routeAction, string operation)
@@ -1155,6 +1577,3 @@ public class ChatService : IChatService
         });
     }
 }
-
-
-

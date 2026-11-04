@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Security.Cryptography;
+using System.Text.Json;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Moq;
@@ -156,7 +158,11 @@ public class NotificationQueueServiceTests : IDisposable
         Directory.CreateDirectory(tempDir);
         try
         {
-            var configDict = new Dictionary<string, string?> { ["DataPath"] = tempDir };
+            var configDict = new Dictionary<string, string?>
+            {
+                ["DataPath"] = tempDir,
+                ["SPOKES_MASTER_PASSWORD"] = NotificationTestFactory.DefaultTestMasterPassword
+            };
             var config = new ConfigurationBuilder().AddInMemoryCollection(configDict).Build();
             var persistence = new DiskPersistenceService(new Mock<ILogger<DiskPersistenceService>>().Object);
             var companyRepo = new CompanyProfileRepository(persistence, config);
@@ -193,7 +199,11 @@ public class NotificationQueueServiceTests : IDisposable
         Directory.CreateDirectory(tempDir);
         try
         {
-            var configDict = new Dictionary<string, string?> { ["DataPath"] = tempDir };
+            var configDict = new Dictionary<string, string?>
+            {
+                ["DataPath"] = tempDir,
+                ["SPOKES_MASTER_PASSWORD"] = NotificationTestFactory.DefaultTestMasterPassword
+            };
             var config = new ConfigurationBuilder().AddInMemoryCollection(configDict).Build();
             var persistence = new DiskPersistenceService(new Mock<ILogger<DiskPersistenceService>>().Object);
             var companyRepo = new CompanyProfileRepository(persistence, config);
@@ -522,7 +532,11 @@ public class NotificationQueueServiceTests : IDisposable
         Directory.CreateDirectory(tempDir);
         try
         {
-            var configDict = new Dictionary<string, string?> { ["DataPath"] = tempDir };
+            var configDict = new Dictionary<string, string?>
+            {
+                ["DataPath"] = tempDir,
+                ["SPOKES_MASTER_PASSWORD"] = NotificationTestFactory.DefaultTestMasterPassword
+            };
             var config = new ConfigurationBuilder().AddInMemoryCollection(configDict).Build();
             var persistence = new DiskPersistenceService(new Mock<ILogger<DiskPersistenceService>>().Object);
             var companyRepo = new CompanyProfileRepository(persistence, config);
@@ -584,7 +598,11 @@ public class NotificationQueueServiceTests : IDisposable
         Directory.CreateDirectory(tempDir);
         try
         {
-            var configDict = new Dictionary<string, string?> { ["DataPath"] = tempDir };
+            var configDict = new Dictionary<string, string?>
+            {
+                ["DataPath"] = tempDir,
+                ["SPOKES_MASTER_PASSWORD"] = NotificationTestFactory.DefaultTestMasterPassword
+            };
             var config = new ConfigurationBuilder().AddInMemoryCollection(configDict).Build();
             var persistence = new DiskPersistenceService(new Mock<ILogger<DiskPersistenceService>>().Object);
             var companyRepo = new CompanyProfileRepository(persistence, config);
@@ -798,6 +816,242 @@ public class NotificationQueueServiceTests : IDisposable
         Assert.Single(_service.DeadLetterMobileNotifications);
         Assert.Equal(delayed.Id, _service.DeadLetterMobileNotifications[0].Id);
         Assert.Equal(NotificationQueueService.MaxDeliveryRetries, _service.DeadLetterMobileNotifications[0].RetryCount);
+    }
+
+    [Fact]
+    public void Persistence_EncryptsEntireSnapshotEnvelopeAtRest_ConcealingMetadataAndContent()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"NotificationQueueEnvelope_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            var configDict = new Dictionary<string, string?>
+            {
+                ["DataPath"] = tempDir,
+                ["SPOKES_MASTER_PASSWORD"] = "QueueEnvelopeTestMasterPwd!"
+            };
+            var config = new ConfigurationBuilder().AddInMemoryCollection(configDict).Build();
+            using var persistence = new DiskPersistenceService(new Mock<ILogger<DiskPersistenceService>>().Object);
+            var companyRepo = new CompanyProfileRepository(persistence, config);
+
+            var service1 = new NotificationQueueService(
+                new Mock<ILogger<NotificationQueueService>>().Object,
+                persistence,
+                config,
+                companyRepo);
+
+            var request = new PushNotificationRequest
+            {
+                UserId = "emp-secret-user",
+                Title = "Confidential Merger Chat",
+                Body = "Decrypted E2EE message text",
+                MaskedBody = "🔒 New Secure Message",
+                IsEncrypted = true,
+                Sound = "custom-chime.mp3",
+                Url = "/chat/private-channel-xyz",
+                ChannelName = "Executive-Ops",
+                ServerName = "PolyRobotics-HQ"
+            };
+
+            service1.Enqueue(new QueuedNotification(request));
+            persistence.FlushAll();
+
+            var stateFilePath = Path.Combine(tempDir, "Notifications", "queue_state.json");
+            Assert.True(File.Exists(stateFilePath));
+            var rawOnDisk = File.ReadAllText(stateFilePath);
+
+            using var jsonDoc = JsonDocument.Parse(rawOnDisk);
+            Assert.Equal(2, jsonDoc.RootElement.GetProperty("spokesEncryptedVersion").GetInt32());
+            Assert.DoesNotContain("emp-secret-user", rawOnDisk);
+            Assert.DoesNotContain("Confidential Merger Chat", rawOnDisk);
+            Assert.DoesNotContain("Decrypted E2EE message text", rawOnDisk);
+            Assert.DoesNotContain("private-channel-xyz", rawOnDisk);
+            Assert.DoesNotContain("Executive-Ops", rawOnDisk);
+            Assert.DoesNotContain("PolyRobotics-HQ", rawOnDisk);
+            Assert.DoesNotContain("QueuedNotifications", rawOnDisk);
+
+            var service2 = new NotificationQueueService(
+                new Mock<ILogger<NotificationQueueService>>().Object,
+                persistence,
+                config,
+                companyRepo);
+
+            var restored = Assert.Single(service2.DequeueAll("emp-secret-user"));
+            var restoredReq = restored.ToPushNotificationRequest();
+            Assert.Equal("Confidential Merger Chat", restoredReq.Title);
+            Assert.Equal("Decrypted E2EE message text", restoredReq.Body);
+            Assert.Equal("🔒 New Secure Message", restoredReq.MaskedBody);
+            Assert.True(restoredReq.IsEncrypted);
+            Assert.Equal("custom-chime.mp3", restoredReq.Sound);
+            Assert.Equal("/chat/private-channel-xyz", restoredReq.Url);
+            Assert.Equal("Executive-Ops", restoredReq.ChannelName);
+            Assert.Equal("PolyRobotics-HQ", restoredReq.ServerName);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+            {
+                try { Directory.Delete(tempDir, true); } catch { }
+            }
+        }
+    }
+
+    [Fact]
+    public void RestoreFromDisk_LegacyPlaintextSnapshot_RestoresWithoutDataLossAndUpgradesEnvelope()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"NotificationQueueLegacyPlain_{Guid.NewGuid():N}");
+        var notifDir = Path.Combine(tempDir, "Notifications");
+        Directory.CreateDirectory(notifDir);
+        try
+        {
+            var legacySnapshot = new NotificationQueueSnapshot
+            {
+                QueuedNotifications = new Dictionary<string, List<QueuedNotification>>
+                {
+                    ["legacy_user"] =
+                    [
+                        new QueuedNotification
+                        {
+                            UserId = "legacy_user",
+                            Title = "Pre-55a639a1 Plaintext Title",
+                            Body = "Plaintext Body Before Upgrade",
+                            ChannelName = "General",
+                            ServerName = "Spokes",
+                            QueuedAtUtc = DateTime.UtcNow.AddMinutes(-5)
+                        }
+                    ]
+                }
+            };
+
+            var stateFilePath = Path.Combine(notifDir, "queue_state.json");
+            File.WriteAllText(stateFilePath, JsonSerializer.Serialize(legacySnapshot));
+
+            var configDict = new Dictionary<string, string?>
+            {
+                ["DataPath"] = tempDir,
+                ["SPOKES_MASTER_PASSWORD"] = "UpgradeTestMasterPwd!"
+            };
+            var config = new ConfigurationBuilder().AddInMemoryCollection(configDict).Build();
+            using var persistence = new DiskPersistenceService(new Mock<ILogger<DiskPersistenceService>>().Object);
+            var companyRepo = new CompanyProfileRepository(persistence, config);
+
+            var service = new NotificationQueueService(
+                new Mock<ILogger<NotificationQueueService>>().Object,
+                persistence,
+                config,
+                companyRepo);
+
+            service.RestoreFromDisk();
+            persistence.FlushAll();
+
+            // Verify upgraded on disk to encrypted v2 envelope
+            var upgradedOnDisk = File.ReadAllText(stateFilePath);
+            Assert.Contains("spokesEncryptedVersion", upgradedOnDisk);
+            Assert.DoesNotContain("Pre-55a639a1 Plaintext Title", upgradedOnDisk);
+
+            var items = service.DequeueAll("legacy_user");
+            var restored = Assert.Single(items);
+            Assert.Equal("Pre-55a639a1 Plaintext Title", restored.Title);
+            Assert.Equal("Plaintext Body Before Upgrade", restored.Body);
+            Assert.Equal("General", restored.ChannelName);
+            Assert.Equal("Spokes", restored.ServerName);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+            {
+                try { Directory.Delete(tempDir, true); } catch { }
+            }
+        }
+    }
+
+    [Fact]
+    public void RestoreFromDisk_TransitionalV1PerFieldEncryptedSnapshot_DecryptsFieldsAndUpgradesEnvelope()
+    {
+        const string masterPwd = "TransitionalV1MasterPwd!";
+        var tempDir = Path.Combine(Path.GetTempPath(), $"NotificationQueueLegacyV1_{Guid.NewGuid():N}");
+        var notifDir = Path.Combine(tempDir, "Notifications");
+        Directory.CreateDirectory(notifDir);
+        try
+        {
+            var transitionalSnapshot = new NotificationQueueSnapshot
+            {
+                QueuedNotifications = new Dictionary<string, List<QueuedNotification>>
+                {
+                    ["v1_user"] =
+                    [
+                        new QueuedNotification
+                        {
+                            UserId = "v1_user",
+                            Title = EncryptLegacyV1Field("V1 Encrypted Title", masterPwd),
+                            Body = EncryptLegacyV1Field("V1 Encrypted Body", masterPwd),
+                            ChannelName = EncryptLegacyV1Field("V1 Channel", masterPwd),
+                            ServerName = EncryptLegacyV1Field("V1 Server", masterPwd),
+                            QueuedAtUtc = DateTime.UtcNow.AddMinutes(-2)
+                        }
+                    ]
+                }
+            };
+
+            var stateFilePath = Path.Combine(notifDir, "queue_state.json");
+            File.WriteAllText(stateFilePath, JsonSerializer.Serialize(transitionalSnapshot));
+
+            var configDict = new Dictionary<string, string?>
+            {
+                ["DataPath"] = tempDir,
+                ["SPOKES_MASTER_PASSWORD"] = masterPwd
+            };
+            var config = new ConfigurationBuilder().AddInMemoryCollection(configDict).Build();
+            using var persistence = new DiskPersistenceService(new Mock<ILogger<DiskPersistenceService>>().Object);
+            var companyRepo = new CompanyProfileRepository(persistence, config);
+
+            var service = new NotificationQueueService(
+                new Mock<ILogger<NotificationQueueService>>().Object,
+                persistence,
+                config,
+                companyRepo);
+
+            var restored = Assert.Single(service.DequeueAll("v1_user"));
+            Assert.Equal("V1 Encrypted Title", restored.Title);
+            Assert.Equal("V1 Encrypted Body", restored.Body);
+            Assert.Equal("V1 Channel", restored.ChannelName);
+            Assert.Equal("V1 Server", restored.ServerName);
+
+            persistence.FlushAll();
+            var upgradedOnDisk = File.ReadAllText(stateFilePath);
+            Assert.Contains("spokesEncryptedVersion", upgradedOnDisk);
+            Assert.DoesNotContain("v1_user", upgradedOnDisk);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+            {
+                try { Directory.Delete(tempDir, true); } catch { }
+            }
+        }
+    }
+
+    private static string EncryptLegacyV1Field(string plainText, string masterPassword)
+    {
+        var salt = RandomNumberGenerator.GetBytes(16);
+        var iv = RandomNumberGenerator.GetBytes(16);
+        var key = Rfc2898DeriveBytes.Pbkdf2(masterPassword, salt, 100_000, HashAlgorithmName.SHA256, 32);
+
+        using var aes = Aes.Create();
+        aes.Key = key;
+        aes.IV = iv;
+
+        using var encryptor = aes.CreateEncryptor(aes.Key, aes.IV);
+        using var ms = new MemoryStream();
+        ms.Write(salt);
+        ms.Write(iv);
+        using (var cs = new CryptoStream(ms, encryptor, CryptoStreamMode.Write))
+        using (var sw = new StreamWriter(cs))
+        {
+            sw.Write(plainText);
+        }
+
+        return Convert.ToBase64String(ms.ToArray());
     }
 
     #endregion

@@ -225,7 +225,7 @@ public class CompanyBillDuplicateDetectionTests : TestDataTestBase
         var email = new EmailMessage
         {
             Id = Guid.NewGuid().ToString(),
-            EmployeeId = CompanyBillInboxConstants.SystemEmployeeId,
+            AccountId = CompanyBillInboxConstants.SystemEmployeeId,
             BillingStatus = CompanyBillInboxConstants.BillingStatus.DuplicateDetected,
             LinkedBillId = manualBill.Id,
             MatchedAttachmentPath = "/spokesapi/files/bills/123/invoice.pdf",
@@ -254,7 +254,7 @@ public class CompanyBillDuplicateDetectionTests : TestDataTestBase
         var email = new EmailMessage
         {
             Id = Guid.NewGuid().ToString(),
-            EmployeeId = CompanyBillInboxConstants.SystemEmployeeId,
+            AccountId = CompanyBillInboxConstants.SystemEmployeeId,
             BillingStatus = CompanyBillInboxConstants.BillingStatus.DuplicateDetected,
             FromAddress = "billing@supplier.com",
             FromName = "Supplier Inc",
@@ -367,7 +367,7 @@ public class CompanyBillDuplicateDetectionTests : TestDataTestBase
         var email = new EmailMessage
         {
             Id = Guid.NewGuid().ToString(),
-            EmployeeId = CompanyBillInboxConstants.SystemEmployeeId,
+            AccountId = CompanyBillInboxConstants.SystemEmployeeId,
             BillingStatus = CompanyBillInboxConstants.BillingStatus.DuplicateDetected,
             LinkedBillId = existingBill.Id,
             MatchedAttachmentPath = "/spokesapi/files/bills/100/final_invoice.pdf",
@@ -396,7 +396,7 @@ public class CompanyBillDuplicateDetectionTests : TestDataTestBase
         var email = new EmailMessage
         {
             Id = Guid.NewGuid().ToString(),
-            EmployeeId = CompanyBillInboxConstants.SystemEmployeeId,
+            AccountId = CompanyBillInboxConstants.SystemEmployeeId,
             BillingStatus = CompanyBillInboxConstants.BillingStatus.Unprocessed,
             FromAddress = "billing@supplier.com",
             FromName = "Supplier Inc",
@@ -545,7 +545,7 @@ public class CompanyBillDuplicateDetectionTests : TestDataTestBase
         var email = new EmailMessage
         {
             Id = Guid.NewGuid().ToString(),
-            EmployeeId = CompanyBillInboxConstants.SystemEmployeeId,
+            AccountId = CompanyBillInboxConstants.SystemEmployeeId,
             FromAddress = "billing@supplier-tech.com",
             FromName = "Supplier Tech Inc",
             Subject = "Invoice #INV-2026-0042 for Software Licenses",
@@ -598,7 +598,7 @@ public class CompanyBillDuplicateDetectionTests : TestDataTestBase
         var email = new EmailMessage
         {
             Id = "email-123",
-            EmployeeId = CompanyBillInboxConstants.SystemEmployeeId,
+            AccountId = CompanyBillInboxConstants.SystemEmployeeId,
             FromAddress = "billing@bell.ca",
             FromName = "Bell Canada",
             Subject = "Bell Internet Bill: Your monthly balance of $145.00 is ready",
@@ -655,7 +655,7 @@ public class CompanyBillDuplicateDetectionTests : TestDataTestBase
         var email = new EmailMessage
         {
             Id = "email-aws",
-            EmployeeId = CompanyBillInboxConstants.SystemEmployeeId,
+            AccountId = CompanyBillInboxConstants.SystemEmployeeId,
             FromAddress = "no-reply@amazon.com",
             FromName = "Amazon Web Services",
             Subject = "AWS Invoice",
@@ -712,7 +712,7 @@ public class CompanyBillDuplicateDetectionTests : TestDataTestBase
         var email = new EmailMessage
         {
             Id = "email-aws-force",
-            EmployeeId = CompanyBillInboxConstants.SystemEmployeeId,
+            AccountId = CompanyBillInboxConstants.SystemEmployeeId,
             FromAddress = "no-reply@amazon.com",
             FromName = "Amazon Web Services",
             Subject = "AWS Invoice: Total $520.00",
@@ -744,7 +744,7 @@ public class CompanyBillDuplicateDetectionTests : TestDataTestBase
         var email = new EmailMessage
         {
             Id = "msg-body-test",
-            EmployeeId = CompanyBillInboxConstants.SystemEmployeeId,
+            AccountId = CompanyBillInboxConstants.SystemEmployeeId,
             FromAddress = "vendor@test.com",
             FromName = "Vendor Test",
             Subject = "Test Email Body",
@@ -781,7 +781,7 @@ public class CompanyBillDuplicateDetectionTests : TestDataTestBase
         var email = new EmailMessage
         {
             Id = "msg-snippet-fallback",
-            EmployeeId = CompanyBillInboxConstants.SystemEmployeeId,
+            AccountId = CompanyBillInboxConstants.SystemEmployeeId,
             FromAddress = "vendor@test.com",
             FromName = "Vendor Test",
             Subject = "Test Email Without MIME",
@@ -908,7 +908,7 @@ public class CompanyBillDuplicateDetectionTests : TestDataTestBase
         var email = new EmailMessage
         {
             Id = Guid.NewGuid().ToString(),
-            EmployeeId = CompanyBillInboxConstants.SystemEmployeeId,
+            AccountId = CompanyBillInboxConstants.SystemEmployeeId,
             BillingStatus = CompanyBillInboxConstants.BillingStatus.DuplicateDetected,
             LinkedBillId = existingPaidBill.Id,
             LinkedBillIds = [existingPaidBill.Id]
@@ -955,7 +955,7 @@ public class CompanyBillDuplicateDetectionTests : TestDataTestBase
         var autoDraftedEmail = new EmailMessage
         {
             Id = Guid.NewGuid().ToString(),
-            EmployeeId = CompanyBillInboxConstants.SystemEmployeeId,
+            AccountId = CompanyBillInboxConstants.SystemEmployeeId,
             UniqueId = 1001,
             FromAddress = "billing@acmetools.com",
             FromName = "Acme Tools Corp",
@@ -972,7 +972,7 @@ public class CompanyBillDuplicateDetectionTests : TestDataTestBase
         var unprocessedEmail = new EmailMessage
         {
             Id = Guid.NewGuid().ToString(),
-            EmployeeId = CompanyBillInboxConstants.SystemEmployeeId,
+            AccountId = CompanyBillInboxConstants.SystemEmployeeId,
             UniqueId = 1002,
             FromAddress = "billing@acmetools.com",
             FromName = "Acme Tools Corp",
@@ -1016,7 +1016,7 @@ public class CompanyBillDuplicateDetectionTests : TestDataTestBase
         var email = new EmailMessage
         {
             Id = Guid.NewGuid().ToString(),
-            EmployeeId = CompanyBillInboxConstants.SystemEmployeeId,
+            AccountId = CompanyBillInboxConstants.SystemEmployeeId,
             FromAddress = "comptabilite@fournisseur.qc.ca",
             FromName = "Fournisseur Industriel",
             Subject = "Relevé de compte mensuel au 31 décembre",
@@ -1124,7 +1124,7 @@ public class CompanyBillDuplicateDetectionTests : TestDataTestBase
         var email = new EmailMessage
         {
             Id = Guid.NewGuid().ToString(),
-            EmployeeId = CompanyBillInboxConstants.SystemEmployeeId,
+            AccountId = CompanyBillInboxConstants.SystemEmployeeId,
             BillingStatus = CompanyBillInboxConstants.BillingStatus.DuplicateDetected,
             LinkedBillId = bill.Id,
             LinkedBillIds = [bill.Id],
@@ -1466,7 +1466,7 @@ public class CompanyBillDuplicateDetectionTests : TestDataTestBase
         var email = new EmailMessage
         {
             Id = emailId,
-            EmployeeId = CompanyBillInboxConstants.SystemEmployeeId,
+            AccountId = CompanyBillInboxConstants.SystemEmployeeId,
             FromAddress = "billing@sherwin.com",
             FromName = "Sherwin William",
             Subject = "Invoice SW-100",

@@ -25,15 +25,25 @@
     private string _cachedHtml = "";
     private string _lastContent = "";
     private bool _lastIsEdited;
+    private string? _lastChannelKey;
+    private string? _lastChannelId;
+    private string? _lastSessionId;
 
     protected override void OnParametersSet()
     {
-        // Re-render markdown only if the content or edit status changes
-        if (_lastContent != Content || _lastIsEdited != IsEdited)
+        // Re-render markdown only if the content, edit status, or channel/session signing context changes
+        if (_lastContent != Content ||
+            _lastIsEdited != IsEdited ||
+            _lastChannelKey != ChannelKey ||
+            _lastChannelId != ChannelId ||
+            _lastSessionId != SessionId)
         {
             _cachedHtml = RenderMarkdown(Content);
             _lastContent = Content;
             _lastIsEdited = IsEdited;
+            _lastChannelKey = ChannelKey;
+            _lastChannelId = ChannelId;
+            _lastSessionId = SessionId;
         }
     }
 
@@ -45,6 +55,101 @@
     private static readonly Regex EntityTagRegex = new(@"#\[([^\]]+)\]\(([a-zA-Z0-9_-]+):[^\)]+\)", RegexOptions.Compiled);
     // Matches ANY image to parse optional #ar= fragment for skeleton loading, and checks for klipy
     private static readonly Regex ImgRegex = new(@"<img([^>]+)src=""([^""]+)""([^>]*)>", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    // Strictly anchored same-origin relative chat file path: /spokesapi/files/chat/{contextId}/{fileName}
+    private static readonly Regex SameOriginChatFilePathRegex = new(@"^/spokesapi/files/(chat)/([^/]+)/([^/?#]+)$", RegexOptions.Compiled);
+
+    /// <summary>
+    /// Appends a scoped file access token ONLY when <paramref name="rawUrl"/> is a strictly same-origin
+    /// relative <c>/spokesapi/files/chat/{contextId}/{fileName}</c> URL whose <c>contextId</c> matches
+    /// <paramref name="channelId"/>, and both <paramref name="currentUserId"/> and <paramref name="effectiveSessionId"/>
+    /// are non-empty. Never signs external URLs or cross-channel file URLs.
+    /// </summary>
+    public static string TrySignChatFileUrl(
+        string rawUrl,
+        string? channelId,
+        string? currentUserId,
+        string? effectiveSessionId,
+        string? channelKey,
+        FileTokenService? fileTokens)
+    {
+        if (string.IsNullOrWhiteSpace(rawUrl) ||
+            string.IsNullOrWhiteSpace(channelId) ||
+            string.IsNullOrWhiteSpace(currentUserId) ||
+            string.IsNullOrWhiteSpace(effectiveSessionId) ||
+            fileTokens == null)
+        {
+            return rawUrl;
+        }
+
+        var trimmed = rawUrl.Trim();
+
+        // Reject external origins, protocol-relative URLs, backslashes, or any scheme prefix before the leading '/'
+        if (trimmed.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
+            trimmed.StartsWith("https://", StringComparison.OrdinalIgnoreCase) ||
+            trimmed.StartsWith("//", StringComparison.Ordinal) ||
+            trimmed.StartsWith(@"\\", StringComparison.Ordinal) ||
+            trimmed.Contains('\\'))
+        {
+            return rawUrl;
+        }
+
+        int colonIndex = trimmed.IndexOf(':');
+        int firstSlashIndex = trimmed.IndexOf('/');
+        if (firstSlashIndex != 0 || (colonIndex >= 0 && colonIndex < firstSlashIndex))
+        {
+            return rawUrl;
+        }
+
+        if (!trimmed.StartsWith("/spokesapi/files/chat/", StringComparison.Ordinal))
+        {
+            return rawUrl;
+        }
+
+        string fragment = string.Empty;
+        string withoutFragment = trimmed;
+        int hashIdx = withoutFragment.IndexOf('#');
+        if (hashIdx >= 0)
+        {
+            fragment = withoutFragment[hashIdx..];
+            withoutFragment = withoutFragment[..hashIdx];
+        }
+
+        string query = string.Empty;
+        string pathOnly = withoutFragment;
+        int queryIdx = withoutFragment.IndexOf('?');
+        if (queryIdx >= 0)
+        {
+            query = withoutFragment[queryIdx..];
+            pathOnly = withoutFragment[..queryIdx];
+        }
+
+        var fileMatch = SameOriginChatFilePathRegex.Match(pathOnly);
+        if (!fileMatch.Success)
+        {
+            return rawUrl;
+        }
+
+        var category = fileMatch.Groups[1].Value;
+        var contextId = System.Net.WebUtility.UrlDecode(fileMatch.Groups[2].Value);
+        var fileName = System.Net.WebUtility.UrlDecode(fileMatch.Groups[3].Value);
+
+        if (string.IsNullOrWhiteSpace(fileName) ||
+            fileName.Contains('/') ||
+            fileName.Contains('\\') ||
+            fileName is "." or "..")
+        {
+            return rawUrl;
+        }
+
+        if (!string.Equals(contextId, channelId, StringComparison.Ordinal))
+        {
+            return rawUrl;
+        }
+
+        var token = fileTokens.GenerateAccessToken(category, contextId, fileName, channelKey, currentUserId, effectiveSessionId);
+        var signedQuery = string.IsNullOrEmpty(query) ? $"?t={token}" : $"{query}&t={token}";
+        return $"{pathOnly}{signedQuery}{fragment}";
+    }
 
     // Matches [code]...[/code] and [code=language]...[/code]
     private static readonly Regex CodeBlockRegex = new(@"\[code(?:=([^\]]+))?\](.*?)\[/code\]", RegexOptions.Compiled | RegexOptions.Singleline | RegexOptions.IgnoreCase);
@@ -117,7 +222,7 @@
                 var title = System.Net.WebUtility.HtmlEncode(match.Groups[1].Value);
                 var type = match.Groups[2].Value.ToLowerInvariant();
                 
-                if (type == "album" || type == "event")
+                if (type == "album" || type == "event" || type == "poll")
                 {
                     return string.Empty;
                 }
@@ -141,17 +246,14 @@
                 var beforeSrc = match.Groups[1].Value;
                 var rawUrl = match.Groups[2].Value;
                 var afterSrc = match.Groups[3].Value;
-                
-                var fileMatch = Regex.Match(rawUrl, @"/spokesapi/files/(chat)/([^/]+)/([^?#]+)");
-                if (fileMatch.Success && CurrentUserId != null)
-                {
-                    var category = fileMatch.Groups[1].Value;
-                    var contextId = fileMatch.Groups[2].Value;
-                    var fileName = System.Net.WebUtility.UrlDecode(fileMatch.Groups[3].Value);
-                    
-                    var token = FileTokens.GenerateAccessToken(category, contextId, fileName, ChannelKey, CurrentUserId, SessionId ?? CircuitContext?.SessionId);
-                    rawUrl = rawUrl.Contains("?") ? $"{rawUrl}&t={token}" : $"{rawUrl}?t={token}";
-                }
+
+                rawUrl = TrySignChatFileUrl(
+                    rawUrl,
+                    ChannelId,
+                    CurrentUserId,
+                    SessionId ?? CircuitContext?.SessionId,
+                    ChannelKey,
+                    FileTokens);
 
                 bool isKlipy = rawUrl.Contains("klipy.com", StringComparison.OrdinalIgnoreCase) || rawUrl.Contains("klipy.co", StringComparison.OrdinalIgnoreCase);
                 string watermarkHtml = isKlipy ? @"<img src=""/Klipy/KLIPY Light with logo.svg"" class=""klipy-watermark"" style=""position: absolute; bottom: 8px; left: 8px; width: 60px; height: auto; opacity: 0.9; pointer-events: none; border-radius: 0; margin: 0; padding: 0; box-shadow: none;"" alt=""Klipy Watermark"" />" : "";

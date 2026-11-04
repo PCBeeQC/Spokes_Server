@@ -17,6 +17,7 @@ public class EventRsvpTests : IDisposable
     private readonly string _testDataDir;
     private readonly DiskPersistenceService _persistence;
     private readonly CalendarEventRepository _calendarEvents;
+    private readonly EmployeeRepository _employees;
     private readonly CalendarService _calendarService;
 
     public EventRsvpTests()
@@ -29,7 +30,8 @@ public class EventRsvpTests : IDisposable
 
         _persistence = new DiskPersistenceService(new Mock<ILogger<DiskPersistenceService>>().Object);
         _calendarEvents = new CalendarEventRepository(_persistence, config);
-        _calendarService = new CalendarService(_calendarEvents, null!, null!, null);
+        _employees = new EmployeeRepository(_persistence, config);
+        _calendarService = new CalendarService(_calendarEvents, _employees, null, null);
     }
 
     public void Dispose()

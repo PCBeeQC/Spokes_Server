@@ -55,7 +55,15 @@
                         </MudItem>
 
                         <MudItem xs="12" sm="4">
-                            <MudTextField @bind-Value="Bill.SupplierName" Label="Supplier Name" Required="true" ReadOnly="@(Bill.Status == BillStatus.Void)" />
+                            <MudAutocomplete T="string"
+                                             Value="@Bill.SupplierName"
+                                             ValueChanged="@OnSupplierNameChanged"
+                                             SearchFunc="@SearchSupplierNames"
+                                             CoerceText="false"
+                                             CoerceValue="true"
+                                             Label="Supplier Name"
+                                             Required="true"
+                                             ReadOnly="@(Bill.Status == BillStatus.Void)" />
                         </MudItem>
                         <MudItem xs="12" sm="4">
                             <MudTextField @bind-Value="Bill.InvoiceNumber" Label="Invoice #" ReadOnly="@(Bill.Status == BillStatus.Void)" />
@@ -107,7 +115,11 @@
                             </MudSelect>
                         </MudItem>
                         <MudItem xs="12" sm="4">
-                            <MudTextField @bind-Value="Bill.GlAccountCode" Label="GL Account (Sage 50)" Placeholder="e.g. 5200" ReadOnly="@(Bill.Status == BillStatus.Void)" />
+                            <SageGlAccountSelect @bind-Value="Bill.GlAccountCode"
+                                                 Label="Accounting Category / GL (Optional)"
+                                                 Placeholder="Auto-inherited from Supplier"
+                                                 Clearable="true"
+                                                 ReadOnly="@(Bill.Status == BillStatus.Void)" />
                         </MudItem>
 
                         <MudItem xs="6">
@@ -184,6 +196,7 @@
                                         <MudTh>Qty</MudTh>
                                         <MudTh>Price</MudTh>
                                         <MudTh>Total</MudTh>
+                                        <MudTh>GL Override</MudTh>
                                         <MudTh></MudTh>
                                     </HeaderContent>
                                     <RowTemplate Context="lineItem">
@@ -191,6 +204,15 @@
                                         <MudTd><MudNumericField @bind-Value="lineItem.Quantity" Margin="Margin.Dense" Underline="false" ReadOnly="@(Bill.Status == BillStatus.Void)" /></MudTd>
                                         <MudTd><MudNumericField @bind-Value="lineItem.UnitPrice" Margin="Margin.Dense" Underline="false" ReadOnly="@(Bill.Status == BillStatus.Void)" /></MudTd>
                                         <MudTd>@lineItem.Total.ToString("C")</MudTd>
+                                        <MudTd Style="min-width: 170px;">
+                                            <SageGlAccountSelect @bind-Value="lineItem.GlAccountCode"
+                                                                 Margin="Margin.Dense"
+                                                                 Dense="true"
+                                                                 Underline="false"
+                                                                 Clearable="true"
+                                                                 Placeholder="@(string.IsNullOrWhiteSpace(Bill.GlAccountCode) ? "Bill Default" : Bill.GlAccountCode)"
+                                                                 ReadOnly="@(Bill.Status == BillStatus.Void)" />
+                                        </MudTd>
                                         <MudTd>
                                             @if (Bill.Status != BillStatus.Void)
                                             {
@@ -377,6 +399,63 @@
     }
 
     private RecurringExpense? SelectedRecurringExpense;
+
+    private Task<IEnumerable<string>> SearchSupplierNames(string? value, CancellationToken token)
+    {
+        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var s in Db.Suppliers.GetAll())
+        {
+            if (!string.IsNullOrWhiteSpace(s.ContactInfo.BusinessName))
+                names.Add(s.ContactInfo.BusinessName.Trim());
+        }
+        var sageVendors = Db.CompanyProfile.GetAccounting().SageSettings?.ImportedVendors;
+        if (sageVendors != null)
+        {
+            foreach (var v in sageVendors)
+            {
+                if (!string.IsNullOrWhiteSpace(v.Name))
+                    names.Add(v.Name.Trim());
+            }
+        }
+
+        var ordered = names.OrderBy(n => n);
+        if (string.IsNullOrWhiteSpace(value))
+            return Task.FromResult<IEnumerable<string>>(ordered.Take(75));
+
+        return Task.FromResult<IEnumerable<string>>(
+            ordered.Where(n => n.Contains(value.Trim(), StringComparison.OrdinalIgnoreCase)).Take(75));
+    }
+
+    private void OnSupplierNameChanged(string? newName)
+    {
+        Bill.SupplierName = newName?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(Bill.SupplierName))
+        {
+            Bill.SupplierId = string.Empty;
+            return;
+        }
+
+        var supplier = Db.Suppliers.GetAll().FirstOrDefault(s =>
+            string.Equals(s.ContactInfo.BusinessName, Bill.SupplierName, StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(s.ContactInfo.SageReferenceName, Bill.SupplierName, StringComparison.OrdinalIgnoreCase));
+
+        if (supplier != null)
+        {
+            Bill.SupplierId = supplier.Id;
+            if (string.IsNullOrWhiteSpace(Bill.GlAccountCode) && !string.IsNullOrWhiteSpace(supplier.ContactInfo.DefaultGlAccountCode))
+            {
+                Bill.GlAccountCode = supplier.ContactInfo.DefaultGlAccountCode;
+            }
+        }
+        else if (string.IsNullOrWhiteSpace(Bill.GlAccountCode))
+        {
+            var sageSettings = Db.CompanyProfile.GetAccounting().SageSettings;
+            if (sageSettings != null && sageSettings.VendorDefaultGlMappings.TryGetValue(Bill.SupplierName, out var mappedGl) && !string.IsNullOrWhiteSpace(mappedGl))
+            {
+                Bill.GlAccountCode = mappedGl;
+            }
+        }
+    }
 
     private Task<IEnumerable<RecurringExpense>> SearchRecurringExpenses(string value, CancellationToken token)
     {

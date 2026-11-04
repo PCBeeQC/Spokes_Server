@@ -1,31 +1,7 @@
 @inject Database Db
-@inject Spokes_Server.Core.Services.Security.ScopedKeystoreService ScopedKeystore
-@inject Spokes_Server.Core.Services.Security.GlobalKeystoreService GlobalKeystore
-@inject ICryptoService Crypto
 @{
-    // Auto-unlock vault on HTTP request start if cookie is present and GlobalKeystore is not yet unlocked for this user.
-    // (InteractiveServerRenderMode(prerender: false) initializes the circuit's ScopedKeystore inside MainLayout/Chat.)
-    if (HttpContext != null && HttpContext.Request.Cookies.ContainsKey("chat_vault_key"))
-    {
-        var sub = HttpContext.User.FindFirst("sub")?.Value ?? HttpContext.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
-        if (!string.IsNullOrEmpty(sub))
-        {
-            var openIdAccount = Db.OpenIdAccounts.GetBySub(sub);
-            var user = !string.IsNullOrEmpty(openIdAccount?.LinkedEmployeeId)
-                ? Db.Employees.GetById(openIdAccount.LinkedEmployeeId)
-                : Db.Employees.GetAll().FirstOrDefault(e => e.Email == HttpContext.User.FindFirst("email")?.Value);
-            var empId = user?.Id ?? HttpContext.User.FindFirst("EmployeeId")?.Value;
-            if (!string.IsNullOrEmpty(empId) && !GlobalKeystore.IsUserUnlocked(empId) && !ScopedKeystore.IsUnlocked)
-            {
-                var employee = Db.Employees.GetById(empId);
-                if (employee != null && employee.HasVaultPassword && !string.IsNullOrEmpty(employee.EncryptedPrivateKey))
-                {
-                    ScopedKeystore.TryInitializeFromVaultCookie(HttpContext, empId, employee.EncryptedPrivateKey);
-                }
-            }
-        }
-    }
-
+    // Note: InteractiveServerRenderMode(prerender: false) unlocks ScopedKeystore & GlobalKeystore once on the
+    // circuit handshake inside MainLayout.OnInitializedAsync, avoiding 100k-iteration PBKDF2 blocking HTML <head> TTFB.
     var isMobile = string.Equals(HttpContext?.Request.Query["client"].ToString(), "mobile", StringComparison.OrdinalIgnoreCase) 
         || (HttpContext?.Request.Headers.UserAgent.ToString().Contains("Capacitor") == true);
     var brandingToken = Db.SystemConfigs.Get().PublicBrandingToken ?? "default";
@@ -39,6 +15,15 @@
     var isAuthenticated = HttpContext?.User?.Identity?.IsAuthenticated == true;
     var sessionExpiresUtc = HttpContext?.Features.Get<Microsoft.AspNetCore.Authentication.IAuthenticateResultFeature>()?.AuthenticateResult?.Properties?.ExpiresUtc;
     var sessionExpiresAtMs = isAuthenticated && sessionExpiresUtc.HasValue ? sessionExpiresUtc.Value.ToUnixTimeMilliseconds() : 0;
+    var isStaticLoginRoute = HttpContext != null && (
+        HttpContext.Request.Path.StartsWithSegments("/mobile-login") ||
+        HttpContext.Request.Path.StartsWithSegments("/mobile-login-success") ||
+        HttpContext.Request.Path.StartsWithSegments("/access-pending") ||
+        HttpContext.Request.Path.StartsWithSegments("/banned"));
+    var companyEdition = Db.CompanyProfile.Get()?.Edition;
+    var isInitialChatRoute = HttpContext != null && (
+        HttpContext.Request.Path.StartsWithSegments("/chat") ||
+        (HttpContext.Request.Path == "/" && string.Equals(companyEdition, "Family", StringComparison.OrdinalIgnoreCase)));
 }
 <!DOCTYPE html>
 <html lang="@System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName">
@@ -47,17 +32,72 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=0, interactive-widget=resizes-content, viewport-fit=cover" />
     <base href="/" />
+    @if (isAuthenticated && !isStaticLoginRoute)
+    {
+        <script>
+            // Pre-warm the /_blazor WebSocket handshake immediately on <head> first-byte (~530ms) so the
+            // Cloudflare -> NPM/Tunnel -> Spokes TLS + HTTP 101 Upgrade runs in parallel with CSS and blazor.web.js.
+            (function prewarmBlazorSocket() {
+                try {
+                    if (!window.WebSocket || document.visibilityState === 'hidden') return;
+                    if (sessionStorage.getItem('spokes_force_negotiate') === '1') return;
+                    var wsUrl = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/_blazor';
+                    window.startupTimings = window.startupTimings || {};
+                    window.startupTimings.ws_open_start = Date.now();
+                    var ws = new window.WebSocket(wsUrl);
+                    ws.binaryType = 'arraybuffer';
+                    var state = {
+                        url: wsUrl,
+                        ws: ws,
+                        claimed: false,
+                        opened: false,
+                        openEvent: null,
+                        errorEvent: null,
+                        closeEvent: null,
+                        messages: [],
+                        expireTimer: setTimeout(function () {
+                            if (!state.claimed) {
+                                state.claimed = true;
+                                window.__spokesPrewarmedWs = null;
+                                try { ws.close(); } catch (e) {}
+                            }
+                        }, 15000)
+                    };
+                    ws.addEventListener('open', function (ev) {
+                        window.startupTimings.ws_open_end = Date.now();
+                        state.opened = true;
+                        state.openEvent = ev;
+                    }, { once: true });
+                    ws.addEventListener('message', function (ev) {
+                        if (!state.claimed) state.messages.push(ev);
+                    });
+                    ws.addEventListener('error', function (ev) {
+                        state.errorEvent = ev;
+                    }, { once: true });
+                    ws.addEventListener('close', function (ev) {
+                        state.closeEvent = ev;
+                    }, { once: true });
+                    window.__spokesPrewarmedWs = state;
+                } catch (e) {}
+            })();
+        </script>
+    }
     @if (HttpContext != null)
     {
-        <link rel="preconnect" href="@(HttpContext.Request.Scheme + "://" + HttpContext.Request.Host)" />
+        var safePreconnectOrigin = Spokes_Server.Core.Security.ServerUrlResolver.GetSafeServerBaseUrl(HttpContext, Db.SystemConfigs.Get()?.ServerPublicUrl);
+        if (!string.IsNullOrEmpty(safePreconnectOrigin))
+        {
+            <link rel="preconnect" href="@safePreconnectOrigin" />
+        }
     }
-    <link href="@Assets["css/roboto.css"]" rel="stylesheet" />
+    <link href="@Assets["css/roboto.css"]" rel="stylesheet" media="print" onload="this.media='all'" />
+    <noscript><link href="@Assets["css/roboto.css"]" rel="stylesheet" /></noscript>
     <link href="@Assets["_content/MudBlazor/MudBlazor.min.css"]" rel="stylesheet" />
     @if (!isMobile)
     {
         <link rel="icon" href="@favicon" />
     }
-    @if (HttpContext != null && (HttpContext.Request.Path.StartsWithSegments("/mobile-login") || HttpContext.Request.Path.StartsWithSegments("/mobile-login-success")))
+    @if (isStaticLoginRoute)
     {
         <HeadOutlet />
     }
@@ -67,21 +107,33 @@
     }
     <ImportMap />
     <link href="@Assets["css/app.css"]" rel="stylesheet" />
-    <link href="@Assets["css/chat.css"]" rel="stylesheet" />
-    <script src="@Assets["js/spokesbridge.js"]"></script>
-    <script src="@Assets["js/capacitor-init.js"]"></script>
-    <script src="@Assets["js/soundManager.js"]"></script>
-    <script src="@Assets["js/spokes-auth.js"]"></script>
+    @if (isInitialChatRoute)
+    {
+        <link href="@Assets["css/chat.css"]" rel="stylesheet" />
+    }
+    else
+    {
+        <link href="@Assets["css/chat.css"]" rel="stylesheet" media="print" onload="this.media='all'" />
+        <noscript><link href="@Assets["css/chat.css"]" rel="stylesheet" /></noscript>
+    }
+    <script src="@Assets["js/spokesbridge.js"]" defer></script>
+    <script src="@Assets["js/capacitor-init.js"]" defer></script>
+    <script src="@Assets["js/soundManager.js"]" defer></script>
+    <script src="@Assets["js/spokes-auth.js"]" defer></script>
     <script src="@Assets["js/spokes-vault.js"]" defer></script>
 </head>
 
 <body>
-    <div id="startup-splash" style="position: fixed; inset: 0; background-color: #1e1e2d; z-index: 999999; display: flex; flex-direction: column; align-items: center; justify-content: center;">
+    <div id="startup-splash" style="position: fixed; inset: 0; background-color: #1e1e2d; z-index: 999999; display: @(isStaticLoginRoute ? "none" : "flex"); flex-direction: column; align-items: center; justify-content: center;">
         <div style="width: 40px; height: 40px; border: 3px solid rgba(255,255,255,0.1); border-top-color: #7e6fff; border-radius: 50%; animation: spokes-spin 1s linear infinite;"></div>
         <div id="splash-status" style="margin-top: 20px; color: #999; font-family: sans-serif; text-align: center; max-width: 80%; font-size: 14px;"></div>
+        <div id="spokes-splash-watchdog-actions" style="display: none; margin-top: 24px; gap: 12px; flex-wrap: wrap; justify-content: center; padding: 0 20px;">
+            <button id="spokes-splash-retry-btn" type="button" onclick="window.location.reload()" style="background: #7e6fff; color: #fff; border: none; border-radius: 8px; padding: 10px 18px; font-size: 14px; font-weight: 600; cursor: pointer; font-family: sans-serif;">@Loc["Retry Connection"]</button>
+            <button id="spokes-splash-switch-server-btn" type="button" onclick="if (typeof window.changeCapacitorServer === 'function') { window.changeCapacitorServer(); } else if (window.SpokesNative && typeof window.SpokesNative.openServer === 'function') { window.SpokesNative.openServer(''); } else { window.location.href = '/'; }" style="background: rgba(255,255,255,0.1); color: #e0e0e0; border: 1px solid rgba(255,255,255,0.2); border-radius: 8px; padding: 10px 18px; font-size: 14px; font-weight: 600; cursor: pointer; font-family: sans-serif;">@Loc["Switch Server"]</button>
+        </div>
         <style>@@keyframes spokes-spin { to { transform: rotate(360deg); } }</style>
     </div>
-    @if (HttpContext != null && (HttpContext.Request.Path.StartsWithSegments("/mobile-login") || HttpContext.Request.Path.StartsWithSegments("/mobile-login-success")))
+    @if (isStaticLoginRoute)
     {
         <Routes />
     }
@@ -107,9 +159,50 @@
             sessionStorage.setItem('spokes_startup_meta', JSON.stringify({ startupId: window.__startupCorrelationId, clientTimings: window.__clientLocalTimings }));
         } catch (e) {}
         window.__signalRLogLevel = "@signalRLogLevel";
+        window.__isStaticLoginRoute = @(isStaticLoginRoute ? "true" : "false");
         window.__spokesSession = { authenticated: @(isAuthenticated ? "true" : "false"), expiresAt: @sessionExpiresAtMs };
         window.startupTimings = window.startupTimings || {};
         window.startupTimings.remote_html_received = Date.now();
+        window.__spokesPerfTelemetry = window.__spokesPerfTelemetry || {
+            version: 1,
+            boot: {
+                settled: false,
+                layoutSettled: false,
+                routeSettled: false,
+                settledRoute: null,
+                clickOriginMs: 0,
+                shellInteractiveAt: 0,
+                shellPaintedAt: 0,
+                shellTtiMs: 0,
+                routeSettledAt: 0,
+                clickToUsableMs: 0,
+                navToUsableMs: 0,
+                cookieBootstrapDetourMs: 0,
+                usedPrewarmedWs: false,
+                forcedNegotiateFallback: false,
+                serverTimings: [],
+                timeline: []
+            },
+            navigation: null,
+            resources: null,
+            mainThread: { longTaskCount: 0, totalBlockingTimeMs: 0, maxLongTaskMs: 0, _entries: [] },
+            switches: [],
+            reconnects: []
+        };
+        try {
+            if (typeof PerformanceObserver !== 'undefined') {
+                const ltObs = new PerformanceObserver((list) => {
+                    const entries = list.getEntries();
+                    const mt = window.__spokesPerfTelemetry && window.__spokesPerfTelemetry.mainThread;
+                    if (!mt || !mt._entries) return;
+                    for (let i = 0; i < entries.length; i++) {
+                        mt._entries.push({ startTime: entries[i].startTime, duration: entries[i].duration });
+                    }
+                });
+                ltObs.observe({ type: 'longtask', buffered: true });
+                window._spokesStartupLongTaskObserver = ltObs;
+            }
+        } catch (e) {}
 
         console.log('[App.razor] Remote HTML received. Startup ID:', window.__startupCorrelationId);
 
@@ -195,19 +288,26 @@
         // Only the startup socket is instrumented, and the per-message listener detaches once the
         // app is interactive so it never adds work to the steady-state render stream.
         try {
-            const OriginalWebSocket = window.WebSocket;
-            window.WebSocket = function(url, protocols) {
-                const ws = protocols ? new OriginalWebSocket(url, protocols) : new OriginalWebSocket(url);
-                if (url && typeof url === 'string' && url.includes('_blazor')) {
-                    window.__spokesBlazorSocket = ws; // DIAG-TEMP: chat transition wire log
-                    // DIAG-TEMP: registered before SignalR assigns onmessage, so inbound frames are logged before Blazor handles them
-                    ws.addEventListener('message', (e) => { const f = window.__spokesWsIn; if (f) f(e.data); });
-                }
-                if (url && typeof url === 'string' && url.includes('_blazor') && !window.startupTimings.interactive) {
-                    window.startupTimings.ws_open_start = Date.now();
-                    ws.addEventListener('open', () => {
+            const attachBlazorSocketDiagnostics = (ws, isPrewarmed) => {
+                if (!ws || ws._spokesDiagAttached) return;
+                ws._spokesDiagAttached = true;
+                window.__spokesBlazorSocket = ws; // DIAG-TEMP: chat transition wire log
+                // DIAG-TEMP: registered before SignalR assigns onmessage, so inbound frames are logged before Blazor handles them
+                ws.addEventListener('message', (e) => { const f = window.__spokesWsIn; if (f) f(e.data); });
+
+                if (!window.startupTimings.interactive) {
+                    if (!isPrewarmed || !window.startupTimings.ws_open_start) {
+                        window.startupTimings.ws_open_start = Date.now();
+                    }
+                    if (ws.readyState === 1 && !window.startupTimings.ws_open_end) {
                         window.startupTimings.ws_open_end = Date.now();
-                    }, { once: true });
+                    } else {
+                        ws.addEventListener('open', () => {
+                            if (!window.startupTimings.ws_open_end) {
+                                window.startupTimings.ws_open_end = Date.now();
+                            }
+                        }, { once: true });
+                    }
                     let msgIndex = 0;
                     const onStartupMessage = (event) => {
                         if (window.startupTimings.interactive) {
@@ -233,6 +333,21 @@
                         }
                     };
                     ws.addEventListener('message', onStartupMessage);
+                }
+            };
+
+            if (window.__spokesPrewarmedWs && window.__spokesPrewarmedWs.ws) {
+                attachBlazorSocketDiagnostics(window.__spokesPrewarmedWs.ws, true);
+                if (window.__spokesPrewarmedWs.messages && window.__spokesPrewarmedWs.messages.length > 0 && !window.startupTimings.ws_msg_1) {
+                    window.startupTimings.ws_msg_1 = Date.now();
+                }
+            }
+
+            const OriginalWebSocket = window.WebSocket;
+            window.WebSocket = function(url, protocols) {
+                const ws = protocols ? new OriginalWebSocket(url, protocols) : new OriginalWebSocket(url);
+                if (url && typeof url === 'string' && url.includes('_blazor')) {
+                    attachBlazorSocketDiagnostics(ws, false);
                 }
                 return ws;
             };
@@ -290,13 +405,15 @@
             let lastProactiveRefreshAt = 0;
 
             const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
-            const isVisible = () => document.visibilityState === 'visible';
-            const isNative = () => window.checkIsCapacitorNative();
+            const isNative = () => typeof window.isCapacitorNative === 'function' ? window.isCapacitorNative() : (typeof window.checkIsCapacitorNative === 'function' ? window.checkIsCapacitorNative() : (navigator.userAgent.includes('Capacitor') || Boolean(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform())));
+            const isVisible = () => window._spokesHostViewActive !== false && (document.visibilityState === 'visible' || (isNative() && window._spokesHostViewExplicitlyActivated === true));
+
             const mark = (name) => {
                 if (window._reconnectTimings) window._reconnectTimings.timeline.push({ name: name, absolute: Date.now() });
             };
             const armSplashDebounce = () => {
                 if (!window._blazorDisconnected || window._isServerRestarting || !isVisible()) return;
+                if (typeof window.__disarmSpokesStartupWatchdog === 'function') window.__disarmSpokesStartupWatchdog();
                 const splash = document.getElementById('startup-splash');
                 if (splash && splash.style.display === 'flex') return;
                 if (window._reconnectSplashTimeout) return;
@@ -315,6 +432,7 @@
                     clearTimeout(window._reconnectSplashTimeout);
                     window._reconnectSplashTimeout = null;
                 }
+                if (typeof window.__disarmSpokesStartupWatchdog === 'function') window.__disarmSpokesStartupWatchdog();
                 const splash = document.getElementById('startup-splash');
                 if (splash) splash.style.display = 'flex';
                 if (window._reconnectTimings) window._reconnectTimings.splashShown = true;
@@ -360,7 +478,9 @@
                 const timer = setTimeout(() => controller.abort(), REACHABILITY_TIMEOUT_MS);
                 try {
                     const response = await fetch('/spokesapi/Manifest', { cache: 'no-store', signal: controller.signal });
-                    return response.ok;
+                    if (!response.ok) return false;
+                    const contentType = (response.headers.get('content-type') || '').toLowerCase();
+                    return contentType.includes('json');
                 } catch (e) {
                     return false;
                 } finally {
@@ -579,6 +699,7 @@
 
             document.addEventListener('visibilitychange', () => {
                 if (document.visibilityState === 'hidden') {
+                    window._spokesHostViewExplicitlyActivated = false;
                     window._hiddenAt = Date.now();
                     hiddenSinceAttemptStart = true;
                     // Pause the splash debounce timer while hidden so a fast foreground reconnect on reopen
@@ -595,7 +716,7 @@
                     window._lastHiddenDurationMs = Math.max(0, Date.now() - window._hiddenAt);
                     console.log('[Resume] Visible after ' + Math.round(window._lastHiddenDurationMs / 1000) + 's in background.');
                     window._hiddenAt = 0;
-                    if (!window._blazorDisconnected && isNative() && window._lastHiddenDurationMs >= MAX_BACKGROUND_RETENTION_MS) {
+                    if (!window._blazorDisconnected && isNative() && !window._spokesInVoiceCall && window._lastHiddenDurationMs >= MAX_BACKGROUND_RETENTION_MS) {
                         onConnectionDown('background-retention-expired');
                         return;
                     }
@@ -603,13 +724,38 @@
                 onVisible();
             });
 
-            return { onConnectionDown, onConnectionUp, verifyCircuitAlive };
+            const onHostViewDeactivated = () => {
+                window._hiddenAt = Date.now();
+                hiddenSinceAttemptStart = true;
+                if (window._reconnectSplashTimeout) {
+                    clearTimeout(window._reconnectSplashTimeout);
+                    window._reconnectSplashTimeout = null;
+                }
+            };
+
+            const onHostViewActivated = () => {
+                if (window._hiddenAt) {
+                    window._lastHiddenDurationMs = Math.max(0, Date.now() - window._hiddenAt);
+                    window._hiddenAt = 0;
+                    if (!window._blazorDisconnected && isNative() && !window._spokesInVoiceCall && window._lastHiddenDurationMs >= MAX_BACKGROUND_RETENTION_MS) {
+                        onConnectionDown('background-retention-expired');
+                        return;
+                    }
+                }
+                if (isVisible()) {
+                    onVisible();
+                }
+            };
+
+            return Object.assign(() => onHostViewActivated(), { onConnectionDown, onConnectionUp, verifyCircuitAlive, onHostViewActivated, onHostViewDeactivated });
         })();
 
         window.startupDiagnostics = {
             reportInteractive: function(userId, avatarLength, serverTimings) {
                 const now = Date.now();
                 window.startupTimings.interactive = now;
+                if (typeof window.__disarmSpokesStartupWatchdog === 'function') window.__disarmSpokesStartupWatchdog();
+                if (window.SpokesNative && typeof window.SpokesNative.notifyInteractive === 'function') { try { window.SpokesNative.notifyInteractive(); } catch (e) {} }
                 
                 const correlationId = window.__startupCorrelationId;
                 const cTimesStr = window.__clientLocalTimings;
@@ -670,9 +816,20 @@
                 
                 let clockOffset = 0;
                 if (serverTimings && serverTimings.length > 0) {
-                    // The last server timing is right before this function is called
+                    const firstServerTiming = serverTimings[0].timestamp || serverTimings[0].Timestamp;
                     const lastServerTiming = serverTimings[serverTimings.length - 1].timestamp || serverTimings[serverTimings.length - 1].Timestamp;
-                    clockOffset = now - lastServerTiming;
+                    // MainLayout.OnAfterRenderAsync (lastServerTiming) runs at the symmetric midpoint of the
+                    // OnRenderCompleted (ws_render_batch) -> OnAfterRenderAsync -> SpokesBridge.initLayout (now) round-trip.
+                    const batchAnchor = (window.startupTimings.ws_render_batch && window.startupTimings.ws_render_batch <= now)
+                        ? window.startupTimings.ws_render_batch
+                        : now;
+                    clockOffset = Math.round(((batchAnchor + now) / 2) - lastServerTiming);
+                    if (window.startupTimings.ws_msg_1 && (firstServerTiming + clockOffset) < window.startupTimings.ws_msg_1) {
+                        clockOffset = window.startupTimings.ws_msg_1 - firstServerTiming;
+                    }
+                    if ((lastServerTiming + clockOffset) > now) {
+                        clockOffset = now - lastServerTiming;
+                    }
                     
                     serverTimings.forEach(st => {
                         const name = st.name || st.Name;
@@ -702,25 +859,261 @@
                 });
                 console.log('==================================================');
 
+                if (!window._isServerRestarting && !window._reloadInProgress) {
+                    if (typeof window.__disarmSpokesStartupWatchdog === 'function') window.__disarmSpokesStartupWatchdog();
+                const splash = document.getElementById('startup-splash');
+                    if (splash) splash.style.display = 'none';
+                }
+
                 // Clear the startup metadata so subsequent reloads don't reuse stale timings
                 try { sessionStorage.removeItem('spokes_startup_meta'); } catch (e) {}
                 document.cookie = "Spokes_Startup_Id=; Max-Age=0; path=/";
                 document.cookie = "Spokes_Client_Times=; Max-Age=0; path=/";
 
-                // Eager-lazy: load non-critical scripts now that the app is interactive
-                if (!window._lazyScriptsLoaded) {
-                    window._lazyScriptsLoaded = true;
-                    loadDeferredScripts();
+                // Schedule post-interactive preloads (upload/recorder helpers + idle vendor bundles)
+                // after initial layout/route settlement so they do not contend with Click-to-Usable hydration.
+                if (typeof window.scheduleIdleDeferredScripts === 'function') {
+                    window.scheduleIdleDeferredScripts();
                 }
 
                 if (window._startupMutationObserver) {
                     try { window._startupMutationObserver.disconnect(); } catch(e) {}
                     window._startupMutationObserver = null;
                 }
+                if (window.startupDiagnostics && typeof window.startupDiagnostics._onReportInteractive === 'function') {
+                    window.startupDiagnostics._onReportInteractive(now, localStart, serverTimings, timeline);
+                }
             }
         };
 
+        Object.assign(window.startupDiagnostics, {
+            _onReportInteractive: function(now, localStart, serverTimings, timeline) {
+                try {
+                    const perf = window.__spokesPerfTelemetry;
+                    if (!perf || !perf.boot) return;
+                    let clickOrigin = localStart || window.startupTimings.nav_start || now;
+                    try {
+                        const harnessT0 = parseInt(sessionStorage.getItem('spokes_perf_click_t0') || '0', 10);
+                        if (harnessT0 > 0 && now - harnessT0 >= 0 && now - harnessT0 < 120000 && harnessT0 < clickOrigin) {
+                            clickOrigin = harnessT0;
+                        }
+                    } catch (e) {}
+                    if (window.startupTimings.bootstrap_start && window.startupTimings.bootstrap_start < clickOrigin) {
+                        clickOrigin = window.startupTimings.bootstrap_start;
+                    }
+
+                    perf.boot.clickOriginMs = clickOrigin;
+                    perf.boot.shellInteractiveAt = now;
+                    perf.boot.usedPrewarmedWs = Boolean(window.startupTimings.used_prewarmed_ws);
+                    perf.boot.forcedNegotiateFallback = sessionStorage.getItem('spokes_force_negotiate') === '1';
+                    perf.boot.cookieBootstrapDetourMs = window.startupTimings.bootstrap_start && window.startupTimings.nav_start
+                        ? Math.max(0, window.startupTimings.nav_start - window.startupTimings.bootstrap_start)
+                        : 0;
+                    perf.boot.serverTimings = Array.isArray(serverTimings) ? serverTimings : [];
+                    perf.boot.timeline = timeline.map(s => ({
+                        name: s.name,
+                        absolute: s.absolute,
+                        elapsedMs: s.absolute - clickOrigin
+                    }));
+
+                    const onDoubleRaf = (cb) => {
+                        if (typeof requestAnimationFrame === 'function') {
+                            requestAnimationFrame(() => requestAnimationFrame(cb));
+                        } else {
+                            setTimeout(cb, 16);
+                        }
+                    };
+                    onDoubleRaf(() => {
+                        const paintedAt = Date.now();
+                        perf.boot.shellPaintedAt = paintedAt;
+                        perf.boot.shellTtiMs = Math.max(0, paintedAt - perf.boot.clickOriginMs);
+                        window.startupDiagnostics._tryFinalizeUsableTti();
+                    });
+                } catch (e) {}
+            },
+            _snapshotResourcesAndMainThread: function(settledAtEpochMs) {
+                const perf = window.__spokesPerfTelemetry;
+                if (!perf) return;
+                try {
+                    const origin = Math.round(performance.timeOrigin);
+                    const nav = performance.getEntriesByType('navigation')[0];
+                    if (nav) {
+                        const d = (a, b) => Math.max(0, Math.round(b - a));
+                        perf.navigation = {
+                            type: nav.type,
+                            redirectCount: nav.redirectCount || 0,
+                            dnsMs: d(nav.domainLookupStart, nav.domainLookupEnd),
+                            tcpMs: d(nav.connectStart, nav.connectEnd),
+                            tlsMs: nav.secureConnectionStart > 0 ? d(nav.secureConnectionStart, nav.connectEnd) : 0,
+                            ttfbMs: d(nav.requestStart, nav.responseStart),
+                            htmlDownloadMs: d(nav.responseStart, nav.responseEnd),
+                            transferBytes: nav.transferSize || 0,
+                            decodedBytes: nav.decodedBodySize || 0
+                        };
+                    }
+
+                    const buckets = {
+                        js: { count: 0, transferBytes: 0, decodedBytes: 0 },
+                        css: { count: 0, transferBytes: 0, decodedBytes: 0 },
+                        font: { count: 0, transferBytes: 0, decodedBytes: 0 },
+                        audio: { count: 0, transferBytes: 0, decodedBytes: 0 },
+                        image: { count: 0, transferBytes: 0, decodedBytes: 0 },
+                        fetch: { count: 0, transferBytes: 0, decodedBytes: 0 },
+                        other: { count: 0, transferBytes: 0, decodedBytes: 0 }
+                    };
+                    const blockingHeadResources = [];
+                    const uncompressedLargeAssets = [];
+                    let totalRequests = 0;
+                    let totalTransferBytes = nav ? (nav.transferSize || 0) : 0;
+                    let totalDecodedBytes = nav ? (nav.decodedBodySize || 0) : 0;
+
+                    const cutoffRelMs = Math.max(0, settledAtEpochMs - origin);
+                    const entries = performance.getEntriesByType('resource') || [];
+                    for (let i = 0; i < entries.length; i++) {
+                        const r = entries[i];
+                        if (r.startTime > cutoffRelMs + 50) continue;
+                        totalRequests++;
+                        const xfer = r.transferSize || r.encodedBodySize || 0;
+                        const dec = r.decodedBodySize || xfer || 0;
+                        totalTransferBytes += xfer;
+                        totalDecodedBytes += dec;
+
+                        const cleanUrl = (r.name || '').split('?')[0].toLowerCase();
+                        let cat = 'other';
+                        if (cleanUrl.endsWith('.js') || r.initiatorType === 'script') cat = 'js';
+                        else if (cleanUrl.endsWith('.css') || r.initiatorType === 'link') cat = 'css';
+                        else if (/\.(woff2?|ttf|otf|eot)$/.test(cleanUrl)) cat = 'font';
+                        else if (/\.(wav|mp3|ogg|m4a|aac|flac)$/.test(cleanUrl) || r.initiatorType === 'audio') cat = 'audio';
+                        else if (/\.(png|jpe?g|webp|gif|svg|ico|avif)$/.test(cleanUrl) || r.initiatorType === 'img') cat = 'image';
+                        else if (r.initiatorType === 'fetch' || r.initiatorType === 'xmlhttprequest') cat = 'fetch';
+
+                        buckets[cat].count++;
+                        buckets[cat].transferBytes += xfer;
+                        buckets[cat].decodedBytes += dec;
+
+                        if (r.renderBlockingStatus === 'blocking') {
+                            blockingHeadResources.push({ url: r.name, category: cat, transferBytes: xfer, decodedBytes: dec, durationMs: Math.round(r.duration || 0) });
+                        }
+                        const enc = r.encodedBodySize || xfer;
+                        if (dec >= 30720 && (cat === 'audio' || (enc > 0 && enc >= dec * 0.95))) {
+                            uncompressedLargeAssets.push({ url: r.name, category: cat, transferBytes: xfer, decodedBytes: dec });
+                        }
+                    }
+
+                    perf.resources = {
+                        totalRequests: totalRequests,
+                        totalTransferBytes: totalTransferBytes,
+                        totalDecodedBytes: totalDecodedBytes,
+                        byCategory: buckets,
+                        blockingHeadResources: blockingHeadResources,
+                        uncompressedLargeAssets: uncompressedLargeAssets
+                    };
+
+                    const mt = perf.mainThread;
+                    if (mt && Array.isArray(mt._entries)) {
+                        let count = 0;
+                        let tbt = 0;
+                        let maxDur = 0;
+                        for (let i = 0; i < mt._entries.length; i++) {
+                            const lt = mt._entries[i];
+                            if (lt.startTime > cutoffRelMs + 50) continue;
+                            count++;
+                            const dur = Math.round(lt.duration || 0);
+                            if (dur > maxDur) maxDur = dur;
+                            tbt += Math.max(0, dur - 50);
+                        }
+                        mt.longTaskCount = count;
+                        mt.totalBlockingTimeMs = tbt;
+                        mt.maxLongTaskMs = maxDur;
+                    }
+                    if (window._spokesStartupLongTaskObserver) {
+                        try { window._spokesStartupLongTaskObserver.disconnect(); } catch (e) {}
+                        window._spokesStartupLongTaskObserver = null;
+                    }
+                } catch (e) {}
+            },
+            _tryFinalizeUsableTti: function() {
+                const perf = window.__spokesPerfTelemetry;
+                if (!perf || !perf.boot || perf.boot.settled) return;
+                if (!perf.boot.shellInteractiveAt || !perf.boot.layoutSettled || !perf.boot.routeSettled) return;
+
+                const finalizePaint = () => {
+                    if (perf.boot.settled) return;
+                    if (typeof window.__disarmSpokesStartupWatchdog === 'function') window.__disarmSpokesStartupWatchdog();
+                const splash = document.getElementById('startup-splash');
+                    if (splash && splash.style.display !== 'none' && !window._isServerRestarting && !window._reloadInProgress) {
+                        splash.style.display = 'none';
+                    }
+                    const now = Date.now();
+                    const clickOrigin = perf.boot.clickOriginMs || window.startupTimings.nav_start || now;
+                    const navOrigin = window.startupTimings.nav_start || clickOrigin;
+                    perf.boot.settled = true;
+                    perf.boot.routeSettledAt = now;
+                    perf.boot.clickToUsableMs = Math.max(0, now - clickOrigin);
+                    perf.boot.navToUsableMs = Math.max(0, now - navOrigin);
+                    window.startupDiagnostics._snapshotResourcesAndMainThread(now);
+                    try { sessionStorage.removeItem('spokes_perf_click_t0'); } catch (e) {}
+                    console.log(`[Startup] Usable TTI settled (${perf.boot.settledRoute || 'app'}): clickToUsable=${perf.boot.clickToUsableMs}ms, shellTti=${perf.boot.shellTtiMs}ms`);
+                };
+
+                if (typeof requestAnimationFrame === 'function') {
+                    requestAnimationFrame(() => requestAnimationFrame(finalizePaint));
+                } else {
+                    setTimeout(finalizePaint, 16);
+                }
+            },
+            reportLayoutSettled: function() {
+                const perf = window.__spokesPerfTelemetry;
+                if (!perf || !perf.boot) return;
+                perf.boot.layoutSettled = true;
+                window.startupDiagnostics._tryFinalizeUsableTti();
+            },
+            reportRouteSettled: function(routeKey) {
+                const perf = window.__spokesPerfTelemetry;
+                if (!perf || !perf.boot) return;
+                perf.boot.routeSettled = true;
+                if (routeKey && !perf.boot.settledRoute) {
+                    perf.boot.settledRoute = String(routeKey);
+                }
+                window.startupDiagnostics._tryFinalizeUsableTti();
+            },
+            recordHostViewSwitch: function(meta) {
+                const perf = window.__spokesPerfTelemetry;
+                if (!perf) return;
+                const activatedAt = Date.now();
+                const startedAt = (meta && meta.startedAt) ? meta.startedAt : activatedAt;
+                const entry = {
+                    origin: location.origin,
+                    route: (meta && meta.route) || (location.pathname + location.search),
+                    isWarm: Boolean(window._blazorCircuitEverOpened),
+                    disconnectedOnEntry: Boolean(window._blazorDisconnected),
+                    startedAt: startedAt,
+                    activatedAt: activatedAt,
+                    paintedAt: 0,
+                    totalSwitchMs: 0
+                };
+                perf.switches.push(entry);
+                if (perf.switches.length > 20) perf.switches.shift();
+                const done = () => {
+                    entry.paintedAt = Date.now();
+                    entry.totalSwitchMs = Math.max(0, entry.paintedAt - entry.startedAt);
+                };
+                if (typeof requestAnimationFrame === 'function') {
+                    requestAnimationFrame(() => requestAnimationFrame(done));
+                } else {
+                    setTimeout(done, 16);
+                }
+            }
+        });
+
         window.addEventListener('error', function(event) {
+            if (event.message && (
+                event.message.indexOf('ResizeObserver loop') !== -1 ||
+                event.message.indexOf('ResizeObserver loop completed with undelivered notifications') !== -1 ||
+                event.message.indexOf('ResizeObserver loop limit exceeded') !== -1
+            )) {
+                return;
+            }
             console.error('[Global Error]', event.message, event.error);
         });
         window.addEventListener('unhandledrejection', function(event) {
@@ -804,8 +1197,8 @@
             }
         }
 
-        window.checkIsCapacitorNative = () => typeof window.isCapacitorNative === 'function' 
-            ? window.isCapacitorNative() 
+        window.checkIsCapacitorNative = () => typeof window.isCapacitorNative === 'function' ? window.isCapacitorNative()
+
             : (navigator.userAgent.includes("Capacitor") || Boolean(window.Capacitor?.isNativePlatform?.()));
 
         window.spokesTriggerServerRestart = function(targetUrl) {
@@ -837,8 +1230,15 @@
                     try {
                         const res = await fetch('/spokesapi/Manifest', { cache: 'no-store' });
                         if (res.ok) {
+                            const contentType = (res.headers.get('content-type') || '').toLowerCase();
+                            if (!contentType.includes('json')) {
+                                return;
+                            }
                             const data = await res.json().catch(() => null);
-                            if (initialBootId && data && data.boot_id === initialBootId) {
+                            if (!data || typeof data.boot_id !== 'string') {
+                                return;
+                            }
+                            if (initialBootId && data.boot_id === initialBootId) {
                                 return;
                             }
                             clearInterval(pollInterval);
@@ -867,6 +1267,171 @@
             }
         };
 
+        const ensureCapacitorInitializedOnce = () => {
+            if (window._capacitorEnvTriggered) return;
+            window._capacitorEnvTriggered = true;
+            if (window.initCapacitorEnv) {
+                window.initCapacitorEnv();
+            }
+        };
+
+        const hasRenderedInteractiveDom = () => {
+            if (!document.body) return false;
+            for (let i = 0; i < document.body.children.length; i++) {
+                const el = document.body.children[i];
+                if (!el || el.id === 'startup-splash' || el.id === 'blazor-error-ui' || el.id === 'components-reconnect-modal' || el.hidden || el.style.display === 'none') continue;
+                const tag = el.tagName;
+                if (tag === 'SCRIPT' || tag === 'STYLE' || tag === 'LINK') continue;
+                return true;
+            }
+            return false;
+        };
+
+        const hideStartupSplashAfterCircuitDomCommit = () => {
+            if (window._isServerRestarting || window._reloadInProgress) return;
+            const finishHide = () => {
+                if (window._isServerRestarting || window._reloadInProgress || window._blazorDisconnected) return;
+                if (typeof window.__disarmSpokesStartupWatchdog === 'function') window.__disarmSpokesStartupWatchdog();
+                const splash = document.getElementById('startup-splash');
+                if (splash) splash.style.display = 'none';
+                if (typeof window.ensureUploadScriptsLoaded === 'function') {
+                    window.ensureUploadScriptsLoaded();
+                }
+                if (window.__spokesSession && window.__spokesSession.authenticated && typeof window.scheduleIdleDeferredScripts === 'function') {
+                    window.scheduleIdleDeferredScripts();
+                }
+            };
+            if (hasRenderedInteractiveDom()) {
+                requestAnimationFrame(finishHide);
+                return;
+            }
+            let settled = false;
+            const settle = () => {
+                if (settled) return;
+                settled = true;
+                if (obs) { try { obs.disconnect(); } catch (e) {} }
+                requestAnimationFrame(finishHide);
+            };
+            let obs = null;
+            try {
+                obs = new MutationObserver(() => {
+                    if (hasRenderedInteractiveDom()) settle();
+                });
+                if (document.body) {
+                    obs.observe(document.body, { childList: true, subtree: true });
+                }
+            } catch (e) {}
+            setTimeout(settle, 1500);
+        };
+
+        // Handles pre-open direct WebSocket failures (which .NET 9 blazor.web.js silently swallows instead of
+        // throwing FailedToNegotiateWithServerError): recovers 401/404 expired cookies first, and falls back
+        // via a single splash-covered reload to standard negotiated SignalR (SSE / LongPolling) if a proxy
+        // or VPN blocks direct WebSocket upgrades.
+        const handleInitialDirectWsFailure = async () => {
+            if (window._blazorCircuitEverOpened || window._directWsFallbackHandled || window._isServerRestarting || window._reloadInProgress) {
+                return;
+            }
+            window._directWsFallbackHandled = true;
+
+            try {
+                const r = await fetch('/spokesapi/auth/current-session?strict=1', { cache: 'no-store' });
+                if (r.status === 401 || r.status === 404) {
+                    console.warn('[App.razor] Direct WebSocket failed with ' + r.status + ' session. Refreshing cookie and reloading...');
+                    const lastAuthReload = parseInt(sessionStorage.getItem('spokes_ws_auth_reload_at') || '0', 10);
+                    if (Date.now() - lastAuthReload >= 15000 && window.spokesAuth && window.spokesAuth.refreshSessionAsync) {
+                        const refreshed = await window.spokesAuth.refreshSessionAsync();
+                        if (refreshed) {
+                            sessionStorage.setItem('spokes_ws_auth_reload_at', String(Date.now()));
+                            window._reloadInProgress = true;
+                            window.location.reload();
+                            return;
+                        }
+                    }
+                    // On web (no refresh token API) or unrecoverable token, fall back once to negotiated mode so standard error/redirect paths run
+                    if (sessionStorage.getItem('spokes_force_negotiate') !== '1') {
+                        sessionStorage.setItem('spokes_force_negotiate', '1');
+                        window._reloadInProgress = true;
+                        window.location.reload();
+                        return;
+                    }
+                    ensureCapacitorInitializedOnce();
+                    handleSevereError('Session expired. Please sign in again.');
+                    return;
+                }
+            } catch (fetchErr) {
+                // Server unreachable / device offline — do not poison spokes_force_negotiate
+                ensureCapacitorInitializedOnce();
+                handleSevereError('Unable to reach server. Please check your connection.');
+                return;
+            }
+
+            if (sessionStorage.getItem('spokes_force_negotiate') !== '1') {
+                console.warn('[App.razor] Direct WebSocket upgrade rejected while session is valid. Falling back to negotiated SignalR...');
+                sessionStorage.setItem('spokes_force_negotiate', '1');
+                window._reloadInProgress = true;
+                window.location.reload();
+                return;
+            }
+
+            ensureCapacitorInitializedOnce();
+            handleSevereError('Circuit not initialized (WebSocket connection blocked).');
+        };
+
+        window.SpokesBlazorWebSocket = function (url, protocols) {
+            const attachHandshakeGuard = (ws, alreadyOpened, preCloseEvent) => {
+                if (window._blazorCircuitEverOpened || alreadyOpened) return;
+                if (preCloseEvent || ws.readyState >= 2) {
+                    handleInitialDirectWsFailure();
+                    return;
+                }
+                let opened = false;
+                ws.addEventListener('open', () => { opened = true; }, { once: true });
+                ws.addEventListener('close', () => {
+                    if (!opened && !window._blazorCircuitEverOpened) {
+                        handleInitialDirectWsFailure();
+                    }
+                }, { once: true });
+            };
+
+            const prewarm = window.__spokesPrewarmedWs;
+            if (prewarm && !prewarm.claimed && !protocols && typeof url === 'string' && url.includes('/_blazor')) {
+                prewarm.claimed = true;
+                window.startupTimings.used_prewarmed_ws = true;
+                clearTimeout(prewarm.expireTimer);
+                window.__spokesPrewarmedWs = null;
+                const ws = prewarm.ws;
+                attachHandshakeGuard(ws, prewarm.opened, prewarm.closeEvent);
+
+                if (prewarm.opened && ws.readyState === 1) {
+                    const buffered = prewarm.messages.splice(0, prewarm.messages.length);
+                    const openEv = prewarm.openEvent || new Event('open');
+                    Promise.resolve().then(() => {
+                        if (typeof ws.onopen === 'function') ws.onopen(openEv);
+                        for (let i = 0; i < buffered.length; i++) {
+                            if (typeof ws.onmessage === 'function') ws.onmessage(buffered[i]);
+                        }
+                    });
+                } else if (prewarm.closeEvent || ws.readyState >= 2) {
+                    const errEv = prewarm.errorEvent || new Event('error');
+                    const closeEv = prewarm.closeEvent || new Event('close');
+                    Promise.resolve().then(() => {
+                        if (typeof ws.onerror === 'function') ws.onerror(errEv);
+                        if (typeof ws.onclose === 'function') ws.onclose(closeEv);
+                    });
+                }
+                return ws;
+            }
+
+            const ws = protocols ? new window.WebSocket(url, protocols) : new window.WebSocket(url);
+            attachHandshakeGuard(ws, false, null);
+            return ws;
+        };
+        window.SpokesBlazorWebSocket.CONNECTING = 0;
+        window.SpokesBlazorWebSocket.OPEN = 1;
+        window.SpokesBlazorWebSocket.CLOSING = 2;
+        window.SpokesBlazorWebSocket.CLOSED = 3;
+
         const startBlazor = () => {
             window.startupTimings.blazor_start = Date.now();
             try {
@@ -874,9 +1439,19 @@
                     throw new Error("Blazor is not defined. The framework script failed to load.");
                 }
 
+                const useDirectWebSocket = Boolean(window.WebSocket) && sessionStorage.getItem('spokes_force_negotiate') !== '1';
+
                 Blazor.start({
                 circuit: {
                     configureSignalR: function (builder) {
+                        if (useDirectWebSocket) {
+                            builder.withUrl('/_blazor', {
+                                skipNegotiation: true,
+                                transport: 1, // HttpTransportType.WebSockets
+                                WebSocket: window.SpokesBlazorWebSocket
+                            });
+                        }
+
                         // Align client timeout with server (120s) so client does not abort during cellular latency spikes
                         builder.withServerTimeout(120000);
                         builder.withKeepAliveInterval(15000);
@@ -895,6 +1470,17 @@
                             builder.configureLogging(level);
                         }
                     },
+                    circuitHandlers: [{
+                        onCircuitOpened() {
+                            window._blazorCircuitEverOpened = true;
+                            if (typeof window.__disarmSpokesStartupWatchdog === 'function') window.__disarmSpokesStartupWatchdog();
+                            window.startupTimings.blazor_conn_up = Date.now();
+                            try { sessionStorage.removeItem('spokes_ws_auth_reload_at'); } catch (e) {}
+                            console.log('[App.razor] Blazor circuit opened.');
+                            hideStartupSplashAfterCircuitDomCommit();
+                            ensureCapacitorInitializedOnce();
+                        }
+                    }],
                     reconnectionHandler: {
                         onConnectionDown(options, error) {
                             console.log('[Server Connection] Connection Down. Reason: ' + (error ? error.message : 'Unknown'));
@@ -905,7 +1491,7 @@
 
                             window._reconnectTimings = {
                                 start: Date.now(),
-                                trigger: document.visibilityState === 'visible' ? 'onConnectionDown' : 'onConnectionDown-hidden',
+                                trigger: (document.visibilityState === 'visible' && window._spokesHostViewActive !== false) ? 'onConnectionDown' : 'onConnectionDown-hidden',
                                 hiddenDurationMs: window._lastHiddenDurationMs || 0,
                                 splashShown: false,
                                 timeline: [{ name: 'Connection Dropped', absolute: Date.now() }]
@@ -933,9 +1519,11 @@
                             window._blazorDisconnected = false;
                             window._lastHiddenDurationMs = 0;
                             window.spokesResume.onConnectionUp();
+                            if (typeof window.__disarmSpokesStartupWatchdog === 'function') window.__disarmSpokesStartupWatchdog();
                             if (window._reloadInProgress) return; // a late reconnect must not flash the old page mid-reload
                             window.startupTimings.blazor_conn_up = Date.now();
-                            const splash = document.getElementById('startup-splash');
+                            if (typeof window.__disarmSpokesStartupWatchdog === 'function') window.__disarmSpokesStartupWatchdog();
+                const splash = document.getElementById('startup-splash');
                             if (splash) splash.style.display = 'none';
                             
                             if (window._reconnectTimings) {
@@ -953,7 +1541,26 @@
                                     console.log(`${step.name.padEnd(40)}: ${elapsedSinceStart.toString().padStart(6)}ms (delta: +${delta}ms)`);
                                 });
                                 console.log('==================================================');
+                                if (window.__spokesPerfTelemetry && Array.isArray(window.__spokesPerfTelemetry.reconnects)) {
+                                    const endTs = Date.now();
+                                    window.__spokesPerfTelemetry.reconnects.push({
+                                        trigger: trig,
+                                        hiddenDurationMs: window._reconnectTimings.hiddenDurationMs || 0,
+                                        splashShown: Boolean(window._reconnectTimings.splashShown),
+                                        totalMs: Math.max(0, endTs - window._reconnectTimings.start),
+                                        timeline: window._reconnectTimings.timeline.slice()
+                                    });
+                                    if (window.__spokesPerfTelemetry.reconnects.length > 10) {
+                                        window.__spokesPerfTelemetry.reconnects.shift();
+                                    }
+                                }
                                 window._reconnectTimings = null;
+                            }
+
+                            if (window.pendingNotificationRoute && typeof window.spokesNavigateFromNative === 'function') {
+                                const pendingRoute = window.pendingNotificationRoute;
+                                window.pendingNotificationRoute = null;
+                                window.spokesNavigateFromNative(pendingRoute);
                             }
 
                             // If a warm-share was aborted/pending due to socket drop, retry it instantly now
@@ -974,19 +1581,19 @@
                     }
                 }
             }).then(() => {
-                // Initial connection established
-                console.log('[App.razor] Blazor circuit established.');
-                if (typeof loadDeferredScripts === 'function') {
-                    loadDeferredScripts();
-                }
-                window.startupTimings.blazor_conn_up = Date.now();
-                if (window._isServerRestarting) return;
+                // Note: In .NET 9 blazor.web.js, Blazor.start() resolves after client runtime setup (~3ms),
+                // BEFORE interactive server circuit negotiation/StartCircuit completes. Interactive routes
+                // defer splash dismissal, Capacitor bridge init, and heavy script bundles to onCircuitOpened / reportInteractive.
+                if (window.__isStaticLoginRoute) {
+                    if (typeof window.__disarmSpokesStartupWatchdog === 'function') window.__disarmSpokesStartupWatchdog();
                 const splash = document.getElementById('startup-splash');
-                if (splash) splash.style.display = 'none';
+                    if (splash && !window._isServerRestarting) splash.style.display = 'none';
+                    ensureCapacitorInitializedOnce();
+                }
                 try {
                     Blazor.addEventListener('enhancedload', () => {
                         if (window._blazorDisconnected || window._isServerRestarting || window._reloadInProgress) return;
-                        if (window.startupTimings && window.startupTimings.blazor_conn_up) {
+                        if (window._blazorCircuitEverOpened || window.__isStaticLoginRoute) {
                             const s = document.getElementById('startup-splash');
                             if (s) s.style.display = 'none';
                         }
@@ -996,8 +1603,8 @@
                 console.error('[App.razor] Blazor.start() promise rejected:', e);
                 const errMsg = e ? (e.message || e.toString()) : "unknown";
                 
-                // If Blazor failed, the session may have been lost between the page request and the
-                // WebSocket handshake (e.g. the OS cleared the cookie jar). Refresh once and reload.
+                // If Blazor failed (e.g. negotiated mode 401), the session may have been lost between the page request
+                // and the SignalR handshake. Refresh once and reload.
                 try {
                     let r = await fetch('/spokesapi/auth/current-session?strict=1', { cache: 'no-store' });
                     if (r.status === 404 || r.status === 401) {
@@ -1007,36 +1614,57 @@
                             refreshed = await window.spokesAuth.refreshSessionAsync();
                         }
                         if (refreshed) {
+                            window._reloadInProgress = true;
                             window.location.reload();
                             return;
                         }
-                        // Refresh failed (invalid/revoked token) — don't reload or we'll loop forever
                         console.warn('[App.razor] Session refresh failed. Cannot recover.');
                     }
                 } catch (fetchErr) {}
                 
+                ensureCapacitorInitializedOnce();
                 handleSevereError("Circuit not initialized (Blazor failed to load: " + errMsg + ")");
-            }).finally(() => {
-                // Register native event listeners (deep links, back button, notifications) after Blazor
-                // completes its initial negotiate + WebSocket handshake so plugin bridge calls never
-                // contend with circuit startup.
-                if (window.initCapacitorEnv) {
-                    window.initCapacitorEnv();
-                }
             });
             } catch (e) {
                 console.error('[App.razor] Blazor.start() threw synchronously:', e);
-                if (window.initCapacitorEnv) {
-                    window.initCapacitorEnv();
-                }
+                ensureCapacitorInitializedOnce();
                 handleSevereError("Circuit not initialized (Blazor failed to load: " + (e ? e.message || e : "unknown") + ")");
             }
         };
 
 
-        const isNative = typeof window.isCapacitorNative === 'function' 
-            ? window.isCapacitorNative() 
-            : (navigator.userAgent.includes("Capacitor") || !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()));
+        const checkIsNativePlatform = () => window.checkIsCapacitorNative();
+
+
+        let startupWatchdogTimer = null;
+        window.__disarmSpokesStartupWatchdog = () => {
+            if (startupWatchdogTimer) { clearTimeout(startupWatchdogTimer); startupWatchdogTimer = null; }
+            const actions = document.getElementById('spokes-splash-watchdog-actions');
+            if (actions) actions.style.display = 'none';
+        };
+        window.__armSpokesStartupWatchdog = (timeoutMs = 9500) => {
+            window.__disarmSpokesStartupWatchdog();
+            startupWatchdogTimer = setTimeout(() => {
+                startupWatchdogTimer = null;
+                if (window._blazorCircuitEverOpened || window.__isStaticLoginRoute) return;
+                const splash = document.getElementById('startup-splash');
+                if (!splash || splash.style.display === 'none') return;
+                const statusEl = document.getElementById('splash-status');
+                if (statusEl && !statusEl.textContent) {
+                    statusEl.textContent = 'Connection is taking longer than expected. Check your network or proxy configuration.';
+                }
+                const switchBtn = document.getElementById('spokes-splash-switch-server-btn');
+                if (switchBtn) {
+                    const hasSwitcher = checkIsNativePlatform() || typeof window.changeCapacitorServer === 'function' || Boolean(window.SpokesNative && window.SpokesNative.openServer);
+                    switchBtn.style.display = hasSwitcher ? 'inline-block' : 'none';
+                }
+                const actions = document.getElementById('spokes-splash-watchdog-actions');
+                if (actions) actions.style.display = 'flex';
+            }, timeoutMs);
+        };
+        const isNative = checkIsNativePlatform();
+
+
 
         const navigateToReturnUrl = () => {
             const rawReturnUrl = new URLSearchParams(window.location.search).get('returnUrl');
@@ -1051,10 +1679,13 @@
         // (The mobile splash interceptor guarantees authenticated Capacitor requests on app pages;
         // only pages it skips, e.g. /mobile-login, can arrive here unauthenticated.)
         const ensureCookiesFlushed = async () => {
-            if (!isNative) return true; // Web browsers: cookies just work.
+            if (!checkIsNativePlatform()) return true; // Web browsers: cookies just work.
 
             const session = window.__spokesSession || {};
             const path = window.location.pathname.toLowerCase();
+            if (path.startsWith('/access-pending') || path.startsWith('/banned')) {
+                return true;
+            }
             const onLoginPage = path.includes('/mobile-login') || path.includes('/session-expired');
 
             if (session.authenticated) {
@@ -1067,6 +1698,14 @@
             }
 
             console.log('[App.razor] Page request was unauthenticated. Establishing session from the refresh token...');
+            if (window.__spokesPrewarmedWs) {
+                try {
+                    clearTimeout(window.__spokesPrewarmedWs.expireTimer);
+                    window.__spokesPrewarmedWs.claimed = true;
+                    window.__spokesPrewarmedWs.ws.close();
+                } catch (e) {}
+                window.__spokesPrewarmedWs = null;
+            }
             window.startupTimings.cookie_sync_start = Date.now();
             const refreshed = await window.spokesAuth.refreshSessionAsync();
             window.startupTimings.cookie_sync_end = Date.now();
@@ -1078,58 +1717,185 @@
             return true;
         };
 
-        // --- Eager-lazy script loader ---
-        // These scripts are NOT needed for startup or share intents but should load ASAP
-        // after the app is interactive. Removing them from <script defer> unblocks
-        // DOMContentLoaded, saving ~80-120ms of V8 parse/compile on Android.
-        function loadDeferredScripts() {
-            if (window._lazyScriptsLoaded) return;
-            window._lazyScriptsLoaded = true;
-            const loadScript = (src) => {
-                return new Promise((resolve, reject) => {
-                    const s = document.createElement('script');
-                    s.src = src;
-                    s.onload = resolve;
-                    s.onerror = (e) => { console.warn('[Lazy-Load] Failed to load:', src, e); resolve(); };
-                    document.body.appendChild(s);
-                });
+        // --- Partitioned post-interactive & on-demand script loaders ---
+        // Feature bundles (~950 KB: LiveKit, Quill, Cropper, Upload, Cast) are partitioned into
+        // idempotent Promise-cached loaders. They preload during post-interactive idle time and can
+        // also be awaited on-demand by any component or JS interop entrypoint so deep links never race.
+        (function initDeferredScriptLoaders() {
+            const scriptPromises = Object.create(null);
+            const loadedCss = Object.create(null);
+
+            const loadScriptOnce = (src) => {
+                if (!scriptPromises[src]) {
+                    scriptPromises[src] = new Promise((resolve) => {
+                        const s = document.createElement('script');
+                        s.src = src;
+                        s.onload = () => resolve(true);
+                        s.onerror = (e) => {
+                            console.warn('[Lazy-Load] Failed to load:', src, e);
+                            delete scriptPromises[src];
+                            resolve(false);
+                        };
+                        (document.body || document.head || document.documentElement).appendChild(s);
+                    });
+                }
+                return scriptPromises[src];
             };
 
-            const loadCss = (href) => {
+            const loadCssOnce = (href) => {
+                if (loadedCss[href]) return;
+                loadedCss[href] = true;
                 const l = document.createElement('link');
                 l.rel = 'stylesheet';
                 l.href = href;
                 document.head.appendChild(l);
             };
 
-            // Group 1: independent scripts and non-critical stylesheets — load all in parallel
-            loadCss('@Assets["lib/quill/quill.snow.css"]');
-            loadCss('@Assets["lib/cropperjs/cropper.min.css"]');
-            const quillReady = loadScript('@Assets["lib/quill/quill.js"]');
-            const cropperReady = loadScript('@Assets["lib/cropperjs/cropper.min.js"]');
-            loadScript('@Assets["lib/livekit/livekit-client.umd.min.js"]');
-            loadScript('@Assets["js/upload.js"]');
-            loadScript('@Assets["js/download.js"]');
-            loadScript('@Assets["js/voice-recorder.js"]');
-            loadScript('@Assets["js/google-cast-sender.js"]');
-
-            // Group 2: depends on quill.js and cropperjs — load after they're ready
-            Promise.all([quillReady, cropperReady]).then(() => {
-                // Polyfill for third-party plugins that still expect Quill 1.x's Module class
-                if (window.Quill && !window.Quill.Module) {
-                    window.Quill.Module = window.Quill.import('core/module');
+            let uploadBundlePromise = null;
+            window.ensureUploadScriptsLoaded = function () {
+                if (!uploadBundlePromise) {
+                    uploadBundlePromise = Promise.all([
+                        loadScriptOnce('@Assets["js/upload.js"]'),
+                        loadScriptOnce('@Assets["js/download.js"]'),
+                        loadScriptOnce('@Assets["js/voice-recorder.js"]')
+                    ]);
                 }
-                loadScript('@Assets["lib/quill-magic-url/quill-magic-url.min.js"]');
-                loadScript('@Assets["js/spokes-quill.js"]');
-                loadScript('@Assets["js/cropper-interop.js"]');
-            }).catch(e => console.warn('[Lazy-Load] Dependency load failed:', e));
-        }
+                return uploadBundlePromise;
+            };
 
-        window.loadDeferredScripts = loadDeferredScripts;
+            let voiceBundlePromise = null;
+            window.ensureVoiceScriptsLoaded = function () {
+                if (window.LivekitClient) return Promise.resolve(true);
+                if (!voiceBundlePromise) {
+                    voiceBundlePromise = loadScriptOnce('@Assets["lib/livekit/livekit-client.umd.min.js"]');
+                }
+                return voiceBundlePromise;
+            };
+
+            let richTextBundlePromise = null;
+            window.ensureRichTextScriptsLoaded = function () {
+                if (window.spokesQuill && window.Quill) return Promise.resolve(true);
+                if (!richTextBundlePromise) {
+                    loadCssOnce('@Assets["lib/quill/quill.snow.css"]');
+                    richTextBundlePromise = loadScriptOnce('@Assets["lib/quill/quill.js"]').then(async () => {
+                        if (window.Quill && !window.Quill.Module) {
+                            window.Quill.Module = window.Quill.import('core/module');
+                        }
+                        await Promise.all([
+                            loadScriptOnce('@Assets["lib/quill-magic-url/quill-magic-url.min.js"]'),
+                            loadScriptOnce('@Assets["js/spokes-quill.js"]')
+                        ]);
+                        return true;
+                    });
+                }
+                return richTextBundlePromise;
+            };
+
+            let cropperBundlePromise = null;
+            window.ensureCropperScriptsLoaded = function () {
+                if (typeof window.initCropper === 'function' && window.Cropper) return Promise.resolve(true);
+                if (!cropperBundlePromise) {
+                    loadCssOnce('@Assets["lib/cropperjs/cropper.min.css"]');
+                    cropperBundlePromise = loadScriptOnce('@Assets["lib/cropperjs/cropper.min.js"]').then(() =>
+                        loadScriptOnce('@Assets["js/cropper-interop.js"]')
+                    );
+                }
+                return cropperBundlePromise;
+            };
+
+            let castBundlePromise = null;
+            window.ensureCastScriptsLoaded = function () {
+                if (window.spokesCast) return Promise.resolve(true);
+                if (!castBundlePromise) {
+                    castBundlePromise = loadScriptOnce('@Assets["js/google-cast-sender.js"]');
+                }
+                return castBundlePromise;
+            };
+
+            let shareBundlePromise = null;
+            window.ensureShareScriptsLoaded = function () {
+                if (typeof window.registerShareTarget === 'function' && window.spokesShareRouter) {
+                    return Promise.resolve(true);
+                }
+                if (!shareBundlePromise) {
+                    shareBundlePromise = loadScriptOnce('@Assets["js/share-router.js"]').then(() =>
+                        loadScriptOnce('@Assets["js/share-target.js"]')
+                    );
+                }
+                return shareBundlePromise;
+            };
+
+            // Safe Capacitor-gated stubs so callers invoked before share-target.js finishes loading
+            // no-op cleanly on Web/Desktop and lazy-load on Capacitor Native.
+            if (typeof window.spokesPushDirectShareShortcut !== 'function') {
+                window.spokesPushDirectShareShortcut = async function (serverUrl, channelId, channelName, iconBase64) {
+                    if (!window.Capacitor?.Plugins?.ShortcutManager) return;
+                    await window.ensureShareScriptsLoaded();
+                    if (window.spokesPushDirectShareShortcut && !window.spokesPushDirectShareShortcut._isStub) {
+                        return window.spokesPushDirectShareShortcut(serverUrl, channelId, channelName, iconBase64);
+                    }
+                };
+                window.spokesPushDirectShareShortcut._isStub = true;
+            }
+            if (typeof window.spokesPushAppShortcut !== 'function') {
+                window.spokesPushAppShortcut = async function (serverUrl, id, shortLabel, longLabel, iconBase64) {
+                    if (!window.Capacitor?.Plugins?.ShortcutManager) return;
+                    await window.ensureShareScriptsLoaded();
+                    if (window.spokesPushAppShortcut && !window.spokesPushAppShortcut._isStub) {
+                        return window.spokesPushAppShortcut(serverUrl, id, shortLabel, longLabel, iconBase64);
+                    }
+                };
+                window.spokesPushAppShortcut._isStub = true;
+            }
+            if (typeof window.spokesRemoveShortcut !== 'function') {
+                window.spokesRemoveShortcut = async function (serverUrl, id) {
+                    if (!window.Capacitor?.Plugins?.ShortcutManager) return;
+                    await window.ensureShareScriptsLoaded();
+                    if (window.spokesRemoveShortcut && !window.spokesRemoveShortcut._isStub) {
+                        return window.spokesRemoveShortcut(serverUrl, id);
+                    }
+                };
+                window.spokesRemoveShortcut._isStub = true;
+            }
+
+            window.loadDeferredScripts = function () {
+                window._lazyScriptsLoaded = true;
+                return Promise.all([
+                    window.ensureUploadScriptsLoaded(),
+                    window.ensureVoiceScriptsLoaded(),
+                    window.ensureRichTextScriptsLoaded(),
+                    window.ensureCropperScriptsLoaded(),
+                    window.ensureCastScriptsLoaded()
+                ]);
+            };
+
+            let idleScheduled = false;
+            window.scheduleIdleDeferredScripts = function () {
+                if (idleScheduled) return;
+                idleScheduled = true;
+                const triggerPreload = () => {
+                    window.ensureUploadScriptsLoaded();
+                    const scheduleHeavy = typeof window.requestIdleCallback === 'function'
+                        ? (fn) => window.requestIdleCallback(fn, { timeout: 3000 })
+                        : (fn) => setTimeout(fn, 600);
+                    scheduleHeavy(() => {
+                        window.ensureRichTextScriptsLoaded();
+                        window.ensureCropperScriptsLoaded();
+                        window.ensureCastScriptsLoaded();
+                        scheduleHeavy(() => {
+                            window.ensureVoiceScriptsLoaded();
+                            window._lazyScriptsLoaded = true;
+                        });
+                    });
+                };
+                setTimeout(triggerPreload, 800);
+            };
+        })();
 
         const runStartup = async () => {
             // Step 0: Ensure desktop/web clients do not retain an accidental client=mobile query param
-            if (!isNative && window.location.search.includes('client=mobile')) {
+            const nativePlatform = checkIsNativePlatform();
+            if (!nativePlatform && window.location.search.includes('client=mobile')) {
                 try {
                     const cleanUrl = new URL(window.location.href);
                     cleanUrl.searchParams.delete('client');
@@ -1143,16 +1909,22 @@
             // the user returns. Waiting costs nothing: nobody is looking at a hidden page, and native push
             // covers notifications. (Native only: a desktop background tab still needs its circuit for
             // in-app notifications.)
-            if (isNative && document.visibilityState === 'hidden') {
+            if (nativePlatform && (window._spokesHostViewActive === false || (document.visibilityState === 'hidden' && window._spokesHostViewExplicitlyActivated !== true))) {
                 console.log('[App.razor] Page is hidden. Deferring boot until it becomes visible.');
                 window.startupTimings.hidden_wait_start = Date.now();
                 await new Promise(resolve => {
-                    const onVisibilityChange = () => {
-                        if (document.visibilityState !== 'visible') return;
-                        document.removeEventListener('visibilitychange', onVisibilityChange);
+                    let resolved = false;
+                    const onWakeCheck = () => {
+                        if (resolved) return;
+                        if (window._spokesHostViewActive === false) return;
+                        if (document.visibilityState !== 'visible' && window._spokesHostViewExplicitlyActivated !== true) return;
+                        resolved = true;
+                        document.removeEventListener('visibilitychange', onWakeCheck);
+                        window.removeEventListener('spokes:host-view-active', onWakeCheck);
                         resolve();
                     };
-                    document.addEventListener('visibilitychange', onVisibilityChange);
+                    window.addEventListener('spokes:host-view-active', onWakeCheck);
+                    document.addEventListener('visibilitychange', onWakeCheck);
                 });
                 window.startupTimings.hidden_wait_end = Date.now();
                 console.log('[App.razor] Page visible after ' + (window.startupTimings.hidden_wait_end - window.startupTimings.hidden_wait_start) + 'ms. Resuming boot.');
@@ -1168,7 +1940,18 @@
                 // Continue to startBlazor anyway, so the user isn't stuck on the splash screen indefinitely.
             }
 
-            // Step 3: Start Blazor (initCapacitorEnv runs in Blazor.start().finally())
+            // Step 3: Static SSR routes (/mobile-login, /mobile-login-success, /access-pending, /banned)
+            // require no SignalR circuit or enhanced form/navigation interception.
+            if (window.__isStaticLoginRoute) {
+                if (typeof window.__disarmSpokesStartupWatchdog === 'function') window.__disarmSpokesStartupWatchdog();
+                const splash = document.getElementById('startup-splash');
+                if (splash) splash.style.display = 'none';
+                ensureCapacitorInitializedOnce();
+                return;
+            }
+
+            // Step 4: Start Blazor (initCapacitorEnv runs in Blazor.start().finally())
+            if (typeof window.__armSpokesStartupWatchdog === 'function') window.__armSpokesStartupWatchdog(9500);
             startBlazor();
         };
 
@@ -1180,11 +1963,8 @@
     </script>
     <script src="@Assets["_content/MudBlazor/MudBlazor.min.js"]" defer></script>
     <script src="@Assets["js/push-notifications.js"]" defer></script>
-    <script src="@Assets["js/share-router.js"]" defer></script>
-    <script src="@Assets["js/share-target.js"]" defer></script>
-    <!-- Non-critical scripts (upload, download, livekit, quill, cropperjs) are eager-lazy loaded
-         by loadDeferredScripts() immediately after the app becomes interactive.
-         Removing them from defer unblocks DOMContentLoaded and saves ~80-120ms on Android. -->
+    <!-- Non-critical scripts (upload, download, livekit, quill, cropperjs) and Capacitor-only share scripts
+         are loaded post-interactive or on demand so they never block DOMContentLoaded or Web Desktop cold start. -->
     <script src="@Assets["js/spokes-app.js"]" defer></script>
 </body>
 

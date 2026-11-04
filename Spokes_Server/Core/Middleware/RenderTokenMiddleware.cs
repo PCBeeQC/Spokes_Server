@@ -20,7 +20,6 @@ public class RenderTokenMiddleware
     [
         AppPermissions.Projects.View,
         AppPermissions.Purchases.ViewPOs,
-        AppPermissions.Purchases.ManagePOs,
         AppPermissions.BusinessDocuments.View
     ];
 
@@ -36,20 +35,25 @@ public class RenderTokenMiddleware
     public async Task InvokeAsync(HttpContext context, RenderTokenService tokenService, DeviceSessionRepository deviceSessions)
     {
         string? token = null;
-        if (context.Request.Headers.TryGetValue("X-Spokes-Render-Token", out var headerValues) && !string.IsNullOrWhiteSpace(headerValues))
-        {
-            token = headerValues.ToString();
-        }
-        else if (context.Request.Query.TryGetValue("renderToken", out var tokenValues) && !string.IsNullOrWhiteSpace(tokenValues))
+        if (context.Request.Query.TryGetValue("renderToken", out var tokenValues) && !string.IsNullOrWhiteSpace(tokenValues))
         {
             token = tokenValues.ToString();
         }
 
         if (!string.IsNullOrEmpty(token))
         {
-            var remoteIp = context.Connection.RemoteIpAddress;
+            var rawRemoteIp = context.Items.TryGetValue("Spokes.RawRemoteIp", out var rawIpObj) && rawIpObj is IPAddress capturedIp
+                ? capturedIp
+                : context.Connection.RemoteIpAddress;
 
-            if (tokenService.ValidateToken(token, out var sessionId))
+            if (rawRemoteIp == null || !IPAddress.IsLoopback(rawRemoteIp))
+            {
+                _logger?.LogWarning("Audit: Rejected non-loopback renderToken attempt from {RemoteIp}", rawRemoteIp);
+                await _next(context);
+                return;
+            }
+
+            if (tokenService.TryConsumeToken(token, context.Request.Path.Value, out var sessionId))
             {
                 // Create a scoped document-rendering identity for this request (no Admin role)
                 Claim[] claims =
@@ -87,14 +91,14 @@ public class RenderTokenMiddleware
                         ExpiresUtc = DateTimeOffset.UtcNow.AddMinutes(5)
                     });
 
-                    _logger?.LogInformation("Audit: Authenticated valid renderToken for headless rendering session {SessionId} from {RemoteIp}", sessionId, remoteIp);
+                    _logger?.LogInformation("Audit: Authenticated valid renderToken for headless rendering session {SessionId} from {RemoteIp}", sessionId, rawRemoteIp);
                 }
 
                 context.User = principal;
             }
             else
             {
-                _logger?.LogWarning("Audit: Rejected invalid or expired renderToken from {RemoteIp}", remoteIp);
+                _logger?.LogWarning("Audit: Rejected invalid, mismatched, or expired renderToken from {RemoteIp}", rawRemoteIp);
             }
         }
 

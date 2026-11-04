@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.IO;
@@ -151,7 +151,13 @@ public class FileService : IFileService
             }
         }
 
-        // Pattern 3: Direct or relative physical path
+        // Pattern 3: Direct or relative physical path (confined to allowed upload/attachment roots)
+        if (clean.Contains("..", StringComparison.Ordinal))
+        {
+            _logger.LogWarning("Rejected DeleteAsync with path traversal segment: {FileIdentifier}", fileIdentifier);
+            return false;
+        }
+
         string physicalPath = clean;
         if (!Path.IsPathRooted(physicalPath))
         {
@@ -170,6 +176,28 @@ public class FileService : IFileService
             {
                 physicalPath = candidateInUploads;
             }
+        }
+
+        try
+        {
+            physicalPath = Path.GetFullPath(physicalPath);
+        }
+        catch
+        {
+            return false;
+        }
+
+        var allowedRoots = new[]
+        {
+            Path.GetFullPath(_basePath) + Path.DirectorySeparatorChar,
+            Path.GetFullPath(Path.Combine(_baseDataPath, "Attachments")) + Path.DirectorySeparatorChar,
+            Path.GetFullPath(Path.Combine(_baseDataPath, "EmailAccounts")) + Path.DirectorySeparatorChar
+        };
+
+        if (!allowedRoots.Any(root => physicalPath.StartsWith(root, StringComparison.OrdinalIgnoreCase)))
+        {
+            _logger.LogWarning("Rejected DeleteAsync outside allowed storage roots: {FileIdentifier}", fileIdentifier);
+            return false;
         }
 
         if (!File.Exists(physicalPath)) return false;
@@ -568,19 +596,31 @@ public class FileService : IFileService
         return filePath;
     }
 
-    public string GetEmailAttachmentPhysicalPath(string employeeId, string messageId, string attachmentId)
+    public string GetEmailAttachmentPhysicalPath(string accountId, string messageId, string attachmentId)
     {
-        ValidatePathSegment(employeeId, nameof(employeeId));
+        ValidatePathSegment(accountId, nameof(accountId));
         ValidatePathSegment(messageId, nameof(messageId));
         ValidatePathSegment(attachmentId, nameof(attachmentId));
 
-        var baseDirPath = Path.GetFullPath(Path.Combine(_baseDataPath, "Employees", employeeId, "Email", "Attachments", messageId));
-        var filePath = Path.GetFullPath(Path.Combine(baseDirPath, attachmentId));
-        if (!filePath.StartsWith(baseDirPath, StringComparison.OrdinalIgnoreCase))
+        var accountDirPath = Path.GetFullPath(Path.Combine(_baseDataPath, "EmailAccounts", accountId, "Attachments", messageId));
+        var accountFilePath = Path.GetFullPath(Path.Combine(accountDirPath, attachmentId));
+        if (!accountFilePath.StartsWith(accountDirPath, StringComparison.OrdinalIgnoreCase))
         {
             throw new ArgumentException("Invalid path traversal detected");
         }
-        return filePath;
+        if (File.Exists(accountFilePath))
+        {
+            return accountFilePath;
+        }
+
+        var legacyDirPath = Path.GetFullPath(Path.Combine(_baseDataPath, "Employees", accountId, "Email", "Attachments", messageId));
+        var legacyFilePath = Path.GetFullPath(Path.Combine(legacyDirPath, attachmentId));
+        if (legacyFilePath.StartsWith(legacyDirPath, StringComparison.OrdinalIgnoreCase) && File.Exists(legacyFilePath))
+        {
+            return legacyFilePath;
+        }
+
+        return accountFilePath;
     }
 
     public string GetAvatarPhysicalPath(string employeeId, string fileName)

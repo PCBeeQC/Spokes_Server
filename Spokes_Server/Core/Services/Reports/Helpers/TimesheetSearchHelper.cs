@@ -204,11 +204,15 @@ public static class TimesheetSearchHelper
                ?? task.SubTasks.First();
     }
 
-    public static string FormatTaskAndSubTask(string? taskName, string? subTaskName, string separator = " : ")
+    public static string FormatTaskAndSubTask(string? taskName, string? subTaskName, string separator = " : ", string? note = null)
     {
         if (string.IsNullOrWhiteSpace(taskName)) return string.Empty;
-        if (string.IsNullOrWhiteSpace(subTaskName)) return taskName;
-        return $"{taskName}{separator}{subTaskName}";
+        var text = string.IsNullOrWhiteSpace(subTaskName) ? taskName : $"{taskName}{separator}{subTaskName}";
+        if (!string.IsNullOrWhiteSpace(note))
+        {
+            return $"{text} ({note.Trim()})";
+        }
+        return text;
     }
 
     public static string FormatTranslatedTaskAndSubTask(
@@ -217,7 +221,8 @@ public static class TimesheetSearchHelper
         string? subTaskId,
         WorkType? workType,
         string? languageCode,
-        string separator = " : ")
+        string separator = " : ",
+        string? note = null)
     {
         var taskName = !string.IsNullOrWhiteSpace(fallbackTaskName)
             ? fallbackTaskName
@@ -263,6 +268,6 @@ public static class TimesheetSearchHelper
             }
         }
 
-        return FormatTaskAndSubTask(taskName, subTaskName, separator);
+        return FormatTaskAndSubTask(taskName, subTaskName, separator, note);
     }
 }

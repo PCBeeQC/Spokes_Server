@@ -1,8 +1,8 @@
 <MudDialog>
     <TitleContent>
         <div class="d-flex align-center gap-2">
-            <MudIcon Icon="@(CustomIcon ?? (IsAttendeesMode ? Icons.Material.Filled.EventAvailable : (IsReadReceiptMode ? Icons.Material.Filled.DoneAll : Icons.Material.Filled.People)))" Size="Size.Small" />
-            <MudText Typo="Typo.h6">@(CustomTitle ?? (IsAttendeesMode ? Loc["Event Attendees"].Value : (IsReadReceiptMode ? Loc["Read Receipts"].Value : Loc["Message Reactions"].Value)))</MudText>
+            <MudIcon Icon="@(CustomIcon ?? (IsPollVotesMode ? Icons.Material.Filled.Poll : (IsAttendeesMode ? Icons.Material.Filled.EventAvailable : (IsReadReceiptMode ? Icons.Material.Filled.DoneAll : Icons.Material.Filled.People))))" Size="Size.Small" />
+            <MudText Typo="Typo.h6">@(CustomTitle ?? (IsPollVotesMode ? Loc["Poll Votes"].Value : (IsAttendeesMode ? Loc["Event Attendees"].Value : (IsReadReceiptMode ? Loc["Read Receipts"].Value : Loc["Message Reactions"].Value))))</MudText>
         </div>
     </TitleContent>
     <DialogContent>
@@ -14,7 +14,12 @@
                     <MudCard Elevation="0" Class="pa-0" Style="border-radius: 12px; overflow: hidden; border: 1px solid var(--mud-palette-divider);">
                         <div class="d-flex align-center justify-space-between px-4 py-3" style="background-color: var(--mud-palette-background-grey);">
                             <div class="d-flex align-center gap-2">
-                                @if (IsAttendeesMode)
+                                @if (IsPollVotesMode)
+                                {
+                                    <MudIcon Icon="@Icons.Material.Filled.HowToVote" Size="Size.Small" Color="Color.Primary" />
+                                    <MudText Typo="Typo.subtitle1" Style="font-weight: 600;">@group.Key</MudText>
+                                }
+                                else if (IsAttendeesMode)
                                 {
                                     <MudIcon Icon="@Icons.Material.Filled.CheckCircle" Size="Size.Small" Color="Color.Success" />
                                     <MudText Typo="Typo.subtitle1" Style="font-weight: 600;">@GetLocalizedGroupName(group.Key)</MudText>
@@ -30,14 +35,20 @@
                                 }
                             </div>
                             <MudChip T="string" Size="Size.Small" Color="Color.Primary" Variant="Variant.Outlined">
-                                @group.Value.Count @(group.Value.Count == 1 ? ((IsReadReceiptMode || IsAttendeesMode) ? Loc["person"].Value : Loc["reaction"].Value) : ((IsReadReceiptMode || IsAttendeesMode) ? Loc["people"].Value : Loc["reactions"].Value))
+                                @group.Value.Count @GetUnitLabel(group.Value.Count)
                             </MudChip>
                         </div>
                         <MudDivider />
                         @if (AnonymizeUsers)
                         {
                             <MudText Typo="Typo.body2" Color="Color.Secondary" Class="text-center pa-3">
-                                @Loc["User identities are hidden in this channel."]
+                                @(IsPollVotesMode ? Loc["Voter identities are hidden on anonymous polls."].Value : Loc["User identities are hidden in this channel."].Value)
+                            </MudText>
+                        }
+                        else if (!group.Value.Any())
+                        {
+                            <MudText Typo="Typo.body2" Color="Color.Secondary" Class="text-center pa-3">
+                                @Loc["No votes yet."]
                             </MudText>
                         }
                         else
@@ -64,7 +75,7 @@
             else
             {
                 <MudText Typo="Typo.body2" Color="Color.Secondary" Class="text-center pa-4">
-                    @(IsAttendeesMode ? Loc["No attendees found."].Value : (IsReadReceiptMode ? Loc["No read receipts found."].Value : Loc["No reactions found."].Value))
+                    @(IsPollVotesMode ? Loc["No votes yet."].Value : (IsAttendeesMode ? Loc["No attendees found."].Value : (IsReadReceiptMode ? Loc["No read receipts found."].Value : Loc["No reactions found."].Value)))
                 </MudText>
             }
         </div>
@@ -91,6 +102,10 @@
 
     [Parameter] public bool IsAttendeesMode { get; set; }
     [Parameter] public List<string> AttendeeUserIds { get; set; } = [];
+    [Parameter] public bool IsPollVotesMode { get; set; }
+    [Parameter] public Dictionary<string, List<Employee>>? CustomEmployeeGroups { get; set; }
+    [Parameter] public string? CustomUnitSingular { get; set; }
+    [Parameter] public string? CustomUnitPlural { get; set; }
     [Parameter] public string? CustomTitle { get; set; }
     [Parameter] public string? CustomIcon { get; set; }
     [Parameter] public string? GroupNameOverride { get; set; }
@@ -99,6 +114,14 @@
 
     protected override void OnInitialized()
     {
+        if (CustomEmployeeGroups != null)
+        {
+            _reactionGroups = CustomEmployeeGroups.ToDictionary(
+                g => g.Key,
+                g => g.Value.OrderBy(e => e.FullName).ToList());
+            return;
+        }
+
         Dictionary<string, List<Employee>> groups = [];
         
         if (IsAttendeesMode)
@@ -168,5 +191,21 @@
         if (name == "Attending") return Loc["Attending"].Value;
         if (name == "Seen By") return Loc["Seen By"].Value;
         return name;
+    }
+
+    private string GetUnitLabel(int count)
+    {
+        if (count == 1)
+        {
+            if (!string.IsNullOrEmpty(CustomUnitSingular)) return CustomUnitSingular;
+            if (IsPollVotesMode) return Loc["vote"].Value;
+            if (IsReadReceiptMode || IsAttendeesMode) return Loc["person"].Value;
+            return Loc["reaction"].Value;
+        }
+
+        if (!string.IsNullOrEmpty(CustomUnitPlural)) return CustomUnitPlural;
+        if (IsPollVotesMode) return Loc["votes"].Value;
+        if (IsReadReceiptMode || IsAttendeesMode) return Loc["people"].Value;
+        return Loc["reactions"].Value;
     }
 }

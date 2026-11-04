@@ -80,8 +80,7 @@ public class ChatSecurityService
         }
 
         var isDMRestricted = channel.ChannelType == ChatChannelType.Direct ||
-                             channel.ChannelType == ChatChannelType.Group ||
-                             channel.ParticipantIds.Any();
+                             channel.ChannelType == ChatChannelType.Group;
 
         string? existingCipherKeyForDisable = null;
 
@@ -109,6 +108,15 @@ public class ChatSecurityService
                 existingCipherKeyForDisable,
                 cancellationToken);
         }, cancellationToken);
+    }
+
+    public virtual void ValidateChannelEncryptionPrerequisites(ChatChannel channel, string? privateKeyContext)
+    {
+        ArgumentNullException.ThrowIfNull(channel);
+        var isDMRestricted = channel.ChannelType == ChatChannelType.Direct ||
+                             channel.ChannelType == ChatChannelType.Group ||
+                             channel.ParticipantIds.Any();
+        ValidateEncryptionPrerequisites(channel, isDMRestricted, privateKeyContext);
     }
 
     private void ValidateEncryptionPrerequisites(ChatChannel channel, bool isDMRestricted, string? privateKeyContext)
@@ -321,7 +329,8 @@ public class ChatSecurityService
                 allowedUserIds.Add(p);
             }
         }
-        else
+
+        if (channel.ChannelType != ChatChannelType.Direct && channel.ChannelType != ChatChannelType.Group)
         {
             var members = _employees.GetAll()
                 .Where(e => e.IsActive && e.HasVaultPassword && _chatAuth.CanUserAccessChannel(channel, e));
@@ -543,31 +552,174 @@ public class ChatSecurityService
     }
 
     public virtual Task<List<ChatMessage>> SecureSearchMessagesAsync(
-        string channelId,
+        string? channelId,
         string query,
         string requestingUserId,
         string? requestingUserPrivateKey = null,
         CancellationToken cancellationToken = default)
     {
-        var channel = _channels.GetById(channelId);
-        if (channel == null) return Task.FromResult(new List<ChatMessage>());
-
-        if ((channel.ChannelType == ChatChannelType.Direct || channel.ChannelType == ChatChannelType.Group) &&
-            !channel.ParticipantIds.Contains(requestingUserId))
+        if (string.IsNullOrWhiteSpace(query))
         {
             return Task.FromResult(new List<ChatMessage>());
         }
 
-        string? plainChannelKey = null;
-        if (channel.IsEncrypted)
+        var filter = ChatSearchQueryParser.Parse(query);
+        filter.ChannelId = channelId;
+
+        // Resolve sender & mention IDs from query filters
+        var resolvedSenderIds = ResolveSenderIds(filter.SenderIdentifiers, requestingUserId);
+        var resolvedMentionIds = ResolveMentionIds(filter.MentionIdentifiers, requestingUserId);
+
+        // Determine target channels
+        List<ChatChannel> targetChannels = [];
+        if (!string.IsNullOrWhiteSpace(channelId))
         {
-            plainChannelKey = TryResolveChannelKey(channel, requestingUserId, requestingUserPrivateKey);
-            if (plainChannelKey == null)
-                return Task.FromResult(new List<ChatMessage>());
+            var singleChannel = _channels.GetById(channelId);
+            if (singleChannel != null && IsChannelAccessible(singleChannel, requestingUserId))
+            {
+                targetChannels.Add(singleChannel);
+            }
+        }
+        else
+        {
+            // Default to all accessible channels for the user
+            var accessibleChannels = _chatAuth.GetChannelsForUser(requestingUserId);
+            if (accessibleChannels != null)
+            {
+                targetChannels.AddRange(accessibleChannels);
+            }
         }
 
-        var results = SearchChannelMessages(channel, plainChannelKey, query, cancellationToken);
-        return Task.FromResult(results);
+        if (targetChannels.Count == 0)
+        {
+            return Task.FromResult(new List<ChatMessage>());
+        }
+
+        var allResults = new List<ChatMessage>();
+
+        foreach (var channel in targetChannels)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            string? plainChannelKey = null;
+            if (channel.IsEncrypted)
+            {
+                plainChannelKey = TryResolveChannelKey(channel, requestingUserId, requestingUserPrivateKey);
+                if (plainChannelKey == null)
+                {
+                    // Cannot decrypt this channel without a valid key - skip it
+                    continue;
+                }
+            }
+
+            var channelResults = SearchChannelMessages(channel, plainChannelKey, filter, resolvedSenderIds, resolvedMentionIds, cancellationToken);
+            allResults.AddRange(channelResults);
+
+            if (allResults.Count >= 100) break;
+        }
+
+        var sortedResults = allResults
+            .OrderByDescending(m => m.SentAt)
+            .Take(100)
+            .ToList();
+
+        return Task.FromResult(sortedResults);
+    }
+
+    private bool IsChannelAccessible(ChatChannel channel, string requestingUserId)
+    {
+        if ((channel.ChannelType == ChatChannelType.Direct || channel.ChannelType == ChatChannelType.Group) &&
+            !channel.ParticipantIds.Contains(requestingUserId))
+        {
+            return false;
+        }
+        return true;
+    }
+
+    private HashSet<string>? ResolveSenderIds(List<string> senderIdentifiers, string requestingUserId)
+    {
+        if (senderIdentifiers.Count == 0) return null;
+
+        var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var allEmployees = _employees.GetAll();
+
+        foreach (var id in senderIdentifiers)
+        {
+            if (id.Equals("me", StringComparison.OrdinalIgnoreCase))
+            {
+                set.Add(requestingUserId);
+                continue;
+            }
+
+            var empById = allEmployees.FirstOrDefault(e => e.Id.Equals(id, StringComparison.OrdinalIgnoreCase));
+            if (empById != null)
+            {
+                set.Add(empById.Id);
+                continue;
+            }
+
+            bool isAdminQuery = id.Equals("admin", StringComparison.OrdinalIgnoreCase) ||
+                                id.Equals("administrator", StringComparison.OrdinalIgnoreCase) ||
+                                id.Equals("admins", StringComparison.OrdinalIgnoreCase);
+
+            var matched = allEmployees.Where(e =>
+                (isAdminQuery && e.IsAdmin) ||
+                e.FullName.Contains(id, StringComparison.OrdinalIgnoreCase) ||
+                (!string.IsNullOrEmpty(e.FirstName) && e.FirstName.Contains(id, StringComparison.OrdinalIgnoreCase)) ||
+                (!string.IsNullOrEmpty(e.LastName) && e.LastName.Contains(id, StringComparison.OrdinalIgnoreCase)) ||
+                (!string.IsNullOrEmpty(e.Email) && e.Email.Contains(id, StringComparison.OrdinalIgnoreCase)) ||
+                (!string.IsNullOrEmpty(e.Position) && e.Position.Contains(id, StringComparison.OrdinalIgnoreCase)));
+
+            foreach (var m in matched)
+            {
+                set.Add(m.Id);
+            }
+        }
+
+        return set;
+    }
+
+    private HashSet<string>? ResolveMentionIds(List<string> mentionIdentifiers, string requestingUserId)
+    {
+        if (mentionIdentifiers.Count == 0) return null;
+
+        var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var allEmployees = _employees.GetAll();
+
+        foreach (var id in mentionIdentifiers)
+        {
+            if (id.Equals("me", StringComparison.OrdinalIgnoreCase))
+            {
+                set.Add(requestingUserId);
+                continue;
+            }
+
+            var empById = allEmployees.FirstOrDefault(e => e.Id.Equals(id, StringComparison.OrdinalIgnoreCase));
+            if (empById != null)
+            {
+                set.Add(empById.Id);
+                continue;
+            }
+
+            bool isAdminQuery = id.Equals("admin", StringComparison.OrdinalIgnoreCase) ||
+                                id.Equals("administrator", StringComparison.OrdinalIgnoreCase) ||
+                                id.Equals("admins", StringComparison.OrdinalIgnoreCase);
+
+            var matched = allEmployees.Where(e =>
+                (isAdminQuery && e.IsAdmin) ||
+                e.FullName.Contains(id, StringComparison.OrdinalIgnoreCase) ||
+                (!string.IsNullOrEmpty(e.FirstName) && e.FirstName.Contains(id, StringComparison.OrdinalIgnoreCase)) ||
+                (!string.IsNullOrEmpty(e.LastName) && e.LastName.Contains(id, StringComparison.OrdinalIgnoreCase)) ||
+                (!string.IsNullOrEmpty(e.Email) && e.Email.Contains(id, StringComparison.OrdinalIgnoreCase)) ||
+                (!string.IsNullOrEmpty(e.Position) && e.Position.Contains(id, StringComparison.OrdinalIgnoreCase)));
+
+            foreach (var m in matched)
+            {
+                set.Add(m.Id);
+            }
+        }
+
+        return set;
     }
 
     private string? TryResolveChannelKey(ChatChannel channel, string requestingUserId, string? requestingUserPrivateKey)
@@ -604,11 +756,12 @@ public class ChatSecurityService
     private List<ChatMessage> SearchChannelMessages(
         ChatChannel channel,
         string? plainChannelKey,
-        string query,
+        ChatSearchFilter filter,
+        HashSet<string>? resolvedSenderIds,
+        HashSet<string>? resolvedMentionIds,
         CancellationToken cancellationToken)
     {
         var results = new List<ChatMessage>();
-        var lowerQuery = query.ToLowerInvariant();
         var index = _messages.GetIndexForChannel(channel.Id);
 
         foreach (var entry in index.OrderByDescending(e => e.SentAt))
@@ -616,17 +769,52 @@ public class ChatSecurityService
             cancellationToken.ThrowIfCancellationRequested();
             if (entry.IsDeleted) continue;
 
+            // 1. Fast index pruning: Senders
+            if (resolvedSenderIds != null && !resolvedSenderIds.Contains(entry.SenderId))
+                continue;
+
+            // 2. Fast index pruning: Dates
+            if (filter.Before.HasValue && entry.SentAt > filter.Before.Value)
+                continue;
+            if (filter.After.HasValue && entry.SentAt < filter.After.Value)
+                continue;
+
+            // 3. Fast index pruning: Media & file flags
+            if (filter.HasImages == true && !entry.HasImages)
+                continue;
+            if (filter.HasImages == false && entry.HasImages)
+                continue;
+            if (filter.HasFiles == true && !entry.HasFiles)
+                continue;
+            if (filter.HasFiles == false && entry.HasFiles)
+                continue;
+            if (filter.HasLinks == true && !entry.HasLinks)
+                continue;
+            if (filter.HasLinks == false && entry.HasLinks)
+                continue;
+
+            // 4. Fast index pruning: Unencrypted text terms
+            if (!entry.IsEncrypted && !channel.IsEncrypted && filter.TextTerms.Count > 0)
+            {
+                if (!entry.HasFiles && !entry.HasImages && entry.SearchText != null)
+                {
+                    if (!filter.TextTerms.All(t => entry.SearchText.Contains(t.ToLowerInvariant())))
+                        continue;
+                }
+            }
+
+            // Candidate passed index-level checks -> load and verify message
             if (!entry.IsEncrypted && !channel.IsEncrypted)
             {
-                if (entry.SearchText != null && entry.SearchText.Contains(lowerQuery))
+                var msg = _messages.GetMessageFromDisk(channel.Id, entry.Id);
+                if (msg != null && MatchesMessage(msg, filter, resolvedMentionIds))
                 {
-                    var msg = _messages.GetMessageFromDisk(channel.Id, entry.Id);
-                    if (msg != null) results.Add(msg);
+                    results.Add(msg);
                 }
             }
             else if (channel.IsEncrypted && entry.IsEncrypted && plainChannelKey != null)
             {
-                var match = TryDecryptAndMatchMessage(channel.Id, entry.Id, plainChannelKey, lowerQuery);
+                var match = TryDecryptAndMatchMessage(channel.Id, entry.Id, plainChannelKey, filter, resolvedMentionIds);
                 if (match != null) results.Add(match);
             }
 
@@ -636,51 +824,106 @@ public class ChatSecurityService
         return results;
     }
 
+    private static bool MatchesMessage(ChatMessage msg, ChatSearchFilter filter, HashSet<string>? resolvedMentionIds)
+    {
+        // Text terms (matches content or attachment file names)
+        if (filter.TextTerms.Count > 0)
+        {
+            var lowerContent = msg.Content?.ToLowerInvariant() ?? string.Empty;
+            bool textMatches = filter.TextTerms.All(term =>
+            {
+                var lowerTerm = term.ToLowerInvariant();
+                if (lowerContent.Contains(lowerTerm)) return true;
+                if (msg.Attachments != null && msg.Attachments.Any(a => !string.IsNullOrEmpty(a.FileName) && a.FileName.ToLowerInvariant().Contains(lowerTerm))) return true;
+                return false;
+            });
+
+            if (!textMatches) return false;
+        }
+
+        // Mentioned users
+        if (resolvedMentionIds != null && resolvedMentionIds.Count > 0)
+        {
+            bool hasMention = msg.MentionedUserIds != null && msg.MentionedUserIds.Any(m => resolvedMentionIds.Contains(m));
+            if (!hasMention && (msg.MentionsEveryone || msg.MentionsTeam))
+            {
+                hasMention = true;
+            }
+            if (!hasMention) return false;
+        }
+
+        // Reactions
+        if (filter.HasReactions == true && (msg.Reactions == null || msg.Reactions.Count == 0))
+            return false;
+
+        if (!string.IsNullOrEmpty(filter.ReactionEmoji))
+        {
+            if (msg.Reactions == null || !msg.Reactions.Any(r => r.StartsWith(filter.ReactionEmoji, StringComparison.OrdinalIgnoreCase)))
+                return false;
+        }
+
+        return true;
+    }
+
     private ChatMessage? TryDecryptAndMatchMessage(
         string channelId,
         string messageId,
         string plainChannelKey,
-        string lowerQuery)
+        ChatSearchFilter filter,
+        HashSet<string>? resolvedMentionIds)
     {
         var msg = _messages.GetMessageFromDisk(channelId, messageId);
-        if (msg == null || string.IsNullOrEmpty(msg.Content)) return null;
+        if (msg == null) return null;
 
+        string plainContent;
         try
         {
-            var plainContent = _crypto.DecryptAes(msg.Content, plainChannelKey);
-            if (plainContent.ToLowerInvariant().Contains(lowerQuery))
-            {
-                return new ChatMessage
-                {
-                    Id = msg.Id,
-                    ChannelId = msg.ChannelId,
-                    SenderId = msg.SenderId,
-                    SentAt = msg.SentAt,
-                    Content = plainContent,
-                    IsEncrypted = false
-                };
-            }
+            plainContent = string.IsNullOrEmpty(msg.Content)
+                ? string.Empty
+                : _crypto.DecryptAes(msg.Content, plainChannelKey);
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Failed to decrypt message {MessageId} during search", msg.Id);
-            if (!IsPotentialBase64Cipher(msg.Content) && msg.Content.ToLowerInvariant().Contains(lowerQuery))
+            if (!IsPotentialBase64Cipher(msg.Content))
             {
-                return new ChatMessage
-                {
-                    Id = msg.Id,
-                    ChannelId = msg.ChannelId,
-                    SenderId = msg.SenderId,
-                    SentAt = msg.SentAt,
-                    Content = msg.Content,
-                    IsEncrypted = false
-                };
+                plainContent = msg.Content;
             }
+            else
+            {
+                return null;
+            }
+        }
+
+        var candidateMsg = new ChatMessage
+        {
+            Id = msg.Id,
+            ChannelId = msg.ChannelId,
+            SenderId = msg.SenderId,
+            SentAt = msg.SentAt,
+            EditedAt = msg.EditedAt,
+            Content = plainContent,
+            IsEncrypted = false,
+            MessageType = msg.MessageType,
+            CallStatus = msg.CallStatus,
+            Attachments = msg.Attachments != null ? new List<ChatAttachment>(msg.Attachments) : [],
+            Reactions = msg.Reactions != null ? new List<string>(msg.Reactions) : [],
+            MentionedUserIds = msg.MentionedUserIds != null ? new List<string>(msg.MentionedUserIds) : [],
+            MentionedAlbumIds = msg.MentionedAlbumIds != null ? new List<string>(msg.MentionedAlbumIds) : [],
+            MentionedEventIds = msg.MentionedEventIds != null ? new List<string>(msg.MentionedEventIds) : [],
+            MentionedPollIds = msg.MentionedPollIds != null ? new List<string>(msg.MentionedPollIds) : [],
+            MentionsEveryone = msg.MentionsEveryone,
+            MentionsTeam = msg.MentionsTeam,
+            ReplyToId = msg.ReplyToId
+        };
+
+        if (MatchesMessage(candidateMsg, filter, resolvedMentionIds))
+        {
+            return candidateMsg;
         }
 
         return null;
     }
-
     public static bool IsPotentialBase64Cipher(string? content)
     {
         if (string.IsNullOrWhiteSpace(content)) return false;

@@ -14,6 +14,8 @@ public class VoiceConnectionOptions
     public int AudioBitrateKbps { get; set; } = 64;
     public string NoiseSuppression { get; set; } = "rnnoise";
     public VoiceUserSettings? VoiceSettings { get; set; }
+    public string DeviceId { get; set; } = string.Empty;
+    public string DeviceName { get; set; } = string.Empty;
 
     public VoiceConnectionOptions() { }
 
@@ -24,7 +26,9 @@ public class VoiceConnectionOptions
         string userId,
         int audioBitrateKbps = 64,
         string noiseSuppression = "rnnoise",
-        VoiceUserSettings? voiceSettings = null)
+        VoiceUserSettings? voiceSettings = null,
+        string deviceId = "",
+        string deviceName = "")
     {
         Token = token;
         Url = url;
@@ -33,5 +37,13 @@ public class VoiceConnectionOptions
         AudioBitrateKbps = audioBitrateKbps;
         NoiseSuppression = noiseSuppression;
         VoiceSettings = voiceSettings;
+        DeviceId = deviceId;
+        DeviceName = deviceName;
     }
+}
+
+public class PhysicalDeviceIdentity
+{
+    public string DeviceId { get; set; } = string.Empty;
+    public string DeviceName { get; set; } = string.Empty;
 }

@@ -7,7 +7,6 @@
 @inject IUserPrivacyService PrivacyService
 @inject AuthenticationStateProvider AuthStateProvider
 @inject ChatNotificationService ChatNotifications
-@inject EmailNotificationService EmailNotifications
 @inject CalendarNotificationService CalendarNotifications
 @inject AppLabelService AppLabels
 @inject StartupTimingService StartupTimings
@@ -25,10 +24,6 @@
                 @if (href == "chat" && _unreadCount > 0)
                 {
                     <span style="display: inline-flex; align-items: center; justify-content: center; min-width: 20px; height: 20px; padding: 0 6px; margin-right: 8px; border-radius: 10px; background: var(--mud-palette-error); color: white; font-size: 11px; font-weight: 700;">@_unreadCount</span>
-                }
-                else if (href == "email" && _unreadEmailCount > 0)
-                {
-                    <span class="d-inline-flex align-center justify-center rounded-pill px-2 py-0 mr-2" style="min-width: 20px; height: 20px; background: var(--mud-palette-error); color: white; font-size: 11px; font-weight: 700;">@_unreadEmailCount</span>
                 }
                 
                 @if (_isEditingFavorites)
@@ -53,14 +48,12 @@
     
     private Employee? _currentUser;
     private int _unreadCount = 0;
-    private int _unreadEmailCount = 0;
     private List<string> _availableLinks = new();
 
     private (string Title, string Icon) GetLinkMetadata(string href) => href switch
     {
         "" => (Loc["Home"].Value, Icons.Material.Filled.Home),
         "chat" => (Loc["Chat"].Value, Icons.Material.Filled.Chat),
-        "email" => (Loc["Email"].Value, Icons.Material.Filled.Email),
         "planning/calendar" => (Loc["Calendar"].Value, Icons.Material.Filled.CalendarMonth),
         "organization" => ($"{AppLabels.Employees} & {AppLabels.Teams}", @Icons.Material.Filled.People),
         "admin/definitions" => (Loc["TaskDefinitions"].Value, Icons.Material.Filled.ListAlt),
@@ -116,7 +109,6 @@
             var allowed = new List<string>(); // Home is hidden in friend edition
             
             if (HasPerm(AppPermissions.Chat.Use)) allowed.Add("chat");
-            //if (HasPerm(AppPermissions.Email.Use)) allowed.Add("email");
             if (HasPerm(AppPermissions.Calendar.View)) allowed.Add("planning/calendar");
             if (HasPerm(AppPermissions.Albums.View)) allowed.Add("albums");
             
@@ -138,7 +130,6 @@
                 }
             }
             
-            
             // 2. Friend edition uses the standard defined allowed list order (Chat, Calendar, Albums, Organization, etc.)
             _availableLinks = allowed;
 
@@ -149,18 +140,28 @@
                 Db.Employees.Save(_currentUser);
             }
 
-            // Initialize chat and email notifications
-            await ChatNotifications.InitializeAsync(_currentUser.Id);
-            await EmailNotifications.InitializeAsync(_currentUser.Id);
-            await CalendarNotifications.InitializeAsync(_currentUser.Id);
+            // Initialize chat and calendar notifications
+            // Calendar notifications are already initialized by MainLayout.OnInitializedAsync; initialize chat unread state asynchronously so nav chrome renders immediately.
+            ChatNotifications.OnUnreadCountChanged += UpdateUnreadCount;
+            _unreadCount = ChatNotifications.TotalUnreadCount;
+            _ = InitializeChatUnreadBackgroundAsync(_currentUser.Id);
+
 
             ChatNotifications.OnUnreadCountChanged += UpdateUnreadCount;
-            EmailNotifications.OnUnreadCountChanged += UpdateUnreadEmailCount;
             _unreadCount = ChatNotifications.TotalUnreadCount;
-            _unreadEmailCount = EmailNotifications.TotalUnreadCount;
             UpdateUnreadCount();
         }
         StartupTimings.Add($"Server: NavMenu_Friend OnInitializedAsync Done (+{sw.ElapsedMilliseconds}ms)");
+    }
+
+    private async Task InitializeChatUnreadBackgroundAsync(string userId)
+    {
+        try
+        {
+            await ChatNotifications.InitializeAsync(userId);
+            UpdateUnreadCount();
+        }
+        catch { }
     }
 
     private bool HasPerm(string perm) => _currentUser?.HasPermission(perm) ?? false;
@@ -172,24 +173,12 @@
         {
             StateHasChanged();
             await Task.Delay(250);
-            try { await JS.InvokeVoidAsync("pushNotifications.updateBadge", _unreadCount + _unreadEmailCount); } catch { }
-        });
-    }
-
-    private void UpdateUnreadEmailCount()
-    {
-        _unreadEmailCount = EmailNotifications.TotalUnreadCount;
-        InvokeAsync(async () =>
-        {
-            StateHasChanged();
-            await Task.Delay(250);
-            try { await JS.InvokeVoidAsync("pushNotifications.updateBadge", _unreadCount + _unreadEmailCount); } catch { }
+            try { await JS.InvokeVoidAsync("pushNotifications.updateBadge", _unreadCount); } catch { }
         });
     }
 
     public void Dispose()
     {
         ChatNotifications.OnUnreadCountChanged -= UpdateUnreadCount;
-        EmailNotifications.OnUnreadCountChanged -= UpdateUnreadEmailCount;
     }
 }

@@ -138,6 +138,7 @@ public class FileControllerTests : TestDataTestBase
         // Setup User Claims
         var user = new ClaimsPrincipal(new ClaimsIdentity(new Claim[] {
             new Claim("sub", "auth0|123"),
+            new Claim("SessionId", "valid_session"),
         }, "mock"));
 
         var services = new ServiceCollection();
@@ -254,7 +255,13 @@ public class FileControllerTests : TestDataTestBase
     {
         _employeesRepo.Save(new Employee { Id = "emp1" });
         _openIdRepo.Save(new OpenIdAccount { Sub = "auth0|123", LinkedEmployeeId = "emp1" });
-        _albumsRepo.Save(new Spokes_Server.Core.Models.Communication.Album { Id = "v1", IsEncrypted = true });
+        _albumsRepo.Save(new Spokes_Server.Core.Models.Communication.Album
+        {
+            Id = "v1",
+            OwnerId = "emp1",
+            IsEncrypted = true,
+            EncryptedAlbumKeys = { ["emp1"] = "cipher" }
+        });
         _mockAlbumsAccessProvider.Setup(p => p.CanAccess(It.IsAny<Employee>(), "v1")).Returns(true);
 
         var filePath = Path.Combine(_testDataPath, "file.pdf");
@@ -265,7 +272,7 @@ public class FileControllerTests : TestDataTestBase
 
         var fileTokenService = _controller.ControllerContext.HttpContext.RequestServices.GetRequiredService<Spokes_Server.Core.Services.Security.FileTokenService>();
         string b64Key = System.Convert.ToBase64String(new byte[32]); // Valid 32-byte AES key
-        string t = fileTokenService.GenerateAccessToken("albums", "v1", "file.pdf", b64Key);
+        string t = fileTokenService.GenerateAccessToken("albums", "v1", "file.pdf", b64Key, "emp1", "valid_session");
 
         var result = _controller.GetFile("albums", "v1", "file.pdf", t);
         
@@ -303,7 +310,7 @@ public class FileControllerTests : TestDataTestBase
         _mockFileService.Setup(f => f.GetPhysicalPath("albums", "v1", "file.pdf")).Returns(filePath);
 
         var fileTokenService = _controller.ControllerContext.HttpContext.RequestServices.GetRequiredService<Spokes_Server.Core.Services.Security.FileTokenService>();
-        string t = fileTokenService.GenerateAccessToken("albums", "v1", "file.pdf");
+        string t = fileTokenService.GenerateAccessToken("albums", "v1", "file.pdf", userId: "emp1", sessionId: "valid_session");
 
         var result = _controller.GetFile("albums", "v1", "file.pdf", t);
         
@@ -316,11 +323,11 @@ public class FileControllerTests : TestDataTestBase
     {
         _employeesRepo.Save(new Employee { Id = "emp1" });
         _openIdRepo.Save(new OpenIdAccount { Sub = "auth0|123", LinkedEmployeeId = "emp1" });
-        _albumsRepo.Save(new Spokes_Server.Core.Models.Communication.Album { Id = "v1", IsEncrypted = true });
+        _albumsRepo.Save(new Spokes_Server.Core.Models.Communication.Album { Id = "v1", OwnerId = "emp1", IsEncrypted = true, EncryptedAlbumKeys = { ["emp1"] = "cipher" } });
         _mockAlbumsAccessProvider.Setup(p => p.CanAccess(It.IsAny<Employee>(), "v1")).Returns(false);
 
         var fileTokenService = _controller.ControllerContext.HttpContext.RequestServices.GetRequiredService<Spokes_Server.Core.Services.Security.FileTokenService>();
-        string t = fileTokenService.GenerateAccessToken("albums", "v1", "wrong_file.pdf");
+        string t = fileTokenService.GenerateAccessToken("albums", "v1", "wrong_file.pdf", userId: "emp1", sessionId: "valid_session");
 
         var result = _controller.GetFile("albums", "v1", "file.pdf", t);
         // Token was for wrong_file.pdf but request is for file.pdf → 410
@@ -332,11 +339,11 @@ public class FileControllerTests : TestDataTestBase
     public void GetFile_WithRevokedSession_ReturnsUnauthorized()
     {
         _employeesRepo.Save(new Employee { Id = "emp1" });
-        _albumsRepo.Save(new Spokes_Server.Core.Models.Communication.Album { Id = "v1", IsEncrypted = true });
+        _albumsRepo.Save(new Spokes_Server.Core.Models.Communication.Album { Id = "v1", OwnerId = "emp1", IsEncrypted = true, EncryptedAlbumKeys = { ["emp1"] = "cipher" } });
         
         var fileTokenService = _controller.ControllerContext.HttpContext.RequestServices.GetRequiredService<Spokes_Server.Core.Services.Security.FileTokenService>();
         string b64Key = System.Convert.ToBase64String(new byte[32]);
-        string t = fileTokenService.GenerateAccessToken("albums", "v1", "file.pdf", b64Key);
+        string t = fileTokenService.GenerateAccessToken("albums", "v1", "file.pdf", b64Key, "emp1", "valid_session");
 
         _controller.ControllerContext.HttpContext.User = new ClaimsPrincipal(); // Anonymous
 
@@ -376,7 +383,14 @@ public class FileControllerTests : TestDataTestBase
     [Fact]
     public async Task UploadFile_WithTempCategory_SucceedsForActiveEmployee()
     {
-        _employeesRepo.Save(new Employee { Id = "emp1", IsActive = true, IsSuspended = false, IsBanned = false });
+        _employeesRepo.Save(new Employee
+        {
+            Id = "emp1",
+            IsActive = true,
+            IsSuspended = false,
+            IsBanned = false,
+            Permissions = new List<string> { Spokes_Server.Core.Constants.AppPermissions.Admin.ManageSettings }
+        });
         _openIdRepo.Save(new OpenIdAccount { Sub = "auth0|123", LinkedEmployeeId = "emp1" });
 
         var formFile = new Mock<IFormFile>();
@@ -394,6 +408,25 @@ public class FileControllerTests : TestDataTestBase
         var result = await _controller.UploadFile("temp", "ctx-1", files);
         var okResult = Assert.IsType<OkObjectResult>(result);
         Assert.NotNull(okResult.Value);
+    }
+
+    [Fact]
+    public async Task UploadFile_WithTempCategory_WithoutPermission_ReturnsForbid()
+    {
+        _employeesRepo.Save(new Employee { Id = "emp1", IsActive = true, IsSuspended = false, IsBanned = false });
+        _openIdRepo.Save(new OpenIdAccount { Sub = "auth0|123", LinkedEmployeeId = "emp1" });
+
+        var formFile = new Mock<IFormFile>();
+        formFile.Setup(f => f.Length).Returns(100);
+        formFile.Setup(f => f.FileName).Returns("license.spokes-license");
+        formFile.Setup(f => f.ContentType).Returns("application/json");
+        formFile.Setup(f => f.OpenReadStream()).Returns(new MemoryStream(new byte[100]));
+
+        var files = new FormFileCollection { formFile.Object };
+
+        var result = await _controller.UploadFile("temp", "ctx-1", files);
+        var forbidden = Assert.IsType<ObjectResult>(result);
+        Assert.Equal(403, forbidden.StatusCode);
     }
 
     [Fact]
@@ -490,7 +523,7 @@ public class FileControllerTests : TestDataTestBase
         return data.ToArray();
     }
 
-    private string CreateFileToken(string category, string contextId, string fileName, string? encryptionKey = null, TimeSpan? lifetime = null)
+    private string CreateFileToken(string category, string contextId, string fileName, string? encryptionKey = null, TimeSpan? lifetime = null, string userId = "emp1", string sessionId = "valid_session")
     {
         var provider = _controller.ControllerContext.HttpContext.RequestServices.GetRequiredService<IDataProtectionProvider>();
         var protector = provider.CreateProtector("SpokesFileToken");
@@ -500,7 +533,10 @@ public class FileControllerTests : TestDataTestBase
             ContextId = contextId,
             FileName = fileName,
             EncryptionKeyBase64 = encryptionKey,
-            ExpiryTicks = (DateTime.UtcNow + (lifetime ?? TimeSpan.FromDays(14))).Ticks
+            ExpiryTicks = (DateTime.UtcNow + (lifetime ?? TimeSpan.FromDays(14))).Ticks,
+            UserId = userId,
+            SessionId = sessionId,
+            TokenSequence = DateTime.UtcNow.Ticks
         };
         return protector.Protect(JsonSerializer.Serialize(payload));
     }
@@ -610,6 +646,65 @@ public class FileControllerTests : TestDataTestBase
         var result = _controller.GetDemoMediaThumb("avatar.jpg");
         var physicalResult = Assert.IsType<PhysicalFileResult>(result);
         Assert.Equal("image/jpeg", physicalResult.ContentType);
+    }
+
+    [Fact]
+    public async Task ImportDemoMedia_WhenDemoModeDisabled_ReturnsNotFound()
+    {
+        SetConfiguration(new Dictionary<string, string?> {
+            { "DataPath", _testDataPath },
+            { "Spokes_DemoMode", "false" },
+            { "Spokes_DemoSetup", "false" }
+        });
+
+        var result = await _controller.ImportDemoMedia("albums", "album1", "sample.jpg");
+        var notFound = Assert.IsType<NotFoundObjectResult>(result);
+        var payload = Assert.IsType<SpokesResult>(notFound.Value);
+        Assert.False(payload.IsSuccess);
+    }
+
+    [Fact]
+    public async Task ImportDemoMedia_WhenSampleFileMissing_ReturnsNotFound()
+    {
+        SetConfiguration(new Dictionary<string, string?> {
+            { "DataPath", _testDataPath },
+            { "Spokes_DemoMode", "true" }
+        });
+
+        var result = await _controller.ImportDemoMedia("albums", "album1", "missing.jpg");
+        var notFound = Assert.IsType<NotFoundObjectResult>(result);
+        var payload = Assert.IsType<SpokesResult>(notFound.Value);
+        Assert.False(payload.IsSuccess);
+    }
+
+    [Fact]
+    public async Task ImportDemoMedia_WhenValidSampleFile_ImportsAndReturnsUploadResult()
+    {
+        SetConfiguration(new Dictionary<string, string?> {
+            { "DataPath", _testDataPath },
+            { "Spokes_DemoMode", "true" }
+        });
+
+        SetupUser("emp1");
+
+        var demoDir = Path.Combine(_testDataPath, "DemoMedia");
+        Directory.CreateDirectory(demoDir);
+        var sampleFile = Path.Combine(demoDir, "mountain.jpg");
+        File.WriteAllBytes(sampleFile, new byte[] { 0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46 });
+
+        _mockAlbumsAccessProvider.Setup(p => p.CanAccess(It.IsAny<Employee>(), "album1")).Returns(true);
+        _mockAlbumsAccessProvider.Setup(p => p.CanUpload(It.IsAny<Employee>(), "album1")).Returns(true);
+
+        _mockFileService.Setup(f => f.GenerateSafeName("mountain.jpg")).Returns("safe_mountain.jpg");
+        _mockFileService.Setup(f => f.UploadStreamAsync("albums", "album1", It.IsAny<Stream>(), "mountain.jpg", It.IsAny<string?>(), "safe_mountain.jpg"))
+            .ReturnsAsync("/spokesapi/files/albums/album1/safe_mountain.jpg");
+
+        var result = await _controller.ImportDemoMedia("albums", "album1", "mountain.jpg");
+        var okResult = Assert.IsType<OkObjectResult>(result);
+        var list = Assert.IsType<List<FileUploadResult>>(okResult.Value);
+        Assert.Single(list);
+        Assert.Equal("/spokesapi/files/albums/album1/safe_mountain.jpg", list[0].FilePath);
+        Assert.Equal("mountain.jpg", list[0].FileName);
     }
 
     #endregion
@@ -834,7 +929,7 @@ public class FileControllerTests : TestDataTestBase
     public async Task UploadThumbnail_WithValidEncryptionToken_EncryptsAndReturnsOk()
     {
         SetupUser("emp1");
-        _channelsRepo.Save(new ChatChannel { Id = "c1", IsEncrypted = true });
+        _channelsRepo.Save(new ChatChannel { Id = "c1", IsEncrypted = true, EncryptedChannelKeys = { ["emp1"] = "cipher" } });
         _mockChatAccessProvider.Setup(p => p.CanAccess(It.IsAny<Employee>(), "c1")).Returns(true);
         _mockFileService.Setup(f => f.GetPhysicalPath("chat", "c1", "")).Returns(_testDataPath);
 
@@ -1139,7 +1234,7 @@ public class FileControllerTests : TestDataTestBase
     public async Task UploadFile_WithValidEncryptionToken_UploadsEncryptedChatFileSuccessfully()
     {
         SetupUser("emp1");
-        _channelsRepo.Save(new ChatChannel { Id = "c1", IsEncrypted = true });
+        _channelsRepo.Save(new ChatChannel { Id = "c1", IsEncrypted = true, EncryptedChannelKeys = { ["emp1"] = "cipher" } });
         _mockChatAccessProvider.Setup(p => p.CanAccess(It.IsAny<Employee>(), "c1")).Returns(true);
 
         string aesKey = Convert.ToBase64String(new byte[32]);
@@ -1325,15 +1420,29 @@ public class FileControllerTests : TestDataTestBase
 
     [Theory]
     [InlineData(false, false, false)] // Inactive
-    [InlineData(true, true, false)]  // Suspended
-    [InlineData(true, false, true)]  // Banned
-    public void GetFile_WhenUserInactiveOrSuspendedOrBanned_ReturnsUnauthorized(bool isActive, bool isSuspended, bool isBanned)
+    [InlineData(true, false, true)]   // Banned
+    public void GetFile_WhenUserInactiveOrBanned_ReturnsUnauthorized(bool isActive, bool isSuspended, bool isBanned)
     {
         SetupUser("emp1", isActive: isActive, isSuspended: isSuspended, isBanned: isBanned);
 
         var result = _controller.GetFile("projects", "v1", "file.pdf");
         var unauthorizedResult = Assert.IsType<UnauthorizedObjectResult>(result);
         Assert.Equal("Authentication required.", GetErrorMessage(unauthorizedResult.Value));
+    }
+
+    [Fact]
+    public void GetFile_WhenUserIsSuspended_AllowsReadOnlyDownload()
+    {
+        SetupUser("emp1", isActive: true, isSuspended: true, isBanned: false);
+        _mockAccessProvider.Setup(p => p.CanAccess(It.IsAny<Employee>(), "v1")).Returns(true);
+
+        var filePath = Path.Combine(_testDataPath, "readonly_suspended.pdf");
+        File.WriteAllText(filePath, "pdf-bytes");
+        _mockFileService.Setup(f => f.GetPhysicalPath("projects", "v1", "readonly_suspended.pdf")).Returns(filePath);
+
+        var result = _controller.GetFile("projects", "v1", "readonly_suspended.pdf");
+        var physicalFileResult = Assert.IsType<PhysicalFileResult>(result);
+        Assert.Equal("application/pdf", physicalFileResult.ContentType);
     }
 
     [Fact]
@@ -1636,7 +1745,7 @@ public class FileControllerTests : TestDataTestBase
     {
         _employeesRepo.Save(new Employee { Id = "emp1" });
         _openIdRepo.Save(new OpenIdAccount { Sub = "auth0|123", LinkedEmployeeId = "emp1" });
-        _albumsRepo.Save(new Spokes_Server.Core.Models.Communication.Album { Id = "v1", IsEncrypted = true });
+        _albumsRepo.Save(new Spokes_Server.Core.Models.Communication.Album { Id = "v1", OwnerId = "emp1", IsEncrypted = true, EncryptedAlbumKeys = { ["emp1"] = "cipher" } });
         _mockAlbumsAccessProvider.Setup(p => p.CanAccess(It.IsAny<Employee>(), "v1")).Returns(true);
 
         var filePath = Path.Combine(_testDataPath, "file_fnf.pdf");
@@ -1649,7 +1758,7 @@ public class FileControllerTests : TestDataTestBase
 
         var fileTokenService = _controller.ControllerContext.HttpContext.RequestServices.GetRequiredService<Spokes_Server.Core.Services.Security.FileTokenService>();
         string b64Key = System.Convert.ToBase64String(new byte[32]);
-        string t = fileTokenService.GenerateAccessToken("albums", "v1", "file_fnf.pdf", b64Key);
+        string t = fileTokenService.GenerateAccessToken("albums", "v1", "file_fnf.pdf", b64Key, "emp1", "valid_session");
 
         var result = _controller.GetFile("albums", "v1", "file_fnf.pdf", t);
         var notFoundResult = Assert.IsType<NotFoundObjectResult>(result);
@@ -1661,7 +1770,7 @@ public class FileControllerTests : TestDataTestBase
     {
         _employeesRepo.Save(new Employee { Id = "emp1" });
         _openIdRepo.Save(new OpenIdAccount { Sub = "auth0|123", LinkedEmployeeId = "emp1" });
-        _albumsRepo.Save(new Spokes_Server.Core.Models.Communication.Album { Id = "v1", IsEncrypted = true });
+        _albumsRepo.Save(new Spokes_Server.Core.Models.Communication.Album { Id = "v1", OwnerId = "emp1", IsEncrypted = true, EncryptedAlbumKeys = { ["emp1"] = "cipher" } });
         _mockAlbumsAccessProvider.Setup(p => p.CanAccess(It.IsAny<Employee>(), "v1")).Returns(true);
 
         var filePath = Path.Combine(_testDataPath, "file_io.pdf");
@@ -1674,7 +1783,7 @@ public class FileControllerTests : TestDataTestBase
 
         var fileTokenService = _controller.ControllerContext.HttpContext.RequestServices.GetRequiredService<Spokes_Server.Core.Services.Security.FileTokenService>();
         string b64Key = System.Convert.ToBase64String(new byte[32]);
-        string t = fileTokenService.GenerateAccessToken("albums", "v1", "file_io.pdf", b64Key);
+        string t = fileTokenService.GenerateAccessToken("albums", "v1", "file_io.pdf", b64Key, "emp1", "valid_session");
 
         var result = _controller.GetFile("albums", "v1", "file_io.pdf", t);
         var objResult = Assert.IsType<ObjectResult>(result);
@@ -1686,7 +1795,7 @@ public class FileControllerTests : TestDataTestBase
     {
         _employeesRepo.Save(new Employee { Id = "emp1" });
         _openIdRepo.Save(new OpenIdAccount { Sub = "auth0|123", LinkedEmployeeId = "emp1" });
-        _albumsRepo.Save(new Spokes_Server.Core.Models.Communication.Album { Id = "v1", IsEncrypted = true });
+        _albumsRepo.Save(new Spokes_Server.Core.Models.Communication.Album { Id = "v1", OwnerId = "emp1", IsEncrypted = true, EncryptedAlbumKeys = { ["emp1"] = "cipher" } });
         _mockAlbumsAccessProvider.Setup(p => p.CanAccess(It.IsAny<Employee>(), "v1")).Returns(true);
 
         var filePath = Path.Combine(_testDataPath, "file_crypto.pdf");
@@ -1699,7 +1808,7 @@ public class FileControllerTests : TestDataTestBase
 
         var fileTokenService = _controller.ControllerContext.HttpContext.RequestServices.GetRequiredService<Spokes_Server.Core.Services.Security.FileTokenService>();
         string b64Key = System.Convert.ToBase64String(new byte[32]);
-        string t = fileTokenService.GenerateAccessToken("albums", "v1", "file_crypto.pdf", b64Key);
+        string t = fileTokenService.GenerateAccessToken("albums", "v1", "file_crypto.pdf", b64Key, "emp1", "valid_session");
 
         var result = _controller.GetFile("albums", "v1", "file_crypto.pdf", t);
         var badRequest = Assert.IsType<BadRequestObjectResult>(result);

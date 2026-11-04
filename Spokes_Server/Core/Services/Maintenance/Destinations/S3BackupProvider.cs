@@ -9,21 +9,32 @@ using Amazon.S3.Model;
 using Amazon.S3.Transfer;
 using Microsoft.Extensions.Logging;
 using Spokes_Server.Core.Data.Repositories.Core;
+using Spokes_Server.Core.Services.Security;
 
 namespace Spokes_Server.Core.Services.Maintenance.Destinations;
 
 public class S3BackupProvider : IBackupDestinationProvider
 {
     private readonly CompanyProfileRepository _profiles;
+    private readonly EncryptionService _encryptionService;
     private readonly ILogger<S3BackupProvider>? _logger;
 
     public BackupDestinationType DestinationType => BackupDestinationType.S3;
 
-    public S3BackupProvider(CompanyProfileRepository profiles, ILogger<S3BackupProvider>? logger = null)
+    public S3BackupProvider(
+        CompanyProfileRepository profiles,
+        ILogger<S3BackupProvider>? logger = null,
+        EncryptionService? encryptionService = null)
     {
         _profiles = profiles;
         _logger = logger;
+        _encryptionService = encryptionService ?? profiles?.EncryptionService ?? new EncryptionService();
     }
+
+    private string ResolveCredential(string? value) =>
+        string.IsNullOrEmpty(value)
+            ? string.Empty
+            : (_encryptionService.TryDecrypt(value, out var decrypted) ? decrypted : value);
 
     private AmazonS3Client CreateClient()
     {
@@ -43,7 +54,7 @@ public class S3BackupProvider : IBackupDestinationProvider
             s3Config.RegionEndpoint = Amazon.RegionEndpoint.GetBySystemName(config.Region);
         }
 
-        return new AmazonS3Client(config.AccessKey, config.SecretKey, s3Config);
+        return new AmazonS3Client(ResolveCredential(config.AccessKey), ResolveCredential(config.SecretKey), s3Config);
     }
 
     internal static string NormalizePrefix(string? prefix)

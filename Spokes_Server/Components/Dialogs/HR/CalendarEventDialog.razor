@@ -75,7 +75,7 @@
                             {
                                 <div class="d-flex align-center gap-2">
                                     <MudIcon Icon="@Icons.Material.Filled.Folder" Size="Size.Small" Color="Color.Primary" />
-                                    <MudText Typo="Typo.body2">@((MarkupString)$"Project: <strong>{proj.DisplayName}</strong>")</MudText>
+                                    <MudText Typo="Typo.body2">@((MarkupString)$"Project: <strong>{System.Net.WebUtility.HtmlEncode(proj.DisplayName)}</strong>")</MudText>
                                 </div>
                             }
                         }
@@ -429,7 +429,7 @@
                 @if (IsAdminOverride)
                 {
                     <MudAlert Severity="Severity.Warning" Dense="true" Icon="@Icons.Material.Filled.AdminPanelSettings" Class="mb-1">
-                        @((MarkupString)string.Format(Loc["<strong>Administrator Action:</strong> You are modifying an event created by <strong>{0}</strong>. Changes will affect all participants."].Value, GetCreatorName()))
+                        @((MarkupString)string.Format(Loc["<strong>Administrator Action:</strong> You are modifying an event created by <strong>{0}</strong>. Changes will affect all participants."].Value, System.Net.WebUtility.HtmlEncode(GetCreatorName())))
                     </MudAlert>
                 }
                 <!-- Card 1: General Info -->
@@ -653,7 +653,7 @@
                         @if (_workingEvent.IsCompanyWide)
                         {
                             <MudAlert Severity="Severity.Info" Dense="true">
-                                @((MarkupString)string.Format(Loc["This event is marked <strong>{0}-Wide</strong> and will appear on all {0} calendars. You can still tag specific attendees or {1} below."].Value, AppLabels.Company, AppLabels.Teams))
+                                @((MarkupString)string.Format(Loc["This event is marked <strong>{0}-Wide</strong> and will appear on all {0} calendars. You can still tag specific attendees or {1} below."].Value, System.Net.WebUtility.HtmlEncode(AppLabels.Company), System.Net.WebUtility.HtmlEncode(AppLabels.Teams)))
                             </MudAlert>
                         }
 
@@ -1216,6 +1216,7 @@
 
     private void Submit()
     {
+        if (!_canEdit) return;
         if (string.IsNullOrWhiteSpace(_workingEvent.Title)) return;
 
         if (string.IsNullOrEmpty(_workingEvent.EmployeeId) && _currentUser != null)
@@ -1279,6 +1280,7 @@
 
     private async Task Delete()
     {
+        if (!_canEdit) return;
         var isOtherUserEvent = IsAdminOverride;
         var creatorName = GetCreatorName();
         var confirmTitle = isOtherUserEvent ? Loc["Delete Event (Admin Override)?"].Value : Loc["Delete Event?"].Value;
@@ -1346,7 +1348,14 @@
         if (_currentUser == null) return;
         var pref = EnsureUserPreference(_currentUser.Id);
         pref.ReceiveEventReminders = value;
-        CalendarService.SaveEvent(_workingEvent);
+        if (!IsNew && !string.IsNullOrEmpty(_workingEvent.Id))
+        {
+            CalendarService.UpdateUserEventNotificationPreference(_workingEvent.Id, _currentUser.Id, receiveEventReminders: value);
+        }
+        else if (_canEdit)
+        {
+            CalendarService.SaveEvent(_workingEvent);
+        }
         if (Event != null)
         {
             Event.UserReminderPreferences = _workingEvent.UserReminderPreferences;
@@ -1360,7 +1369,14 @@
         if (_currentUser == null) return;
         var pref = EnsureUserPreference(_currentUser.Id);
         pref.IsMuted = !pref.IsMuted;
-        CalendarService.SaveEvent(_workingEvent);
+        if (!IsNew && !string.IsNullOrEmpty(_workingEvent.Id))
+        {
+            CalendarService.UpdateUserEventNotificationPreference(_workingEvent.Id, _currentUser.Id, isMuted: pref.IsMuted);
+        }
+        else if (_canEdit)
+        {
+            CalendarService.SaveEvent(_workingEvent);
+        }
         if (Event != null)
         {
             Event.UserReminderPreferences = _workingEvent.UserReminderPreferences;
@@ -1392,7 +1408,14 @@
         if (_currentUser == null) return;
         var pref = EnsureUserPreference(_currentUser.Id);
         pref.PersonalReminders = _editingPersonalReminders.ConvertAll(r => r.Clone());
-        CalendarService.SaveEvent(_workingEvent);
+        if (!IsNew && !string.IsNullOrEmpty(_workingEvent.Id))
+        {
+            CalendarService.UpdateUserEventNotificationPreference(_workingEvent.Id, _currentUser.Id, personalReminders: pref.PersonalReminders);
+        }
+        else if (_canEdit)
+        {
+            CalendarService.SaveEvent(_workingEvent);
+        }
         if (Event != null)
         {
             Event.UserReminderPreferences = _workingEvent.UserReminderPreferences;
@@ -1433,6 +1456,7 @@
 
     private void SaveEditingSharedReminders()
     {
+        if (!_canEdit) return;
         _workingEvent.Reminders = _editingSharedReminders.ConvertAll(r => r.Clone());
         CalendarService.SaveEvent(_workingEvent);
         if (Event != null)

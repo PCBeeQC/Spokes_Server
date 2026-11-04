@@ -333,6 +333,10 @@ public static class UniversalPartyExtractor
         foreach (Match m in matches)
         {
             var normalized = Regex.Replace(m.Value.Trim(), @"\s+", " ");
+            if (Regex.IsMatch(normalized, @"\b[A-Za-z]\s+[A-Za-z]\b"))
+            {
+                continue;
+            }
             int spaces = normalized.Count(char.IsWhiteSpace);
             if (spaces > bestSpaceCount)
             {

@@ -19,7 +19,7 @@
 @inject AuthenticationStateProvider AuthStateProvider
 @inject UserService UserService
 
-<div class="d-flex flex-column h-100" style="min-height: 0;">
+<MudContainer MaxWidth="MaxWidth.False" Class="pa-4 px-md-6 h-100 d-flex flex-column" Style="min-height: 0;">
     <div class="d-flex align-center justify-space-between flex-wrap gap-2 mt-4 mb-3 flex-shrink-0">
         <div>
             <MudText Typo="Typo.h4">Accounting & Invoicing</MudText>
@@ -95,20 +95,20 @@
                     Class="mt-0"></MudTextField>
             </ToolBarContent>
             <HeaderContent>
-                <MudTh>Invoice #</MudTh>
-                <MudHidden Breakpoint="Breakpoint.SmAndDown"><MudTh>Date</MudTh></MudHidden>
+                <MudTh Style="width: 140px; white-space: nowrap;">Invoice #</MudTh>
+                <MudHidden Breakpoint="Breakpoint.SmAndDown"><MudTh Style="width: 110px; white-space: nowrap;">Date</MudTh></MudHidden>
                 <MudTh>Client</MudTh>
                 <MudHidden Breakpoint="Breakpoint.SmAndDown"><MudTh>Project</MudTh></MudHidden>
-                <MudTh>Total</MudTh>
-                <MudTh>Balance</MudTh>
-                <MudTh>Due Date</MudTh>
-                <MudTh>Status</MudTh>
-                <MudHidden Breakpoint="Breakpoint.SmAndDown"><MudTh>Paid Date</MudTh></MudHidden>
-                <MudTh Style="text-align: right;">Actions</MudTh>
+                <MudTh Style="width: 110px; white-space: nowrap;">Total</MudTh>
+                <MudTh Style="width: 110px; white-space: nowrap;">Balance</MudTh>
+                <MudTh Style="min-width: 150px; width: 150px; white-space: nowrap;">Due Date</MudTh>
+                <MudTh Style="width: 100px; white-space: nowrap;">Status</MudTh>
+                <MudHidden Breakpoint="Breakpoint.SmAndDown"><MudTh Style="width: 110px; white-space: nowrap;">Paid Date</MudTh></MudHidden>
+                <MudTh Style="text-align: right; min-width: 220px; width: 220px; white-space: nowrap;">Actions</MudTh>
             </HeaderContent>
             <RowTemplate>
-                <MudTd><b>@context.Number</b></MudTd>
-                <MudHidden Breakpoint="Breakpoint.SmAndDown"><MudTd>@context.Date.ToShortDateString()</MudTd></MudHidden>
+                <MudTd Style="white-space: nowrap;"><b>@context.Number</b></MudTd>
+                <MudHidden Breakpoint="Breakpoint.SmAndDown"><MudTd Style="white-space: nowrap;">@context.Date.ToShortDateString()</MudTd></MudHidden>
                 <MudTd>
                     <MudStack Spacing="0">
                         <MudText>@context.ClientName</MudText>
@@ -118,8 +118,8 @@
                     </MudStack>
                 </MudTd>
                 <MudHidden Breakpoint="Breakpoint.SmAndDown"><MudTd>@context.ProjectName</MudTd></MudHidden>
-                <MudTd>@context.Total.ToString("C")</MudTd>
-                <MudTd>
+                <MudTd Style="white-space: nowrap;">@context.Total.ToString("C")</MudTd>
+                <MudTd Style="white-space: nowrap;">
                     @if (context.Balance > 0)
                     {
                         <MudText Color="Color.Error"><b>@context.Balance.ToString("C")</b></MudText>
@@ -129,12 +129,12 @@
                         <MudText Color="Color.Success">Paid</MudText>
                     }
                 </MudTd>
-                <MudTd>
+                <MudTd Style="white-space: nowrap;">
                     @if (context.DueDate.HasValue && context.DueDate < DateTime.Today && context.Balance > 0)
                     {
-                        <div class="d-flex align-center gap-1">
-                            <MudIcon Icon="@Icons.Material.Filled.Warning" Color="Color.Error" Size="Size.Small" />
-                            <MudText Color="Color.Error" Style="font-weight:bold;">@context.DueDate?.ToShortDateString()
+                        <div class="d-flex align-center gap-1" style="white-space: nowrap;">
+                            <MudIcon Icon="@Icons.Material.Filled.Warning" Color="Color.Error" Size="Size.Small" Class="flex-shrink-0" />
+                            <MudText Color="Color.Error" Style="font-weight:bold; white-space: nowrap;">@context.DueDate?.ToShortDateString()
                             </MudText>
                         </div>
                     }
@@ -143,16 +143,16 @@
                         @context.DueDate?.ToShortDateString()
                     }
                 </MudTd>
-                <MudTd>
+                <MudTd Style="white-space: nowrap;">
                     <StatusChip Status="@context.Status" />
                 </MudTd>
-                <MudHidden Breakpoint="Breakpoint.SmAndDown"><MudTd>@(context.DatePaid.HasValue ? context.DatePaid.Value.ToShortDateString() : "-")</MudTd></MudHidden>
-                <MudTd>
-                    <div class="d-flex align-center justify-end gap-1">
+                <MudHidden Breakpoint="Breakpoint.SmAndDown"><MudTd Style="white-space: nowrap;">@(context.DatePaid.HasValue ? context.DatePaid.Value.ToShortDateString() : "-")</MudTd></MudHidden>
+                <MudTd Style="white-space: nowrap; text-align: right;">
+                    <div class="d-flex align-center justify-end gap-2" style="white-space: nowrap;">
                         <MudButton Variant="Variant.Outlined" Size="Size.Small" StartIcon="@Icons.Material.Filled.Visibility" OnClick="@(() => OpenItem(context))">View</MudButton>
                         @if (context.Status != InvoiceStatus.Paid)
                         {
-                            <MudButton Variant="Variant.Filled" Color="Color.Success" Size="Size.Small" StartIcon="@Icons.Material.Filled.PriceCheck" OnClick="@(() => MarkPaid(context))">Mark Paid</MudButton>
+                            <MudButton Variant="Variant.Outlined" Color="Color.Success" Size="Size.Small" StartIcon="@Icons.Material.Filled.PriceCheck" OnClick="@(() => MarkPaid(context))">Mark Paid</MudButton>
                         }
                     </div>
                 </MudTd>
@@ -178,21 +178,21 @@
                               AdornmentIcon="@Icons.Material.Filled.Search" IconSize="Size.Medium" Class="mt-0"></MudTextField>
             </ToolBarContent>
             <HeaderContent>
-                <MudHidden Breakpoint="Breakpoint.SmAndDown"><MudTh>Type</MudTh></MudHidden>
-                <MudHidden Breakpoint="Breakpoint.SmAndDown"><MudTh>Number</MudTh></MudHidden>
+                <MudHidden Breakpoint="Breakpoint.SmAndDown"><MudTh Style="width: 100px; white-space: nowrap;">Type</MudTh></MudHidden>
+                <MudHidden Breakpoint="Breakpoint.SmAndDown"><MudTh Style="width: 130px; white-space: nowrap;">Number</MudTh></MudHidden>
                 <MudTh>Entity</MudTh>
-                <MudHidden Breakpoint="Breakpoint.SmAndDown"><MudTh>Date</MudTh></MudHidden>
-                <MudTh>Due Date</MudTh>
-                <MudTh>Balance / Total</MudTh>
-                <MudTh Style="text-align: right;">Actions</MudTh>
+                <MudHidden Breakpoint="Breakpoint.SmAndDown"><MudTh Style="width: 110px; white-space: nowrap;">Date</MudTh></MudHidden>
+                <MudTh Style="min-width: 150px; width: 150px; white-space: nowrap;">Due Date</MudTh>
+                <MudTh Style="width: 150px; white-space: nowrap;">Balance / Total</MudTh>
+                <MudTh Style="text-align: right; min-width: 260px; width: 260px; white-space: nowrap;">Actions</MudTh>
             </HeaderContent>
             <RowTemplate>
                 <MudHidden Breakpoint="Breakpoint.SmAndDown">
-                    <MudTd>
+                    <MudTd Style="white-space: nowrap;">
                         <MudChip T="string" Size="Size.Small" Color="@GetTypeColor(context.Type)">@context.Type</MudChip>
                     </MudTd>
                 </MudHidden>
-                <MudHidden Breakpoint="Breakpoint.SmAndDown"><MudTd>@context.Number</MudTd></MudHidden>
+                <MudHidden Breakpoint="Breakpoint.SmAndDown"><MudTd Style="white-space: nowrap;">@context.Number</MudTd></MudHidden>
                 <MudTd>
                     <MudStack Spacing="0">
                         <MudText>@context.Entity</MudText>
@@ -201,18 +201,21 @@
                         </MudHidden>
                     </MudStack>
                 </MudTd>
-                <MudHidden Breakpoint="Breakpoint.SmAndDown"><MudTd>@context.Date.ToShortDateString()</MudTd></MudHidden>
-                <MudTd>
+                <MudHidden Breakpoint="Breakpoint.SmAndDown"><MudTd Style="white-space: nowrap;">@context.Date.ToShortDateString()</MudTd></MudHidden>
+                <MudTd Style="white-space: nowrap;">
                     @if (context.DueDate.HasValue && context.DueDate < DateTime.Today && context.Balance > 0)
                     {
-                        <MudText Color="Color.Error">@context.DueDate?.ToShortDateString()</MudText>
+                        <div class="d-flex align-center gap-1" style="white-space: nowrap;">
+                            <MudIcon Icon="@Icons.Material.Filled.Warning" Color="Color.Error" Size="Size.Small" Class="flex-shrink-0" />
+                            <MudText Color="Color.Error" Style="font-weight:bold; white-space: nowrap;">@context.DueDate?.ToShortDateString()</MudText>
+                        </div>
                     }
                     else
                     {
                         @context.DueDate?.ToShortDateString()
                     }
                 </MudTd>
-                <MudTd>
+                <MudTd Style="white-space: nowrap;">
                     @if (context.Balance > 0 && context.Balance < context.Total)
                     {
                         <MudText Color="Color.Warning"><b>@context.Balance.ToString("C")</b> / @context.Total.ToString("C")</MudText>
@@ -226,8 +229,8 @@
                         <MudText Color="Color.Success">Paid</MudText>
                     }
                 </MudTd>
-                <MudTd>
-                    <div class="d-flex align-center justify-end gap-1">
+                <MudTd Style="white-space: nowrap; text-align: right;">
+                    <div class="d-flex align-center justify-end gap-2" style="white-space: nowrap;">
                         @if (context.Type == "Recurring" || context.Type == "One-Time")
                         {
                             <MudButton Variant="Variant.Outlined" Size="Size.Small" StartIcon="@Icons.Material.Filled.Visibility" OnClick="@(() => OpenItem(context))">View</MudButton>
@@ -250,7 +253,7 @@
                                     </CustomContent>
                                 </ApiFileUpload>
                             }
-                            <MudButton Variant="Variant.Filled" Color="Color.Success" Size="Size.Small" StartIcon="@Icons.Material.Filled.PriceCheck" OnClick="@(() => MarkRecurringPaid(context))">
+                            <MudButton Variant="Variant.Outlined" Color="Color.Success" Size="Size.Small" StartIcon="@Icons.Material.Filled.PriceCheck" OnClick="@(() => MarkRecurringPaid(context))">
                                 Mark Paid
                             </MudButton>
                         }
@@ -261,7 +264,7 @@
                                 <MudButton Variant="Variant.Outlined" Size="Size.Small" StartIcon="@Icons.Material.Filled.Assignment" OnClick="@(() => ViewPo(bill.PurchaseOrderId))">View PO</MudButton>
                             }
                             <MudButton Variant="Variant.Outlined" Size="Size.Small" StartIcon="@Icons.Material.Filled.Visibility" OnClick="@(() => OpenItem(context))">View</MudButton>
-                            <MudButton Variant="Variant.Filled" Color="Color.Success" Size="Size.Small" StartIcon="@Icons.Material.Filled.PriceCheck" OnClick="@(() => MarkPaid(context))">
+                            <MudButton Variant="Variant.Outlined" Color="Color.Success" Size="Size.Small" StartIcon="@Icons.Material.Filled.PriceCheck" OnClick="@(() => MarkPaid(context))">
                                 Mark Paid
                             </MudButton>
                             @if (context.Type == "Bill" && context.OriginalItem is Bill unvoidedBill && unvoidedBill.Status != BillStatus.Void && unvoidedBill.AmountPaid == 0)
@@ -305,22 +308,22 @@
                               AdornmentIcon="@Icons.Material.Filled.Search" IconSize="Size.Medium" Class="mt-0" />
             </ToolBarContent>
             <HeaderContent>
-                <MudHidden Breakpoint="Breakpoint.SmAndDown"><MudTh>Type</MudTh></MudHidden>
-                <MudHidden Breakpoint="Breakpoint.SmAndDown"><MudTh>Number</MudTh></MudHidden>
+                <MudHidden Breakpoint="Breakpoint.SmAndDown"><MudTh Style="width: 100px; white-space: nowrap;">Type</MudTh></MudHidden>
+                <MudHidden Breakpoint="Breakpoint.SmAndDown"><MudTh Style="width: 130px; white-space: nowrap;">Number</MudTh></MudHidden>
                 <MudTh>Supplier / Entity</MudTh>
-                <MudHidden Breakpoint="Breakpoint.SmAndDown"><MudTh>Date</MudTh></MudHidden>
-                <MudTh>Due Date</MudTh>
-                <MudTh>Amount</MudTh>
-                <MudTh>Status</MudTh>
-                <MudTh Style="text-align: right;">Actions</MudTh>
+                <MudHidden Breakpoint="Breakpoint.SmAndDown"><MudTh Style="width: 110px; white-space: nowrap;">Date</MudTh></MudHidden>
+                <MudTh Style="min-width: 150px; width: 150px; white-space: nowrap;">Due Date</MudTh>
+                <MudTh Style="width: 120px; white-space: nowrap;">Amount</MudTh>
+                <MudTh Style="width: 140px; white-space: nowrap;">Status</MudTh>
+                <MudTh Style="text-align: right; min-width: 250px; width: 250px; white-space: nowrap;">Actions</MudTh>
             </HeaderContent>
             <RowTemplate>
                 <MudHidden Breakpoint="Breakpoint.SmAndDown">
-                    <MudTd>
+                    <MudTd Style="white-space: nowrap;">
                         <MudChip T="string" Size="Size.Small" Color="Color.Warning">Bill</MudChip>
                     </MudTd>
                 </MudHidden>
-                <MudHidden Breakpoint="Breakpoint.SmAndDown"><MudTd>@context.Number</MudTd></MudHidden>
+                <MudHidden Breakpoint="Breakpoint.SmAndDown"><MudTd Style="white-space: nowrap;">@context.Number</MudTd></MudHidden>
                 <MudTd>
                     <MudStack Spacing="0">
                         <MudText>@context.Entity</MudText>
@@ -329,16 +332,28 @@
                         </MudHidden>
                     </MudStack>
                 </MudTd>
-                <MudHidden Breakpoint="Breakpoint.SmAndDown"><MudTd>@context.Date.ToShortDateString()</MudTd></MudHidden>
-                <MudTd>@(context.DueDate?.ToShortDateString() ?? "-")</MudTd>
-                <MudTd>
+                <MudHidden Breakpoint="Breakpoint.SmAndDown"><MudTd Style="white-space: nowrap;">@context.Date.ToShortDateString()</MudTd></MudHidden>
+                <MudTd Style="white-space: nowrap;">
+                    @if (context.DueDate.HasValue && context.DueDate < DateTime.Today)
+                    {
+                        <div class="d-flex align-center gap-1" style="white-space: nowrap;">
+                            <MudIcon Icon="@Icons.Material.Filled.Warning" Color="Color.Error" Size="Size.Small" Class="flex-shrink-0" />
+                            <MudText Color="Color.Error" Style="font-weight:bold; white-space: nowrap;">@context.DueDate?.ToShortDateString()</MudText>
+                        </div>
+                    }
+                    else
+                    {
+                        @(context.DueDate?.ToShortDateString() ?? "-")
+                    }
+                </MudTd>
+                <MudTd Style="white-space: nowrap;">
                     <MudText Color="Color.Error"><b>@context.Total.ToString("C")</b></MudText>
                 </MudTd>
-                <MudTd>
+                <MudTd Style="white-space: nowrap;">
                     <MudChip T="string" Size="Size.Small" Color="Color.Warning">Awaiting Approval</MudChip>
                 </MudTd>
-                <MudTd>
-                    <div class="d-flex align-center justify-end gap-1">
+                <MudTd Style="white-space: nowrap; text-align: right;">
+                    <div class="d-flex align-center justify-end gap-2" style="white-space: nowrap;">
                         @if (context.OriginalItem is Bill bill && !string.IsNullOrEmpty(bill.PurchaseOrderId))
                         {
                             <MudButton Variant="Variant.Outlined" Size="Size.Small" StartIcon="@Icons.Material.Filled.Assignment" OnClick="@(() => ViewPo(bill.PurchaseOrderId))">View PO</MudButton>
@@ -346,14 +361,14 @@
                         <MudButton Variant="Variant.Outlined" Size="Size.Small" StartIcon="@Icons.Material.Filled.Visibility" OnClick="@(() => OpenItem(context))">View</MudButton>
                         @if (CanApproveBills)
                         {
-                            <MudButton Variant="Variant.Filled" Color="Color.Success" Size="Size.Small" StartIcon="@Icons.Material.Filled.CheckCircle" OnClick="@(() => ApproveBill(context))">
+                            <MudButton Variant="Variant.Outlined" Color="Color.Success" Size="Size.Small" StartIcon="@Icons.Material.Filled.CheckCircle" OnClick="@(() => ApproveBill(context))">
                                 Approve
                             </MudButton>
                         }
                         else
                         {
                             <MudTooltip Text="Requires Purchases.ApproveBills permission">
-                                <MudButton Variant="Variant.Filled" Color="Color.Default" Size="Size.Small" Disabled="true" StartIcon="@Icons.Material.Filled.CheckCircle">
+                                <MudButton Variant="Variant.Outlined" Color="Color.Default" Size="Size.Small" Disabled="true" StartIcon="@Icons.Material.Filled.CheckCircle">
                                     Approve
                                 </MudButton>
                             </MudTooltip>
@@ -393,21 +408,21 @@
                     AdornmentIcon="@Icons.Material.Filled.Search" IconSize="Size.Medium" Class="mt-0"></MudTextField>
             </ToolBarContent>
             <HeaderContent>
-                <MudHidden Breakpoint="Breakpoint.SmAndDown"><MudTh><MudTableSortLabel SortBy="new Func<AccountingItem, object>(x => x.Type)">Type</MudTableSortLabel></MudTh></MudHidden>
-                <MudHidden Breakpoint="Breakpoint.SmAndDown"><MudTh><MudTableSortLabel SortBy="new Func<AccountingItem, object>(x => x.Number)">Number</MudTableSortLabel></MudTh></MudHidden>
+                <MudHidden Breakpoint="Breakpoint.SmAndDown"><MudTh Style="width: 100px; white-space: nowrap;"><MudTableSortLabel SortBy="new Func<AccountingItem, object>(x => x.Type)">Type</MudTableSortLabel></MudTh></MudHidden>
+                <MudHidden Breakpoint="Breakpoint.SmAndDown"><MudTh Style="width: 130px; white-space: nowrap;"><MudTableSortLabel SortBy="new Func<AccountingItem, object>(x => x.Number)">Number</MudTableSortLabel></MudTh></MudHidden>
                 <MudTh><MudTableSortLabel SortBy="new Func<AccountingItem, object>(x => x.Entity)">Entity</MudTableSortLabel></MudTh>
-                <MudTh><MudTableSortLabel InitialDirection="SortDirection.Descending" SortBy="new Func<AccountingItem, object>(x => x.DatePaid ?? x.Date)">Date</MudTableSortLabel></MudTh>
-                <MudTh><MudTableSortLabel SortBy="new Func<AccountingItem, object>(x => x.Total)">Total</MudTableSortLabel></MudTh>
-                <MudTh>Status</MudTh>
-                <MudTh Style="text-align: right;">Actions</MudTh>
+                <MudTh Style="width: 120px; white-space: nowrap;"><MudTableSortLabel InitialDirection="SortDirection.Descending" SortBy="new Func<AccountingItem, object>(x => x.DatePaid ?? x.Date)">Date</MudTableSortLabel></MudTh>
+                <MudTh Style="width: 120px; white-space: nowrap;"><MudTableSortLabel SortBy="new Func<AccountingItem, object>(x => x.Total)">Total</MudTableSortLabel></MudTh>
+                <MudTh Style="width: 110px; white-space: nowrap;">Status</MudTh>
+                <MudTh Style="text-align: right; min-width: 120px; width: 120px; white-space: nowrap;">Actions</MudTh>
             </HeaderContent>
             <RowTemplate>
                 <MudHidden Breakpoint="Breakpoint.SmAndDown">
-                    <MudTd>
+                    <MudTd Style="white-space: nowrap;">
                         <MudChip T="string" Size="Size.Small" Color="@GetTypeColor(context.Type)">@context.Type</MudChip>
                     </MudTd>
                 </MudHidden>
-                <MudHidden Breakpoint="Breakpoint.SmAndDown"><MudTd>@context.Number</MudTd></MudHidden>
+                <MudHidden Breakpoint="Breakpoint.SmAndDown"><MudTd Style="white-space: nowrap;">@context.Number</MudTd></MudHidden>
                 <MudTd>
                     <MudStack Spacing="0">
                         <MudText>@context.Entity</MudText>
@@ -416,9 +431,9 @@
                         </MudHidden>
                     </MudStack>
                 </MudTd>
-                <MudTd>@context.DatePaid?.ToShortDateString()</MudTd>
-                <MudTd>@context.Total.ToString("C")</MudTd>
-                <MudTd>
+                <MudTd Style="white-space: nowrap;">@context.DatePaid?.ToShortDateString()</MudTd>
+                <MudTd Style="white-space: nowrap;">@context.Total.ToString("C")</MudTd>
+                <MudTd Style="white-space: nowrap;">
                     @if (context.Status == BillStatus.Void)
                     {
                         var b = context.OriginalItem as Bill;
@@ -434,8 +449,8 @@
                         <MudChip T="string" Size="Size.Small" Color="Color.Success">Paid</MudChip>
                     }
                 </MudTd>
-                <MudTd>
-                    <div class="d-flex align-center justify-end gap-1">
+                <MudTd Style="white-space: nowrap; text-align: right;">
+                    <div class="d-flex align-center justify-end gap-2" style="white-space: nowrap;">
                         <MudButton Variant="Variant.Outlined" Size="Size.Small" StartIcon="@Icons.Material.Filled.Visibility" OnClick="@(() => OpenItem(context))">View</MudButton>
                     </div>
                 </MudTd>
@@ -456,7 +471,7 @@
         <SageExportTab />
     }
 </div>
-</div>
+</MudContainer>
 
 @code {
     public class AccountingItem

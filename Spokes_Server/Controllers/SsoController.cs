@@ -9,6 +9,7 @@ using Microsoft.Extensions.Options;
 using Spokes_Server.Aggregate;
 using Spokes_Server.Aggregate.Contexts;
 using Spokes_Server.Core.Models.Core;
+using Spokes_Server.Core.Models.HR;
 using Spokes_Server.Core.Security;
 using Spokes_Server.Core.Services.Security;
 
@@ -57,30 +58,22 @@ public class SsoController : SpokesControllerBase
         [FromForm] string? deviceId,
         [FromForm] string? returnUrl)
     {
-        var requestHost = $"{Request.Scheme}://{Request.Host.Value}";
-        if (Request.Headers.TryGetValue("Sec-Fetch-Site", out var fetchSite))
-        {
-            if (fetchSite == "cross-site" || fetchSite == "same-site")
-            {
-                return BadRequestError("Invalid cross-site request.", "INVALID_CROSS_SITE");
-            }
-        }
-        if (Request.Headers.TryGetValue("Origin", out var origin) && !string.IsNullOrEmpty(origin))
-        {
-            if (!string.Equals(origin, requestHost, StringComparison.OrdinalIgnoreCase))
-            {
-                return BadRequestError("Invalid origin header.", "INVALID_ORIGIN");
-            }
-        }
-        else if (Request.Headers.TryGetValue("Referer", out var referer) && !string.IsNullOrEmpty(referer))
-        {
-            if (!referer.ToString().StartsWith(requestHost, StringComparison.OrdinalIgnoreCase))
-            {
-                return BadRequestError("Invalid referer header.", "INVALID_REFERER");
-            }
-        }
-
         var target = RedirectHelper.GetSafeRedirectUrl(returnUrl, HttpContext);
+        var configuredPublicUrl = _coreContext.SystemConfigs.Get()?.ServerPublicUrl;
+        if (!ServerUrlResolver.IsTrustedMobileBootstrapRequest(HttpContext, configuredPublicUrl, out var originErrCode, out var originErrMsg))
+        {
+            bool isTopLevelHtmlNavigation =
+                string.Equals(Request.Headers["Sec-Fetch-Mode"].ToString(), "navigate", StringComparison.OrdinalIgnoreCase) ||
+                Request.Headers.Accept.ToString().Contains("text/html", StringComparison.OrdinalIgnoreCase);
+
+            if (isTopLevelHtmlNavigation)
+            {
+                _logger.LogWarning("[SSO-BOOTSTRAP] Rejected untrusted top-level mobile-bootstrap navigation ({Code}); redirecting safely to /mobile-login.", originErrCode);
+                return Redirect($"/mobile-login?returnUrl={Uri.EscapeDataString(target)}");
+            }
+
+            return BadRequestError(originErrMsg, originErrCode);
+        }
 
         if (string.IsNullOrEmpty(refreshToken))
         {
@@ -130,7 +123,9 @@ public class SsoController : SpokesControllerBase
 
         if (User.Identity?.IsAuthenticated == true)
         {
-            return Redirect(target);
+            var empId = User.FindFirst("EmployeeId")?.Value;
+            var emp = !string.IsNullOrEmpty(empId) ? _hrContext.Employees.GetById(empId) : null;
+            return Redirect(ResolveTargetWithLandingPage(target, emp));
         }
 
         // Demo mode auto-login
@@ -151,7 +146,7 @@ public class SsoController : SpokesControllerBase
                         HttpContext, employee.Id, devId, issueCookie: true);
                     
                     await _sessionService.SignInAndExtendAsync(HttpContext, deviceSession, employee);
-                    return Redirect(target);
+                    return Redirect(ResolveTargetWithLandingPage(target, employee));
                 }
             }
         }
@@ -181,7 +176,7 @@ public class SsoController : SpokesControllerBase
                 };
                 Response.Cookies.Append("Spokes_Refresh", refreshToken, refreshCookieOptions);
                 Response.Cookies.Delete("Spokes_SSO_Attempt");
-                return Redirect(target);
+                return Redirect(ResolveTargetWithLandingPage(target, employee));
             }
 
             var refreshDeleteCookieOptions = new CookieOptions
@@ -304,7 +299,7 @@ public class SsoController : SpokesControllerBase
             string idToken = data.Item1;
             string endSessionUrl = data.Item2;
 
-            var serverBase = $"{Request.Scheme}://{Request.Host}";
+            var serverBase = ServerUrlResolver.GetSafeServerBaseUrl(HttpContext, _coreContext.SystemConfigs.Get().ServerPublicUrl);
             var postLogoutRedirect = $"{serverBase}/sso/mobile-logout-complete";
 
             var html = $@"
@@ -350,6 +345,11 @@ public class SsoController : SpokesControllerBase
     [HttpPost("/logout")]
     public async Task<IActionResult> Logout()
     {
+        if (!ServerUrlResolver.IsSameOriginRequest(HttpContext, _coreContext.SystemConfigs.Get()?.ServerPublicUrl))
+        {
+            return ForbiddenError("Cross-origin logout requests are not permitted.", "CSRF_DETECTED");
+        }
+
         var isMobile = false;
         if (Request.HasFormContentType)
         {
@@ -364,5 +364,20 @@ public class SsoController : SpokesControllerBase
             redirectUri: "/");
 
         return ProcessLogoutHandoff(handoff);
+    }
+
+    private string ResolveTargetWithLandingPage(string target, Employee? employee)
+    {
+        if ((target == "/" || string.IsNullOrEmpty(target)) && employee != null)
+        {
+            if (_coreContext.CompanyProfile.Get()?.Edition != "Family"
+                && !string.IsNullOrWhiteSpace(employee.LandingPage)
+                && employee.LandingPage != ""
+                && employee.LandingPage != "/")
+            {
+                return employee.LandingPage.StartsWith('/') ? employee.LandingPage : "/" + employee.LandingPage;
+            }
+        }
+        return target;
     }
 }

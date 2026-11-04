@@ -57,7 +57,10 @@
     /// <summary>The email message to add to the timeline.</summary>
     [Parameter] public EmailMessage Email { get; set; } = default!;
 
-    /// <summary>The employee ID of the current user (needed to locate the .eml file).</summary>
+    /// <summary>The account ID where the email is stored.</summary>
+    [Parameter] public string AccountId { get; set; } = string.Empty;
+
+    /// <summary>Legacy fallback parameter for account/employee ID.</summary>
     [Parameter] public string EmployeeId { get; set; } = string.Empty;
 
     /// <summary>The display name of the current user (for CreatedBy).</summary>
@@ -100,7 +103,11 @@
 
         try
         {
-            var mimePath = CacheMaintenance.GetMimeFilePath(EmployeeId, Email.Id);
+            var effectiveAccountId = !string.IsNullOrEmpty(AccountId)
+                ? AccountId
+                : (!string.IsNullOrEmpty(Email.AccountId) ? Email.AccountId : EmployeeId);
+
+            var mimePath = CacheMaintenance.GetMimeFilePath(effectiveAccountId, Email.Id);
             if (string.IsNullOrEmpty(mimePath))
             {
                 Snackbar.Add("Email file not found on disk", Severity.Error);

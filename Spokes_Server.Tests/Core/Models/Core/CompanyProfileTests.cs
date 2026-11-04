@@ -216,13 +216,10 @@ public class CompanyProfileTests
     {
         var settings = new EmailServerSettings();
 
-        Assert.Equal("", settings.ImapHost);
-        Assert.Equal(993, settings.ImapPort);
-        Assert.True(settings.ImapSsl);
-
-        Assert.Equal("", settings.SmtpHost);
-        Assert.Equal(587, settings.SmtpPort);
-        Assert.False(settings.SmtpSsl);
+        Assert.NotNull(settings.IncomingServers);
+        Assert.Empty(settings.IncomingServers);
+        Assert.NotNull(settings.SendingServers);
+        Assert.Empty(settings.SendingServers);
     }
 
     [Fact]
@@ -230,20 +227,24 @@ public class CompanyProfileTests
     {
         var settings = new EmailServerSettings
         {
-            ImapHost = "imap.example.com",
-            ImapPort = 143,
-            ImapSsl = false,
-            SmtpHost = "smtp.example.com",
-            SmtpPort = 465,
-            SmtpSsl = true
+            IncomingServers = new List<IncomingServerConfig>
+            {
+                new IncomingServerConfig { Name = "IMAP", Host = "imap.example.com", Port = 143, UseSsl = false }
+            },
+            SendingServers = new List<SendingServerConfig>
+            {
+                new SendingServerConfig { Name = "SMTP", Host = "smtp.example.com", Port = 465, UseSsl = true }
+            }
         };
 
-        Assert.Equal("imap.example.com", settings.ImapHost);
-        Assert.Equal(143, settings.ImapPort);
-        Assert.False(settings.ImapSsl);
-        Assert.Equal("smtp.example.com", settings.SmtpHost);
-        Assert.Equal(465, settings.SmtpPort);
-        Assert.True(settings.SmtpSsl);
+        Assert.Single(settings.IncomingServers);
+        Assert.Equal("imap.example.com", settings.IncomingServers[0].Host);
+        Assert.Equal(143, settings.IncomingServers[0].Port);
+        Assert.False(settings.IncomingServers[0].UseSsl);
+        Assert.Single(settings.SendingServers);
+        Assert.Equal("smtp.example.com", settings.SendingServers[0].Host);
+        Assert.Equal(465, settings.SendingServers[0].Port);
+        Assert.True(settings.SendingServers[0].UseSsl);
     }
 
     [Fact]

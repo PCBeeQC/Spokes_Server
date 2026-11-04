@@ -33,6 +33,7 @@ else
     {
         <PageTitle>@($"{PO.PoNumber} - {PO.Supplier?.BusinessName}")</PageTitle>
     }
+    <MudContainer MaxWidth="MaxWidth.Large" Class="py-4 pb-8">
     <div class="d-print-none mb-1">
         <SpokesBreadcrumbs Items="@(new (string, string?)[] { ("Money", "business/accounting"), ("Purchases", "purchases"), (PO!.PoNumber, null) })" />
     </div>
@@ -41,7 +42,7 @@ else
             <MudButton StartIcon="@Icons.Material.Filled.ArrowBack" OnClick="GoBack">Back to List</MudButton>
         </div>
         <div class="d-flex align-center gap-2 flex-wrap">
-            <MudSelect T="string" Value="@PO.Status" ValueChanged="UpdateStatusAsync" Dense="true" Margin="Margin.Dense"
+            <MudSelect T="string" Value="@PO.Status" ValueChanged="UpdateStatusAsync" Disabled="@(!CanManagePO)" Dense="true" Margin="Margin.Dense"
                 Variant="Variant.Outlined" Style="width: 220px; min-width: 220px; flex-shrink: 0;">
                 <MudSelectItem Value="@(PurchaseOrderStatus.Draft)">Draft</MudSelectItem>
                 <MudSelectItem Value="@(PurchaseOrderStatus.Final)">Final</MudSelectItem>
@@ -55,10 +56,13 @@ else
             @if (PO.Status != PurchaseOrderStatus.Draft)
             {
                 <MudButton Variant="Variant.Outlined" Color="Color.Info" StartIcon="@Icons.Material.Filled.OpenInNew" OnClick="OpenPdf">Open PDF</MudButton>
-                <MudButton Variant="Variant.Outlined" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Email"
-                    OnClick="SendByEmail">Send by Email</MudButton>
+                @if (CanManagePO)
+                {
+                    <MudButton Variant="Variant.Outlined" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Email"
+                        OnClick="SendByEmail">Send by Email</MudButton>
+                }
             }
-            @if (PO.Status == PurchaseOrderStatus.Draft)
+            @if (CanManagePO && PO.Status == PurchaseOrderStatus.Draft)
             {
                 <MudButton Variant="Variant.Outlined" Color="Color.Warning" StartIcon="@Icons.Material.Filled.Edit"
                     OnClick="EditPO">Edit</MudButton>
@@ -430,6 +434,7 @@ else
             }
         </div>
     }
+    </MudContainer>
 }
 
 @code {
@@ -442,6 +447,7 @@ else
 
     private string IssuedByName = "";
     private string IssuedByEmail = "";
+    private bool CanManagePO;
     private bool CanManageBills;
     private bool CanViewBills;
     private bool _isAdmin;
@@ -507,6 +513,7 @@ else
     protected override async Task OnInitializedAsync()
     {
         var emp = await UserService.GetEmployeeAsync();
+        CanManagePO = emp != null && (emp.IsAdmin || emp.HasPermission(AppPermissions.Purchases.ManagePOs) || emp.HasPermission(AppPermissions.Finance.AccessAccounting));
         CanManageBills = emp != null && (emp.IsAdmin || emp.HasPermission(AppPermissions.Purchases.ManageBills));
         CanViewBills = emp != null && (emp.IsAdmin || emp.HasPermission(AppPermissions.Purchases.ViewBills) || CanManageBills || emp.HasPermission(AppPermissions.Purchases.ApproveBills));
 
@@ -540,7 +547,7 @@ else
 
             var projectIds = PO.LineItems.Select(i => i.ProjectId).Distinct().ToList();
             var projects = Db.Projects.GetAll().Where(p => projectIds.Contains(p.Id));
-            ProjectNames = projects.ToDictionary(p => p.Id, p => p.DisplayName);
+            ProjectNames = projects.ToDictionary(p => p.Id, p => p.ProjectNumber);
 
             var employee = Db.Employees.GetAll().FirstOrDefault(e => e.FullName == PO.IssuedBy);
             if (employee != null)
@@ -569,6 +576,7 @@ else
 
     private async Task EditPO()
     {
+        if (PO == null || !CanManagePO) return;
         var parameters = new DialogParameters { ["PO"] = PO };
         var options = new DialogOptions { MaxWidth = MaxWidth.ExtraExtraLarge, FullWidth = true };
 
@@ -598,7 +606,7 @@ else
 
     private async Task UpdateStatusAsync(string newStatus)
     {
-        if (PO == null) return;
+        if (PO == null || !CanManagePO) return;
 
         // Admin-only revert from Final to Draft
         if (PO.Status == PurchaseOrderStatus.Final && newStatus == PurchaseOrderStatus.Draft && !_isAdmin)
@@ -794,7 +802,7 @@ else
             }
         };
 
-        var options = new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true };
+        var options = new DialogOptions { MaxWidth = MaxWidth.Large, FullWidth = true, CloseButton = true, CloseOnEscapeKey = true };
         await DialogService.ShowAsync<EmailComposer>("Send Email", parameters, options);
     }
 

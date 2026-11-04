@@ -84,6 +84,7 @@ public class ServiceCollectionExtensionsTests
         Assert.Contains(services, d => d.ServiceType == typeof(TimesheetTimerService) && d.Lifetime == ServiceLifetime.Singleton);
         Assert.Contains(services, d => d.ServiceType == typeof(CasdoorProvisioningService) && d.Lifetime == ServiceLifetime.Scoped);
         Assert.Contains(services, d => d.ServiceType == typeof(BackupService) && d.Lifetime == ServiceLifetime.Singleton);
+        Assert.Contains(services, d => d.ServiceType == typeof(IHostedService) && d.ImplementationType == typeof(Spokes_Server.Core.Services.Communication.Email.EmailBackgroundService));
     }
 
     [Fact]
@@ -190,5 +191,38 @@ public class ServiceCollectionExtensionsTests
         Assert.NotNull(encryptionService);
         Assert.NotNull(serverConfigRepo);
         Assert.NotNull(companyProfileRepo);
+    }
+
+    [Fact]
+    public async Task AddSpokesCoreServices_ResolvesVoiceAndDatabaseServicesWithoutCircularDependencies()
+    {
+        var services = new ServiceCollection();
+
+        var mockConfig = new Mock<IConfiguration>();
+        services.AddSingleton(mockConfig.Object);
+        services.AddLogging();
+        services.AddDataProtection();
+        services.AddSingleton(new Mock<Microsoft.JSInterop.IJSRuntime>().Object);
+        services.AddSingleton(new Mock<Microsoft.AspNetCore.SignalR.IHubContext<Spokes_Server.Hubs.ChatHub>>().Object);
+        services.AddSpokesConfiguration(mockConfig.Object);
+        services.AddSpokesDatabase();
+        services.AddSpokesCoreServices();
+
+        await using var sp = services.BuildServiceProvider(new ServiceProviderOptions
+        {
+            ValidateScopes = true
+        });
+
+        await using var scope = sp.CreateAsyncScope();
+        var scopedSp = scope.ServiceProvider;
+
+        Assert.NotNull(scopedSp.GetRequiredService<Database>());
+        Assert.NotNull(scopedSp.GetRequiredService<DatabaseRelationshipCoordinator>());
+        Assert.NotNull(scopedSp.GetRequiredService<Spokes_Server.Core.Services.Communication.Voice.PhysicalVoiceRoomService>());
+        Assert.NotNull(scopedSp.GetRequiredService<Spokes_Server.Core.Services.Communication.Voice.IVoiceBotService>());
+        Assert.NotNull(scopedSp.GetRequiredService<Spokes_Server.Core.Services.Communication.Voice.Pipeline.PhysicalRoomPipelineStage>());
+        Assert.NotNull(scopedSp.GetRequiredService<Spokes_Server.Core.Services.Communication.Voice.GlobalVoiceService>());
+        Assert.NotNull(scopedSp.GetRequiredService<Spokes_Server.Core.Services.Communication.Email.IEmailInboxService>());
+        Assert.NotNull(scopedSp.GetRequiredService<Spokes_Server.Core.Services.Communication.Email.EmailIdleService>());
     }
 }

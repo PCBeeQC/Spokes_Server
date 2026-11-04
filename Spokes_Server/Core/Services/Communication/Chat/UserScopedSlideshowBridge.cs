@@ -53,12 +53,23 @@ public class UserScopedSlideshowBridge : ISlideshowFileBridge
             fileController.ControllerContext = new ControllerContext(actionContext);
         }
 
-        return fileController.ServeFileForUser(
+        var result = fileController.ServeFileForUser(
             category: "albums",
             contextId: _albumId,
             fileName: fileName,
             user: _user,
             thumb: thumb,
             tokenEncryptionKey: _plainAlbumKey);
+
+        if (result is NotFoundResult || result is NotFoundObjectResult)
+        {
+            var demoResult = fileController.GetDemoMedia(fileName);
+            if (demoResult is not NotFoundResult && demoResult is not NotFoundObjectResult && demoResult is not ForbidResult)
+            {
+                return demoResult;
+            }
+        }
+
+        return result;
     }
 }

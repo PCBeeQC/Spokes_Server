@@ -20,6 +20,7 @@ public interface IVoiceDeviceService
     ConcurrentDictionary<string, int> RemoteVideoFps { get; }
 
     Task SwitchCameraAsync(string deviceId, bool isVideoOn);
+    Task UpdateCameraSettingsAsync(string quality, int fps, string deviceId, bool isVideoOn);
     Task SwitchMicrophoneAsync(string deviceId);
     Task SwitchSpeakerAsync(string deviceId);
     Task RefreshAudioDevicesAsync();

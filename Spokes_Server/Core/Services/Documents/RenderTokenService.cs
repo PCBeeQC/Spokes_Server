@@ -7,10 +7,12 @@ public class RenderTokenService
     private sealed class TokenData
     {
         public required string SessionId { get; init; }
+        public string? ExpectedPath { get; init; }
         public DateTimeOffset ExpiresAt { get; set; }
     }
 
     private readonly ConcurrentDictionary<string, TokenData> _tokens = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, TokenData> _consumedSessions = new(StringComparer.OrdinalIgnoreCase);
     private readonly TimeSpan _tokenLifetime = TimeSpan.FromMinutes(2);
     private readonly TimeProvider _timeProvider;
 
@@ -22,7 +24,9 @@ public class RenderTokenService
     internal int TokenCount => _tokens.Count;
     internal bool ContainsToken(string token) => _tokens.ContainsKey(token);
 
-    public string CreateToken()
+    public string CreateToken() => CreateToken(null);
+
+    public string CreateToken(string? expectedPath)
     {
         CleanupExpired();
 
@@ -30,16 +34,59 @@ public class RenderTokenService
         _tokens[token] = new TokenData
         {
             SessionId = Guid.NewGuid().ToString(),
+            ExpectedPath = string.IsNullOrWhiteSpace(expectedPath) ? null : NormalizePath(expectedPath),
             ExpiresAt = _timeProvider.GetUtcNow().Add(_tokenLifetime)
         };
         return token;
     }
 
+    public string GenerateToken(string expectedPath) => CreateToken(expectedPath);
+
     /// <summary>
-    /// Validates an active render token without consuming it so that all HTTP and WebSocket
-    /// requests made by the headless browser during a single PDF render scope are authenticated.
-    /// The token is deterministically revoked by <see cref="RevokeToken(string, out string?)"/>
-    /// when the render completes, or automatically after <see cref="_tokenLifetime"/>.
+    /// Atomically validates and consumes a single-use render token bound to <paramref name="requestPath"/>.
+    /// Once consumed, the initial loopback navigation receives a short-lived isolated session cookie,
+    /// and the token itself can never be replayed.
+    /// </summary>
+    public bool TryConsumeToken(string token, string? requestPath, out string sessionId)
+    {
+        sessionId = string.Empty;
+        if (string.IsNullOrWhiteSpace(token)) return false;
+
+        CleanupExpired();
+
+        if (!_tokens.TryGetValue(token, out var peek))
+        {
+            return false;
+        }
+
+        if (_timeProvider.GetUtcNow() > peek.ExpiresAt)
+        {
+            _tokens.TryRemove(token, out _);
+            return false;
+        }
+
+        if (!string.IsNullOrEmpty(peek.ExpectedPath) && !PathsMatch(requestPath, peek.ExpectedPath))
+        {
+            return false;
+        }
+
+        if (_tokens.TryRemove(token, out var data) && _timeProvider.GetUtcNow() <= data.ExpiresAt)
+        {
+            if (!string.IsNullOrEmpty(data.ExpectedPath) && !PathsMatch(requestPath, data.ExpectedPath))
+            {
+                return false;
+            }
+
+            _consumedSessions[token] = data;
+            sessionId = data.SessionId;
+            return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Validates an unconsumed active render token without consuming it.
     /// </summary>
     public bool ValidateToken(string token, out string sessionId)
     {
@@ -58,7 +105,8 @@ public class RenderTokenService
     }
 
     /// <summary>
-    /// Explicitly revokes a render token upon completion of a PDF generation scope.
+    /// Explicitly revokes a render token (or retrieves the session ID of an already-consumed token)
+    /// upon completion of a PDF generation scope so its temporary DeviceSession is deleted.
     /// </summary>
     public bool RevokeToken(string token, out string? sessionId)
     {
@@ -67,7 +115,14 @@ public class RenderTokenService
 
         if (_tokens.TryRemove(token, out var data))
         {
+            _consumedSessions.TryRemove(token, out _);
             sessionId = data.SessionId;
+            return true;
+        }
+
+        if (_consumedSessions.TryRemove(token, out var consumed))
+        {
+            sessionId = consumed.SessionId;
             return true;
         }
 
@@ -85,6 +140,29 @@ public class RenderTokenService
         return _tokens.TryRemove(token, out var data) && _timeProvider.GetUtcNow() <= data.ExpiresAt;
     }
 
+    private static bool PathsMatch(string? actualPath, string expectedNormalizedPath)
+    {
+        if (string.IsNullOrWhiteSpace(actualPath)) return false;
+        return string.Equals(NormalizePath(actualPath), expectedNormalizedPath, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string NormalizePath(string rawPath)
+    {
+        var trimmed = rawPath.Trim();
+        var queryIdx = trimmed.IndexOf('?');
+        if (queryIdx >= 0)
+        {
+            trimmed = trimmed[..queryIdx];
+        }
+
+        if (!trimmed.StartsWith('/'))
+        {
+            trimmed = "/" + trimmed;
+        }
+
+        return trimmed.Length > 1 ? trimmed.TrimEnd('/') : trimmed;
+    }
+
     private void CleanupExpired()
     {
         var now = _timeProvider.GetUtcNow();
@@ -93,6 +171,14 @@ public class RenderTokenService
             if (now > kvp.Value.ExpiresAt)
             {
                 _tokens.TryRemove(kvp.Key, out _);
+            }
+        }
+
+        foreach (var kvp in _consumedSessions)
+        {
+            if (now > kvp.Value.ExpiresAt)
+            {
+                _consumedSessions.TryRemove(kvp.Key, out _);
             }
         }
     }

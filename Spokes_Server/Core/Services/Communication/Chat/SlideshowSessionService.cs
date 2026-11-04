@@ -2,7 +2,10 @@ namespace Spokes_Server.Core.Services.Communication.Chat;
 
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
+using System.Linq;
 using System.Security.Cryptography;
+using System.Text;
 using Microsoft.Extensions.Logging;
 using Spokes_Server.Core.Models.Communication;
 
@@ -17,11 +20,13 @@ public interface ISlideshowSessionService
     event Action<string>? OnTvVideoEnded;
     event Action<string>? OnSessionEnded;
 
-    SlideshowSession CreateSession(string tvConnectionId);
+    SlideshowSession CreateSession(string tvConnectionId, SlideshowDisplayKind displayKind = SlideshowDisplayKind.BlazorPinStage, string? creatorIp = null);
     SlideshowSession CreateDirectSession(string hostUserId, string hostConnectionId, string albumId, ISlideshowFileBridge? fileBridge = null);
     SlideshowSession? GetSessionById(string sessionId);
     SlideshowSession? GetSessionByPin(string pin);
     bool TryPair(string pin, string hostUserId, string hostConnectionId, string albumId, out SlideshowSession? session, out string? error, ISlideshowFileBridge? fileBridge = null);
+    bool TryBindDirectStageCircuit(string sessionId, string? tvSecret, out string? circuitToken, out SlideshowSession? session);
+    bool EndSessionIfStageOwner(string sessionId, string? ownedTvConnectionId, string? boundDirectStageToken);
     void AttachBridge(string sessionId, ISlideshowFileBridge bridge);
     bool ValidateHostCommand(string sessionId, string callerConnectionId, out SlideshowSession? session);
     void UpdateCurrentIndex(string sessionId, int newIndex);
@@ -35,7 +40,7 @@ public interface ISlideshowSessionService
     void RecordActivity(string sessionId);
     void EndSession(string sessionId);
     SlideshowSession? HandleDisconnect(string connectionId);
-    bool RebindTvConnection(string sessionId, string newConnectionId);
+    bool RebindTvConnection(string sessionId, string newConnectionId, string? tvSecret);
 }
 
 public class SlideshowSessionService : ISlideshowSessionService
@@ -51,9 +56,14 @@ public class SlideshowSessionService : ISlideshowSessionService
 
     private readonly ConcurrentDictionary<string, SlideshowSession> _sessionsById = new();
     private readonly ConcurrentDictionary<string, string> _pinToSessionId = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, List<DateTime>> _failedPinAttemptsByUser = new(StringComparer.OrdinalIgnoreCase);
+    private readonly object _unpairedCreationLock = new();
     private readonly ILogger<SlideshowSessionService>? _logger;
 
     private const int MaxFailedAttempts = 5;
+    private const int MaxFailedPinAttemptsPerMinute = 5;
+    private const int MaxUnpairedSessionsPerIp = 5;
+    private const int MaxGlobalUnpairedSessions = 100;
     private const int SessionTtlMinutes = 30;
     private const int PinTtlMinutes = 5;
 
@@ -62,27 +72,55 @@ public class SlideshowSessionService : ISlideshowSessionService
         _logger = logger;
     }
 
-    public SlideshowSession CreateSession(string tvConnectionId)
+    public SlideshowSession CreateSession(string tvConnectionId, SlideshowDisplayKind displayKind = SlideshowDisplayKind.BlazorPinStage, string? creatorIp = null)
     {
         CleanExpiredSessions();
 
-        string pin = GenerateSecureNumericPin();
-        var session = new SlideshowSession
+        string? normalizedIp = string.IsNullOrWhiteSpace(creatorIp) ? null : creatorIp.Trim();
+
+        lock (_unpairedCreationLock)
         {
-            SessionId = Guid.NewGuid().ToString(),
-            PairingPin = pin,
-            TvConnectionId = tvConnectionId,
-            CreatedAtUtc = DateTime.UtcNow,
-            ExpiresAtUtc = DateTime.UtcNow.AddMinutes(PinTtlMinutes),
-            LastActivityUtc = DateTime.UtcNow,
-            IsPaired = false
-        };
+            var unpairedSessions = _sessionsById.Values
+                .Where(s => !s.IsPaired)
+                .ToList();
 
-        _sessionsById[session.SessionId] = session;
-        _pinToSessionId[pin] = session.SessionId;
+            if (unpairedSessions.Count >= MaxGlobalUnpairedSessions)
+            {
+                _logger?.LogWarning("Rejected unpaired slideshow session creation: global unpaired cap ({MaxGlobal}) reached", MaxGlobalUnpairedSessions);
+                throw new InvalidOperationException("Too many active unpaired slideshow sessions. Please try again shortly.");
+            }
 
-        _logger?.LogInformation("Created new slideshow session {SessionId} with PIN for TV connection {ConnectionId}", session.SessionId, tvConnectionId);
-        return session;
+            if (normalizedIp != null)
+            {
+                int perIpCount = unpairedSessions.Count(s => string.Equals(s.CreatorIpAddress, normalizedIp, StringComparison.OrdinalIgnoreCase));
+                if (perIpCount >= MaxUnpairedSessionsPerIp)
+                {
+                    _logger?.LogWarning("Rejected unpaired slideshow session creation from IP {Ip}: per-IP cap ({MaxPerIp}) reached", normalizedIp, MaxUnpairedSessionsPerIp);
+                    throw new InvalidOperationException("Too many active unpaired slideshow sessions from this address. Please close unused pairing screens or try again shortly.");
+                }
+            }
+
+            string pin = GenerateUniqueNumericPin();
+            var session = new SlideshowSession
+            {
+                SessionId = Guid.NewGuid().ToString(),
+                TvSecret = GenerateTvSecret(),
+                DisplayKind = displayKind,
+                CreatorIpAddress = normalizedIp,
+                PairingPin = pin,
+                TvConnectionId = tvConnectionId,
+                CreatedAtUtc = DateTime.UtcNow,
+                ExpiresAtUtc = DateTime.UtcNow.AddMinutes(PinTtlMinutes),
+                LastActivityUtc = DateTime.UtcNow,
+                IsPaired = false
+            };
+
+            _sessionsById[session.SessionId] = session;
+            _pinToSessionId[pin] = session.SessionId;
+
+            _logger?.LogInformation("Created new slideshow session {SessionId} ({DisplayKind}) with PIN for TV connection {ConnectionId}", session.SessionId, displayKind, tvConnectionId);
+            return session;
+        }
     }
 
     public SlideshowSession CreateDirectSession(string hostUserId, string hostConnectionId, string albumId, ISlideshowFileBridge? fileBridge = null)
@@ -92,6 +130,8 @@ public class SlideshowSessionService : ISlideshowSessionService
         var session = new SlideshowSession
         {
             SessionId = Guid.NewGuid().ToString("N"),
+            TvSecret = GenerateTvSecret(),
+            DisplayKind = SlideshowDisplayKind.DirectExternalDisplay,
             PairingPin = string.Empty,
             TvConnectionId = string.Empty,
             HostUserId = hostUserId,
@@ -140,14 +180,24 @@ public class SlideshowSessionService : ISlideshowSessionService
         session = null;
         error = null;
 
+        string rateLimitKey = string.IsNullOrWhiteSpace(hostUserId) ? "__anonymous__" : hostUserId.Trim();
+        if (IsUserPinRateLimited(rateLimitKey))
+        {
+            _logger?.LogWarning("Rate-limited slideshow PIN pairing attempt for user {HostUserId}", rateLimitKey);
+            error = "Too many failed pairing attempts. Please wait a minute and try again.";
+            return false;
+        }
+
         if (string.IsNullOrWhiteSpace(normalized))
         {
+            RecordFailedPinAttempt(rateLimitKey);
             error = "Invalid pairing code.";
             return false;
         }
 
         if (!_pinToSessionId.TryGetValue(normalized, out var sessionId) || !_sessionsById.TryGetValue(sessionId, out var foundSession))
         {
+            RecordFailedPinAttempt(rateLimitKey);
             error = "Invalid or expired pairing code.";
             return false;
         }
@@ -191,6 +241,71 @@ public class SlideshowSessionService : ISlideshowSessionService
         return true;
     }
 
+    public bool TryBindDirectStageCircuit(string sessionId, string? tvSecret, out string? circuitToken, out SlideshowSession? session)
+    {
+        circuitToken = null;
+        session = null;
+
+        var candidate = GetSessionById(sessionId);
+        if (candidate == null || !candidate.IsPaired || candidate.DisplayKind != SlideshowDisplayKind.DirectExternalDisplay)
+        {
+            return false;
+        }
+
+        if (!SecretsMatch(candidate.TvSecret, tvSecret))
+        {
+            return false;
+        }
+
+        lock (candidate)
+        {
+            if (!string.IsNullOrEmpty(candidate.BoundDirectStageToken))
+            {
+                return false;
+            }
+
+            circuitToken = Guid.NewGuid().ToString("N");
+            candidate.BoundDirectStageToken = circuitToken;
+            candidate.LastActivityUtc = DateTime.UtcNow;
+            candidate.ExpiresAtUtc = DateTime.UtcNow.AddMinutes(SessionTtlMinutes);
+            session = candidate;
+            return true;
+        }
+    }
+
+    public bool EndSessionIfStageOwner(string sessionId, string? ownedTvConnectionId, string? boundDirectStageToken)
+    {
+        if (string.IsNullOrWhiteSpace(sessionId) || !_sessionsById.TryGetValue(sessionId, out var session))
+        {
+            return false;
+        }
+
+        bool isOwner = false;
+        lock (session)
+        {
+            if (!string.IsNullOrEmpty(ownedTvConnectionId) &&
+                session.DisplayKind == SlideshowDisplayKind.BlazorPinStage &&
+                string.Equals(session.TvConnectionId, ownedTvConnectionId, StringComparison.Ordinal))
+            {
+                isOwner = true;
+            }
+            else if (!string.IsNullOrEmpty(boundDirectStageToken) &&
+                     session.DisplayKind == SlideshowDisplayKind.DirectExternalDisplay &&
+                     SecretsMatch(session.BoundDirectStageToken, boundDirectStageToken))
+            {
+                isOwner = true;
+            }
+        }
+
+        if (!isOwner)
+        {
+            return false;
+        }
+
+        EndSession(sessionId);
+        return true;
+    }
+
     public void AttachBridge(string sessionId, ISlideshowFileBridge bridge)
     {
         if (string.IsNullOrWhiteSpace(sessionId) || bridge == null) return;
@@ -203,7 +318,7 @@ public class SlideshowSessionService : ISlideshowSessionService
     public bool ValidateHostCommand(string sessionId, string callerConnectionId, out SlideshowSession? session)
     {
         session = GetSessionById(sessionId);
-        if (session == null || !session.IsPaired) return false;
+        if (session == null || !session.IsPaired || string.IsNullOrEmpty(callerConnectionId)) return false;
 
         if (session.HostConnectionId != callerConnectionId)
         {
@@ -288,6 +403,7 @@ public class SlideshowSessionService : ISlideshowSessionService
         {
             _pinToSessionId.TryRemove(session.PairingPin, out _);
             session.FileBridge = null;
+            session.BoundDirectStageToken = null;
             _logger?.LogInformation("Ended slideshow session {SessionId}", sessionId);
             OnSessionEnded?.Invoke(sessionId);
         }
@@ -295,15 +411,20 @@ public class SlideshowSessionService : ISlideshowSessionService
 
     public SlideshowSession? HandleDisconnect(string connectionId)
     {
+        if (string.IsNullOrEmpty(connectionId))
+        {
+            return null;
+        }
+
         foreach (var kvp in _sessionsById)
         {
             var session = kvp.Value;
-            if (session.HostConnectionId == connectionId)
+            if (!string.IsNullOrEmpty(session.HostConnectionId) && session.HostConnectionId == connectionId)
             {
                 EndSession(session.SessionId);
                 return session;
             }
-            if (session.TvConnectionId == connectionId)
+            if (!string.IsNullOrEmpty(session.TvConnectionId) && session.TvConnectionId == connectionId)
             {
                 if (!session.IsPaired)
                 {
@@ -321,24 +442,87 @@ public class SlideshowSessionService : ISlideshowSessionService
         return null;
     }
 
-    public bool RebindTvConnection(string sessionId, string newConnectionId)
+    public bool RebindTvConnection(string sessionId, string newConnectionId, string? tvSecret)
     {
-        if (string.IsNullOrWhiteSpace(sessionId) || string.IsNullOrWhiteSpace(newConnectionId))
+        if (string.IsNullOrWhiteSpace(sessionId) || string.IsNullOrWhiteSpace(newConnectionId) || string.IsNullOrEmpty(tvSecret))
         {
             return false;
         }
 
         var session = GetSessionById(sessionId);
-        if (session == null || !session.IsPaired)
+        if (session == null)
         {
             return false;
         }
 
-        session.TvConnectionId = newConnectionId;
-        session.LastActivityUtc = DateTime.UtcNow;
-        session.ExpiresAtUtc = DateTime.UtcNow.AddMinutes(SessionTtlMinutes);
+        lock (session)
+        {
+            if (!session.IsPaired ||
+                session.DisplayKind != SlideshowDisplayKind.SignalRCastReceiver ||
+                !string.IsNullOrEmpty(session.TvConnectionId) ||
+                session.HostConnectionId == newConnectionId ||
+                !SecretsMatch(session.TvSecret, tvSecret))
+            {
+                return false;
+            }
+
+            session.TvConnectionId = newConnectionId;
+            session.LastActivityUtc = DateTime.UtcNow;
+            session.ExpiresAtUtc = DateTime.UtcNow.AddMinutes(SessionTtlMinutes);
+        }
+
         _logger?.LogInformation("Successfully rebound TV connection {ConnectionId} for session {SessionId}", newConnectionId, sessionId);
         return true;
+    }
+
+    public static bool SecretsMatch(string? expected, string? provided)
+    {
+        if (string.IsNullOrEmpty(expected) || string.IsNullOrEmpty(provided))
+        {
+            return false;
+        }
+
+        byte[] expectedBytes = Encoding.UTF8.GetBytes(expected);
+        byte[] providedBytes = Encoding.UTF8.GetBytes(provided);
+        return CryptographicOperations.FixedTimeEquals(expectedBytes, providedBytes);
+    }
+
+    public static string AppendSecretQuery(string url, string? tvSecret)
+    {
+        if (string.IsNullOrEmpty(url) || string.IsNullOrEmpty(tvSecret))
+        {
+            return url;
+        }
+
+        char separator = url.Contains('?') ? '&' : '?';
+        return $"{url}{separator}st={Uri.EscapeDataString(tvSecret)}";
+    }
+
+    private bool IsUserPinRateLimited(string rateLimitKey)
+    {
+        if (!_failedPinAttemptsByUser.TryGetValue(rateLimitKey, out var attempts))
+        {
+            return false;
+        }
+
+        var cutoff = DateTime.UtcNow.AddMinutes(-1);
+        lock (attempts)
+        {
+            attempts.RemoveAll(ts => ts < cutoff);
+            return attempts.Count >= MaxFailedPinAttemptsPerMinute;
+        }
+    }
+
+    private void RecordFailedPinAttempt(string rateLimitKey)
+    {
+        var now = DateTime.UtcNow;
+        var cutoff = now.AddMinutes(-1);
+        var attempts = _failedPinAttemptsByUser.GetOrAdd(rateLimitKey, _ => []);
+        lock (attempts)
+        {
+            attempts.RemoveAll(ts => ts < cutoff);
+            attempts.Add(now);
+        }
     }
 
     private void CleanExpiredSessions()
@@ -359,9 +543,29 @@ public class SlideshowSessionService : ISlideshowSessionService
         return new string(pin.Where(char.IsDigit).ToArray());
     }
 
+    private string GenerateUniqueNumericPin()
+    {
+        for (int attempt = 0; attempt < 20; attempt++)
+        {
+            string candidate = GenerateSecureNumericPin();
+            if (!_pinToSessionId.ContainsKey(candidate))
+            {
+                return candidate;
+            }
+        }
+
+        return GenerateSecureNumericPin();
+    }
+
     private static string GenerateSecureNumericPin()
     {
         int value = RandomNumberGenerator.GetInt32(100000, 1000000);
         return value.ToString();
+    }
+
+    private static string GenerateTvSecret()
+    {
+        byte[] bytes = RandomNumberGenerator.GetBytes(32);
+        return Convert.ToBase64String(bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_');
     }
 }

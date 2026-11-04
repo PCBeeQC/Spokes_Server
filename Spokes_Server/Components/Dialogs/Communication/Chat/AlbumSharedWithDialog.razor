@@ -45,7 +45,7 @@
                                         </MudText>
                                     </div>
                                 </div>
-                                @if (!IsReadOnly)
+                                @if (!IsReadOnly && _album?.OwnerId == CurrentUserId)
                                 {
                                     <MudIconButton Icon="@Icons.Material.Filled.Close" Color="Color.Error" Size="Size.Small" OnClick="@(() => UnshareChannel(channel.Id))" title="@Loc["Unshare from channel"]" />
                                 }
@@ -148,9 +148,9 @@
             .Where(c => _album.SharedWithChannelIds.Contains(c.Id))
             .ToList();
 
-        // Channel confidentiality: Non-owner/non-admin viewers only see channels they have permission to access
+        // Channel confidentiality: Viewers only see channels they have permission to access
         _channels = allSharedChannels
-            .Where(c => caller != null && (caller.Id == _album.OwnerId || caller.IsAdmin || ChatAuth.CanUserAccessChannel(c, caller)))
+            .Where(c => caller != null && ChatAuth.CanUserAccessChannel(c, caller))
             .ToList();
 
         bool isAudienceRestricted = PrivacyService.ShouldRestrictAlbumAudience(_album, caller);
@@ -179,7 +179,8 @@
         {
             _hasPublicAudience = false;
 
-            var userIds = _album.SharedWithChannelIds
+            var userIds = _channels
+                .Select(c => c.Id)
                 .SelectMany(cId => ChatAccess.GetUsersForChannel(cId))
                 .Distinct()
                 .ToList();

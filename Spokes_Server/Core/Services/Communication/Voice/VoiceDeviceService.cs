@@ -46,6 +46,21 @@ public class VoiceDeviceService : IVoiceDeviceService
         }
     }
 
+    public async Task UpdateCameraSettingsAsync(string quality, int fps, string deviceId, bool isVideoOn)
+    {
+        try
+        {
+            if (_jsInterop != null && _jsInterop.IsModuleLoaded && isVideoOn)
+            {
+                await _jsInterop.UpdateCameraSettingsAsync(quality, fps, deviceId);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "[Voice] UpdateCameraSettings failed: {Message}", ex.Message);
+        }
+    }
+
     public async Task SwitchMicrophoneAsync(string deviceId)
     {
         try

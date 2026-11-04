@@ -88,6 +88,17 @@ public class VoiceChannelService
 
     public virtual string GenerateJoinToken(string channelId, string userId, string userName, string userAvatarUrl = "")
     {
+        if (_chatAuth != null)
+        {
+            var channel = _channels?.GetById(channelId);
+            var emp = _employees?.GetById(userId);
+            if (channel == null || emp == null || !emp.IsActive || emp.IsBanned || !_chatAuth.CanUserAccessChannel(channel, emp))
+            {
+                _logger?.LogWarning("GenerateJoinToken denied: User {UserId} is not authorized for channel {ChannelId}", userId, channelId);
+                throw new UnauthorizedAccessException("User is not authorized to join this voice channel.");
+            }
+        }
+
         var config = _systemConfigs.Get();
         var apiKey = config.LiveKitApiKey ?? string.Empty;
         var apiSecret = config.LiveKitApiSecret ?? string.Empty;
@@ -110,12 +121,95 @@ public class VoiceChannelService
         return token.ToJwt();
     }
 
+    public virtual string GenerateCameraCompanionToken(string channelId, string userId, string userName = "", string userAvatarUrl = "")
+    {
+        if (_chatAuth != null)
+        {
+            var channel = _channels?.GetById(channelId);
+            var emp = _employees?.GetById(userId);
+            if (channel == null || emp == null || !emp.IsActive || emp.IsBanned || !_chatAuth.CanUserAccessChannel(channel, emp))
+            {
+                _logger?.LogWarning("GenerateCameraCompanionToken denied: User {UserId} is not authorized for channel {ChannelId}", userId, channelId);
+                throw new UnauthorizedAccessException("User is not authorized to join this voice channel.");
+            }
+            if (string.IsNullOrWhiteSpace(userName))
+            {
+                userName = emp.FullName ?? userId;
+            }
+        }
+
+        var config = _systemConfigs.Get();
+        var apiKey = config.LiveKitApiKey ?? string.Empty;
+        var apiSecret = config.LiveKitApiSecret ?? string.Empty;
+        string roomName = $"channel-{channelId}";
+        string displayName = string.IsNullOrWhiteSpace(userName) ? $"{userId} (Camera)" : $"{userName} (Camera)";
+
+        var token = new AccessToken(apiKey, apiSecret)
+            .WithIdentity($"{userId}:cam")
+            .WithName(displayName)
+            .WithMetadata(userAvatarUrl);
+
+        token.WithGrants(new VideoGrants
+        {
+            RoomJoin = true,
+            Room = roomName,
+            CanPublish = true,
+            CanPublishData = false,
+            CanSubscribe = true
+        });
+
+        return token.ToJwt();
+    }
+
+    public virtual async Task JoinVoiceAsync(string channelId, string userId, string? deviceId, string? deviceName, CancellationToken cancellationToken = default)
+    {
+        if (_chatAuth != null)
+        {
+            var channel = _channels?.GetById(channelId);
+            var emp = _employees?.GetById(userId);
+            if (channel == null || emp == null || !emp.IsActive || emp.IsBanned || !_chatAuth.CanUserAccessChannel(channel, emp))
+            {
+                _logger?.LogWarning("JoinVoiceAsync denied: User {UserId} is not authorized for channel {ChannelId}", userId, channelId);
+                return;
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(deviceId))
+        {
+            _chatState.SetVoiceParticipantDevice(channelId, userId, deviceId, deviceName);
+        }
+
+        await JoinVoiceAsync(channelId, userId, cancellationToken);
+    }
+
     public virtual async Task JoinVoiceAsync(string channelId, string userId, CancellationToken cancellationToken = default)
     {
+        if (_chatAuth != null)
+        {
+            var channel = _channels?.GetById(channelId);
+            var emp = _employees?.GetById(userId);
+            if (channel == null || emp == null || !emp.IsActive || emp.IsBanned || !_chatAuth.CanUserAccessChannel(channel, emp))
+            {
+                _logger?.LogWarning("JoinVoiceAsync denied: User {UserId} is not authorized for channel {ChannelId}", userId, channelId);
+                return;
+            }
+        }
+
         bool isNewMember = _chatState.NotifyVoiceMemberJoined(channelId, userId);
         if (isNewMember)
         {
             await _realtimeGateway.SendToChannelAsync(channelId, "VoiceMemberJoined", channelId, userId, cancellationToken);
+
+            var currentParticipants = _chatState.GetVoiceParticipants(channelId);
+            if (currentParticipants.Count > 1)
+            {
+                var activeInvite = _messages.GetByChannel(channelId, 50)
+                    .FirstOrDefault(m => m.MessageType == ChatMessageType.CallInvite && m.CallStatus == CallStatus.Active);
+                if (activeInvite != null)
+                {
+                    await ApplyCallInviteStatusCoreAsync(activeInvite, CallStatus.Joined, cancellationToken);
+                }
+            }
         }
 
         if (_voiceBotService != null)
@@ -123,6 +217,7 @@ public class VoiceChannelService
             try
             {
                 await _voiceBotService.EnsureBotJoinedAsync(channelId, cancellationToken);
+                await _voiceBotService.NotifyRoomConfigurationChangedAsync(channelId, cancellationToken);
 
                 var participants = _chatState.GetVoiceParticipants(channelId);
                 if (isNewMember && participants.Count > 1)
@@ -137,11 +232,23 @@ public class VoiceChannelService
         }
     }
 
-    public virtual async Task LeaveVoiceAsync(string channelId, string userId, CancellationToken cancellationToken = default)
+    public virtual Task LeaveVoiceAsync(string channelId, string userId, CancellationToken cancellationToken = default) =>
+        LeaveVoiceAsync(channelId, userId, evictFromLiveKit: true, cancellationToken);
+
+    public virtual async Task LeaveVoiceAsync(string channelId, string userId, bool evictFromLiveKit, CancellationToken cancellationToken = default)
     {
         bool wasPresent = _chatState.NotifyVoiceMemberLeft(channelId, userId);
         if (!wasPresent)
         {
+            if (evictFromLiveKit && !string.IsNullOrWhiteSpace(channelId) && !string.IsNullOrWhiteSpace(userId))
+            {
+                var cfg = _systemConfigs.Get();
+                if (!string.IsNullOrEmpty(cfg.LiveKitApiKey) && !string.IsNullOrEmpty(cfg.LiveKitApiSecret))
+                {
+                    await _liveKitService.RemoveParticipantAsync(channelId, userId, cfg.LiveKitApiKey, cfg.LiveKitApiSecret, cancellationToken);
+                    await _liveKitService.RemoveParticipantAsync(channelId, $"{userId}:cam", cfg.LiveKitApiKey, cfg.LiveKitApiSecret, cancellationToken);
+                }
+            }
             return;
         }
 
@@ -152,24 +259,47 @@ public class VoiceChannelService
                 .FirstOrDefault(m => m.MessageType == ChatMessageType.CallInvite && (m.CallStatus == CallStatus.Active || m.CallStatus == CallStatus.Joined));
             if (activeInvite != null)
             {
-                await UpdateCallInviteStatusAsync(activeInvite.Id, CallStatus.Ended, cancellationToken);
+                await ApplyCallInviteStatusCoreAsync(activeInvite, CallStatus.Ended, cancellationToken);
             }
 
-            _voiceBotService?.ScheduleBotDeparture(channelId, TimeSpan.FromSeconds(30));
+            if (_voiceBotService != null)
+            {
+                try
+                {
+                    await _voiceBotService.NotifyRoomConfigurationChangedAsync(channelId, cancellationToken);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogDebug(ex, "[VoiceChannelService] Failed to notify bot pipeline on empty channel {ChannelId}", channelId);
+                }
+                _voiceBotService.ScheduleBotDeparture(channelId, TimeSpan.FromSeconds(30));
+            }
         }
         else
         {
             if (_voiceBotService != null)
             {
+                try
+                {
+                    await _voiceBotService.NotifyRoomConfigurationChangedAsync(channelId, cancellationToken);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogDebug(ex, "[VoiceChannelService] Failed to notify bot pipeline on leave in channel {ChannelId}", channelId);
+                }
                 _ = _voiceBotService.PlaySoundAsync(channelId, "channel_leave", cancellationToken);
             }
         }
 
-        // Evict participant from LiveKit via LiveKitService
-        var config = _systemConfigs.Get();
-        if (!string.IsNullOrEmpty(config.LiveKitApiKey) && !string.IsNullOrEmpty(config.LiveKitApiSecret))
+        if (evictFromLiveKit)
         {
-            await _liveKitService.RemoveParticipantAsync(channelId, userId, config.LiveKitApiKey, config.LiveKitApiSecret, cancellationToken);
+            // Evict participant from LiveKit via LiveKitService
+            var config = _systemConfigs.Get();
+            if (!string.IsNullOrEmpty(config.LiveKitApiKey) && !string.IsNullOrEmpty(config.LiveKitApiSecret))
+            {
+                await _liveKitService.RemoveParticipantAsync(channelId, userId, config.LiveKitApiKey, config.LiveKitApiSecret, cancellationToken);
+                await _liveKitService.RemoveParticipantAsync(channelId, $"{userId}:cam", config.LiveKitApiKey, config.LiveKitApiSecret, cancellationToken);
+            }
         }
 
         await _realtimeGateway.SendToChannelAsync(channelId, "VoiceMemberLeft", channelId, userId, cancellationToken);
@@ -205,6 +335,12 @@ public class VoiceChannelService
         {
             _logger.LogWarning("SendCallInvite failed: Employee not found: {SenderId}", senderId);
             return SpokesResult<ChatMessage>.Failure($"User '{senderId}' not found.", "NOT_FOUND");
+        }
+
+        if (!employee.IsActive || employee.IsSuspended || employee.IsBanned)
+        {
+            _logger.LogWarning("SendCallInvite failed: Employee {SenderId} is inactive, suspended, or banned", senderId);
+            return SpokesResult<ChatMessage>.Failure("User is not authorized to start a voice call.", "FORBIDDEN");
         }
 
         var channel = _channels.GetById(channelId);
@@ -257,11 +393,37 @@ public class VoiceChannelService
         return SpokesResult<ChatMessage>.Success(message);
     }
 
-    public virtual async Task UpdateCallInviteStatusAsync(string messageId, string status, CancellationToken cancellationToken = default)
+    public virtual async Task UpdateCallInviteStatusAsync(
+        string messageId,
+        string status,
+        CancellationToken cancellationToken = default,
+        string? actorUserId = null)
     {
         var message = _messages.GetById(messageId);
         if (message == null || message.MessageType != ChatMessageType.CallInvite) return;
 
+        if (_chatAuth != null)
+        {
+            if (string.IsNullOrWhiteSpace(actorUserId))
+            {
+                _logger?.LogWarning("UpdateCallInviteStatusAsync denied: missing actorUserId for message {MessageId}", messageId);
+                return;
+            }
+
+            var channel = _channels?.GetById(message.ChannelId);
+            var emp = _employees?.GetById(actorUserId);
+            if (channel == null || emp == null || !emp.IsActive || emp.IsBanned || emp.IsSuspended || !_chatAuth.CanUserAccessChannel(channel, emp))
+            {
+                _logger?.LogWarning("UpdateCallInviteStatusAsync denied: User {UserId} is not authorized for channel {ChannelId}", actorUserId, message.ChannelId);
+                return;
+            }
+        }
+
+        await ApplyCallInviteStatusCoreAsync(message, status, cancellationToken);
+    }
+
+    private async Task ApplyCallInviteStatusCoreAsync(ChatMessage message, string status, CancellationToken cancellationToken)
+    {
         message.CallStatus = status;
         _messages.Save(message);
 
@@ -276,7 +438,7 @@ public class VoiceChannelService
             message.CallStatus
         }, cancellationToken);
 
-        if (status == CallStatus.Ended || status == CallStatus.Declined)
+        if (status == CallStatus.Ended || status == CallStatus.Declined || status == CallStatus.Joined)
         {
             _ = SafeDispatchNotificationAsync(() => _notificationRouting.ClearChannelNotificationsAsync(message.ChannelId), "clear channel notifications");
         }

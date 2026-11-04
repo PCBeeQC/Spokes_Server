@@ -76,6 +76,8 @@ public class LicenseValidationService
     public static bool IsLicenseActive(LicenseStatus status) =>
         status != LicenseStatus.HardLock && status != LicenseStatus.Expired;
 
+    public static bool IsLifetimeExpiry(DateTime expiry) => expiry.Year >= 9000;
+
     public bool IsNativePushAllowed(string? jsonPayload, ServerConfig? config = null)
     {
         var result = ValidateLicense(jsonPayload, config);

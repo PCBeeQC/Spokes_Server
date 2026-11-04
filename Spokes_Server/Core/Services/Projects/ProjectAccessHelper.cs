@@ -8,9 +8,9 @@ using Spokes_Server.Core.Models.Projects;
 namespace Spokes_Server.Core.Services.Projects;
 
 /// <summary>
-/// Authoritative domain helper for evaluating project access permissions across UI, files, and chat.
+/// Authoritative domain helper for evaluating read/view project access permissions across UI, files, and chat.
 /// Consistently enforces:
-/// 1. Active employee state (inactive, suspended, or banned employees are denied).
+/// 1. Active employee state (inactive or banned employees are denied; suspended employees retain read-only visibility).
 /// 2. Admin role (admins have unrestricted access).
 /// 3. Foundational global permission (AppPermissions.Projects.View).
 /// 4. Internal headless document renderer (system-renderer with Projects.View).
@@ -24,7 +24,7 @@ public static class ProjectAccessHelper
 {
     public static bool CanAccess(Employee? user, Project? project, TeamRepository? teams = null)
     {
-        if (user == null || !user.IsActive || user.IsSuspended || user.IsBanned || project == null)
+        if (user == null || !user.IsActive || user.IsBanned || project == null)
         {
             return false;
         }
@@ -67,7 +67,7 @@ public static class ProjectAccessHelper
     /// </summary>
     public static bool CanAccess(Employee? user, Project? project, IEnumerable<string>? userTeamIds)
     {
-        if (user == null || !user.IsActive || user.IsSuspended || user.IsBanned || project == null)
+        if (user == null || !user.IsActive || user.IsBanned || project == null)
         {
             return false;
         }
@@ -111,7 +111,7 @@ public static class ProjectAccessHelper
     /// </summary>
     public static bool HasAccess(ProjectRepository projects, TeamRepository teams, Employee user, string projectId)
     {
-        if (user == null || !user.IsActive || user.IsSuspended || user.IsBanned) return false;
+        if (user == null || !user.IsActive || user.IsBanned) return false;
         if (user.IsAdmin) return true;
         if (string.IsNullOrWhiteSpace(projectId)) return false;
         var project = projects.GetById(projectId);

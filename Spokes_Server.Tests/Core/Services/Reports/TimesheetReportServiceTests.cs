@@ -462,4 +462,44 @@ public class TimesheetReportServiceTests : IDisposable
         Assert.Single(entries);
         Assert.Equal(0m, entries[0].HourlyRate);
     }
+
+    [Fact]
+    public async Task LoadAllEntriesAsync_WhenIncludeCostRatesIsFalse_RedactsCostRateAndCostAmount()
+    {
+        var emp = new Employee { Id = "emp-cost-redact", FirstName = "Sarah", LastName = "Engineer", HourlyRate = 65m };
+        _db.Employees.Save(emp);
+
+        var task = new WorkType { Id = "task-redact", Name = "Engineering", DefaultRate = 150m, CostRate = 60m };
+        _db.WorkTypes.Save(task);
+
+        var proj = new Project { Id = "proj-redact", Name = "Platform" };
+        _db.Projects.Save(proj);
+
+        var timesheet = new Timesheet
+        {
+            Id = "ts-redact",
+            EmployeeId = emp.Id,
+            Status = "Approved",
+            Entries =
+            [
+                new TimeEntry
+                {
+                    Id = "e-redact-1",
+                    ProjectId = proj.Id,
+                    WorkTypeId = task.Id,
+                    Date = DateTime.Today,
+                    Hours = 4.0m,
+                    IsBillable = true
+                }
+            ]
+        };
+        _db.Timesheets.Save(timesheet);
+
+        var redactedEntries = await _service.LoadAllEntriesAsync(includeCostRates: false);
+        Assert.Single(redactedEntries);
+        Assert.Equal(150m, redactedEntries[0].HourlyRate);
+        Assert.Equal(600m, redactedEntries[0].BillableAmount);
+        Assert.Equal(0m, redactedEntries[0].CostRate);
+        Assert.Equal(0m, redactedEntries[0].CostAmount);
+    }
 }

@@ -4,6 +4,7 @@
 @inject IDialogService DialogService
 @inject ChatNotificationService ChatNotifications
 @inject ChatService ChatService
+@inject IChatAuthorizationService ChatAuth
 @inject ChatSecurityService ChatSecurityService
 @inject ChatStateService ChatState
 @inject ScopedKeystoreService ScopedKeystore
@@ -1013,8 +1014,10 @@
     }
 
     private Employee? _currentUserObj => Employees.FirstOrDefault(e => e.Id == CurrentUserId);
-    private bool CanCreateChannel => _currentUserObj?.HasPermission(Spokes_Server.Core.Constants.AppPermissions.Chat.CreateChannels) == true || _currentUserObj?.IsAdmin == true;
-    private bool CanReorder => _currentUserObj?.HasPermission(Spokes_Server.Core.Constants.AppPermissions.Chat.EditAllPublicChannels) == true || _currentUserObj?.IsAdmin == true;
+    private bool CanCreateChannel => _currentUserObj is { IsActive: true, IsSuspended: false, IsBanned: false } u &&
+                                     (u.HasPermission(Spokes_Server.Core.Constants.AppPermissions.Chat.CreateChannels) || u.IsAdmin);
+    private bool CanReorder => _currentUserObj is { IsActive: true, IsSuspended: false, IsBanned: false } u &&
+                               (u.HasPermission(Spokes_Server.Core.Constants.AppPermissions.Chat.EditAllPublicChannels) || u.IsAdmin);
 
     private bool _hasRenderedOnce;
 
@@ -1067,7 +1070,7 @@
     private void SaveLocalPrefs()
     {
         var user = _currentUserObj;
-        if (user != null)
+        if (user is { IsActive: true, IsSuspended: false, IsBanned: false })
         {
             user.ChatPublicCollapsed = _publicCollapsed;
             user.ChatProjectsCollapsed = _projectsCollapsed;
@@ -1331,11 +1334,33 @@
                         AllowedPostUserIds = data.AllowedPostUserIds ?? new(),
                         AllowedPostTeamIds = data.AllowedPostTeamIds ?? new()
                     };
+                if (data.IsEncrypted)
+                {
+                    try
+                    {
+                        ChatSecurityService.ValidateChannelEncryptionPrerequisites(channelToSave, ScopedKeystore.GetPrivateKey());
+                    }
+                    catch (Exception ex)
+                    {
+                        Snackbar.Add(ex.Message, Severity.Error);
+                        return;
+                    }
+                }
+
                 ChatService.CreateChannel(channelToSave);
                 
                 if (data.IsEncrypted)
                 {
-                    await ChatSecurityService.ToggleChannelEncryptionAsync(channelToSave.Id, true, CurrentUserId!, ScopedKeystore.GetPrivateKey());
+                    try
+                    {
+                        await ChatSecurityService.ToggleChannelEncryptionAsync(channelToSave.Id, true, CurrentUserId!, ScopedKeystore.GetPrivateKey());
+                    }
+                    catch (Exception ex)
+                    {
+                        Db.ChatChannels.Delete(channelToSave.Id);
+                        Snackbar.Add(ex.Message, Severity.Error);
+                        return;
+                    }
                 }
 
                 await OnChannelSelected.InvokeAsync(channelToSave.Id);
@@ -1346,6 +1371,15 @@
                 channelToSave = existing;
                 var isEncryptionChanging = channelToSave.IsEncrypted != data.IsEncrypted;
                 
+                if (isEncryptionChanging && !ScopedKeystore.IsUnlocked)
+                {
+                    var msg = data.IsEncrypted
+                        ? Loc["Your vault must be unlocked to enable encryption."].Value
+                        : Loc["Your vault must be unlocked to disable encryption."].Value;
+                    Snackbar.Add(msg, Severity.Error);
+                    return;
+                }
+
                 channelToSave.Name = data.Name;
                 channelToSave.Description = data.Description;
                 channelToSave.Icon = data.Icon;
@@ -1363,32 +1397,44 @@
                 channelToSave.AllowedPostUserIds = data.AllowedPostUserIds ?? new();
                 channelToSave.AllowedPostTeamIds = data.AllowedPostTeamIds ?? new();
 
-                if (isEncryptionChanging)
+                if (isEncryptionChanging && data.IsEncrypted)
                 {
-                    if (!ScopedKeystore.IsUnlocked)
+                    try
                     {
-                        var msg = data.IsEncrypted
-                            ? Loc["Your vault must be unlocked to enable encryption."].Value
-                            : Loc["Your vault must be unlocked to disable encryption."].Value;
-                        Snackbar.Add(msg, Severity.Error);
+                        ChatSecurityService.ValidateChannelEncryptionPrerequisites(channelToSave, ScopedKeystore.GetPrivateKey());
+                    }
+                    catch (Exception ex)
+                    {
+                        Snackbar.Add(ex.Message, Severity.Error);
                         return;
                     }
-
-                    var privateKey = ScopedKeystore.GetPrivateKey();
-                    await ChatSecurityService.ToggleChannelEncryptionAsync(channelToSave.Id, data.IsEncrypted, CurrentUserId!, privateKey);
-                    var refreshed = Db.ChatChannels.GetById(channelToSave.Id);
-                    if (refreshed != null)
-                    {
-                        channelToSave.IsEncrypted = refreshed.IsEncrypted;
-                        channelToSave.EncryptedChannelKeys = refreshed.EncryptedChannelKeys;
-                    }
                 }
-                
-                var updateResult = ChatService.UpdateChannel(channelToSave, CurrentUserId, ScopedKeystore.IsUnlocked);
+
+                var updateResult = ChatService.UpdateChannel(channelToSave, CurrentUserId ?? string.Empty, ScopedKeystore.IsUnlocked);
                 if (!updateResult.IsSuccess)
                 {
                     Snackbar.Add(updateResult.ErrorMessage ?? Loc["Failed to update channel"].Value, Severity.Error);
                     return;
+                }
+
+                if (isEncryptionChanging)
+                {
+                    try
+                    {
+                        var privateKey = ScopedKeystore.GetPrivateKey();
+                        await ChatSecurityService.ToggleChannelEncryptionAsync(channelToSave.Id, data.IsEncrypted, CurrentUserId!, privateKey);
+                        var refreshed = Db.ChatChannels.GetById(channelToSave.Id);
+                        if (refreshed != null)
+                        {
+                            channelToSave.IsEncrypted = refreshed.IsEncrypted;
+                            channelToSave.EncryptedChannelKeys = refreshed.EncryptedChannelKeys;
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Snackbar.Add(ex.Message, Severity.Error);
+                        return;
+                    }
                 }
             }
 
@@ -1400,32 +1446,7 @@
     private bool CanManageChannel(ChatChannel channel)
     {
         var currentUserObj = Employees.FirstOrDefault(e => e.Id == CurrentUserId);
-        if (currentUserObj == null) return false;
-
-        // Dynamic owner rules (Channel Creator or Team Leader)
-        if (channel.ChannelType == ChatChannelType.Team)
-        {
-            var teams = Db.Teams.GetAll();
-            bool isLeader = teams.Any(t => channel.AllowedTeamIds.Contains(t.Id) && t.LeaderId == CurrentUserId);
-            if (isLeader) return true;
-        }
-        else if (channel.CreatedById == CurrentUserId)
-        {
-            return true;
-        }
-
-        if (currentUserObj.IsAdmin == true)
-            return true;
-            
-        // Check if user has permission to edit all public channels
-        if (currentUserObj.HasPermission(Spokes_Server.Core.Constants.AppPermissions.Chat.EditAllPublicChannels))
-        {
-            if (channel.ChannelType == ChatChannelType.General || channel.ChannelType == ChatChannelType.Project)
-            {
-                return true;
-            }
-        }
-        return false;
+        return ChatAuth.CanUserManageChannel(channel, currentUserObj, isSessionUnlocked: true);
     }
 
     private async Task MoveChannelUp(ChatChannel channel, List<ChatChannel> list)
@@ -1449,7 +1470,7 @@
                 
                 await OnChannelOrdersChanged.InvokeAsync(updates);
             }
-            else if (_reorderMode == ReorderMode.Personal && _currentUserObj != null)
+            else if (_reorderMode == ReorderMode.Personal && _currentUserObj is { IsActive: true, IsSuspended: false, IsBanned: false })
             {
                 InitializeCustomOrderIfNeeded();
                 for (int i = 0; i < list.Count; i++) 
@@ -1486,7 +1507,7 @@
                 
                 await OnChannelOrdersChanged.InvokeAsync(updates);
             }
-            else if (_reorderMode == ReorderMode.Personal && _currentUserObj != null)
+            else if (_reorderMode == ReorderMode.Personal && _currentUserObj is { IsActive: true, IsSuspended: false, IsBanned: false })
             {
                 InitializeCustomOrderIfNeeded();
                 for (int i = 0; i < list.Count; i++) 
@@ -1634,10 +1655,6 @@
                             <MudText Typo="Typo.caption" Class="text-truncate flex-grow-1" Style="@($"color: {textColor}; line-height: 1.2;")">
                                 @u.FullName
                             </MudText>
-                            @if (isMuted)
-                            {
-                                <MudIcon Icon="@Icons.Material.Filled.MicOff" Size="Size.Small" Color="Color.Error" Style="font-size: 14px; flex-shrink: 0;" />
-                            }
                         </div>
                     }
                 }

@@ -50,6 +50,7 @@ public static class ChatPreviewFormatter
             return type switch
             {
                 "event" => $"📅 {title}",
+                "poll" => $"📊 {title}",
                 "album" => $"shared {title} album",
                 "project" => $"shared {title} project",
                 "quote" => $"shared {title} quote",

@@ -12,7 +12,8 @@
 @inject IDialogService DialogService
 @inject UserService UserService
 
-<MudText Class="mt-4" Typo="Typo.h4" GutterBottom="true">Purchases (POs)</MudText>
+<MudContainer MaxWidth="MaxWidth.ExtraLarge" Class="mt-4 pb-6">
+<MudText Typo="Typo.h4" GutterBottom="true">Purchases (POs)</MudText>
 
 
 <MudGrid Class="mb-6">
@@ -78,6 +79,7 @@
         </MudTable>
     }
 </MudPaper>
+</MudContainer>
 
 @code {
     private List<PurchaseOrder> PoList = [];

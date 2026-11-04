@@ -13,6 +13,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Protocols;
 using Microsoft.IdentityModel.Protocols.OpenIdConnect;
+using Microsoft.IdentityModel.Tokens;
 using Spokes_Server.Aggregate;
 using Spokes_Server.Aggregate.Contexts;
 using Spokes_Server.Core.Constants;
@@ -182,21 +183,77 @@ public class MobileAuthController : SpokesControllerBase
             var configManager = GetConfigurationManager(authority);
             var openIdConfig = await configManager.GetConfigurationAsync(HttpContext?.RequestAborted ?? CancellationToken.None);
 
-            var validationParams = new Microsoft.IdentityModel.Tokens.TokenValidationParameters
+            var validIssuers = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            static void AddIssuerVariants(HashSet<string> set, string? rawIssuer)
             {
-                // Issuer validation is intentionally disabled. The id_token is already
-                // cryptographically verified against the IdP's JWKS signing keys and
-                // audience-validated against our client_id. Strict issuer string matching
-                // only causes compatibility issues across providers (trailing slashes,
-                // casing differences, etc).
-                ValidateIssuer = false,
+                if (string.IsNullOrWhiteSpace(rawIssuer)) return;
+                var trimmed = rawIssuer.Trim().TrimEnd('/');
+                if (!string.IsNullOrEmpty(trimmed))
+                {
+                    set.Add(trimmed);
+                    set.Add(trimmed + "/");
+                }
+            }
+
+            AddIssuerVariants(validIssuers, openIdConfig.Issuer);
+            AddIssuerVariants(validIssuers, authority);
+            AddIssuerVariants(validIssuers, sysConfig.ServerPublicUrl);
+            if (sysConfig.ProviderType == IdpType.BuiltInCasdoor)
+            {
+                AddIssuerVariants(validIssuers, "http://127.0.0.1:8000");
+                AddIssuerVariants(validIssuers, "http://localhost:8000");
+            }
+
+            var validationParams = new TokenValidationParameters
+            {
+                ValidateIssuer = validIssuers.Count > 0,
+                ValidIssuers = validIssuers,
                 ValidateAudience = true,
                 ValidAudience = sysConfig.ClientId,
                 ValidateIssuerSigningKey = true,
                 IssuerSigningKeys = openIdConfig.SigningKeys,
                 ValidateLifetime = true,
-                // Accept expired X.509 certificates as long as the cryptographic signature matches the public key
-                IssuerSigningKeyValidator = (issuerSigningKey, securityToken, validationParameters) => true
+                // Accept expired X.509 certificates as long as the cryptographic signature matches one of the IdP's configured public keys
+                IssuerSigningKeyValidator = (issuerSigningKey, securityToken, validationParameters) =>
+                {
+                    if (issuerSigningKey == null || openIdConfig.SigningKeys == null || openIdConfig.SigningKeys.Count == 0)
+                        return false;
+
+                    foreach (var trustedKey in openIdConfig.SigningKeys)
+                    {
+                        if (ReferenceEquals(issuerSigningKey, trustedKey))
+                            return true;
+
+                        if (issuerSigningKey is RsaSecurityKey rsaCandidate &&
+                            trustedKey is RsaSecurityKey rsaTrusted)
+                        {
+                            var p1 = rsaCandidate.Rsa != null ? rsaCandidate.Rsa.ExportParameters(false) : rsaCandidate.Parameters;
+                            var p2 = rsaTrusted.Rsa != null ? rsaTrusted.Rsa.ExportParameters(false) : rsaTrusted.Parameters;
+                            if (p1.Modulus != null && p2.Modulus != null &&
+                                p1.Exponent != null && p2.Exponent != null &&
+                                p1.Modulus.AsSpan().SequenceEqual(p2.Modulus) &&
+                                p1.Exponent.AsSpan().SequenceEqual(p2.Exponent))
+                            {
+                                return true;
+                            }
+                        }
+                        else if (issuerSigningKey is X509SecurityKey x509Candidate &&
+                                 trustedKey is X509SecurityKey x509Trusted)
+                        {
+                            if (string.Equals(x509Candidate.Certificate.Thumbprint, x509Trusted.Certificate.Thumbprint, StringComparison.OrdinalIgnoreCase))
+                            {
+                                return true;
+                            }
+                        }
+                        else if (!string.IsNullOrEmpty(issuerSigningKey.KeyId) &&
+                                 string.Equals(issuerSigningKey.KeyId, trustedKey.KeyId, StringComparison.Ordinal))
+                        {
+                            return true;
+                        }
+                    }
+
+                    return false;
+                }
             };
 
             principal = handler.ValidateToken(idToken, validationParams, out _);
@@ -215,12 +272,12 @@ public class MobileAuthController : SpokesControllerBase
 
         if (string.IsNullOrEmpty(sub)) return BadRequestError("id_token missing sub claim");
 
-        // 3. Look up or auto-create the OpenIdAccount & Employee
+        // 3. Look up or auto-create the OpenIdAccount & Employee (strict sub -> LinkedEmployeeId binding)
         var (_, existingUser, _) = _userService.ProvisionOrSyncOidcUser(sub, name, email);
 
-        if (existingUser == null || !existingUser.IsActive || existingUser.IsSuspended || existingUser.IsBanned)
+        if (existingUser == null || !existingUser.IsActive || existingUser.IsBanned)
         {
-            return UnauthorizedError("Account is inactive, suspended, banned, or pending approval.");
+            return UnauthorizedError("Account is inactive, banned, or pending approval.");
         }
 
         // 4. Issue a DeviceSession (Refresh Token) natively
@@ -229,7 +286,6 @@ public class MobileAuthController : SpokesControllerBase
         {
             session.IsCapacitor = true;
             session.DeviceType = DeviceType.Mobile;
-            session.IsIdleDetectionEnabled = false;
             _coreContext.DeviceSessions.Save(session);
         }
 

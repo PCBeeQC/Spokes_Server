@@ -1,3 +1,4 @@
+using System;
 using Spokes_Server.Core.Models.Core;
 
 namespace Spokes_Server.Core.Services.Communication.Notifications.Routing;
@@ -10,6 +11,7 @@ public class PushNotificationRequest
     public string? Url { get; set; }
     public string? Icon { get; set; }
     public PresenceTier? Tier { get; set; }
+    public System.Collections.Generic.IReadOnlyCollection<string>? ExcludedSessionIds { get; set; }
     public string? Tag { get; set; }
     public object[]? Actions { get; set; }
     public string Category { get; set; } = "chat";
@@ -20,6 +22,8 @@ public class PushNotificationRequest
     public int? Badge { get; set; }
     public bool IsSilent { get; set; }
     public string? Sound { get; set; }
+    public DateTime SentAtUtc { get; set; } = DateTime.UtcNow;
+    public int? TtlSeconds { get; set; }
 
     /// <summary>
     /// Indicates whether this push notification is for an end-to-end encrypted chat message.

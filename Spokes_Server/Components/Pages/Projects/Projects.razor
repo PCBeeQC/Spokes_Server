@@ -12,7 +12,8 @@
 @inject UserService UserService
 @inject NavigationManager Nav
 
-<MudText Class="mt-2" Typo="Typo.h4" GutterBottom="true">Projects</MudText>
+<MudContainer MaxWidth="MaxWidth.ExtraLarge" Class="mt-4 pb-6">
+<MudText Typo="Typo.h4" GutterBottom="true">Projects</MudText>
 
 
 
@@ -274,7 +275,7 @@
         </MudTd>
     </RowTemplate>
 </MudTable>
-
+</MudContainer>
 
 @code {
     private List<Project> _allVisibleProjects = [];

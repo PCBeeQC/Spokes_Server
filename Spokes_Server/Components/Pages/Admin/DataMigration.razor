@@ -8,9 +8,10 @@
 @inject NavigationManager Nav
 @attribute [Authorize(Policy = AppPermissions.Admin.ManageSettings)]
 
+<MudContainer MaxWidth="MaxWidth.Large" Class="mt-4 pb-6">
 <MudText Typo="Typo.h5" Class="mb-4">Data Migration</MudText>
 
-<MudPaper Elevation="0" Outlined="true" Class="pa-4 mx-6 mb-4">
+<MudPaper Elevation="0" Outlined="true" Class="pa-4 mb-4">
     <MudText Typo="Typo.body1">
         Welcome to the Data Migration tool. Currently, we support importing historical time entries and projects from Clockify via their Detailed Report CSV export.
     </MudText>
@@ -141,6 +142,7 @@
         </MudStack>
     </MudStep>
 </MudStepper>
+</MudContainer>
 
 @code {
     private int _index;

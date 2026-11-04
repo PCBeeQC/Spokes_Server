@@ -2,6 +2,17 @@ namespace Spokes_Server.Core.Models.Communication;
 
 using System;
 using System.Collections.Generic;
+using System.Text.Json.Serialization;
+
+/// <summary>
+/// Distinguishes the display surface that originated a slideshow session.
+/// </summary>
+public enum SlideshowDisplayKind
+{
+    BlazorPinStage = 0,
+    SignalRCastReceiver = 1,
+    DirectExternalDisplay = 2
+}
 
 /// <summary>
 /// Represents an active, ephemeral TV slideshow presentation session.
@@ -9,6 +20,28 @@ using System.Collections.Generic;
 public class SlideshowSession
 {
     public string SessionId { get; set; } = Guid.NewGuid().ToString();
+
+    /// <summary>
+    /// 256-bit Base64Url capability secret proving possession of the TV/display stage.
+    /// </summary>
+    public string TvSecret { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Display surface kind that created this session.
+    /// </summary>
+    public SlideshowDisplayKind DisplayKind { get; set; } = SlideshowDisplayKind.BlazorPinStage;
+
+    /// <summary>
+    /// Single-circuit binding token for DirectExternalDisplay stages (/slideshow/stage/{id}).
+    /// </summary>
+    [JsonIgnore]
+    public string? BoundDirectStageToken { get; set; }
+
+    /// <summary>
+    /// Remote IP address that created an unpaired session, used for per-IP unpaired session caps.
+    /// </summary>
+    [JsonIgnore]
+    public string? CreatorIpAddress { get; set; }
 
     /// <summary>
     /// 6-digit numeric pairing PIN (e.g. "849215") shown on the TV screen.

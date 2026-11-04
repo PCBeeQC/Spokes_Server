@@ -52,6 +52,7 @@ public class DeviceSessionRepository : JsonRepository<DeviceSession>
     /// </summary>
     public DeviceSession? GetByTokenHash(string tokenHash)
     {
+        if (string.IsNullOrEmpty(tokenHash)) return null;
         EnsureLoaded();
         return _cache.Values.FirstOrDefault(s => s.TokenHash == tokenHash);
     }
@@ -61,6 +62,7 @@ public class DeviceSessionRepository : JsonRepository<DeviceSession>
     /// </summary>
     public DeviceSession? GetActiveByTokenHash(string tokenHash)
     {
+        if (string.IsNullOrEmpty(tokenHash)) return null;
         EnsureLoaded();
         return _cache.Values.FirstOrDefault(s => s.TokenHash == tokenHash && s.RevokedAt == null && s.ExpiresAt > DateTime.UtcNow);
     }

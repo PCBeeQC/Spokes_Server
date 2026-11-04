@@ -1,5 +1,13 @@
 @using Spokes_Server.Core.Data.Repositories.Core
+@using Spokes_Server.Core.Models.Documents
+@using Spokes_Server.Aggregate
+@using Spokes_Server.Core.Services.Content
+@using Spokes_Server.Core.Services.Security
 @inject CompanyProfileRepository CompanyProfile
+@inject Database Db
+@inject IDialogService DialogService
+@inject ISnackbar Snackbar
+@inject MarkdownSanitizerService MarkdownSanitizer
 
 <MudDialog>
     <DialogContent>
@@ -129,6 +137,9 @@
                         </MudItem>
 
                         <MudItem xs="3">
+                            <MudTextField @bind-Value="Template.Label_ItemNumber" Label="Col: #" />
+                        </MudItem>
+                        <MudItem xs="3">
                             <MudTextField @bind-Value="Template.Label_Description" Label="Col: Description" />
                         </MudItem>
                         <MudItem xs="3">
@@ -184,7 +195,7 @@
 
                         <MudItem xs="12">
                             <MudDivider Class="my-2" />
-                            <MudText Typo="Typo.caption">Totals</MudText>
+                            <MudText Typo="Typo.caption">Totals & Payments</MudText>
                         </MudItem>
                         <MudItem xs="4">
                             <MudTextField @bind-Value="Template.Label_Subtotal" Label="Total: Subtotal" />
@@ -196,7 +207,19 @@
                             <MudTextField @bind-Value="Template.Label_QuoteTotal" Label="Total: Quote Total" />
                         </MudItem>
                         <MudItem xs="4">
-                            <MudTextField @bind-Value="Template.Label_GrandTotal" Label="Total: Inbox/Grand Total" />
+                            <MudTextField @bind-Value="Template.Label_GrandTotal" Label="Total: Grand Total / Total Due" />
+                        </MudItem>
+                        <MudItem xs="4">
+                            <MudTextField @bind-Value="Template.Label_AmountPaid" Label="Total: Amount Paid" />
+                        </MudItem>
+                        <MudItem xs="4">
+                            <MudTextField @bind-Value="Template.Label_DateReceived" Label="Payment: Date Received" />
+                        </MudItem>
+                        <MudItem xs="4">
+                            <MudTextField @bind-Value="Template.Label_BalanceDue" Label="Total: Balance Due" />
+                        </MudItem>
+                        <MudItem xs="4">
+                            <MudTextField @bind-Value="Template.Label_Paid" Label="Status: PAID Tag" />
                         </MudItem>
 
                         <MudItem xs="4">
@@ -280,29 +303,80 @@
                 </MudTabPanel>
 
                 <MudTabPanel Text="Content Defaults">
-                    <MudText Typo="Typo.body2" Class="mb-4">Set the default text that appears on new quotes.</MudText>
+                    <MudText Typo="Typo.body2" Class="mb-4">Set the default text and presets that appear on new quotes and invoices.</MudText>
 
-                    <MudTextField @bind-Value="Template.DefaultTermsAndConditions" Label="Default Terms & Conditions"
-                        Lines="10" Variant="Variant.Outlined"
-                        HelperText="This text will be copied to new quotes automatically." />
+                    <MudGrid>
+                        <MudItem xs="12" sm="8">
+                            <MudSelect T="string" Label="Terms & Conditions Preset"
+                                       @bind-Value="Template.DefaultTermsAndConditionsId"
+                                       Variant="Variant.Outlined" Clearable="true"
+                                       HelperText="Select which terms & conditions will be copied to new quotes.">
+                                <MudSelectItem T="string" Value="@("")">None (No default terms)</MudSelectItem>
+                                @foreach (var term in AvailableTerms)
+                                {
+                                    <MudSelectItem T="string" Value="@term.Id">
+                                        @term.Name @(term.IsDefault ? "(Default)" : "")
+                                    </MudSelectItem>
+                                }
+                            </MudSelect>
+                        </MudItem>
+                        <MudItem xs="12" sm="4" Class="d-flex align-center">
+                            <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small"
+                                       StartIcon="@Icons.Material.Filled.Add"
+                                       OnClick="CreateNewTermsQuick">
+                                New Preset
+                            </MudButton>
+                        </MudItem>
 
-                    <MudCheckBox @bind-Value="Template.TermsStartOnNewPage" Label="Always start Terms & Conditions on a new page" Color="Color.Primary" Class="mt-2" />
+                        @if (SelectedTerms != null)
+                        {
+                            <MudItem xs="12">
+                                <MudPaper Class="pa-3" Outlined="true" Style="background-color: var(--mud-palette-background-grey);">
+                                    <div class="d-flex justify-space-between align-center mb-1">
+                                        <MudText Typo="Typo.caption" Style="font-weight: 600;">PREVIEW: @SelectedTerms.Name</MudText>
+                                    </div>
+                                    <div class="markdown-preview" style="font-size: 0.85rem; max-height: 140px; overflow-y: auto; color: var(--mud-palette-text-primary);">
+                                        @RenderMarkdown(SelectedTerms.Content)
+                                    </div>
+                                </MudPaper>
+                            </MudItem>
+                        }
+                        else if (!string.IsNullOrWhiteSpace(Template.DefaultTermsAndConditions))
+                        {
+                            <MudItem xs="12">
+                                <MudAlert Severity="Severity.Info" Dense="true" Class="mb-2">
+                                    This template has unlinked custom text in Default Terms & Conditions.
+                                    <MudButton Variant="Variant.Text" Color="Color.Primary" Size="Size.Small" OnClick="ConvertLegacyToPreset" Class="ml-2">
+                                        Save as Preset
+                                    </MudButton>
+                                </MudAlert>
+                            </MudItem>
+                        }
 
-                    <MudItem xs="12">
-                        <MudDivider Class="my-4" />
-                    </MudItem>
+                        <MudItem xs="12">
+                            <MudCheckBox @bind-Value="Template.TermsStartOnNewPage" Label="Always start Terms & Conditions on a new page" Color="Color.Primary" Class="mt-2" />
+                        </MudItem>
 
-                    <MudTextField @bind-Value="Template.DefaultPaymentTerms" Label="Default Payment Terms"
-                        Lines="4" Variant="Variant.Outlined"
-                        HelperText="This text will be copied to new invoices automatically." />
+                        <MudItem xs="12">
+                            <MudDivider Class="my-2" />
+                        </MudItem>
 
-                    <MudItem xs="12">
-                        <MudDivider Class="my-4" />
-                    </MudItem>
+                        <MudItem xs="12">
+                            <MudTextField @bind-Value="Template.DefaultPaymentTerms" Label="Default Payment Terms"
+                                Lines="4" Variant="Variant.Outlined"
+                                HelperText="This text will be copied to new invoices automatically." />
+                        </MudItem>
 
-                    <MudTextField @bind-Value="Template.DefaultCostPlusTerms" Label="Cost+ Billing Explanation"
-                        HelperText="Displayed instead of Payment Schedule if no milestones are defined (Supports Markdown)."
-                        Lines="4" Variant="Variant.Outlined" />
+                        <MudItem xs="12">
+                            <MudDivider Class="my-2" />
+                        </MudItem>
+
+                        <MudItem xs="12">
+                            <MudTextField @bind-Value="Template.DefaultCostPlusTerms" Label="Cost+ Billing Explanation"
+                                HelperText="Displayed instead of Payment Schedule if no milestones are defined (Supports Markdown)."
+                                Lines="4" Variant="Variant.Outlined" />
+                        </MudItem>
+                    </MudGrid>
                 </MudTabPanel>
 
             </MudTabs>
@@ -319,13 +393,91 @@
     [Parameter] public DocumentTemplate Template { get; set; } = default!;
     
     private List<string> TaskLanguages = [];
+    private List<TermsAndConditions> AvailableTerms = [];
+
+    private TermsAndConditions? SelectedTerms =>
+        AvailableTerms.FirstOrDefault(t => t.Id == Template.DefaultTermsAndConditionsId);
 
     protected override void OnInitialized()
     {
         var profile = CompanyProfile.Get();
         TaskLanguages = profile?.TaskTranslationLanguages ?? [];
+        AvailableTerms = Db.TermsAndConditions.GetAll().OrderBy(t => t.Name).ToList();
+
+        if (string.IsNullOrEmpty(Template.DefaultTermsAndConditionsId) && !string.IsNullOrEmpty(Template.DefaultTermsAndConditions))
+        {
+            var match = AvailableTerms.FirstOrDefault(t => t.Content.Trim() == Template.DefaultTermsAndConditions.Trim());
+            if (match != null)
+            {
+                Template.DefaultTermsAndConditionsId = match.Id;
+            }
+        }
+    }
+
+    private async Task CreateNewTermsQuick()
+    {
+        var newTerms = new TermsAndConditions
+        {
+            Name = $"{Template.Name} Terms",
+            Content = !string.IsNullOrWhiteSpace(Template.DefaultTermsAndConditions)
+                ? Template.DefaultTermsAndConditions
+                : ""
+        };
+        var parameters = new DialogParameters { ["Item"] = newTerms, ["IsNew"] = true };
+        var options = new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true };
+        var dialog = await DialogService.ShowAsync<TermsAndConditionsDialog>("New Terms & Conditions", parameters, options);
+        var result = await dialog.Result;
+        if (result != null && !result.Canceled && result.Data is TermsAndConditions created)
+        {
+            AvailableTerms = Db.TermsAndConditions.GetAll().OrderBy(t => t.Name).ToList();
+            Template.DefaultTermsAndConditionsId = created.Id;
+            Template.DefaultTermsAndConditions = created.Content;
+            StateHasChanged();
+        }
+    }
+
+    private async Task ConvertLegacyToPreset()
+    {
+        var newTerms = new TermsAndConditions
+        {
+            Name = $"{Template.Name} Terms",
+            Content = Template.DefaultTermsAndConditions
+        };
+        var parameters = new DialogParameters { ["Item"] = newTerms, ["IsNew"] = true };
+        var options = new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true };
+        var dialog = await DialogService.ShowAsync<TermsAndConditionsDialog>("Save as Terms & Conditions Preset", parameters, options);
+        var result = await dialog.Result;
+        if (result != null && !result.Canceled && result.Data is TermsAndConditions created)
+        {
+            AvailableTerms = Db.TermsAndConditions.GetAll().OrderBy(t => t.Name).ToList();
+            Template.DefaultTermsAndConditionsId = created.Id;
+            Template.DefaultTermsAndConditions = created.Content;
+            Snackbar.Add("Converted to Terms & Conditions preset", Severity.Success);
+            StateHasChanged();
+        }
+    }
+
+    private MarkupString RenderMarkdown(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return new MarkupString("");
+        try
+        {
+            var html = MarkdownSanitizer.RenderSanitizedHtml(text);
+            return new MarkupString(html);
+        }
+        catch
+        {
+            return new MarkupString(System.Net.WebUtility.HtmlEncode(text));
+        }
     }
 
     private void Cancel() => MudDialog.Cancel();
-    private void Submit() => MudDialog.Close(DialogResult.Ok(Template));
+    private void Submit()
+    {
+        if (SelectedTerms != null)
+        {
+            Template.DefaultTermsAndConditions = SelectedTerms.Content;
+        }
+        MudDialog.Close(DialogResult.Ok(Template));
+    }
 }

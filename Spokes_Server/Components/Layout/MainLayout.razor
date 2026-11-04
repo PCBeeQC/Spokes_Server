@@ -22,12 +22,13 @@
 @inject LicenseValidationService LicenseValidationService
 @inject IFileService FileService
 @inject ChatNotificationService ChatNotifications
+@inject Spokes_Server.Core.Services.Communication.Email.EmailNotificationService EmailNotifications
 @inject Spokes_Server.Core.Services.HR.Calendar.CalendarNotificationService CalendarNotifications
 @inject ShareTargetStateService ShareTargetStateService
 @inject ServerUpdateService ServerUpdateService
 @inject ScopedKeystoreService ScopedKeystore
 @inject ICryptoService Crypto
-@inject GlobalKeystoreService GlobalKeystore
+@inject Microsoft.AspNetCore.DataProtection.IDataProtectionProvider DataProtection
 @inject ImageRecoveryService ImageRecovery
 @inject IHttpContextAccessor HttpContextAccessor
 @inject StartupTimingService StartupTimings
@@ -50,29 +51,19 @@
     <MudAppBar Class="@($"py-n2{(_isChatChannelOpen ? " hide-appbar-mobile" : "")}")" Elevation="1" Dense="true">
         <MudIconButton Icon="@Icons.Material.Filled.Menu" Color="Color.Inherit" Edge="Edge.Start"
             OnClick="@((e) => DrawerToggle())" />
-        <div class="d-flex align-center ml-1">
+        <div class="d-flex align-center ml-1 flex-shrink-1" style="min-width: 0; overflow: hidden;">
             @if (Profile?.HasCustomLogo == true)
             {
-                <MudImage Src="@($"/spokesapi/Media/Logo?v={Profile.LogoVersion}")" Height="32" Class="mr-2" />
+                <MudImage Src="@($"/spokesapi/Media/Logo?v={Profile.LogoVersion}")" Height="32" Class="mr-2 flex-shrink-0" />
             }
             else if (Profile?.HasCustomIcon == true)
             {
-                <MudImage Src="@($"/spokesapi/Media/Icon?v={Profile.IconVersion}")" Height="32" Class="mr-2" />
+                <MudImage Src="@($"/spokesapi/Media/Icon?v={Profile.IconVersion}")" Height="32" Class="mr-2 flex-shrink-0" />
             }
 
-            @if(!IsFriendEdition)
-            {
-                <MudHidden Breakpoint="Breakpoint.SmAndDown">
-                    <MudText Typo="Typo.h6" Style="font-weight: 700;">@Profile?.CompanyName</MudText>
-                </MudHidden>
-            }
-            else
-            {
-                <MudText Typo="Typo.h6" Style="font-weight: 700;">@Profile?.CompanyName</MudText>
-            }
-
-
-
+            <MudText Typo="Typo.h6" Style="font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0;">
+                @Profile?.CompanyName
+            </MudText>
         </div>
 
         @* Desktop Toolbar *@
@@ -253,7 +244,7 @@
         </MudPaper>
     </MudDrawer>
 
-    <MudMainContent Class="@(_isChatPage ? $"pr-1 d-flex flex-column{(_isChatChannelOpen ? " chat-channel-open" : " pt-12")} print-layout" : "pt-12 pb-4 px-0 px-md-4 d-flex flex-column print-layout")" Style="height: 100vh; overflow: hidden;">
+    <MudMainContent Class="@($"d-flex flex-column{(_isChatChannelOpen ? " chat-channel-open" : "")} print-layout")" Style="height: 100vh; overflow: hidden;">
         @if (_currentUser != null && (_currentUser.IsAdmin || _currentUser.HasPermission(AppPermissions.Admin.ManageSettings)))
         {
             var storageStatus = StorageHealth.Status;
@@ -316,6 +307,7 @@
             </MudAlert>
         }
         <Spokes_Server.Components.Shared.GlobalVoiceBar />
+        <Spokes_Server.Components.Shared.VoicePipOverlay />
         <div class="flex-grow-1 d-flex flex-column overflow-auto print-scroll" style="position: relative; min-height: 0;">
             @Body
         </div>
@@ -456,16 +448,18 @@
     // Notification / Presence State
     private string? _currentSubscriptionEndpoint;
     private string? _currentSubscriptionId;
+    private string? _currentPresenceToken;
     private string? _currentSessionId;
     private bool _pushPromptEvaluated = false;
     private bool _isChatPage;
     private bool _isChatChannelOpen;
     private bool _hideLicenseBanner = false;
+    private bool IsReadOnlyOrRestricted => _currentUser == null || !_currentUser.IsActive || _currentUser.IsBanned || _currentUser.IsSuspended;
 
     private void DismissLicenseBanner()
     {
         _hideLicenseBanner = true;
-        if (_currentUser != null)
+        if (!IsReadOnlyOrRestricted && _currentUser != null)
         {
             _currentUser.LicenseBannerRemindLaterDate = DateTimeOffset.UtcNow.AddDays(3);
             Db.Employees.Save(_currentUser);
@@ -475,7 +469,7 @@
     private void NeverShowLicenseBanner()
     {
         _hideLicenseBanner = true;
-        if (_currentUser != null)
+        if (!IsReadOnlyOrRestricted && _currentUser != null)
         {
             _currentUser.DismissedLicenseBannerPermanently = true;
             _currentUser.LicenseBannerRemindLaterDate = null;
@@ -495,6 +489,7 @@
     private void HandleLicenseUploaded(List<Spokes_Server.Components.Shared.ApiFileUpload.UploadResult> results)
     {
         if (results == null || results.Count == 0) return;
+        if (IsReadOnlyOrRestricted || !(_currentUser!.IsAdmin || _currentUser.HasPermission(AppPermissions.Admin.ManageSettings))) return;
         
         var result = results.First();
         var parts = result.FilePath.Substring("/spokesapi/files/".Length).Split('/');
@@ -597,6 +592,7 @@
         CircuitContext.OnChatChannelOpenChanged += HandleChatChannelOpenChanged;
         
         SessionService.OnSessionRevoked += HandleSessionRevoked;
+        SessionService.OnSessionBanned += HandleSessionBanned;
 
         if (Db.CompanyProfile.Get()?.Edition == "Family")
         {
@@ -621,6 +617,17 @@
             await InvokeAsync(() =>
             {
                 Nav.NavigateTo("/spokesapi/auth/force-logout", forceLoad: true);
+            });
+        }
+    }
+
+    private async void HandleSessionBanned(string sessionId)
+    {
+        if (!string.IsNullOrEmpty(_currentSessionId) && sessionId == _currentSessionId)
+        {
+            await InvokeAsync(() =>
+            {
+                Nav.NavigateTo(PreserveMobileQuery("/banned"), forceLoad: true);
             });
         }
     }
@@ -677,6 +684,9 @@
         _isCapacitorApp = !_isDesktopSession && ((initialSession?.IsCapacitorApp ?? false) || isCapacitorFromUa || isMobileQuery);
         bool isInitialMobile = !_isDesktopSession && (isMobileUa || isMobileQuery || string.Equals(initialSession?.DeviceType, DeviceType.Mobile, StringComparison.OrdinalIgnoreCase));
 
+        _drawerVariant = DrawerVariant.Mini;
+        Snackbar.Configuration.PositionClass = Defaults.Classes.Position.BottomLeft;
+        _isLoaded = true;
         if (isInitialMobile)
         {
             _drawerOpen = false;
@@ -771,10 +781,17 @@
             // Server-side vault unlock: read the HttpOnly cookie directly from HttpContext
             // before the circuit switches to WebSocket.
             // This is required so Web clients have the vault unlocked before Albums.razor renders.
-            if (_currentUser != null && !string.IsNullOrEmpty(_currentUser.EncryptedPrivateKey) && !ScopedKeystore.IsUnlocked)
+            if (!IsReadOnlyOrRestricted && _currentUser != null && !string.IsNullOrEmpty(_currentUser.EncryptedPrivateKey) && !ScopedKeystore.IsUnlocked)
             {
+                try
+                {
                 ScopedKeystore.TryInitializeFromVaultCookie(
                     HttpContextAccessor.HttpContext, _currentUser.Id, _currentUser.EncryptedPrivateKey);
+                }
+                catch (Exception ex)
+                {
+                    Logger.LogWarning(ex, "[MainLayout] Failed to initialize Keystore from vault cookie");
+                }
             }
         }
         StartupTimings.Add("Server: Layout OnInitializedAsync Done");
@@ -817,8 +834,10 @@
                 catch { }
             }
 
-            if (_currentUser != null)
+            if (_currentUser is { IsActive: true, IsBanned: false })
             {
+                _currentPresenceToken = Spokes_Server.Controllers.PresenceController.CreatePresenceToken(
+                    DataProtection, _currentSubscriptionId, _currentUser.Id);
                 CircuitContext.SubscriptionId = _currentSubscriptionId;
                 CircuitContext.SessionId = _currentSessionId;
                 PresenceState.RegisterConnection(new ConnectionRegistrationOptions
@@ -834,6 +853,14 @@
             }
 
             var vapidPublicKey = (Profile ?? Db.CompanyProfile.Get())?.VapidPublicKey ?? string.Empty;
+            bool shouldBatchDeviceVaultCheck = !IsReadOnlyOrRestricted
+                && _currentUser != null
+                && !string.IsNullOrEmpty(_currentUser.EncryptedPrivateKey)
+                && !ScopedKeystore.IsUnlocked;
+            using var externalVaultScope = shouldBatchDeviceVaultCheck
+                ? ScopedKeystore.BeginExternalDeviceCookieInit()
+                : default;
+
             LayoutClientInitResult? clientInit = null;
             try
             {
@@ -843,8 +870,10 @@
                     avatarLength = _currentUser?.AvatarBase64?.Length ?? 0,
                     serverTimings = StartupTimings.GetTimings(),
                     subscriptionId = _currentSubscriptionId,
+                    presenceToken = _currentPresenceToken,
                     isDarkMode = _isDarkMode,
                     vapidPublicKey = vapidPublicKey,
+                    needsVaultKey = shouldBatchDeviceVaultCheck,
                     chatDiagnostics = ChatDiagnostics.Enabled // DIAG-TEMP
                 });
             }
@@ -853,7 +882,12 @@
                 Logger.LogWarning(ex, "[MainLayout] SpokesBridge.initLayout failed");
             }
 
-            if (!string.IsNullOrEmpty(clientInit?.TimeZone))
+            if (shouldBatchDeviceVaultCheck && clientInit != null)
+            {
+                await externalVaultScope.CompleteAsync(JS, clientInit.StoredVaultKey, _currentUser!.Id, _currentUser.EncryptedPrivateKey);
+            }
+
+            if (!string.IsNullOrEmpty(clientInit?.TimeZone) && _currentUser is { IsAdmin: true, IsActive: true, IsBanned: false, IsSuspended: false })
             {
                 var companyProfile = Db.CompanyProfile.Get();
                 if (string.IsNullOrEmpty(companyProfile.TimeZoneId))
@@ -875,15 +909,18 @@
 
             var prevIsCapacitor = _isCapacitorApp;
 
-            // Register this connection for presence tracking using the batched client state
-            await RegisterPresenceConnection(clientInit);
+            // Register this connection immediately in memory; slow push/FCM probes run post-TTI
+            RegisterInitialPresenceConnection(clientInit);
+            _deferredPushClientInit = clientInit;
+            _deferredVapidPublicKey = vapidPublicKey;
 
-            // Auto-unlock vault on Native Mobile (since cookies aren't passed reliably in HTTP initial request)
-            if (_currentUser != null && _currentUser.HasVaultPassword && !string.IsNullOrEmpty(_currentUser.EncryptedPrivateKey) && !ScopedKeystore.IsUnlocked)
+            // Auto-unlock vault on Native Mobile fallback (only if initLayout failed to return batched payload)
+            if (shouldBatchDeviceVaultCheck && clientInit == null && !ScopedKeystore.IsUnlocked)
             {
+                externalVaultScope.Dispose();
                 try
                 {
-                    await ScopedKeystore.InitializeFromDeviceCookieAsync(JS, _currentUser.Id, _currentUser.EncryptedPrivateKey);
+                    await ScopedKeystore.InitializeFromDeviceCookieAsync(JS, _currentUser!.Id, _currentUser.EncryptedPrivateKey!);
                 }
                 catch (Exception ex)
                 {
@@ -891,54 +928,8 @@
                 }
             }
 
-            // Auto-prompt or auto-register push notifications on new devices that don't have an active endpoint yet
-            if (!_pushPromptEvaluated && _currentUser != null && string.IsNullOrEmpty(_currentSubscriptionEndpoint) && !Config.GetValue<bool>("Spokes_DemoMode"))
-            {
-                _pushPromptEvaluated = true;
-                try
-                {
-                    if (!string.IsNullOrEmpty(vapidPublicKey))
-                    {
-                        var permStatus = clientInit?.PermissionStatus ?? "default";
-                        if (permStatus == "granted")
-                        {
-                            _ = TriggerAutoPushRegistration(vapidPublicKey, isSilent: true, clientInit);
-                        }
-                        else if (permStatus == "default" && clientInit is { HasBeenPromptedForPush: false, IsPushSupported: true })
-                        {
-                            bool isNativePushBlocked = _licenseStatus == Spokes_Server.Core.Services.Licensing.LicenseStatus.HardLock || 
-                                                       _licenseStatus == Spokes_Server.Core.Services.Licensing.LicenseStatus.Expired;
-
-                            if (clientInit.RequiresPushRelay && isNativePushBlocked)
-                            {
-                                // Suppress auto-prompt for mobile and desktop app users when server lacks a Spokes Pass.
-                                await JS.InvokeVoidAsync("pushNotifications.setPushPrompted", vapidPublicKey);
-                            }
-                            else
-                            {
-                                await JS.InvokeVoidAsync("pushNotifications.setPushPrompted", vapidPublicKey);
-                                
-                                Snackbar.Add("Would you like to enable push notifications for this server?", Severity.Info, config =>
-                                {
-                                    config.Action = "Enable";
-                                    config.ActionColor = Color.Success;
-                                    config.OnClick = snackbar =>
-                                    {
-                                        _ = TriggerAutoPushRegistration(vapidPublicKey, isSilent: false, clientInit);
-                                        return Task.CompletedTask;
-                                    };
-                                    config.ShowCloseIcon = true;
-                                    config.RequireInteraction = true;
-                                });
-                            }
-                        }
-                    }
-                }
-                catch { /* Ignore errors if push is unsupported or network fails */ }
-            }
-
             // Server Update Notification for Admins
-            if (_currentUser != null && (_currentUser.IsAdmin || _currentUser.HasPermission(AppPermissions.Admin.ManageSettings)))
+            if (!IsReadOnlyOrRestricted && (_currentUser!.IsAdmin || _currentUser.HasPermission(AppPermissions.Admin.ManageSettings)))
             {
                 if (ServerUpdateService.IsUpdateAvailable && !string.IsNullOrEmpty(ServerUpdateService.LatestVersion))
                 {
@@ -963,20 +954,32 @@
                 }
             }
 
-            if (_currentUser != null && !_currentUser.HasVaultPassword && !_currentUser.DismissedChatWizardPermanently)
+            if (!IsReadOnlyOrRestricted && !_currentUser!.HasVaultPassword && !_currentUser.DismissedChatWizardPermanently)
             {
                 if ((_currentUser.ChatWizardRemindLaterDate == null || DateTimeOffset.UtcNow > _currentUser.ChatWizardRemindLaterDate) && !Config.GetValue<bool>("Spokes_DemoMode"))
                 {
                     var options = new DialogOptions { CloseOnEscapeKey = false, BackdropClick = false, MaxWidth = MaxWidth.Small, FullWidth = true };
                     var parameters = new DialogParameters { { "Employee", _currentUser } };
                     var dialog = await DialogService.ShowAsync<SecureChatSetupWizardDialog>("Secure Chat Setup", parameters, options);
-                    var result = await dialog.Result;
+                    _ = dialog.Result;
                 }
             }
 
-            await ViewportService.SubscribeAsync(this);
-            var bp = await ViewportService.GetCurrentBreakpointAsync();
-            var isMobile = bp <= Breakpoint.Sm;
+            bool isMobile;
+            if (clientInit is { ViewportWidth: > 0 })
+            {
+                // MudBlazor Breakpoint.Sm upper threshold is < 960px (Breakpoint.Md starts at 960px).
+                // Resolving initial breakpoint from initLayout avoids 2 sequential WAN JS round-trips
+                // while attaching live resize subscriptions asynchronously in the background.
+                isMobile = clientInit.ViewportWidth < 960;
+                _ = SubscribeViewportResizeAsync();
+            }
+            else
+            {
+                await ViewportService.SubscribeAsync(this);
+                var bp = await ViewportService.GetCurrentBreakpointAsync();
+                isMobile = bp <= Breakpoint.Sm;
+            }
             CircuitContext.IsMobileViewport = isMobile;
 
             var targetPosition = isMobile ? Defaults.Classes.Position.TopCenter : Defaults.Classes.Position.BottomLeft;
@@ -999,13 +1002,54 @@
 
             if (needsRender)
             {
+                _pendingLayoutSettleReport = true;
                 StateHasChanged();
+            }
+            else
+            {
+                await ReportLayoutAndFallbackRouteSettledAsync();
             }
         }
         else
         {
+            if (_pendingLayoutSettleReport && _isLoaded)
+            {
+                _pendingLayoutSettleReport = false;
+                await ReportLayoutAndFallbackRouteSettledAsync();
+            }
             StartupTimings.AddChatTransition($"Server: MainLayout[{_diagTag}] OnAfterRender #{++_diagAfterRenderCount} (_isChatChannelOpen={_isChatChannelOpen})"); // DIAG-TEMP
         }
+    }
+
+    private bool _pendingLayoutSettleReport;
+    private bool _layoutSettledReported;
+    private bool _isDisposed;
+    private LayoutClientInitResult? _deferredPushClientInit;
+    private string _deferredVapidPublicKey = string.Empty;
+
+    private async Task ReportLayoutAndFallbackRouteSettledAsync()
+    {
+        if (_layoutSettledReported) return;
+        _layoutSettledReported = true;
+        StartupTimings.Add("Server: Layout Settled");
+        try
+        {
+            await JS.InvokeVoidAsync("startupDiagnostics.reportLayoutSettled");
+            if (!StartupTimings.HasPendingRouteGate && !StartupTimings.IsRouteSettled)
+            {
+                var relPath = "/" + Nav.ToBaseRelativePath(Nav.Uri).Split('?')[0].Trim('/');
+                if (StartupTimings.TryMarkRouteSettled(relPath))
+                {
+                    await JS.InvokeVoidAsync("startupDiagnostics.reportRouteSettled", relPath);
+                }
+            }
+        }
+        catch
+        {
+            // Ignore disconnected circuit during teardown
+        }
+
+        _ = ReconcilePushAfterInteractiveAsync(_deferredPushClientInit, _deferredVapidPublicKey);
     }
 
     public Guid Id { get; } = Guid.NewGuid();
@@ -1033,6 +1077,7 @@
 
     public async ValueTask DisposeAsync()
     {
+        _isDisposed = true;
         try
         {
             if (_dotNetRef != null)
@@ -1059,6 +1104,7 @@
         Nav.LocationChanged -= HandleLocationChanged;
         CircuitContext.OnChatChannelOpenChanged -= HandleChatChannelOpenChanged;
         SessionService.OnSessionRevoked -= HandleSessionRevoked;
+        SessionService.OnSessionBanned -= HandleSessionBanned;
         _dotNetRef?.Dispose();
     }
 
@@ -1121,6 +1167,10 @@
 
             // Heal any desynced unread counters that were missed while the app was asleep/backgrounded
             ChatNotifications.ReloadUnreadCounts();
+            if (!IsFriendEdition)
+            {
+                EmailNotifications.LoadUnreadCount();
+            }
             
             InvokeAsync(StateHasChanged);
         }
@@ -1129,6 +1179,7 @@
     [JSInvokable]
     public Task OnShareReceived(SharePayload payload)
     {
+        if (IsReadOnlyOrRestricted) return Task.CompletedTask;
         // Normalize plugin's "texts" array into Text/Url if those are empty
         if (payload.Texts is { Count: > 0 })
         {
@@ -1213,10 +1264,10 @@
 
         try { _ = JS.InvokeVoidAsync("setCapacitorStatusBarStyle", _isDarkMode); } catch { }
 
-        if (_currentUser != null)
+        if (!IsReadOnlyOrRestricted && _currentUser != null)
         {
             var freshUser = Db.Employees.GetById(_currentUser.Id);
-            if (freshUser != null)
+            if (freshUser is { IsActive: true, IsBanned: false, IsSuspended: false })
             {
                 freshUser.IsDarkMode = _isDarkMode;
                 Db.Employees.Save(freshUser);
@@ -1226,7 +1277,7 @@
 
     private async Task OpenProfileDialog()
     {
-        if (_currentUser == null) return;
+        if (IsReadOnlyOrRestricted) return;
 
         var parameters = new DialogParameters<EditProfileDialog>
 {
@@ -1245,6 +1296,7 @@
     // --- Timer Logic ---
     private async Task StartTimerFromMenu()
     {
+        if (IsReadOnlyOrRestricted) return;
         var options = new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true, CloseButton = true };
         var dialog = await DialogService.ShowAsync<StartTimerDialog>("Start Timer", options);
         // The dialog handles the actual starting through TimerService
@@ -1252,7 +1304,7 @@
 
     private void StopTimerFromMenu()
     {
-        if (_currentUser == null) return;
+        if (IsReadOnlyOrRestricted || _currentUser == null) return;
         var result = TimerService.Stop(_currentUser.Id);
         if (result.IsSuccess)
         {
@@ -1333,7 +1385,7 @@
         return val.ToString();
     }
 
-    private async Task RegisterPresenceConnection(LayoutClientInitResult? clientInit)
+    private void RegisterInitialPresenceConnection(LayoutClientInitResult? clientInit)
     {
         if (_currentUser == null) return;
 
@@ -1353,64 +1405,23 @@
                 : (!string.IsNullOrEmpty(clientInit?.DeviceType) ? clientInit.DeviceType : (currentSession?.DeviceType ?? DeviceType.Desktop)));
 
         // Self-heal previously poisoned sessions or persist Capacitor identity on mobile sessions
-        if (isDesktopClient && currentSession != null && (currentSession.IsCapacitor || currentSession.DeviceType != DeviceType.Desktop))
+        if (!IsReadOnlyOrRestricted && isDesktopClient && currentSession != null && (currentSession.IsCapacitor || currentSession.DeviceType != DeviceType.Desktop))
         {
             currentSession.IsCapacitor = false;
             currentSession.DeviceType = DeviceType.Desktop;
             Db.DeviceSessions.Save(currentSession);
         }
-        else if (isCapacitorApp && currentSession != null && (!currentSession.IsCapacitor || currentSession.DeviceType != DeviceType.Mobile))
+        else if (!IsReadOnlyOrRestricted && isCapacitorApp && currentSession != null && (!currentSession.IsCapacitor || currentSession.DeviceType != DeviceType.Mobile))
         {
             currentSession.IsCapacitor = true;
             currentSession.DeviceType = DeviceType.Mobile;
             Db.DeviceSessions.Save(currentSession);
         }
 
-        bool hasPushEnabled = false;
-        bool shouldSyncPushSubscription = false;
-        var existingSub = clientInit?.ExistingSubscription;
-        var endpoint = ExtractDictString(existingSub, "endpoint");
-        if (existingSub != null && !string.IsNullOrEmpty(endpoint))
+        bool initialHasPushEnabled = currentSession is { HasPush: true, PushEnabled: true };
+        if (initialHasPushEnabled && !string.IsNullOrEmpty(currentSession?.PushEndpoint))
         {
-            _currentSubscriptionEndpoint = endpoint;
-            var sub = Db.DeviceSessions.GetByPushEndpoint(_currentSubscriptionEndpoint);
-            var incomingPubKey = ExtractDictString(existingSub, "publicKey");
-            bool pubKeyMatches = string.IsNullOrEmpty(incomingPubKey) || currentSession?.PushPublicKey == incomingPubKey;
-
-            if (sub != null && sub.Id == currentSession?.Id && currentSession.HasPush && pubKeyMatches)
-            {
-                hasPushEnabled = currentSession.PushEnabled;
-                if (!isDesktopClient)
-                {
-                    isCapacitorApp = isCapacitorApp || sub.IsCapacitorApp;
-                    deviceType = (isCapacitorApp || deviceType == DeviceType.Mobile) ? DeviceType.Mobile : sub.DeviceType;
-                }
-            }
-            else
-            {
-                // Active push subscription exists on client; sync or register to current session
-                var subType = ExtractDictString(existingSub, "subscriptionType");
-                bool isExistingRelay = subType == "NativeRelay" || isNativeApp || (clientInit?.RequiresPushRelay ?? false);
-                bool isNativePushBlocked = _licenseStatus == Spokes_Server.Core.Services.Licensing.LicenseStatus.HardLock || 
-                                           _licenseStatus == Spokes_Server.Core.Services.Licensing.LicenseStatus.Expired;
-
-                if (!isExistingRelay || !isNativePushBlocked)
-                {
-                    hasPushEnabled = true;
-                    shouldSyncPushSubscription = true;
-                }
-            }
-        }
-
-        if (clientInit?.IosSoundDisabled == true && hasPushEnabled)
-        {
-            Snackbar.Add("Notification sounds are disabled for Spokes in your iPhone Settings.", Severity.Warning, config =>
-            {
-                config.Action = "Open Settings";
-                config.ActionColor = Color.Warning;
-                config.OnClick = _ => JS.InvokeVoidAsync("pushNotifications.openAppSettings").AsTask();
-                config.RequireInteraction = true;
-            });
+            _currentSubscriptionEndpoint = currentSession.PushEndpoint;
         }
 
         _isCapacitorApp = isCapacitorApp;
@@ -1420,35 +1431,179 @@
             _isThisTabFocused = false;
         }
 
-        // Populate scoped circuit context for PresenceCircuitHandler
         CircuitContext.UserId = _currentUser.Id;
         CircuitContext.SubscriptionId = _currentSubscriptionId;
         CircuitContext.SessionId = _currentSessionId;
         CircuitContext.DeviceType = deviceType;
-        CircuitContext.HasPushEnabled = hasPushEnabled;
+        CircuitContext.HasPushEnabled = initialHasPushEnabled;
         CircuitContext.IsCapacitorApp = isCapacitorApp;
         CircuitContext.IsFocused = _isThisTabFocused;
         CircuitContext.IsIdle = false;
 
-        // Register the connection in the PresenceState service before awaiting any slow push sync JS roundtrip
         PresenceState.RegisterConnection(new ConnectionRegistrationOptions
         {
             UserId = _currentUser.Id,
             SubscriptionId = _currentSubscriptionId,
             DeviceType = deviceType,
-            HasPushEnabled = hasPushEnabled,
+            HasPushEnabled = initialHasPushEnabled,
             IsCapacitorApp = isCapacitorApp,
             SessionId = _currentSessionId,
             IsFocused = _isThisTabFocused
         });
+    }
 
-        if (shouldSyncPushSubscription && existingSub != null)
+    private async Task ReconcilePushAfterInteractiveAsync(LayoutClientInitResult? clientInit, string vapidPublicKey)
+    {
+        if (_isDisposed || _currentUser == null) return;
+
+        try
         {
+            // Let the settled UI frame flush cleanly before probing ServiceWorker / FCM / AndroidKeyStore
+            await Task.Delay(60);
+            if (_isDisposed || _currentUser == null) return;
+
+            PushProbeResult? pushProbe = null;
             try
             {
-                await JS.InvokeAsync<bool>("pushNotifications.sendSubscriptionToServer", existingSub, deviceType, "", true);
+                pushProbe = await JS.InvokeAsync<PushProbeResult?>("SpokesBridge.probePushState", new
+                {
+                    isCapacitorApp = _isCapacitorApp
+                });
             }
-            catch { /* Ignore */ }
+            catch (Exception ex) when (ex is JSDisconnectedException or TaskCanceledException or ObjectDisposedException or InvalidOperationException)
+            {
+                return;
+            }
+            catch (Exception ex)
+            {
+                Logger.LogDebug(ex, "[MainLayout] Deferred push probe failed");
+            }
+
+            if (_isDisposed || _currentUser == null) return;
+
+            var currentSession = !string.IsNullOrEmpty(_currentSessionId) ? Db.DeviceSessions.GetById(_currentSessionId) : null;
+            bool isDesktopClient = (clientInit?.IsDesktopApp == true) || _isDesktopSession;
+            bool isNativeApp = !isDesktopClient && (clientInit?.IsCapacitorApp ?? _isCapacitorApp);
+            bool isCapacitorApp = _isCapacitorApp;
+            var deviceType = CircuitContext.DeviceType;
+
+            bool hasPushEnabled = false;
+            bool shouldSyncPushSubscription = false;
+            var existingSub = pushProbe?.ExistingSubscription ?? clientInit?.ExistingSubscription;
+            var endpoint = ExtractDictString(existingSub, "endpoint");
+
+            if (existingSub != null && !string.IsNullOrEmpty(endpoint))
+            {
+                _currentSubscriptionEndpoint = endpoint;
+                var sub = Db.DeviceSessions.GetByPushEndpoint(_currentSubscriptionEndpoint);
+                var incomingPubKey = ExtractDictString(existingSub, "publicKey");
+                var subType = ExtractDictString(existingSub, "subscriptionType");
+                bool isExistingRelay = string.Equals(subType, "NativeRelay", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(currentSession?.PushSubscriptionType, "NativeRelay", StringComparison.OrdinalIgnoreCase)
+                    || isNativeApp || isDesktopClient || (clientInit?.RequiresPushRelay ?? false);
+                bool pubKeyMatches = isExistingRelay
+                    ? (!string.IsNullOrEmpty(incomingPubKey) && currentSession?.PushPublicKey == incomingPubKey)
+                    : (string.IsNullOrEmpty(incomingPubKey) || currentSession?.PushPublicKey == incomingPubKey);
+
+                if (sub != null && sub.Id == currentSession?.Id && currentSession.HasPush && pubKeyMatches)
+                {
+                    hasPushEnabled = currentSession.PushEnabled;
+                }
+                else
+                {
+
+
+                    bool isNativePushBlocked = _licenseStatus == Spokes_Server.Core.Services.Licensing.LicenseStatus.HardLock ||
+                                               _licenseStatus == Spokes_Server.Core.Services.Licensing.LicenseStatus.Expired;
+
+                    if (!isExistingRelay || !isNativePushBlocked)
+                    {
+                        hasPushEnabled = true;
+                        shouldSyncPushSubscription = true;
+                    }
+                }
+            }
+            else
+            {
+                _currentSubscriptionEndpoint = null;
+            }
+
+            if (CircuitContext.HasPushEnabled != hasPushEnabled)
+            {
+                CircuitContext.HasPushEnabled = hasPushEnabled;
+                PresenceState.UpdatePushEnabledState(_currentSubscriptionId, hasPushEnabled);
+            }
+
+            if ((pushProbe?.IosSoundDisabled == true || clientInit?.IosSoundDisabled == true) && hasPushEnabled)
+            {
+                Snackbar.Add("Notification sounds are disabled for Spokes in your iPhone Settings.", Severity.Warning, config =>
+                {
+                    config.Action = "Open Settings";
+                    config.ActionColor = Color.Warning;
+                    config.OnClick = _ => JS.InvokeVoidAsync("pushNotifications.openAppSettings").AsTask();
+                    config.RequireInteraction = true;
+                });
+            }
+
+            if (!IsReadOnlyOrRestricted && shouldSyncPushSubscription && existingSub != null && !_isDisposed)
+            {
+                try
+                {
+                    await JS.InvokeAsync<bool>("pushNotifications.sendSubscriptionToServer", existingSub, deviceType, "");
+                }
+                catch { /* Ignore */ }
+            }
+
+            if (_isDisposed) return;
+
+            // Auto-prompt or auto-register push notifications on new devices that don't have an active endpoint yet
+            if (!_pushPromptEvaluated && !IsReadOnlyOrRestricted && string.IsNullOrEmpty(_currentSubscriptionEndpoint) && !Config.GetValue<bool>("Spokes_DemoMode"))
+            {
+                _pushPromptEvaluated = true;
+                if (!string.IsNullOrEmpty(vapidPublicKey))
+                {
+                    var permStatus = clientInit?.PermissionStatus ?? "default";
+                    if (permStatus == "granted")
+                    {
+                        await TriggerAutoPushRegistration(vapidPublicKey, isSilent: true, clientInit);
+                    }
+                    else if (permStatus == "default" && clientInit is { HasBeenPromptedForPush: false, IsPushSupported: true })
+                    {
+                        bool isNativePushBlocked = _licenseStatus == Spokes_Server.Core.Services.Licensing.LicenseStatus.HardLock ||
+                                                   _licenseStatus == Spokes_Server.Core.Services.Licensing.LicenseStatus.Expired;
+
+                        if (clientInit.RequiresPushRelay && isNativePushBlocked)
+                        {
+                            await JS.InvokeVoidAsync("pushNotifications.setPushPrompted", vapidPublicKey);
+                        }
+                        else
+                        {
+                            await JS.InvokeVoidAsync("pushNotifications.setPushPrompted", vapidPublicKey);
+
+                            Snackbar.Add("Would you like to enable push notifications for this server?", Severity.Info, config =>
+                            {
+                                config.Action = "Enable";
+                                config.ActionColor = Color.Success;
+                                config.OnClick = snackbar =>
+                                {
+                                    _ = TriggerAutoPushRegistration(vapidPublicKey, isSilent: false, clientInit);
+                                    return Task.CompletedTask;
+                                };
+                                config.ShowCloseIcon = true;
+                                config.RequireInteraction = true;
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        catch (Exception ex) when (ex is JSDisconnectedException or TaskCanceledException or ObjectDisposedException or InvalidOperationException)
+        {
+            // Circuit closed during background push reconciliation
+        }
+        catch (Exception ex)
+        {
+            Logger.LogDebug(ex, "[MainLayout] Background push reconciliation failed");
         }
     }
 
@@ -1479,7 +1634,9 @@
         };
 
         bool wasIdle = CircuitContext.IsIdle;
-        CircuitContext.IsIdle = parsedState is ConnectionPresenceState.Idle or ConnectionPresenceState.Offline;
+        bool isInVoiceCall = _currentUser != null && PresenceState.IsUserInVoiceCall(_currentUser.Id);
+        CircuitContext.IsIdle = parsedState == ConnectionPresenceState.Offline ||
+            (parsedState == ConnectionPresenceState.Idle && !isInVoiceCall);
 
         PresenceState.SetConnectionPresenceState(_currentSubscriptionId, parsedState);
 
@@ -1563,6 +1720,7 @@
 
     private async Task TriggerAutoPushRegistration(string vapidPublicKey, bool isSilent = false, LayoutClientInitResult? clientInit = null)
     {
+        if (IsReadOnlyOrRestricted) return;
         try
         {
             var requiresRelay = clientInit?.RequiresPushRelay ?? await JS.InvokeAsync<bool>("pushNotifications.requiresPushRelay");
@@ -1595,7 +1753,7 @@
                         var deviceType = !string.IsNullOrEmpty(clientInit?.DeviceType)
                             ? clientInit.DeviceType
                             : await JS.InvokeAsync<string>("pushNotifications.detectDeviceType");
-                        var success = await JS.InvokeAsync<bool>("pushNotifications.sendSubscriptionToServer", subscription, deviceType, "", true);
+                        var success = await JS.InvokeAsync<bool>("pushNotifications.sendSubscriptionToServer", subscription, deviceType, "");
                         
                         if (success)
                         {
@@ -1670,5 +1828,25 @@
         public bool RequiresPushRelay { get; set; }
         public bool IosSoundDisabled { get; set; }
         public string? TimeZone { get; set; }
+        public int ViewportWidth { get; set; }
+        public string? StoredVaultKey { get; set; }
+    }
+
+    private sealed class PushProbeResult
+    {
+        public Dictionary<string, object>? ExistingSubscription { get; set; }
+        public bool IosSoundDisabled { get; set; }
+    }
+
+    private async Task SubscribeViewportResizeAsync()
+    {
+        try
+        {
+            await ViewportService.SubscribeAsync(this);
+        }
+        catch (Exception ex) when (ex is JSDisconnectedException or TaskCanceledException or ObjectDisposedException or InvalidOperationException)
+        {
+            // Circuit closed before background resize listener attached
+        }
     }
 }

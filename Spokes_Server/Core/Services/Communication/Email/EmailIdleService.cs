@@ -1,22 +1,20 @@
 using System;
 using System.Collections.Concurrent;
 using System.IO;
-using System.Security.Cryptography;
 using System.Threading;
 using System.Threading.Tasks;
 using MailKit;
 using MailKit.Net.Imap;
-using MailKit.Security;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Spokes_Server.Core.Data.Repositories.Communication;
 using Spokes_Server.Core.Data.Repositories.Core;
-using Spokes_Server.Core.Data.Repositories.HR;
 using Spokes_Server.Core.Services.Security;
 
 namespace Spokes_Server.Core.Services.Communication.Email;
 
 /// <summary>
-/// Singleton service that manages persistent IMAP IDLE connections for realtime updates.
+/// Singleton service that manages persistent IMAP IDLE connections per EmailAccount for realtime updates.
 /// </summary>
 public class EmailIdleService : IDisposable
 {
@@ -24,19 +22,17 @@ public class EmailIdleService : IDisposable
     private readonly ILogger<EmailIdleService> _logger;
     private readonly IImapConnectionFactory _imapFactory;
 
-    // Map: "EmployeeId:FolderPath" -> CancellationTokenSource (to cancel the running IDLE task)
-    // We allow multiple active watchers per employee, differentiated by folder.
+    // Map: "AccountId:FolderPath" -> CancellationTokenSource
     private readonly ConcurrentDictionary<string, CancellationTokenSource> _activeWatchers = new();
 
-    // Events
     public event Action<string, string, UniqueId>? MessageReceived;
     public event Action<string, string, UniqueId>? MessageFlagsChanged;
 
-    internal void TriggerMessageReceived(string employeeId, string folderPath, UniqueId uid) =>
-        MessageReceived?.Invoke(employeeId, folderPath, uid);
+    internal void TriggerMessageReceived(string accountId, string folderPath, UniqueId uid) =>
+        MessageReceived?.Invoke(accountId, folderPath, uid);
 
-    internal void TriggerMessageFlagsChanged(string employeeId, string folderPath, UniqueId uid) =>
-        MessageFlagsChanged?.Invoke(employeeId, folderPath, uid);
+    internal void TriggerMessageFlagsChanged(string accountId, string folderPath, UniqueId uid) =>
+        MessageFlagsChanged?.Invoke(accountId, folderPath, uid);
 
     public EmailIdleService(IServiceScopeFactory scopeFactory, ILogger<EmailIdleService> logger, IImapConnectionFactory? imapFactory = null)
     {
@@ -52,36 +48,35 @@ public class EmailIdleService : IDisposable
             _imapFactory = scope.ServiceProvider.GetService<IImapConnectionFactory>()
                 ?? new ImapConnectionFactory(
                     scope.ServiceProvider.GetRequiredService<CompanyProfileRepository>(),
-                    scope.ServiceProvider.GetRequiredService<EmployeeRepository>(),
-                    scope.ServiceProvider.GetRequiredService<EncryptionService>());
+                    scope.ServiceProvider.GetRequiredService<EncryptionService>(),
+                    scope.ServiceProvider.GetService<EmailAccountRepository>());
         }
     }
 
-    /// <summary>
-    /// Starts watching a specific folder for an employee. 
-    /// Stops any existing watcher for that employee and folder first.
-    /// </summary>
-    public void WatchFolder(string employeeId, string folderPath)
+    public void WatchFolder(string accountId, string folderPath)
     {
-        var key = $"{employeeId}:{folderPath}";
+        using (var scope = _scopeFactory.CreateScope())
+        {
+            var companyProfileRepo = scope.ServiceProvider.GetService<CompanyProfileRepository>();
+            if (string.Equals(companyProfileRepo?.Get()?.Edition, "Family", StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+        }
 
-        // 1. Stop existing watcher for this user/folder
-        StopWatching(employeeId, folderPath);
+        var key = $"{accountId}:{folderPath}";
 
-        // 2. Start new watcher
+        StopWatching(accountId, folderPath);
+
         var cts = new CancellationTokenSource();
         _activeWatchers[key] = cts;
 
-        // Fire and forget background task
-        _ = Task.Run(() => IdleLoopAsync(employeeId, folderPath, cts), cts.Token);
+        _ = Task.Run(() => IdleLoopAsync(accountId, folderPath, cts), cts.Token);
     }
 
-    /// <summary>
-    /// Stops watching for an employee's specific folder.
-    /// </summary>
-    public void StopWatching(string employeeId, string folderPath)
+    public void StopWatching(string accountId, string folderPath)
     {
-        var key = $"{employeeId}:{folderPath}";
+        var key = $"{accountId}:{folderPath}";
         if (_activeWatchers.TryRemove(key, out var cts))
         {
             try
@@ -89,18 +84,40 @@ public class EmailIdleService : IDisposable
                 cts.Cancel();
                 cts.Dispose();
             }
-            catch (Exception ex) { _logger.LogError(ex, "StopWatching Error for {EmployeeId} - {FolderPath}", employeeId, folderPath); }
+            catch (Exception ex) { _logger.LogError(ex, "StopWatching Error for {AccountId} - {FolderPath}", accountId, folderPath); }
         }
     }
 
-    private async Task IdleLoopAsync(string employeeId, string folderPath, CancellationTokenSource source)
+    public void StopWatchingAccount(string accountId)
+    {
+        if (string.IsNullOrWhiteSpace(accountId)) return;
+        var prefix = $"{accountId}:";
+        foreach (var key in _activeWatchers.Keys)
+        {
+            if (key.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) &&
+                _activeWatchers.TryRemove(key, out var cts))
+            {
+                try
+                {
+                    cts.Cancel();
+                    cts.Dispose();
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "StopWatchingAccount Error for {Key}", key);
+                }
+            }
+        }
+    }
+
+    private async Task IdleLoopAsync(string accountId, string folderPath, CancellationTokenSource source)
     {
         var stopToken = source.Token;
-        _logger.LogInformation("Starting IDLE for {EmployeeId} - {FolderPath}", employeeId, folderPath);
+        _logger.LogInformation("Starting IDLE for {AccountId} - {FolderPath}", accountId, folderPath);
 
         try
         {
-            using var client = await _imapFactory.CreateAuthenticatedClientAsync(employeeId, stopToken);
+            using var client = await _imapFactory.CreateAuthenticatedClientAsync(accountId, stopToken);
             if (client == null) return;
 
             var folder = await client.GetFolderAsync(folderPath, stopToken);
@@ -108,31 +125,25 @@ public class EmailIdleService : IDisposable
 
             CancellationTokenSource? done = null;
 
-            // Hook up events
             folder.CountChanged += (s, e) =>
             {
-                // This fires when count changes (new message or deleted). 
                 _logger.LogInformation("Count Changed in {FolderPath}", folderPath);
-                MessageReceived?.Invoke(employeeId, folderPath, UniqueId.MinValue);
-                done?.Cancel(); // Break IDLE to trigger immediate UI refresh
+                MessageReceived?.Invoke(accountId, folderPath, UniqueId.MinValue);
+                done?.Cancel();
             };
-
-            // MessagesArrived might not be available or requires casting that fails in some contexts.
-            // We rely on CountChanged which covers "New Messages".
-            // For Flags, we keep MessageFlagsChanged.
 
             folder.MessageFlagsChanged += (s, e) =>
             {
                 _logger.LogInformation("Flags Changed for {Index}", e.Index);
-                MessageFlagsChanged?.Invoke(employeeId, folderPath, UniqueId.MinValue);
-                done?.Cancel(); // Break IDLE to trigger immediate UI refresh
+                MessageFlagsChanged?.Invoke(accountId, folderPath, UniqueId.MinValue);
+                done?.Cancel();
             };
 
             folder.MessageExpunged += (s, e) =>
             {
                 _logger.LogInformation("Message Expunged at Index {Index} in {FolderPath}", e.Index, folderPath);
-                MessageReceived?.Invoke(employeeId, folderPath, UniqueId.MinValue); // MessageReceived triggers SyncFolderAsync which handles deletions
-                done?.Cancel(); // Break IDLE to trigger immediate UI refresh
+                MessageReceived?.Invoke(accountId, folderPath, UniqueId.MinValue);
+                done?.Cancel();
             };
 
             while (!stopToken.IsCancellationRequested)
@@ -149,7 +160,6 @@ public class EmailIdleService : IDisposable
                         }
                         else
                         {
-                            // Fallback to NOOP polling
                             await Task.Delay(TimeSpan.FromMinutes(1), combined.Token);
                             await client.NoOpAsync(stopToken);
                         }
@@ -169,12 +179,9 @@ public class EmailIdleService : IDisposable
         }
         finally
         {
-            var key = $"{employeeId}:{folderPath}";
-            // Cleanup from active list if this task finishes naturally (e.g. error)
-            // Only remove if it's OUR cts (handling race condition where new watcher started)
+            var key = $"{accountId}:{folderPath}";
             if (_activeWatchers.TryGetValue(key, out var currentCts) && currentCts == source)
             {
-                // We can safely remove it if it matches OUR source
                 _activeWatchers.TryRemove(key, out _);
                 source.Dispose();
             }

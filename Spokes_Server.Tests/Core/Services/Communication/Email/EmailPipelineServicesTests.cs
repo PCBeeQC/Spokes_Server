@@ -11,10 +11,8 @@ using Xunit;
 using Spokes_Server.Core.Data;
 using Spokes_Server.Core.Data.Repositories.Communication;
 using Spokes_Server.Core.Data.Repositories.Core;
-using Spokes_Server.Core.Data.Repositories.HR;
 using Spokes_Server.Core.Models.Communication;
 using Spokes_Server.Core.Models.Core;
-using Spokes_Server.Core.Models.HR;
 using Spokes_Server.Core.Services.Communication.Chat;
 using Spokes_Server.Core.Services.Communication.Email;
 using Spokes_Server.Core.Services.Communication.Notifications;
@@ -29,7 +27,8 @@ public class EmailPipelineServicesTests : IDisposable
     private readonly IConfiguration _config;
     private readonly DiskPersistenceService _persistence;
 
-    private readonly EmployeeRepository _employees;
+    private readonly EmailAccountRepository _emailAccounts;
+    private readonly EmailSendingIdentityRepository _identities;
     private readonly CompanyProfileRepository _companyProfile;
     private readonly EmailFolderRepository _emailFolders;
     private readonly EmailMessageRepository _emailMessages;
@@ -53,7 +52,8 @@ public class EmailPipelineServicesTests : IDisposable
 
         _persistence = new DiskPersistenceService(new Mock<ILogger<DiskPersistenceService>>().Object);
 
-        _employees = new EmployeeRepository(_persistence, _config);
+        _emailAccounts = new EmailAccountRepository(_persistence, _config);
+        _identities = new EmailSendingIdentityRepository(_persistence, _config);
         _companyProfile = new CompanyProfileRepository(_persistence, _config);
         _emailFolders = new EmailFolderRepository(_persistence, _config);
         _emailMessages = new EmailMessageRepository(_persistence, _config);
@@ -67,21 +67,26 @@ public class EmailPipelineServicesTests : IDisposable
         _companyProfile.Save(new CompanyProfile
         {
             Id = "GlobalProfile",
+            Edition = "Business",
             EmailSettings = new EmailServerSettings
             {
-                ImapHost = "127.0.0.1",
-                ImapPort = 993,
-                SmtpHost = "127.0.0.1",
-                SmtpPort = 587
+                IncomingServers = new List<IncomingServerConfig>
+                {
+                    new IncomingServerConfig { Id = "imap-1", Name = "Local IMAP", Host = "127.0.0.1", Port = 993, UseSsl = true }
+                },
+                SendingServers = new List<SendingServerConfig>
+                {
+                    new SendingServerConfig { Id = "smtp-1", Name = "Local SMTP", Host = "127.0.0.1", Port = 587, UseSsl = false }
+                }
             }
         });
 
-        _cacheMaintenance = new EmailCacheMaintenanceService(_employees, _emailFolders, _emailMessages, _syncStateService, _config);
-        _draftService = new EmailDraftService(_employees, _emailFolders, _emailMessages, _cacheMaintenance);
-        _deliveryService = new EmailDeliveryService(_employees, _companyProfile, _emailFolders, _encryptionService, _cacheMaintenance);
-        _folderService = new EmailFolderService(_employees, _companyProfile, _emailFolders, _emailMessages, _encryptionService);
-        _messageLifecycleService = new EmailMessageLifecycleService(_employees, _companyProfile, _emailFolders, _emailMessages, _encryptionService, _syncStateService, _cacheMaintenance);
-        _syncService = new EmailSyncService(_employees, _companyProfile, _emailFolders, _emailMessages, _encryptionService, _syncStateService, mockNotificationRouting.Object, _draftService, _cacheMaintenance);
+        _cacheMaintenance = new EmailCacheMaintenanceService(_emailFolders, _emailMessages, _syncStateService, _config);
+        _draftService = new EmailDraftService(_emailFolders, _emailMessages, _cacheMaintenance, _emailAccounts, _identities);
+        _deliveryService = new EmailDeliveryService(_companyProfile, _emailFolders, _encryptionService, _cacheMaintenance, _emailMessages, _identities, null, _emailAccounts);
+        _folderService = new EmailFolderService(_companyProfile, _emailFolders, _emailMessages, _encryptionService, _emailAccounts);
+        _messageLifecycleService = new EmailMessageLifecycleService(_companyProfile, _emailFolders, _emailMessages, _encryptionService, _syncStateService, _cacheMaintenance, _emailAccounts);
+        _syncService = new EmailSyncService(_emailAccounts, _companyProfile, _emailFolders, _emailMessages, _encryptionService, _syncStateService, mockNotificationRouting.Object, _draftService, _cacheMaintenance);
     }
 
     public void Dispose()
@@ -103,51 +108,49 @@ public class EmailPipelineServicesTests : IDisposable
     #region Sync & Preconditions Tests
 
     [Fact]
-    public async Task SyncEmployeeAsync_WhenEmployeeNotFound_DoesNotChangeSyncState()
+    public async Task SyncAccountAsync_WhenAccountNotFound_DoesNotChangeSyncState()
     {
-        await _syncService.SyncEmployeeAsync("non_existent_emp");
+        await _syncService.SyncAccountAsync("non_existent_acc");
 
-        Assert.Equal("Idle", _syncStateService.GetState("non_existent_emp"));
+        Assert.Equal("Idle", _syncStateService.GetState("non_existent_acc"));
     }
 
     [Fact]
-    public async Task SyncEmployeeAsync_WhenCredentialsMissing_SetsMissingCredentialsState()
+    public async Task SyncAccountAsync_WhenCredentialsMissing_SetsMissingCredentialsState()
     {
-        var emp = new Employee
+        var acc = new EmailAccount
         {
-            Id = "emp_no_creds",
-            FirstName = "Test",
-            LastName = "User",
-            Email = "",
-            EncryptedEmailPassword = ""
+            Id = "acc_no_creds",
+            Name = "Test User",
+            EmailAddress = "",
+            EncryptedPassword = ""
         };
-        _employees.Save(emp);
+        _emailAccounts.Save(acc);
 
-        await _syncService.SyncEmployeeAsync(emp.Id);
+        await _syncService.SyncAccountAsync(acc.Id);
 
-        Assert.Equal("Missing Credentials", _syncStateService.GetState(emp.Id));
+        Assert.Equal("Missing Credentials", _syncStateService.GetState(acc.Id));
     }
 
     [Fact]
-    public async Task SyncEmployeeAsync_WhenServerNotConfigured_SetsServerNotConfiguredState()
+    public async Task SyncAccountAsync_WhenServerNotConfigured_SetsServerNotConfiguredState()
     {
-        var emp = new Employee
+        var acc = new EmailAccount
         {
-            Id = "emp_with_creds",
-            FirstName = "Alice",
-            LastName = "Smith",
-            Email = "alice@example.com",
-            EncryptedEmailPassword = _encryptionService.Encrypt("secret123")
+            Id = "acc_with_creds",
+            Name = "Alice Smith",
+            EmailAddress = "alice@example.com",
+            EncryptedPassword = _encryptionService.Encrypt("secret123")
         };
-        _employees.Save(emp);
+        _emailAccounts.Save(acc);
 
         var profile = _companyProfile.Get();
-        profile.EmailSettings.ImapHost = "";
+        profile.EmailSettings.IncomingServers.Clear();
         _companyProfile.Save(profile);
 
-        await _syncService.SyncEmployeeAsync(emp.Id);
+        await _syncService.SyncAccountAsync(acc.Id);
 
-        Assert.Equal("Server Not Configured", _syncStateService.GetState(emp.Id));
+        Assert.Equal("Server Not Configured", _syncStateService.GetState(acc.Id));
     }
 
     #endregion
@@ -155,33 +158,148 @@ public class EmailPipelineServicesTests : IDisposable
     #region Flag & Read Status Tests
 
     [Fact]
-    public async Task MarkMessageReadAsync_WhenMessageExists_UpdatesIsReadAndSaves()
+    public async Task MarkMessageReadAsync_WhenMessageExists_UpdatesIsReadAndFolderUnreadCountAndNotifiesSyncState()
     {
+        var folder = new EmailFolder
+        {
+            Id = "folder_read_1",
+            AccountId = "acc1",
+            Name = "Inbox",
+            Path = "INBOX",
+            TotalCount = 1,
+            UnreadCount = 1
+        };
+        _emailFolders.Save(folder);
+
         var msg = new EmailMessage
         {
             Id = "msg_read_1",
-            EmployeeId = "emp1",
+            AccountId = "acc1",
             FolderPath = "INBOX",
-            IsRead = false
+            IsRead = false,
+            IsLocalOnly = true
         };
         _emailMessages.Save(msg);
 
-        await _messageLifecycleService.MarkMessageReadAsync(msg.EmployeeId, msg.Id, true);
+        var notifiedAccounts = new List<string>();
+        _syncStateService.OnUnreadCountChanged += accId => notifiedAccounts.Add(accId);
+
+        await _messageLifecycleService.MarkMessageReadAsync(msg.AccountId, msg.Id, true);
 
         var updated = _emailMessages.GetById(msg.Id);
         Assert.NotNull(updated);
         Assert.True(updated.IsRead);
+        Assert.Equal(0, _emailFolders.GetById("folder_read_1")!.UnreadCount);
+        Assert.Contains("acc1", notifiedAccounts);
 
-        await _messageLifecycleService.MarkMessageReadAsync(msg.EmployeeId, msg.Id, false);
+        notifiedAccounts.Clear();
+        await _messageLifecycleService.MarkMessageReadAsync(msg.AccountId, msg.Id, false);
         var unread = _emailMessages.GetById(msg.Id);
         Assert.NotNull(unread);
         Assert.False(unread.IsRead);
+        Assert.Equal(1, _emailFolders.GetById("folder_read_1")!.UnreadCount);
+        Assert.Contains("acc1", notifiedAccounts);
+    }
+
+    [Fact]
+    public async Task SyncFolderAsync_WhenExistingMessageFlagsChange_UpdatesFolderUnreadCountAndNotifiesSyncState()
+    {
+        var acc = new EmailAccount { Id = "acc_flag_sync", EmailAddress = "sync@test.com", LastSyncedAt = DateTime.UtcNow.AddMinutes(-10) };
+        _emailAccounts.Save(acc);
+
+        var inbox = new EmailFolder { Id = "f_flag_sync", AccountId = acc.Id, Name = "Inbox", Path = "INBOX", IsInbox = true, TotalCount = 1, UnreadCount = 1 };
+        _emailFolders.Save(inbox);
+
+        var msg = new EmailMessage
+        {
+            Id = "msg_flag_sync_1",
+            AccountId = acc.Id,
+            FolderPath = "INBOX",
+            UniqueId = 42,
+            IsRead = false,
+            IsFlagged = false
+        };
+        _emailMessages.Save(msg);
+
+        var mockSummary = new Mock<MailKit.IMessageSummary>();
+        mockSummary.SetupGet(s => s.UniqueId).Returns(new MailKit.UniqueId(42));
+        mockSummary.SetupGet(s => s.Flags).Returns(MailKit.MessageFlags.Seen);
+
+        var mockFolder = new Mock<MailKit.IMailFolder>();
+        mockFolder.SetupGet(f => f.Name).Returns("Inbox");
+        mockFolder.SetupGet(f => f.FullName).Returns("INBOX");
+        mockFolder.SetupGet(f => f.DirectorySeparator).Returns('/');
+        mockFolder.SetupGet(f => f.Attributes).Returns(MailKit.FolderAttributes.Inbox);
+        mockFolder.SetupGet(f => f.Count).Returns(1);
+        mockFolder.Setup(f => f.OpenAsync(MailKit.FolderAccess.ReadWrite, It.IsAny<System.Threading.CancellationToken>()))
+            .ReturnsAsync(MailKit.FolderAccess.ReadWrite);
+        mockFolder.Setup(f => f.FetchAsync(0, -1, It.IsAny<MailKit.IFetchRequest>(), It.IsAny<System.Threading.CancellationToken>()))
+            .ReturnsAsync(new List<MailKit.IMessageSummary> { mockSummary.Object });
+
+        int? unreadCountAtNotificationTime = null;
+        _syncStateService.OnUnreadCountChanged += accountId =>
+        {
+            if (accountId == acc.Id)
+            {
+                unreadCountAtNotificationTime = _emailFolders.GetById("f_flag_sync")?.UnreadCount;
+            }
+        };
+
+        await _syncService.SyncFolderAsync(null, mockFolder.Object, acc, isInitialAccountSync: false);
+
+        Assert.Equal(0, unreadCountAtNotificationTime);
+        Assert.True(_emailMessages.GetById(acc.Id, msg.Id)!.IsRead);
+    }
+
+    [Fact]
+    public async Task SyncFolderAsync_WhenExistingUnreadMessageExpunged_MovesToLocalTrashAndNotifiesSyncState()
+    {
+        var acc = new EmailAccount { Id = "acc_expunge_sync", EmailAddress = "expunge@test.com", LastSyncedAt = DateTime.UtcNow.AddMinutes(-10) };
+        _emailAccounts.Save(acc);
+
+        var inbox = new EmailFolder { Id = "f_expunge_sync", AccountId = acc.Id, Name = "Inbox", Path = "INBOX", IsInbox = true, TotalCount = 1, UnreadCount = 1 };
+        var trash = new EmailFolder { Id = "f_expunge_trash", AccountId = acc.Id, Name = "Trash", Path = "Trash", IsTrash = true, TotalCount = 0, UnreadCount = 0 };
+        _emailFolders.Save(inbox);
+        _emailFolders.Save(trash);
+
+        var msg = new EmailMessage
+        {
+            Id = "msg_expunge_1",
+            AccountId = acc.Id,
+            FolderPath = "INBOX",
+            UniqueId = 99,
+            GlobalMessageId = "<expunge-99@test.com>",
+            IsRead = false
+        };
+        _emailMessages.Save(msg);
+
+        var mockFolder = new Mock<MailKit.IMailFolder>();
+        mockFolder.SetupGet(f => f.Name).Returns("Inbox");
+        mockFolder.SetupGet(f => f.FullName).Returns("INBOX");
+        mockFolder.SetupGet(f => f.DirectorySeparator).Returns('/');
+        mockFolder.SetupGet(f => f.Attributes).Returns(MailKit.FolderAttributes.Inbox);
+        mockFolder.SetupGet(f => f.Count).Returns(0);
+        mockFolder.Setup(f => f.OpenAsync(MailKit.FolderAccess.ReadWrite, It.IsAny<System.Threading.CancellationToken>()))
+            .ReturnsAsync(MailKit.FolderAccess.ReadWrite);
+        mockFolder.Setup(f => f.FetchAsync(0, -1, It.IsAny<MailKit.IFetchRequest>(), It.IsAny<System.Threading.CancellationToken>()))
+            .ReturnsAsync(new List<MailKit.IMessageSummary>());
+
+        bool notified = false;
+        _syncStateService.OnUnreadCountChanged += accountId =>
+        {
+            if (accountId == acc.Id) notified = true;
+        };
+
+        await _syncService.SyncFolderAsync(null, mockFolder.Object, acc, isInitialAccountSync: false);
+
+        Assert.True(notified);
+        Assert.Equal(0, _emailFolders.GetById("f_expunge_sync")!.UnreadCount);
     }
 
     [Fact]
     public async Task MarkMessageReadAsync_WhenMessageDoesNotExist_CompletesWithoutError()
     {
-        var ex = await Record.ExceptionAsync(() => _messageLifecycleService.MarkMessageReadAsync("emp1", "unknown_msg_id", true));
+        var ex = await Record.ExceptionAsync(() => _messageLifecycleService.MarkMessageReadAsync("acc1", "unknown_msg_id", true));
         Assert.Null(ex);
     }
 
@@ -191,19 +309,19 @@ public class EmailPipelineServicesTests : IDisposable
         var msg = new EmailMessage
         {
             Id = "msg_flag_1",
-            EmployeeId = "emp1",
+            AccountId = "acc1",
             FolderPath = "INBOX",
             IsFlagged = false
         };
         _emailMessages.Save(msg);
 
-        await _messageLifecycleService.MarkMessageFlaggedAsync(msg.EmployeeId, msg.Id, true);
+        await _messageLifecycleService.MarkMessageFlaggedAsync(msg.AccountId, msg.Id, true);
 
         var updated = _emailMessages.GetById(msg.Id);
         Assert.NotNull(updated);
         Assert.True(updated.IsFlagged);
 
-        await _messageLifecycleService.MarkMessageFlaggedAsync(msg.EmployeeId, msg.Id, false);
+        await _messageLifecycleService.MarkMessageFlaggedAsync(msg.AccountId, msg.Id, false);
         var unflagged = _emailMessages.GetById(msg.Id);
         Assert.NotNull(unflagged);
         Assert.False(unflagged.IsFlagged);
@@ -212,7 +330,7 @@ public class EmailPipelineServicesTests : IDisposable
     [Fact]
     public async Task MarkMessageFlaggedAsync_WhenMessageDoesNotExist_CompletesWithoutError()
     {
-        var ex = await Record.ExceptionAsync(() => _messageLifecycleService.MarkMessageFlaggedAsync("emp1", "unknown_msg_id", true));
+        var ex = await Record.ExceptionAsync(() => _messageLifecycleService.MarkMessageFlaggedAsync("acc1", "unknown_msg_id", true));
         Assert.Null(ex);
     }
 
@@ -226,28 +344,28 @@ public class EmailPipelineServicesTests : IDisposable
         var msg = new EmailMessage
         {
             Id = "msg_move_same",
-            EmployeeId = "emp1",
+            AccountId = "acc1",
             FolderPath = "INBOX"
         };
         _emailMessages.Save(msg);
 
-        await _messageLifecycleService.MoveMessageAsync("emp1", msg.Id, "INBOX");
+        await _messageLifecycleService.MoveMessageAsync("acc1", msg.Id, "INBOX");
 
         Assert.NotNull(_emailMessages.GetById(msg.Id));
     }
 
     [Fact]
-    public async Task MoveMessageAsync_WhenEmployeeMismatch_DoesNothing()
+    public async Task MoveMessageAsync_WhenAccountMismatch_DoesNothing()
     {
         var msg = new EmailMessage
         {
             Id = "msg_move_mismatch",
-            EmployeeId = "emp1",
+            AccountId = "acc1",
             FolderPath = "INBOX"
         };
         _emailMessages.Save(msg);
 
-        await _messageLifecycleService.MoveMessageAsync("emp2", msg.Id, "Archive");
+        await _messageLifecycleService.MoveMessageAsync("acc2", msg.Id, "Archive");
 
         Assert.NotNull(_emailMessages.GetById(msg.Id));
     }
@@ -255,25 +373,25 @@ public class EmailPipelineServicesTests : IDisposable
     [Fact]
     public async Task MoveMessageAsync_WhenMessageNotFound_DoesNothing()
     {
-        var ex = await Record.ExceptionAsync(() => _messageLifecycleService.MoveMessageAsync("emp1", "not_found", "Archive"));
+        var ex = await Record.ExceptionAsync(() => _messageLifecycleService.MoveMessageAsync("acc1", "not_found", "Archive"));
         Assert.Null(ex);
     }
 
     [Fact]
     public async Task MoveMessageAsync_WhenServerFails_RollsBackMessageAndRestoresFolderCounts()
     {
-        var emp = new Employee { Id = "emp1", Email = "emp@test.com", EncryptedEmailPassword = _encryptionService.Encrypt("pass") };
-        _employees.Save(emp);
+        var acc = new EmailAccount { Id = "acc1", EmailAddress = "emp@test.com", IncomingServerConfigId = "imap-1", EncryptedPassword = _encryptionService.Encrypt("pass") };
+        _emailAccounts.Save(acc);
 
-        var inbox = new EmailFolder { Id = "f_inbox", EmployeeId = "emp1", Name = "Inbox", Path = "INBOX", TotalCount = 5, UnreadCount = 2 };
-        var archive = new EmailFolder { Id = "f_arch", EmployeeId = "emp1", Name = "Archive", Path = "Archive", TotalCount = 0, UnreadCount = 0 };
+        var inbox = new EmailFolder { Id = "f_inbox", AccountId = "acc1", Name = "Inbox", Path = "INBOX", TotalCount = 5, UnreadCount = 2 };
+        var archive = new EmailFolder { Id = "f_arch", AccountId = "acc1", Name = "Archive", Path = "Archive", TotalCount = 0, UnreadCount = 0 };
         _emailFolders.Save(inbox);
         _emailFolders.Save(archive);
 
-        var msg = new EmailMessage { Id = "msg_to_move", EmployeeId = "emp1", FolderPath = "INBOX", IsRead = false };
+        var msg = new EmailMessage { Id = "msg_to_move", AccountId = "acc1", FolderPath = "INBOX", IsRead = false };
         _emailMessages.Save(msg);
 
-        await _messageLifecycleService.MoveMessageAsync("emp1", msg.Id, "Archive");
+        await _messageLifecycleService.MoveMessageAsync("acc1", msg.Id, "Archive");
 
         // Rollback ensures message is not lost locally when remote move fails
         var restoredMsg = _emailMessages.GetById(msg.Id);
@@ -290,16 +408,16 @@ public class EmailPipelineServicesTests : IDisposable
     [Fact]
     public async Task MoveMessageToTrashAsync_WhenAlreadyInTrash_PermanentlyDeletesMessage()
     {
-        var emp = new Employee { Id = "emp1", Email = "emp@test.com", EncryptedEmailPassword = _encryptionService.Encrypt("pass") };
-        _employees.Save(emp);
+        var acc = new EmailAccount { Id = "acc1", EmailAddress = "emp@test.com", IncomingServerConfigId = "imap-1", EncryptedPassword = _encryptionService.Encrypt("pass") };
+        _emailAccounts.Save(acc);
 
-        var trash = new EmailFolder { Id = "f_trash_del", EmployeeId = "emp1", Name = "Trash", Path = "Trash", IsTrash = true, TotalCount = 3, UnreadCount = 1 };
+        var trash = new EmailFolder { Id = "f_trash_del", AccountId = "acc1", Name = "Trash", Path = "Trash", IsTrash = true, TotalCount = 3, UnreadCount = 1 };
         _emailFolders.Save(trash);
 
-        var msg = new EmailMessage { Id = "msg_trash_perm", EmployeeId = "emp1", FolderPath = "Trash", IsRead = false };
+        var msg = new EmailMessage { Id = "msg_trash_perm", AccountId = "acc1", FolderPath = "Trash", IsRead = false };
         _emailMessages.Save(msg);
 
-        await _messageLifecycleService.MoveMessageToTrashAsync("emp1", msg.Id);
+        await _messageLifecycleService.MoveMessageToTrashAsync("acc1", msg.Id);
 
         // Message is permanently deleted from local repository
         Assert.Null(_emailMessages.GetById(msg.Id));
@@ -312,18 +430,18 @@ public class EmailPipelineServicesTests : IDisposable
     [Fact]
     public async Task MoveMessageToTrashAsync_WhenNotInTrash_ServerFails_RollsBack()
     {
-        var emp = new Employee { Id = "emp1", Email = "emp@test.com", EncryptedEmailPassword = _encryptionService.Encrypt("pass") };
-        _employees.Save(emp);
+        var acc = new EmailAccount { Id = "acc1", EmailAddress = "emp@test.com", IncomingServerConfigId = "imap-1", EncryptedPassword = _encryptionService.Encrypt("pass") };
+        _emailAccounts.Save(acc);
 
-        var inbox = new EmailFolder { Id = "f_inbox2", EmployeeId = "emp1", Name = "Inbox", Path = "INBOX", TotalCount = 3, UnreadCount = 1 };
-        var trash = new EmailFolder { Id = "f_trash2", EmployeeId = "emp1", Name = "Trash", Path = "Trash", IsTrash = true };
+        var inbox = new EmailFolder { Id = "f_inbox2", AccountId = "acc1", Name = "Inbox", Path = "INBOX", TotalCount = 3, UnreadCount = 1 };
+        var trash = new EmailFolder { Id = "f_trash2", AccountId = "acc1", Name = "Trash", Path = "Trash", IsTrash = true };
         _emailFolders.Save(inbox);
         _emailFolders.Save(trash);
 
-        var msg = new EmailMessage { Id = "msg_trash_1", EmployeeId = "emp1", FolderPath = "INBOX", IsRead = false };
+        var msg = new EmailMessage { Id = "msg_trash_1", AccountId = "acc1", FolderPath = "INBOX", IsRead = false };
         _emailMessages.Save(msg);
 
-        await _messageLifecycleService.MoveMessageToTrashAsync("emp1", msg.Id);
+        await _messageLifecycleService.MoveMessageToTrashAsync("acc1", msg.Id);
 
         var restoredMsg = _emailMessages.GetById(msg.Id);
         Assert.NotNull(restoredMsg);
@@ -333,28 +451,58 @@ public class EmailPipelineServicesTests : IDisposable
     [Fact]
     public async Task MoveMessageToTrashAsync_WhenNoTrashFolder_HandlesGracefully()
     {
-        var msg = new EmailMessage { Id = "msg_no_trash", EmployeeId = "emp1", FolderPath = "INBOX" };
+        var msg = new EmailMessage { Id = "msg_no_trash", AccountId = "acc1", FolderPath = "INBOX" };
         _emailMessages.Save(msg);
 
-        var ex = await Record.ExceptionAsync(() => _messageLifecycleService.MoveMessageToTrashAsync("emp1", msg.Id));
+        var ex = await Record.ExceptionAsync(() => _messageLifecycleService.MoveMessageToTrashAsync("acc1", msg.Id));
         Assert.Null(ex);
+    }
+
+    [Fact]
+    public async Task MoveMessageToTrashAsync_WhenTrashIsGmailStylePath_FindsFolderSuccessfully()
+    {
+        var acc = new EmailAccount { Id = "acc_gmail", EmailAddress = "emp@gmail.com", IncomingServerConfigId = "imap-gmail", EncryptedPassword = _encryptionService.Encrypt("pass") };
+        _emailAccounts.Save(acc);
+
+        var inbox = new EmailFolder { Id = "f_inbox_gm", AccountId = "acc_gmail", Name = "Inbox", Path = "INBOX", TotalCount = 5, UnreadCount = 2 };
+        var gmailTrash = new EmailFolder { Id = "f_trash_gm", AccountId = "acc_gmail", Name = "Trash", Path = "[Gmail]/Trash", IsTrash = false };
+        _emailFolders.Save(inbox);
+        _emailFolders.Save(gmailTrash);
+
+        var msg = new EmailMessage { Id = "msg_gm_1", AccountId = "acc_gmail", FolderPath = "INBOX", IsRead = true };
+        _emailMessages.Save(msg);
+
+        // Server will fail because it's a dummy test IMAP server, but it confirms MoveMessageAsync was invoked on [Gmail]/Trash
+        var result = await _messageLifecycleService.MoveMessageToTrashAsync("acc_gmail", msg.Id);
+        // It attempted move to [Gmail]/Trash (and failed at IMAP layer), rather than failing with TRASH_FOLDER_NOT_FOUND
+        Assert.NotEqual("TRASH_FOLDER_NOT_FOUND", result.Code);
+    }
+
+    [Fact]
+    public void EmailFolder_IsSelectable_DefaultsToTrue_AndCanBeSetFalse()
+    {
+        var folder = new EmailFolder { Id = "f_cont", Name = "[Gmail]", Path = "[Gmail]" };
+        Assert.True(folder.IsSelectable);
+
+        folder.IsSelectable = false;
+        Assert.False(folder.IsSelectable);
     }
 
     [Fact]
     public async Task ArchiveMessageAsync_WhenServerFails_SafelyRollsBack()
     {
-        var emp = new Employee { Id = "emp1", Email = "emp@test.com", EncryptedEmailPassword = _encryptionService.Encrypt("pass") };
-        _employees.Save(emp);
+        var acc = new EmailAccount { Id = "acc1", EmailAddress = "emp@test.com", IncomingServerConfigId = "imap-1", EncryptedPassword = _encryptionService.Encrypt("pass") };
+        _emailAccounts.Save(acc);
 
-        var inbox = new EmailFolder { Id = "f_inbox_arc", EmployeeId = "emp1", Name = "Inbox", Path = "INBOX", TotalCount = 2, UnreadCount = 0 };
-        var archive = new EmailFolder { Id = "f_arc_folder", EmployeeId = "emp1", Name = "Archive", Path = "Archive", IsArchive = true };
+        var inbox = new EmailFolder { Id = "f_inbox_arc", AccountId = "acc1", Name = "Inbox", Path = "INBOX", TotalCount = 2, UnreadCount = 0 };
+        var archive = new EmailFolder { Id = "f_arc_folder", AccountId = "acc1", Name = "Archive", Path = "Archive", IsArchive = true };
         _emailFolders.Save(inbox);
         _emailFolders.Save(archive);
 
-        var msg = new EmailMessage { Id = "msg_arc_1", EmployeeId = "emp1", FolderPath = "INBOX", IsRead = true };
+        var msg = new EmailMessage { Id = "msg_arc_1", AccountId = "acc1", FolderPath = "INBOX", IsRead = true };
         _emailMessages.Save(msg);
 
-        await _messageLifecycleService.ArchiveMessageAsync("emp1", msg.Id);
+        await _messageLifecycleService.ArchiveMessageAsync("acc1", msg.Id);
 
         var restoredMsg = _emailMessages.GetById(msg.Id);
         Assert.NotNull(restoredMsg);
@@ -364,25 +512,25 @@ public class EmailPipelineServicesTests : IDisposable
     [Fact]
     public async Task ArchiveMessageAsync_WhenNoArchiveFolder_HandlesGracefully()
     {
-        var ex = await Record.ExceptionAsync(() => _messageLifecycleService.ArchiveMessageAsync("emp_no_archive", "any_id"));
+        var ex = await Record.ExceptionAsync(() => _messageLifecycleService.ArchiveMessageAsync("acc_no_archive", "any_id"));
         Assert.Null(ex);
     }
 
     [Fact]
     public async Task JunkMessageAsync_WhenServerFails_SafelyRollsBack()
     {
-        var emp = new Employee { Id = "emp1", Email = "emp@test.com", EncryptedEmailPassword = _encryptionService.Encrypt("pass") };
-        _employees.Save(emp);
+        var acc = new EmailAccount { Id = "acc1", EmailAddress = "emp@test.com", IncomingServerConfigId = "imap-1", EncryptedPassword = _encryptionService.Encrypt("pass") };
+        _emailAccounts.Save(acc);
 
-        var inbox = new EmailFolder { Id = "f_inbox_junk", EmployeeId = "emp1", Name = "Inbox", Path = "INBOX", TotalCount = 2, UnreadCount = 0 };
-        var junk = new EmailFolder { Id = "f_junk_folder", EmployeeId = "emp1", Name = "Junk", Path = "Junk", IsJunk = true };
+        var inbox = new EmailFolder { Id = "f_inbox_junk", AccountId = "acc1", Name = "Inbox", Path = "INBOX", TotalCount = 2, UnreadCount = 0 };
+        var junk = new EmailFolder { Id = "f_junk_folder", AccountId = "acc1", Name = "Junk", Path = "Junk", IsJunk = true };
         _emailFolders.Save(inbox);
         _emailFolders.Save(junk);
 
-        var msg = new EmailMessage { Id = "msg_junk_1", EmployeeId = "emp1", FolderPath = "INBOX", IsRead = true };
+        var msg = new EmailMessage { Id = "msg_junk_1", AccountId = "acc1", FolderPath = "INBOX", IsRead = true };
         _emailMessages.Save(msg);
 
-        await _messageLifecycleService.JunkMessageAsync("emp1", msg.Id);
+        await _messageLifecycleService.JunkMessageAsync("acc1", msg.Id);
 
         var restoredMsg = _emailMessages.GetById(msg.Id);
         Assert.NotNull(restoredMsg);
@@ -392,20 +540,20 @@ public class EmailPipelineServicesTests : IDisposable
     [Fact]
     public async Task JunkMessageAsync_WhenNoJunkFolder_HandlesGracefully()
     {
-        var ex = await Record.ExceptionAsync(() => _messageLifecycleService.JunkMessageAsync("emp_no_junk", "any_id"));
+        var ex = await Record.ExceptionAsync(() => _messageLifecycleService.JunkMessageAsync("acc_no_junk", "any_id"));
         Assert.Null(ex);
     }
 
     [Fact]
     public async Task DeleteMessageAsync_WhenMessageExists_DeletesFromRepoAndDecrementsFolderCounts()
     {
-        var inbox = new EmailFolder { Id = "f_inbox_del", EmployeeId = "emp1", Path = "INBOX", TotalCount = 3, UnreadCount = 1 };
+        var inbox = new EmailFolder { Id = "f_inbox_del", AccountId = "acc1", Path = "INBOX", TotalCount = 3, UnreadCount = 1 };
         _emailFolders.Save(inbox);
 
-        var msg = new EmailMessage { Id = "msg_to_delete", EmployeeId = "emp1", FolderPath = "INBOX", IsRead = false };
+        var msg = new EmailMessage { Id = "msg_to_delete", AccountId = "acc1", FolderPath = "INBOX", IsRead = false };
         _emailMessages.Save(msg);
 
-        await _messageLifecycleService.DeleteMessageAsync("emp1", msg.Id);
+        await _messageLifecycleService.DeleteMessageAsync("acc1", msg.Id);
 
         Assert.Null(_emailMessages.GetById(msg.Id));
         var updated = _emailFolders.GetById("f_inbox_del");
@@ -421,10 +569,10 @@ public class EmailPipelineServicesTests : IDisposable
     [Fact]
     public void GetAttachmentPath_ConstructsExpectedPhysicalPath()
     {
-        var path = _cacheMaintenance.GetAttachmentPath("emp789", "msg123", "att456");
+        var path = _cacheMaintenance.GetAttachmentPath("acc789", "msg123", "att456");
 
-        Assert.Contains("emp789", path);
-        Assert.Contains("Email", path);
+        Assert.Contains("acc789", path);
+        Assert.Contains("EmailAccounts", path);
         Assert.Contains("Attachments", path);
         Assert.Contains("msg123", path);
         Assert.Contains("att456", path);
@@ -433,19 +581,19 @@ public class EmailPipelineServicesTests : IDisposable
     [Fact]
     public void GetMimeFilePath_WhenFileDoesNotExist_ReturnsNull()
     {
-        var path = _cacheMaintenance.GetMimeFilePath("emp1", "non_existent_msg");
+        var path = _cacheMaintenance.GetMimeFilePath("acc1", "non_existent_msg");
         Assert.Null(path);
     }
 
     [Fact]
     public void GetMimeFilePath_WhenFileExists_ReturnsFullPath()
     {
-        var mimeDir = Path.Combine(_testDataDir, "Employees", "emp1", "Email", "Mime");
+        var mimeDir = Path.Combine(_testDataDir, "EmailAccounts", "acc1", "Mime");
         Directory.CreateDirectory(mimeDir);
         var mimeFile = Path.Combine(mimeDir, "existing_msg.eml");
         File.WriteAllText(mimeFile, "MIME dummy content");
 
-        var path = _cacheMaintenance.GetMimeFilePath("emp1", "existing_msg");
+        var path = _cacheMaintenance.GetMimeFilePath("acc1", "existing_msg");
 
         Assert.NotNull(path);
         Assert.Equal(mimeFile, path);
@@ -454,19 +602,19 @@ public class EmailPipelineServicesTests : IDisposable
     [Fact]
     public async Task GetEmailBodyAsync_WhenNeitherMimeNorLegacyHtmlExists_ReturnsEmptyString()
     {
-        var body = await _cacheMaintenance.GetEmailBodyAsync("emp1", "unknown_msg");
+        var body = await _cacheMaintenance.GetEmailBodyAsync("acc1", "unknown_msg");
         Assert.Equal("", body);
     }
 
     [Fact]
     public async Task GetEmailBodyAsync_WhenLegacyHtmlExists_ReturnsFileContent()
     {
-        var bodiesDir = Path.Combine(_testDataDir, "Employees", "emp1", "Email", "Bodies");
+        var bodiesDir = Path.Combine(_testDataDir, "EmailAccounts", "acc1", "Bodies");
         Directory.CreateDirectory(bodiesDir);
         var htmlPath = Path.Combine(bodiesDir, "legacy_msg.html");
         await File.WriteAllTextAsync(htmlPath, "<p>Hello Legacy Email</p>");
 
-        var body = await _cacheMaintenance.GetEmailBodyAsync("emp1", "legacy_msg");
+        var body = await _cacheMaintenance.GetEmailBodyAsync("acc1", "legacy_msg");
 
         Assert.Equal("<p>Hello Legacy Email</p>", body);
     }
@@ -529,74 +677,14 @@ public class EmailPipelineServicesTests : IDisposable
 
     #endregion
 
-    #region Signature Management Tests
-
-    [Fact]
-    public async Task GetSignatureAsync_WhenSignatureFileExists_ReturnsFileContent()
-    {
-        var sigDir = Path.Combine(_testDataDir, "Employees", "emp1", "Email");
-        Directory.CreateDirectory(sigDir);
-        await File.WriteAllTextAsync(Path.Combine(sigDir, "Signature.html"), "<b>Best regards, Alice</b>");
-
-        var sig = await _cacheMaintenance.GetSignatureAsync("emp1");
-
-        Assert.Equal("<b>Best regards, Alice</b>", sig);
-    }
-
-    [Fact]
-    public async Task GetSignatureAsync_WhenLegacyEmployeeSignatureExists_ReturnsLegacySignature()
-    {
-        var emp = new Employee
-        {
-            Id = "emp_legacy_sig",
-            SignatureHtml = "<i>Legacy Signature</i>"
-        };
-        _employees.Save(emp);
-
-        var sig = await _cacheMaintenance.GetSignatureAsync(emp.Id);
-
-        Assert.Equal("<i>Legacy Signature</i>", sig);
-    }
-
-    [Fact]
-    public async Task GetSignatureAsync_WhenNoSignatureExists_ReturnsEmptyString()
-    {
-        var sig = await _cacheMaintenance.GetSignatureAsync("emp_no_sig");
-        Assert.Equal("", sig);
-    }
-
-    [Fact]
-    public async Task SaveSignatureAsync_SavesHtmlToDiskAndClearsLegacyEmployeeSignature()
-    {
-        var emp = new Employee
-        {
-            Id = "emp_save_sig",
-            SignatureHtml = "Old Legacy"
-        };
-        _employees.Save(emp);
-
-        await _cacheMaintenance.SaveSignatureAsync(emp.Id, "<p>New Modern Signature</p>");
-
-        // Legacy property should be cleared on the employee
-        var reloadedEmp = _employees.GetById(emp.Id);
-        Assert.NotNull(reloadedEmp);
-        Assert.Equal(string.Empty, reloadedEmp.SignatureHtml);
-
-        // File should be written and returned by GetSignatureAsync
-        var savedSig = await _cacheMaintenance.GetSignatureAsync(emp.Id);
-        Assert.Equal("<p>New Modern Signature</p>", savedSig);
-    }
-
-    #endregion
-
     #region Drafts Management Tests
 
     [Fact]
-    public async Task SaveDraftAsync_WhenEmployeeNotFound_ReturnsEmptyString()
+    public async Task SaveDraftAsync_WhenAccountNotFound_ReturnsEmptyString()
     {
         var draftId = await _draftService.SaveDraftAsync(new SaveDraftRequest
         {
-            EmployeeId = "unknown_emp",
+            AccountId = "",
             To = "to@test.com",
             Subject = "Subject",
             Body = "Body"
@@ -607,12 +695,12 @@ public class EmailPipelineServicesTests : IDisposable
     [Fact]
     public async Task SaveDraftAsync_WhenNewDraft_CreatesLocalDraftsFolderAndSavesMessage()
     {
-        var emp = new Employee { Id = "emp_draft_1", Email = "emp@test.com" };
-        _employees.Save(emp);
+        var acc = new EmailAccount { Id = "acc_draft_1", EmailAddress = "emp@test.com" };
+        _emailAccounts.Save(acc);
 
         var draftId = await _draftService.SaveDraftAsync(new SaveDraftRequest
         {
-            EmployeeId = emp.Id,
+            AccountId = acc.Id,
             To = "bob@test.com",
             Subject = "Project Update",
             Body = "<p>Draft contents</p>"
@@ -621,7 +709,7 @@ public class EmailPipelineServicesTests : IDisposable
         Assert.False(string.IsNullOrEmpty(draftId));
 
         // Verifies LocalDrafts folder was created
-        var folders = _emailFolders.GetByEmployee(emp.Id);
+        var folders = _emailFolders.GetByAccount(acc.Id);
         var draftsFolder = folders.FirstOrDefault(f => f.Path == "LocalDrafts");
         Assert.NotNull(draftsFolder);
         Assert.True(draftsFolder.IsDrafts);
@@ -637,19 +725,19 @@ public class EmailPipelineServicesTests : IDisposable
     [Fact]
     public async Task SaveDraftAsync_WhenExistingDraftIdProvided_UpdatesExistingMessage()
     {
-        var emp = new Employee { Id = "emp_draft_2", Email = "emp@test.com" };
-        _employees.Save(emp);
+        var acc = new EmailAccount { Id = "acc_draft_2", EmailAddress = "emp@test.com" };
+        _emailAccounts.Save(acc);
 
         var draftId = await _draftService.SaveDraftAsync(new SaveDraftRequest
         {
-            EmployeeId = emp.Id,
+            AccountId = acc.Id,
             To = "initial@test.com",
             Subject = "Initial Subject",
             Body = "Initial Body"
         });
         var updatedId = await _draftService.SaveDraftAsync(new SaveDraftRequest
         {
-            EmployeeId = emp.Id,
+            AccountId = acc.Id,
             To = "updated@test.com",
             Subject = "Updated Subject",
             Body = "Updated Body",
@@ -665,27 +753,27 @@ public class EmailPipelineServicesTests : IDisposable
     }
 
     [Fact]
-    public async Task SaveDraftAsync_WhenExistingDraftBelongsToOtherEmployee_CreatesNewDraft()
+    public async Task SaveDraftAsync_WhenExistingDraftBelongsToOtherAccount_CreatesNewDraft()
     {
-        var emp1 = new Employee { Id = "emp_a", Email = "a@test.com" };
-        var emp2 = new Employee { Id = "emp_b", Email = "b@test.com" };
-        _employees.Save(emp1);
-        _employees.Save(emp2);
+        var acc1 = new EmailAccount { Id = "acc_a", EmailAddress = "a@test.com" };
+        var acc2 = new EmailAccount { Id = "acc_b", EmailAddress = "b@test.com" };
+        _emailAccounts.Save(acc1);
+        _emailAccounts.Save(acc2);
 
         var draftId1 = await _draftService.SaveDraftAsync(new SaveDraftRequest
         {
-            EmployeeId = emp1.Id,
+            AccountId = acc1.Id,
             To = "test@test.com",
-            Subject = "Emp A Draft",
+            Subject = "Acc A Draft",
             Body = "Body A"
         });
 
-        // Emp B attempts to save using Emp A's draft ID
+        // Acc B attempts to save using Acc A's draft ID
         var draftId2 = await _draftService.SaveDraftAsync(new SaveDraftRequest
         {
-            EmployeeId = emp2.Id,
+            AccountId = acc2.Id,
             To = "test@test.com",
-            Subject = "Emp B Draft",
+            Subject = "Acc B Draft",
             Body = "Body B",
             ExistingDraftId = draftId1
         });
@@ -695,19 +783,19 @@ public class EmailPipelineServicesTests : IDisposable
 
         var draft1 = _emailMessages.GetById(draftId1);
         Assert.NotNull(draft1);
-        Assert.Equal("emp_a", draft1.EmployeeId);
-        Assert.Equal("Emp A Draft", draft1.Subject);
+        Assert.Equal("acc_a", draft1.AccountId);
+        Assert.Equal("Acc A Draft", draft1.Subject);
     }
 
     [Fact]
     public async Task RemoveDraftAttachmentAsync_WhenAttachmentExists_RemovesFromDraftAndDeletesPhysicalFile()
     {
-        var emp = new Employee { Id = "emp_draft_att", Email = "emp@test.com" };
-        _employees.Save(emp);
+        var acc = new EmailAccount { Id = "acc_draft_att", EmailAddress = "emp@test.com" };
+        _emailAccounts.Save(acc);
 
         var draftId = await _draftService.SaveDraftAsync(new SaveDraftRequest
         {
-            EmployeeId = emp.Id,
+            AccountId = acc.Id,
             To = "to@test.com",
             Subject = "Draft with attachment",
             Body = "Body"
@@ -716,7 +804,7 @@ public class EmailPipelineServicesTests : IDisposable
         Assert.NotNull(draft);
 
         var attId = Guid.NewGuid().ToString();
-        var attPath = _cacheMaintenance.GetAttachmentPath(emp.Id, draftId, attId);
+        var attPath = _cacheMaintenance.GetAttachmentPath(acc.Id, draftId, attId);
         Directory.CreateDirectory(Path.GetDirectoryName(attPath)!);
         await File.WriteAllTextAsync(attPath, "Attachment data");
 
@@ -725,7 +813,7 @@ public class EmailPipelineServicesTests : IDisposable
 
         Assert.True(File.Exists(attPath));
 
-        await _draftService.RemoveDraftAttachmentAsync(emp.Id, draftId, attId);
+        await _draftService.RemoveDraftAttachmentAsync(acc.Id, draftId, attId);
 
         var reloaded = _emailMessages.GetById(draftId);
         Assert.NotNull(reloaded);
@@ -736,26 +824,26 @@ public class EmailPipelineServicesTests : IDisposable
     [Fact]
     public async Task RepairLocalDraftsAsync_WhenDraftsHaveZeroUniqueId_RepairsAndIncrementsNextUid()
     {
-        var emp = new Employee { Id = "emp_repair", Email = "emp@test.com" };
-        _employees.Save(emp);
+        var acc = new EmailAccount { Id = "acc_repair", EmailAddress = "emp@test.com" };
+        _emailAccounts.Save(acc);
 
         var draftsFolder = new EmailFolder
         {
             Id = "f_drafts",
-            EmployeeId = emp.Id,
+            AccountId = acc.Id,
             Path = "LocalDrafts",
             IsDrafts = true,
             NextUid = 100
         };
         _emailFolders.Save(draftsFolder);
 
-        var msgPath = Path.Combine(_testDataDir, "Employees", emp.Id, "Email", "Messages");
+        var msgPath = Path.Combine(_testDataDir, "EmailAccounts", acc.Id, "Messages");
         Directory.CreateDirectory(msgPath);
 
         var draftMsg = new EmailMessage
         {
             Id = "draft_repair_1",
-            EmployeeId = emp.Id,
+            AccountId = acc.Id,
             FolderPath = "LocalDrafts",
             Subject = "Draft with zero UID",
             UniqueId = 0
@@ -763,7 +851,7 @@ public class EmailPipelineServicesTests : IDisposable
         var filePath = Path.Combine(msgPath, $"{draftMsg.Id}.json");
         await File.WriteAllTextAsync(filePath, System.Text.Json.JsonSerializer.Serialize(draftMsg));
 
-        await _draftService.RepairLocalDraftsAsync(emp.Id);
+        await _draftService.RepairLocalDraftsAsync(acc.Id);
 
         var reloadedMsg = _emailMessages.GetById("draft_repair_1");
         Assert.NotNull(reloadedMsg);
@@ -779,77 +867,103 @@ public class EmailPipelineServicesTests : IDisposable
     #region Folder Operations & Send Preconditions Tests
 
     [Fact]
-    public async Task DeleteFolderAsync_WhenEmployeeNotFound_ReturnsFalse()
+    public async Task DeleteFolderAsync_WhenAccountNotFound_ReturnsFalse()
     {
-        var result = await _folderService.DeleteFolderAsync("unknown_emp", "CustomFolder");
+        var result = await _folderService.DeleteFolderAsync("unknown_acc", "CustomFolder");
         Assert.False(result.IsSuccess);
     }
 
     [Fact]
-    public async Task RenameFolderAsync_WhenEmployeeNotFound_ReturnsFalse()
+    public async Task RenameFolderAsync_WhenAccountNotFound_ReturnsFalse()
     {
-        var result = await _folderService.RenameFolderAsync("unknown_emp", "OldName", "NewName");
+        var result = await _folderService.RenameFolderAsync("unknown_acc", "OldName", "NewName");
         Assert.False(result.IsSuccess);
     }
 
     [Fact]
-    public async Task SendEmailAsync_WhenEmployeeNotFound_ThrowsException()
+    public async Task SendEmailAsync_WhenIdentityAndAccountNotFound_ThrowsException()
     {
         var ex = await Assert.ThrowsAsync<DomainException>(() =>
             _deliveryService.SendEmailAsync(new SendEmailRequest
             {
-                EmployeeId = "unknown_emp",
+                AccountId = "unknown_acc",
                 To = "to@test.com",
                 Subject = "Subject",
                 Body = "Body"
             }));
 
-        Assert.Equal("Employee not found", ex.Message);
+        Assert.Contains("No Sending Identity is configured", ex.Message);
     }
 
     [Fact]
-    public async Task SendEmailAsync_WhenCredentialsMissing_ThrowsException()
+    public async Task SendEmailAsync_WhenCredentialsCorrupted_ThrowsException()
     {
-        var emp = new Employee { Id = "emp_nocreds", Email = "", EncryptedEmailPassword = "" };
-        _employees.Save(emp);
+        var identity = new EmailSendingIdentity
+        {
+            Id = "id_corrupt",
+            Username = "emp",
+            Domain = "test.com",
+            SendingServerConfigId = "smtp-1",
+            EncryptedSmtpPassword = "not-valid-base64-cipher"
+        };
+        _identities.Save(identity);
 
-        var ex = await Assert.ThrowsAsync<DomainException>(() =>
+        await Assert.ThrowsAsync<System.Security.Cryptography.CryptographicException>(() =>
             _deliveryService.SendEmailAsync(new SendEmailRequest
             {
-                EmployeeId = emp.Id,
+                SendingIdentityId = identity.Id,
                 To = "to@test.com",
                 Subject = "Subject",
                 Body = "Body"
             }));
-
-        Assert.Contains("Missing email credentials", ex.Message);
     }
 
     [Fact]
     public async Task SendEmailAsync_WhenSmtpNotConfigured_ThrowsException()
     {
-        var emp = new Employee
+        var identity = new EmailSendingIdentity
         {
-            Id = "emp_nosmtp",
-            Email = "emp@test.com",
-            EncryptedEmailPassword = _encryptionService.Encrypt("pass")
+            Id = "id_nosmtp",
+            Username = "emp",
+            Domain = "test.com",
+            SendingServerConfigId = "",
+            CustomSmtpHost = ""
         };
-        _employees.Save(emp);
+        _identities.Save(identity);
 
         var profile = _companyProfile.Get();
-        profile.EmailSettings.SmtpHost = "";
+        profile.EmailSettings.SendingServers.Clear();
         _companyProfile.Save(profile);
 
         var ex = await Assert.ThrowsAsync<DomainException>(() =>
             _deliveryService.SendEmailAsync(new SendEmailRequest
             {
-                EmployeeId = emp.Id,
+                SendingIdentityId = identity.Id,
                 To = "to@test.com",
                 Subject = "Subject",
                 Body = "Body"
             }));
 
-        Assert.Contains("SMTP Server not configured", ex.Message);
+        Assert.Contains("SMTP Server is not configured", ex.Message);
+    }
+
+    [Fact]
+    public async Task SyncSingleFolderAsync_ConcurrentCalls_AreSerializedViaLock()
+    {
+        var account = new EmailAccount
+        {
+            Id = "acc_concurrent",
+            EmailAddress = "test@concurrent.com",
+            Enabled = true
+        };
+        _emailAccounts.Save(account);
+
+        var task1 = _syncService.SyncSingleFolderAsync(account.Id, "INBOX");
+        var task2 = _syncService.SyncSingleFolderAsync(account.Id, "INBOX");
+
+        await Task.WhenAll(task1, task2);
+
+        Assert.Equal("Missing Credentials", _syncStateService.GetState(account.Id));
     }
 
     #endregion

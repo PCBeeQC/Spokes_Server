@@ -5,9 +5,12 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <UserSecretsId>c63dbdc3-b76e-4a41-9f26-417786143fa7</UserSecretsId>
     <NoWarn>$(NoWarn);MSB3568</NoWarn>
+    <!-- .NET 9 Build generates NoCompression .gz wrappers that block runtime Brotli ResponseCompression; Publish still precompresses .br/.gz. -->
+    <DisableBuildCompression>true</DisableBuildCompression>
   </PropertyGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="Spokes_Server.Tests" />
+    <InternalsVisibleTo Include="Spokes_Server.QcTests" />
     <InternalsVisibleTo Include="DynamicProxyGenAssembly2" />
   </ItemGroup>
   <ItemGroup>
@@ -28,6 +31,7 @@
     <PackageReference Include="Microsoft.Data.Sqlite" Version="9.0.2" />
     <PackageReference Include="MimeKit" Version="4.18.0" />
     <PackageReference Include="MudBlazor" Version="9.10.0" />
+    <PackageReference Include="NWaves" Version="0.9.6" />
     <PackageReference Include="PdfPig" Version="0.1.16" />
     <PackageReference Include="PuppeteerSharp" Version="25.10.0" />
     <PackageReference Include="SkiaSharp" Version="4.152.0" />

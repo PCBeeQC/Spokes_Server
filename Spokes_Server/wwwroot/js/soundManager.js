@@ -30,7 +30,7 @@ window.SoundManager = (function() {
         await applySinkId();
     }
 
-    async function init() {
+    async function init(preloadDefaults = false) {
         if (isInitialized) return;
         
         try {
@@ -39,7 +39,7 @@ window.SoundManager = (function() {
             await applySinkId();
             
             // Preload essential default sounds
-            const fetchPromises = defaultSoundsToLoad.map(async (soundName) => {
+            const fetchPromises = (preloadDefaults ? defaultSoundsToLoad : []).map(async (soundName) => {
                 await loadSound(soundName);
             });
 
@@ -118,7 +118,7 @@ window.SoundManager = (function() {
     }
 
     // Attempt early initialization
-    init();
+    // Lazy-init AudioContext and decode .wav buffers on first playback instead of downloading 622 KB during cold boot.
 
     function stopCallRingtone() {
         if (callTimeout) {
@@ -206,11 +206,14 @@ window.SoundManager = (function() {
 
                 const key = sanitizeSoundName(soundName);
                 const isChannelLeave = key === 'channel_leave';
-                const isNativeMobile = window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform();
+                const isNativeMobile = typeof window.isCapacitorNative === 'function'
+                    ? window.isCapacitorNative()
+                    : Boolean(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
+                const isMobileDevice = isNativeMobile || /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent || '');
                 // CRITICAL FIX: Playing Web Audio on mobile WebViews during active WebRTC VoiceChat 
                 // forces the OS to switch AudioSession categories and revokes mic permissions.
                 // Previews in user settings and channel leave sounds (after WebRTC disconnect) are safe and permitted on mobile.
-                if (isNativeMobile && !isPreview && !isChannelLeave) {
+                if ((isNativeMobile || (isMobileDevice && window._spokesInVoiceCall)) && !isPreview && !isChannelLeave) {
                     return;
                 }
 

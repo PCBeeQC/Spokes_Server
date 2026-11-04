@@ -101,6 +101,11 @@ public class ChatHub : Hub
             throw new HubException("User is not authenticated.");
         }
 
+        if (employee.IsSuspended)
+        {
+            throw new HubException("User account is suspended (read-only mode).");
+        }
+
         var options = new SendMessageOptions
         {
             SenderId = employee.Id,
@@ -122,10 +127,10 @@ public class ChatHub : Hub
     public async Task StartTypingAsync(string channelId)
     {
         var employee = GetCurrentEmployee();
-        if (employee == null) return;
+        if (employee == null || employee.IsSuspended) return;
 
         var channel = _channels.GetById(channelId);
-        if (channel == null || !_chatAuth.CanUserAccessChannel(channel, employee)) return;
+        if (channel == null || !_chatAuth.CanUserAccessChannel(channel, employee) || !_chatAuth.CanUserPostToChannel(channel, employee)) return;
 
         await _chatService.StartTypingAsync(employee.Id, channelId);
     }
@@ -136,10 +141,10 @@ public class ChatHub : Hub
     public async Task StopTypingAsync(string channelId)
     {
         var employee = GetCurrentEmployee();
-        if (employee == null) return;
+        if (employee == null || employee.IsSuspended) return;
 
         var channel = _channels.GetById(channelId);
-        if (channel == null || !_chatAuth.CanUserAccessChannel(channel, employee)) return;
+        if (channel == null || !_chatAuth.CanUserAccessChannel(channel, employee) || !_chatAuth.CanUserPostToChannel(channel, employee)) return;
 
         await _chatService.StopTypingAsync(employee.Id, channelId);
     }
@@ -153,6 +158,11 @@ public class ChatHub : Hub
         if (employee == null)
         {
             throw new HubException("User is not authenticated.");
+        }
+
+        if (employee.IsSuspended)
+        {
+            throw new HubException("User account is suspended (read-only mode).");
         }
 
         var result = await _chatService.EditMessageAsync(employee.Id, messageId, newContent);
@@ -173,6 +183,11 @@ public class ChatHub : Hub
             throw new HubException("User is not authenticated.");
         }
 
+        if (employee.IsSuspended)
+        {
+            throw new HubException("User account is suspended (read-only mode).");
+        }
+
         var result = await _chatService.DeleteMessageAsync(employee.Id, messageId);
         if (!result.IsSuccess)
         {
@@ -189,6 +204,11 @@ public class ChatHub : Hub
         if (employee == null)
         {
             throw new HubException("User is not authenticated.");
+        }
+
+        if (employee.IsSuspended)
+        {
+            throw new HubException("User account is suspended (read-only mode).");
         }
 
         var result = await _chatService.AddReactionAsync(employee.Id, messageId, emoji);
@@ -209,6 +229,11 @@ public class ChatHub : Hub
             throw new HubException("User is not authenticated.");
         }
 
+        if (employee.IsSuspended)
+        {
+            throw new HubException("User account is suspended (read-only mode).");
+        }
+
         var result = await _chatService.RemoveReactionAsync(employee.Id, messageId, emoji);
         if (!result.IsSuccess)
         {
@@ -218,6 +243,10 @@ public class ChatHub : Hub
 
     private Employee? GetCurrentEmployee()
     {
-        return Context.User == null ? null : _userService.GetEmployee(Context.User);
+        if (Context.User == null) return null;
+        var emp = _userService.GetEmployee(Context.User);
+        if (emp == null || !emp.IsActive || emp.IsBanned)
+            return null;
+        return emp;
     }
 }

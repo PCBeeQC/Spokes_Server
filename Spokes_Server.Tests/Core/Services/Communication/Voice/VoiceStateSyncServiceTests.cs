@@ -84,7 +84,74 @@ public class VoiceStateSyncServiceTests : IDisposable
         {
         }
 
+        protected override TimeSpan InitialDelay => TimeSpan.FromMilliseconds(20);
+        protected override TimeSpan PollInterval => TimeSpan.FromMilliseconds(20);
+
         public Task RunExecuteAsync(CancellationToken token) => ExecuteAsync(token);
+        public Task RunSyncOnceAsync(CancellationToken token) => SyncActiveChannelsOnceAsync(token);
+    }
+
+    [Fact]
+    public async Task SyncActiveChannelsOnceAsync_WhenUserMissingFromLiveKit_LeavesVoiceWithoutEvictingFromLiveKit()
+    {
+        var configDict = new Dictionary<string, string?> { ["DataPath"] = _testDataDir };
+        var config = new ConfigurationBuilder().AddInMemoryCollection(configDict).Build();
+
+        var chatState = new ChatStateService();
+        chatState.NotifyVoiceMemberJoined("chan-sync", "user-present");
+        chatState.NotifyVoiceMemberJoined("chan-sync", "user-missing");
+
+        var mockVoiceChannel = new Mock<VoiceChannelService>();
+        var mockLiveKit = new Mock<LiveKitService>(Mock.Of<ILogger<LiveKitService>>(), config);
+        mockLiveKit
+            .Setup(x => x.GetRoomParticipantIdentitiesAsync("chan-sync", "test-key", "test-secret", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<string> { "user-present" });
+
+        _mockScopedProvider.Setup(x => x.GetService(typeof(ChatStateService))).Returns(chatState);
+        _mockScopedProvider.Setup(x => x.GetService(typeof(VoiceChannelService))).Returns(mockVoiceChannel.Object);
+        _mockScopedProvider.Setup(x => x.GetService(typeof(SystemConfigRepository))).Returns(_db.SystemConfigs);
+        _mockScopedProvider.Setup(x => x.GetService(typeof(LiveKitService))).Returns(mockLiveKit.Object);
+
+        var service = new TestableVoiceStateSyncService(_mockServiceProvider.Object, _mockLogger.Object, config);
+        await service.RunSyncOnceAsync(CancellationToken.None);
+
+        mockVoiceChannel.Verify(
+            x => x.LeaveVoiceAsync("chan-sync", "user-missing", false, It.IsAny<CancellationToken>()),
+            Times.Once);
+        mockVoiceChannel.Verify(
+            x => x.LeaveVoiceAsync("chan-sync", "user-present", It.IsAny<bool>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task SyncActiveChannelsOnceAsync_WhenOrphanedCameraCompanionPresent_EvictsCompanionFromLiveKit()
+    {
+        var configDict = new Dictionary<string, string?> { ["DataPath"] = _testDataDir };
+        var config = new ConfigurationBuilder().AddInMemoryCollection(configDict).Build();
+
+        var chatState = new ChatStateService();
+        chatState.NotifyVoiceMemberJoined("chan-sync", "user-present");
+
+        var mockVoiceChannel = new Mock<VoiceChannelService>();
+        var mockLiveKit = new Mock<LiveKitService>(Mock.Of<ILogger<LiveKitService>>(), config);
+        mockLiveKit
+            .Setup(x => x.GetRoomParticipantIdentitiesAsync("chan-sync", "test-key", "test-secret", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<string> { "user-present", "user-present:cam", "user-gone:cam" });
+
+        _mockScopedProvider.Setup(x => x.GetService(typeof(ChatStateService))).Returns(chatState);
+        _mockScopedProvider.Setup(x => x.GetService(typeof(VoiceChannelService))).Returns(mockVoiceChannel.Object);
+        _mockScopedProvider.Setup(x => x.GetService(typeof(SystemConfigRepository))).Returns(_db.SystemConfigs);
+        _mockScopedProvider.Setup(x => x.GetService(typeof(LiveKitService))).Returns(mockLiveKit.Object);
+
+        var service = new TestableVoiceStateSyncService(_mockServiceProvider.Object, _mockLogger.Object, config);
+        await service.RunSyncOnceAsync(CancellationToken.None);
+
+        mockLiveKit.Verify(
+            x => x.RemoveParticipantAsync("chan-sync", "user-gone:cam", "test-key", "test-secret", It.IsAny<CancellationToken>()),
+            Times.Once);
+        mockLiveKit.Verify(
+            x => x.RemoveParticipantAsync("chan-sync", "user-present:cam", It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()),
+            Times.Never);
     }
 
     [Fact]
@@ -186,8 +253,8 @@ public class VoiceStateSyncServiceTests : IDisposable
         var service = new TestableVoiceStateSyncService(_mockServiceProvider.Object, _mockLogger.Object, config);
         
         using var cts = new CancellationTokenSource();
-        // Wait 6s to allow the initial 5s delay to pass and hit the loop before canceling
-        cts.CancelAfter(TimeSpan.FromSeconds(6.0));
+        // Allow the initial delay to pass and hit the loop before canceling
+        cts.CancelAfter(TimeSpan.FromMilliseconds(150));
 
         Assert.NotNull(service);
         Assert.NotNull(chatState);

@@ -1,5 +1,8 @@
 namespace Spokes_Server.Core.Models.Communication;
 
+using System;
+using System.Collections.Generic;
+
 public class ChatIndexEntry
 {
     public string Id { get; set; } = string.Empty;
@@ -26,4 +29,19 @@ public class ChatIndexEntry
     /// IDs of any albums mentioned in this message. Stored in index metadata to avoid disk reads during album synchronization.
     /// </summary>
     public List<string> MentionedAlbumIds { get; set; } = [];
+
+    /// <summary>
+    /// True if the message contains image attachments or inline GIF media.
+    /// </summary>
+    public bool HasImages { get; set; }
+
+    /// <summary>
+    /// True if the message contains non-image file attachments.
+    /// </summary>
+    public bool HasFiles { get; set; }
+
+    /// <summary>
+    /// True if the message contains one or more web URLs.
+    /// </summary>
+    public bool HasLinks { get; set; }
 }

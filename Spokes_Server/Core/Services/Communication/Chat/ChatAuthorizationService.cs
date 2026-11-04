@@ -87,7 +87,7 @@ public class ChatAuthorizationService : IChatAuthorizationService, IChatChannelA
 
     public bool CanUserAccessChannel(ChatChannel? channel, Employee? employee)
     {
-        if (channel == null || employee == null || !employee.IsActive || employee.IsSuspended || employee.IsBanned)
+        if (channel == null || employee == null || !employee.IsActive || employee.IsBanned)
         {
             return false;
         }
@@ -252,7 +252,7 @@ public class ChatAuthorizationService : IChatAuthorizationService, IChatChannelA
     {
         if (string.IsNullOrEmpty(userId)) return [];
         var employee = _employees.GetById(userId);
-        if (employee == null) return [];
+        if (employee == null || !employee.IsActive || employee.IsBanned) return [];
 
         var userProjectIds = GetUserProjectIds(employee);
         var userTeamIds = GetUserTeamIds(employee);
@@ -279,7 +279,7 @@ public class ChatAuthorizationService : IChatAuthorizationService, IChatChannelA
         if (channel == null) return [];
 
         var validUserIds = new List<string>();
-        var allActiveEmployees = _employees.GetAll().Where(e => e.IsActive).ToList();
+        var allActiveEmployees = _employees.GetAll().Where(e => e.IsActive && !e.IsBanned).ToList();
 
         foreach (var emp in allActiveEmployees)
         {
@@ -302,6 +302,25 @@ public class ChatAuthorizationService : IChatAuthorizationService, IChatChannelA
         if (channel.IsEncrypted && !isSessionUnlocked)
         {
             return false;
+        }
+
+        // 1-to-1 Direct channels are immutable and cannot be managed/edited by anyone (including admins)
+        if (channel.ChannelType == ChatChannelType.Direct)
+        {
+            return false;
+        }
+
+        // Private Group channels can only be managed by their creator or an Admin who is already a participant
+        if (channel.ChannelType == ChatChannelType.Group)
+        {
+            if (!string.IsNullOrEmpty(channel.CreatedById) && channel.CreatedById == employee.Id)
+            {
+                return true;
+            }
+
+            return employee.IsAdmin &&
+                   channel.ParticipantIds != null &&
+                   channel.ParticipantIds.Contains(employee.Id);
         }
 
         if (employee.IsAdmin)
@@ -347,6 +366,23 @@ public class ChatAuthorizationService : IChatAuthorizationService, IChatChannelA
         if (channel.IsEncrypted && !isSessionUnlocked)
         {
             return false;
+        }
+
+        if (channel.ChannelType == ChatChannelType.Direct)
+        {
+            return false;
+        }
+
+        if (channel.ChannelType == ChatChannelType.Group)
+        {
+            if (!string.IsNullOrEmpty(channel.CreatedById) && channel.CreatedById == employee.Id)
+            {
+                return true;
+            }
+
+            return employee.IsAdmin &&
+                   channel.ParticipantIds != null &&
+                   channel.ParticipantIds.Contains(employee.Id);
         }
 
         if (employee.IsAdmin)

@@ -218,7 +218,7 @@ public class UserServiceTests : IDisposable
             Assert.True(result.IsSystem);
             Assert.Contains(AppPermissions.Projects.View, result.Permissions);
             Assert.Contains(AppPermissions.Purchases.ViewPOs, result.Permissions);
-            Assert.Contains(AppPermissions.Purchases.ManagePOs, result.Permissions);
+            Assert.DoesNotContain(AppPermissions.Purchases.ManagePOs, result.Permissions);
             Assert.Contains(AppPermissions.BusinessDocuments.View, result.Permissions);
         }
 
@@ -615,7 +615,7 @@ public class UserServiceTests : IDisposable
         }
 
         [Fact]
-        public void ProvisionOrSyncOidcUser_ExistingEmployeeMatchedByEmail_LinksToOpenIdAccount()
+        public void ProvisionOrSyncOidcUser_ExistingEmployeeWithSameEmail_CreatesDistinctNewEmployeeWithoutAutoLinking()
         {
             var emp = new Employee
             {
@@ -623,14 +623,264 @@ public class UserServiceTests : IDisposable
                 FirstName = "Existing",
                 LastName = "User",
                 Email = "match@example.com",
+                IsAdmin = true,
                 IsActive = true
             };
             _employees.Save(emp);
 
             var result = _service.ProvisionOrSyncOidcUser("sub-match", "Match User", "match@example.com");
 
+            Assert.True(result.IsFirstTimeLogin);
             Assert.NotNull(result.Employee);
-            Assert.Equal(emp.Id, result.Employee.Id);
-            Assert.Equal(emp.Id, result.Account.LinkedEmployeeId);
+            Assert.NotEqual(emp.Id, result.Employee.Id);
+            Assert.Equal(result.Employee.Id, result.Account.LinkedEmployeeId);
+            Assert.False(result.Employee.IsAdmin);
+            Assert.Equal(2, _employees.GetAll().Count());
+        }
+
+        [Fact]
+        public void ProvisionOrSyncOidcUser_ExistingEmployeeWithSameDisplayName_CreatesDistinctNewEmployeeWithoutAutoLinking()
+        {
+            var emp = new Employee
+            {
+                Id = "emp-alice",
+                FirstName = "Alice",
+                LastName = "Admin",
+                Email = "alice@example.com",
+                IsAdmin = true,
+                IsActive = true
+            };
+            _employees.Save(emp);
+
+            var result = _service.ProvisionOrSyncOidcUser("sub-imposter", "Alice Admin", "other@example.com");
+
+            Assert.NotNull(result.Employee);
+            Assert.NotEqual(emp.Id, result.Employee.Id);
+            Assert.Equal(result.Employee.Id, result.Account.LinkedEmployeeId);
+            Assert.False(result.Employee.IsAdmin);
+        }
+
+        [Fact]
+        public void ProvisionOrSyncOidcUser_WhenAutoCreateDisabled_LeavesAccountUnlinkedEvenWhenEmailMatches()
+        {
+            var profile = _companyProfiles.GetOrCreate();
+            profile.AutoCreateEmployeeOnFirstLogin = false;
+            _companyProfiles.Save(profile);
+
+            var emp = new Employee
+            {
+                Id = "emp-existing",
+                FirstName = "Target",
+                LastName = "Admin",
+                Email = "target@example.com",
+                IsAdmin = true,
+                IsActive = true
+            };
+            _employees.Save(emp);
+
+            var service = new UserService(_mockAuth.Object, _employees, _openIdAccounts, _companyProfiles, _teams);
+            var result = service.ProvisionOrSyncOidcUser("sub-pending", "Target Admin", "target@example.com");
+
+            Assert.True(result.IsFirstTimeLogin);
+            Assert.Null(result.Employee);
+            Assert.True(string.IsNullOrEmpty(result.Account.LinkedEmployeeId));
+        }
+
+        [Fact]
+        public void GetCurrentUser_NeverFallsBackToEmailOrDisplayName()
+        {
+            var victim = new Employee
+            {
+                Id = "emp-victim",
+                FirstName = "Victim",
+                LastName = "User",
+                Email = "victim@example.com",
+                IsActive = true
+            };
+            _employees.Save(victim);
+
+            var unlinkedPrincipal = new ClaimsPrincipal(new ClaimsIdentity(
+            [
+                new Claim("sub", "unlinked-sub"),
+                new Claim(ClaimTypes.NameIdentifier, victim.Id),
+                new Claim(ClaimTypes.Name, victim.Email),
+                new Claim("email", victim.Email)
+            ], "Cookies"));
+
+            Assert.Null(_service.GetCurrentUser(unlinkedPrincipal));
+        }
+
+        [Fact]
+        public void SetUserActiveState_DeactivatingUser_PersistsInactiveAndRevokesSessionsAndVault()
+        {
+            var emp = new Employee
+            {
+                Id = "emp-deact",
+                FirstName = "Deactivate",
+                LastName = "Me",
+                IsActive = true
+            };
+            _employees.Save(emp);
+
+            var deviceSessions = new DeviceSessionRepository(_persistence, _config);
+            deviceSessions.Save(new DeviceSession
+            {
+                Id = "sess-deact-1",
+                EmployeeId = emp.Id,
+                HasVaultCookie = true,
+                ExpiresAt = DateTime.UtcNow.AddDays(30)
+            });
+
+            var globalKeystore = new Spokes_Server.Core.Services.Security.GlobalKeystoreService();
+            var mockCrypto = new Mock<Spokes_Server.Core.Services.Security.ICryptoService>();
+            mockCrypto.Setup(c => c.DeriveKeyFromPassword(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<int>())).Returns("kek");
+            mockCrypto.Setup(c => c.DecryptAes(It.IsAny<string>(), "kek")).Returns("<RSAKeyValue><Modulus>abc</Modulus></RSAKeyValue>");
+            Assert.True(globalKeystore.UnlockVault(emp.Id, "enc_priv_key", "vault_pwd", mockCrypto.Object));
+
+            var sessionService = new Spokes_Server.Core.Services.Security.SessionService(
+                deviceSessions,
+                _employees,
+                globalKeystore: globalKeystore);
+
+            var service = new UserService(_mockAuth.Object, _employees, _openIdAccounts, _companyProfiles, _teams, sessionService: sessionService);
+
+            service.SetUserActiveState(emp.Id, isActive: false);
+            Assert.False(_employees.GetById(emp.Id)!.IsActive);
+            Assert.NotNull(deviceSessions.GetById("sess-deact-1")!.RevokedAt);
+            Assert.False(deviceSessions.GetById("sess-deact-1")!.HasVaultCookie);
+            Assert.False(globalKeystore.IsUserUnlocked(emp.Id));
+        }
+
+        [Fact]
+        public void ToggleModerationSuspension_And_ToggleModerationBan_EnforcePermissionsAndRevokeSessions()
+        {
+            var moderator = new Employee
+            {
+                Id = "emp-mod-1",
+                FirstName = "Mod",
+                LastName = "User",
+                IsActive = true,
+                Permissions = [AppPermissions.Chat.Moderator]
+            };
+            var admin = new Employee
+            {
+                Id = "emp-admin-1",
+                FirstName = "Admin",
+                LastName = "User",
+                IsActive = true,
+                IsAdmin = true
+            };
+            var regular = new Employee
+            {
+                Id = "emp-reg-1",
+                FirstName = "Regular",
+                LastName = "User",
+                IsActive = true
+            };
+
+            _employees.Save(moderator);
+            _employees.Save(admin);
+            _employees.Save(regular);
+
+            var deviceSessions = new DeviceSessionRepository(_persistence, _config);
+            deviceSessions.Save(new DeviceSession
+            {
+                Id = "sess-ban-1",
+                EmployeeId = regular.Id,
+                ExpiresAt = DateTime.UtcNow.AddDays(30)
+            });
+
+            var sessionService = new Spokes_Server.Core.Services.Security.SessionService(deviceSessions, _employees);
+            var service = new UserService(_mockAuth.Object, _employees, _openIdAccounts, _companyProfiles, _teams, sessionService: sessionService);
+
+            Assert.True(UserService.CanModerateUserTarget(moderator, regular));
+            Assert.False(UserService.CanModerateUserTarget(moderator, admin));
+            Assert.False(UserService.CanModerateUserTarget(regular, moderator));
+
+            // Regular user cannot suspend or ban
+            Assert.False(service.ToggleModerationSuspension(regular.Id, moderator.Id).IsSuccess);
+            Assert.False(service.ToggleModerationBan(regular.Id, moderator.Id).IsSuccess);
+
+            // Moderator cannot suspend or ban admin
+            var forbidAdmin = service.ToggleModerationSuspension(moderator.Id, admin.Id);
+            Assert.False(forbidAdmin.IsSuccess);
+            Assert.Equal("FORBIDDEN_TARGET", forbidAdmin.Code);
+
+            // Moderator suspends and unsuspends regular user
+            var suspendRes = service.ToggleModerationSuspension(moderator.Id, regular.Id);
+            Assert.True(suspendRes.IsSuccess);
+            Assert.True(suspendRes.Value);
+            Assert.True(_employees.GetById(regular.Id)!.IsSuspended);
+
+            var unsuspendRes = service.ToggleModerationSuspension(moderator.Id, regular.Id);
+            Assert.True(unsuspendRes.IsSuccess);
+            Assert.False(unsuspendRes.Value);
+            Assert.False(_employees.GetById(regular.Id)!.IsSuspended);
+
+            // Moderator bans regular user -> quarantines sessions for /banned without setting RevokedAt
+            var bannedIds = new List<string>();
+            sessionService.OnSessionBanned += id => bannedIds.Add(id);
+
+            var banRes = service.ToggleModerationBan(moderator.Id, regular.Id);
+            Assert.True(banRes.IsSuccess);
+            Assert.True(banRes.Value);
+            Assert.True(_employees.GetById(regular.Id)!.IsBanned);
+            Assert.Null(deviceSessions.GetById("sess-ban-1")!.RevokedAt);
+            Assert.Equal(string.Empty, deviceSessions.GetById("sess-ban-1")!.TokenHash);
+            Assert.Contains("sess-ban-1", bannedIds);
+        }
+
+        [Fact]
+        public void SetUserBanState_BanningUser_PersistsBanAndQuarantinesSessionsWithoutSettingRevokedAt()
+        {
+            var emp = new Employee
+            {
+                Id = "emp-ban-quarantine",
+                FirstName = "Ban",
+                LastName = "Target",
+                IsActive = true
+            };
+            _employees.Save(emp);
+
+            var deviceSessions = new DeviceSessionRepository(_persistence, _config);
+            deviceSessions.Save(new DeviceSession
+            {
+                Id = "sess-ban-q1",
+                EmployeeId = emp.Id,
+                TokenHash = "pre_ban_hash",
+                IdToken = "preserved_oidc_id_token",
+                HasVaultCookie = true,
+                ExpiresAt = DateTime.UtcNow.AddDays(30)
+            });
+
+            var globalKeystore = new Spokes_Server.Core.Services.Security.GlobalKeystoreService();
+            var mockCrypto = new Mock<Spokes_Server.Core.Services.Security.ICryptoService>();
+            mockCrypto.Setup(c => c.DeriveKeyFromPassword(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<int>())).Returns("kek");
+            mockCrypto.Setup(c => c.DecryptAes(It.IsAny<string>(), "kek")).Returns("<RSAKeyValue><Modulus>abc</Modulus></RSAKeyValue>");
+            Assert.True(globalKeystore.UnlockVault(emp.Id, "enc_priv_key", "vault_pwd", mockCrypto.Object));
+
+            var sessionService = new Spokes_Server.Core.Services.Security.SessionService(
+                deviceSessions,
+                _employees,
+                globalKeystore: globalKeystore);
+
+            var bannedSessions = new List<string>();
+            var revokedSessions = new List<string>();
+            sessionService.OnSessionBanned += id => bannedSessions.Add(id);
+            sessionService.OnSessionRevoked += id => revokedSessions.Add(id);
+
+            var service = new UserService(_mockAuth.Object, _employees, _openIdAccounts, _companyProfiles, _teams, sessionService: sessionService);
+
+            service.SetUserBanState(emp.Id, isBanned: true);
+
+            Assert.True(_employees.GetById(emp.Id)!.IsBanned);
+            var quarantined = deviceSessions.GetById("sess-ban-q1")!;
+            Assert.Null(quarantined.RevokedAt);
+            Assert.Equal("preserved_oidc_id_token", quarantined.IdToken);
+            Assert.Equal(string.Empty, quarantined.TokenHash);
+            Assert.False(quarantined.HasVaultCookie);
+            Assert.False(globalKeystore.IsUserUnlocked(emp.Id));
+            Assert.Contains("sess-ban-q1", bannedSessions);
+            Assert.Empty(revokedSessions);
         }
     }

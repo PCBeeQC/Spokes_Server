@@ -64,6 +64,11 @@ public class ReportedMessage : IDataEntity
     /// The name of the moderator who resolved this report.
     /// </summary>
     public string ResolvedBy { get; set; } = string.Empty;
+
+    /// <summary>
+    /// UTC timestamp when the report was dismissed or resolved.
+    /// </summary>
+    public DateTime? ResolvedAt { get; set; }
 }
 
 public static class ReportedMessageStatus
@@ -71,4 +76,11 @@ public static class ReportedMessageStatus
     public const string Open = "Open";
     public const string Resolved = "Resolved";
     public const string Dismissed = "Dismissed";
+}
+
+public static class ReportedMessageResolution
+{
+    public const string Dismissed = "Dismissed";
+    public const string DeletedMessage = "Deleted Message";
+    public const string DeletedContentPlaceholder = "content deleted";
 }

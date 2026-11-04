@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <root>
   <xsd:schema id="root" xmlns="" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:msdata="urn:schemas-microsoft-com:xml-msdata">
     <xsd:import namespace="http://www.w3.org/XML/1998/namespace" />
@@ -95,21 +95,12 @@
   <data name="Project Statuses" xml:space="preserve">
     <value>Projektstatus</value>
   </data>
-  <data name="Email Server" xml:space="preserve">
-    <value>E-Mail-Server</value>
-  </data>
   <data name="Timesheets" xml:space="preserve">
     <value>Stundenzettel</value>
   </data>
   <!-- HR & Employee Details -->
   <data name="HR Details" xml:space="preserve">
     <value>HR-Details</value>
-  </data>
-  <data name="Email Password" xml:space="preserve">
-    <value>E-Mail-Passwort</value>
-  </data>
-  <data name="New Email Password" xml:space="preserve">
-    <value>Neues E-Mail-Passwort</value>
   </data>
   <data name="Position / Title" xml:space="preserve">
     <value>Position / Titel</value>
@@ -141,6 +132,15 @@
   </data>
   <data name="Chat Messages" xml:space="preserve">
     <value>Chat-Nachrichten</value>
+  </data>
+  <data name="Incoming Emails" xml:space="preserve">
+    <value>Eingehende E-Mails</value>
+  </data>
+  <data name="Notifications for new incoming email messages." xml:space="preserve">
+    <value>Benachrichtigungen für neue eingehende E-Mails.</value>
+  </data>
+  <data name="Customize notification sounds for chats, calls, calendar alerts, and emails." xml:space="preserve">
+    <value>Passen Sie die Benachrichtigungstöne für Chats, Anrufe, Kalenderbenachrichtigungen und E-Mails an.</value>
   </data>
   <data name="Emails" xml:space="preserve">
     <value>E-Mails</value>

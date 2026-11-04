@@ -40,6 +40,29 @@ public interface IVoiceUiStateService
     bool IsIosVoiceIsolationActive { get; }
 
     VoiceUserSettings VoiceSettings { get; set; }
+    bool HasLoadedVoiceSettings { get; }
+
+    bool IsCallStageVisible { get; }
+    bool IsInAppPipMinimized { get; }
+    bool IsOsPipActive { get; }
+    bool IsNativeMobilePipMode { get; }
+    string? FocusedParticipantId { get; }
+    bool IsGridLayoutForcedByUser { get; }
+    bool ShouldShowInAppPip { get; }
+    bool IsInAppPipCollapsedPill { get; }
+
+    event Action? OnPipStateChanged;
+    event Action? OnReturnToCallStageRequested;
+
+    void SetCallStageVisible(bool visible);
+    void SetFocusedParticipant(string? participantId, bool userInitiated = false);
+    void ToggleFocusParticipant(string participantId);
+    void SetInAppPipMinimized(bool minimized);
+    void RequestReturnToCallStage();
+    Task<bool> ToggleOsPipAsync();
+    Task<bool> IsOsPipSupportedAsync();
+    Task SyncPipMetadataAsync(VoicePipMetadataPayload payload);
+    Task SetInAppPipActiveAsync(bool active);
 
     void UpdateAudioDevices(List<AudioDevice> mics, string activeMicId, List<AudioDevice> speakers, string activeSpeakerId);
     void ApplyLocalVideoDimensions(int maxEdge, int fps);

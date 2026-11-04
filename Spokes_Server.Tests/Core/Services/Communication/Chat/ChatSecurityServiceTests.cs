@@ -488,6 +488,113 @@ public class ChatSecurityServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task SecureSearchMessagesAsync_WithIsPictureFilter_ReturnsOnlyMessagesWithPictures()
+    {
+        // Arrange
+        var channel = new ChatChannel { Id = "chan-filter-pic", Name = "General", IsEncrypted = false };
+        _channels.Save(channel);
+
+        var msgText = new ChatMessage { Id = "msg-text", ChannelId = "chan-filter-pic", Content = "plain text", SentAt = DateTime.UtcNow };
+        var msgPic = new ChatMessage
+        {
+            Id = "msg-pic",
+            ChannelId = "chan-filter-pic",
+            Content = "look at this",
+            Attachments = [new ChatAttachment { Id = "att-1", FileName = "screenshot.png", ContentType = "image/png" }],
+            SentAt = DateTime.UtcNow
+        };
+        _messages.Save(msgText);
+        _messages.Save(msgPic);
+
+        // Act
+        var results = await _service.SecureSearchMessagesAsync("chan-filter-pic", "isPicture:", "user-1");
+
+        // Assert
+        Assert.Single(results);
+        Assert.Equal("msg-pic", results[0].Id);
+    }
+
+    [Fact]
+    public async Task SecureSearchMessagesAsync_WithFromFilter_ReturnsOnlyMessagesFromSender()
+    {
+        // Arrange
+        var empAlice = new Employee { Id = "emp-alice", FirstName = "Alice", LastName = "Smith", IsActive = true };
+        var empBob = new Employee { Id = "emp-bob", FirstName = "Bob", LastName = "Jones", IsActive = true };
+        _employees.Save(empAlice);
+        _employees.Save(empBob);
+
+        var channel = new ChatChannel { Id = "chan-filter-from", Name = "General", IsEncrypted = false };
+        _channels.Save(channel);
+
+        var msgAlice = new ChatMessage { Id = "msg-a", ChannelId = "chan-filter-from", SenderId = "emp-alice", Content = "roadmap discussion", SentAt = DateTime.UtcNow };
+        var msgBob = new ChatMessage { Id = "msg-b", ChannelId = "chan-filter-from", SenderId = "emp-bob", Content = "roadmap budget", SentAt = DateTime.UtcNow };
+        _messages.Save(msgAlice);
+        _messages.Save(msgBob);
+
+        // Act - search with from:Alice
+        var results = await _service.SecureSearchMessagesAsync("chan-filter-from", "from:Alice roadmap", "emp-alice");
+
+        // Assert
+        Assert.Single(results);
+        Assert.Equal("msg-a", results[0].Id);
+    }
+
+    [Fact]
+    public async Task SecureSearchMessagesAsync_WithFromAdmin_ReturnsAdminMessages()
+    {
+        // Arrange
+        var adminEmp = new Employee { Id = "emp-admin", FirstName = "Mats", LastName = "Dallaire", IsAdmin = true, IsActive = true };
+        var memberEmp = new Employee { Id = "emp-member", FirstName = "Alice", LastName = "Smith", IsAdmin = false, IsActive = true };
+        _employees.Save(adminEmp);
+        _employees.Save(memberEmp);
+
+        var channel = new ChatChannel { Id = "chan-filter-admin", Name = "General", IsEncrypted = false };
+        _channels.Save(channel);
+
+        var msgAdmin = new ChatMessage { Id = "msg-adm-1", ChannelId = "chan-filter-admin", SenderId = "emp-admin", Content = "Server maintenance tonight", SentAt = DateTime.UtcNow };
+        var msgMember = new ChatMessage { Id = "msg-mem-1", ChannelId = "chan-filter-admin", SenderId = "emp-member", Content = "Server status ok", SentAt = DateTime.UtcNow };
+        _messages.Save(msgAdmin);
+        _messages.Save(msgMember);
+
+        // Act - search with from:admin (no space)
+        var resultsNoSpace = await _service.SecureSearchMessagesAsync("chan-filter-admin", "from:admin server", "emp-member");
+
+        // Act - search with from: admin (with space)
+        var resultsWithSpace = await _service.SecureSearchMessagesAsync("chan-filter-admin", "from: admin server", "emp-member");
+
+        // Assert
+        Assert.Single(resultsNoSpace);
+        Assert.Equal("msg-adm-1", resultsNoSpace[0].Id);
+
+        Assert.Single(resultsWithSpace);
+        Assert.Equal("msg-adm-1", resultsWithSpace[0].Id);
+    }
+
+    [Fact]
+    public async Task SecureSearchMessagesAsync_WithNullChannelId_SearchesAcrossAccessibleChannels()
+    {
+        // Arrange
+        var chan1 = new ChatChannel { Id = "chan-all-1", Name = "General", IsEncrypted = false };
+        var chan2 = new ChatChannel { Id = "chan-all-2", Name = "Random", IsEncrypted = false };
+        _channels.Save(chan1);
+        _channels.Save(chan2);
+
+        _mockChatAuth.Setup(a => a.GetChannelsForUser("emp-user")).Returns([chan1, chan2]);
+
+        var msg1 = new ChatMessage { Id = "msg-all-1", ChannelId = "chan-all-1", Content = "cross-channel search term", SentAt = DateTime.UtcNow.AddMinutes(-5) };
+        var msg2 = new ChatMessage { Id = "msg-all-2", ChannelId = "chan-all-2", Content = "another search term here", SentAt = DateTime.UtcNow };
+        _messages.Save(msg1);
+        _messages.Save(msg2);
+
+        // Act - null channelId defaults to all accessible channels
+        var results = await _service.SecureSearchMessagesAsync(null, "search", "emp-user");
+
+        // Assert
+        Assert.Equal(2, results.Count);
+        Assert.Contains(results, r => r.Id == "msg-all-1");
+        Assert.Contains(results, r => r.Id == "msg-all-2");
+    }
+    [Fact]
     public async Task ToggleChannelEncryptionAsync_WhenChannelAlreadyMarkedEncryptedWithZeroKeys_HealsChannelAndDistributesKeys()
     {
         // Arrange: Corrupted channel state created when channel was saved with IsEncrypted = true before toggle

@@ -826,6 +826,23 @@ public class PresenceStateServiceTests : IDisposable
     }
 
     [Fact]
+    public void VoiceChannelActiveOnMobile_PreventsIdleTransitionAndKeepsNotificationTierNone()
+    {
+        Register("user-mobile-voice", "sub-mob-voice", "Mobile", hasPushEnabled: true, isFocused: true);
+        _chatState.NotifyVoiceMemberJoined("vc-mobile", "user-mobile-voice");
+
+        // Simulate > 5 minutes in a voice call without touching the mobile screen
+        _service.SetConnectionLastInteraction("sub-mob-voice", DateTime.UtcNow.AddMinutes(-10));
+        _service.SweepStaleConnections();
+        _service.SetConnectionPresenceState("sub-mob-voice", ConnectionPresenceState.Idle);
+
+        Assert.True(_service.IsUserInVoiceCall("user-mobile-voice"));
+        Assert.True(_service.IsUserFocused("user-mobile-voice"));
+        Assert.True(_service.IsConnectionActivelyViewed("sub-mob-voice"));
+        Assert.Equal(PresenceTier.None, _service.DetermineNotificationTier("user-mobile-voice"));
+    }
+
+    [Fact]
     public void UnfocusAndRemoveConnection_DoNotResetLastInteractionOnIdleConnection()
     {
         Register("user-idle-preserve", "sub-idle", "Desktop", hasPushEnabled: true, isFocused: true);
@@ -927,5 +944,152 @@ public class PresenceStateServiceTests : IDisposable
         var connections = _service.GetUserConnections("user-desktop").ToList();
         Assert.Equal(2, connections.Count);
         Assert.True(_service.IsUserFocused("user-desktop"));
+    }
+
+    [Fact]
+    public void IsUserAwayFromDesktop_DesktopIdleAndMobileFocused_ReturnsTrue()
+    {
+        // Desktop is registered and marked Idle (Away)
+        _service.RegisterConnection(new ConnectionRegistrationOptions
+        {
+            UserId = "user-multi",
+            SubscriptionId = "sub-desk",
+            DeviceType = "Desktop",
+            IsCapacitorApp = false,
+            IsFocused = false
+        });
+        _service.SetConnectionPresenceState("sub-desk", ConnectionPresenceState.Idle);
+
+        // Mobile is registered and focused (user using phone)
+        _service.RegisterConnection(new ConnectionRegistrationOptions
+        {
+            UserId = "user-multi",
+            SubscriptionId = "sub-mob",
+            DeviceType = "Mobile",
+            IsCapacitorApp = true,
+            IsFocused = true
+        });
+
+        // Mobile focus must NOT prevent desktop from being evaluated as away
+        Assert.True(_service.IsUserFocused("user-multi"));
+        Assert.False(_service.IsUserFocusedOnDesktop("user-multi"));
+        Assert.True(_service.IsUserAwayFromDesktop("user-multi"));
+    }
+
+    [Fact]
+    public void GetUserPresenceBadge_DesktopIdleAndMobileActive_ReturnsOnlineMobile()
+    {
+        // PC is away
+        _service.RegisterConnection(new ConnectionRegistrationOptions
+        {
+            UserId = "user-pc-away",
+            SubscriptionId = "sub-desk-idle",
+            DeviceType = "Desktop",
+            IsCapacitorApp = false,
+            IsFocused = false
+        });
+        _service.SetConnectionPresenceState("sub-desk-idle", ConnectionPresenceState.Idle);
+
+        // User logs in on mobile
+        _service.RegisterConnection(new ConnectionRegistrationOptions
+        {
+            UserId = "user-pc-away",
+            SubscriptionId = "sub-mob-active",
+            DeviceType = "Mobile",
+            IsCapacitorApp = true,
+            IsFocused = true
+        });
+
+        Assert.Equal(UserPresenceBadge.OnlineMobile, _service.GetUserPresenceBadge("user-pc-away"));
+    }
+
+    [Fact]
+    public void GetUserPresenceBadge_BothDesktopAndMobileActive_PrefersDesktop()
+    {
+        // Both desktop and mobile active -> Desktop green dot takes precedence
+        _service.RegisterConnection(new ConnectionRegistrationOptions
+        {
+            UserId = "user-dual",
+            SubscriptionId = "sub-desk-act",
+            DeviceType = "Desktop",
+            IsCapacitorApp = false,
+            IsFocused = true
+        });
+        _service.RegisterConnection(new ConnectionRegistrationOptions
+        {
+            UserId = "user-dual",
+            SubscriptionId = "sub-mob-act",
+            DeviceType = "Mobile",
+            IsCapacitorApp = true,
+            IsFocused = true
+        });
+
+        Assert.Equal(UserPresenceBadge.OnlineDesktop, _service.GetUserPresenceBadge("user-dual"));
+    }
+
+    [Fact]
+    public void GetUserPresenceBadge_DesktopAwayAndMobileBackgrounded_ReturnsAway()
+    {
+        // Desktop is idle
+        _service.RegisterConnection(new ConnectionRegistrationOptions
+        {
+            UserId = "user-away-bg",
+            SubscriptionId = "sub-desk-id",
+            DeviceType = "Desktop",
+            IsCapacitorApp = false,
+            IsFocused = false
+        });
+        _service.SetConnectionPresenceState("sub-desk-id", ConnectionPresenceState.Idle);
+
+        // Mobile is backgrounded
+        _service.RegisterConnection(new ConnectionRegistrationOptions
+        {
+            UserId = "user-away-bg",
+            SubscriptionId = "sub-mob-bg",
+            DeviceType = "Mobile",
+            IsCapacitorApp = true,
+            IsFocused = false
+        });
+
+        Assert.Equal(UserPresenceBadge.Away, _service.GetUserPresenceBadge("user-away-bg"));
+    }
+
+    [Fact]
+    public void GetUserPresenceBadge_MobileBrowserOnly_ReturnsOnlineMobile()
+    {
+        // Non-Capacitor mobile browser
+        _service.RegisterConnection(new ConnectionRegistrationOptions
+        {
+            UserId = "user-web-mob",
+            SubscriptionId = "sub-web-mob",
+            DeviceType = "Mobile",
+            IsCapacitorApp = false,
+            IsFocused = true
+        });
+
+        Assert.Equal(UserPresenceBadge.OnlineMobile, _service.GetUserPresenceBadge("user-web-mob"));
+    }
+
+    [Fact]
+    public void GetUserPresenceBadge_NoConnections_ReturnsOffline()
+    {
+        Assert.Equal(UserPresenceBadge.Offline, _service.GetUserPresenceBadge("user-offline"));
+    }
+
+    [Fact]
+    public void GetFocusedSessionIds_ReturnsOnlyFocusedNonIdleSessionIds()
+    {
+        Register("user-multi", "sub-focused-1", "Mobile", hasPushEnabled: true, sessionId: "sess-focused", isFocused: true);
+        Register("user-multi", "sub-unfocused-2", "Mobile", hasPushEnabled: true, sessionId: "sess-unfocused", isFocused: false);
+        Register("user-multi", "sub-idle-3", "Desktop", hasPushEnabled: true, sessionId: "sess-idle", isFocused: true);
+        _service.SetConnectionPresenceState("sub-idle-3", ConnectionPresenceState.Idle);
+
+        var focusedSessions = _service.GetFocusedSessionIds("user-multi");
+
+        Assert.Single(focusedSessions);
+        Assert.Contains("sess-focused", focusedSessions);
+        Assert.DoesNotContain("sess-unfocused", focusedSessions);
+        Assert.DoesNotContain("sess-idle", focusedSessions);
+        Assert.Empty(_service.GetFocusedSessionIds("non-existent-user"));
     }
 }

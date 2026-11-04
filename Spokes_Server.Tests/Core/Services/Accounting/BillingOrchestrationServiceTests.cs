@@ -261,4 +261,70 @@ public class BillingOrchestrationServiceTests : TestDataTestBase
         var updatedQuote = _db.Quotes.GetById("q-1");
         Assert.Equal("inv-target", updatedQuote!.PaymentTerms[0].InvoiceId);
     }
+
+    [Fact]
+    public void CalculateAvailablePrepaymentCredits_ExcludesSelfAndClampsAppliedCreditsOnSave()
+    {
+        var project = new Project { Id = "proj-clamp", Name = "Clamp Project" };
+        _db.Projects.Save(project);
+
+        var prepayInvoice = new Invoice
+        {
+            Id = "inv-prepay",
+            InvoiceNumber = "INV-PRE-1",
+            ProjectId = project.Id,
+            Status = "Paid",
+            Date = DateTime.Today.AddDays(-5),
+            Lines = new List<InvoiceLine>
+            {
+                new() { Id = "line-prepay-clamp", Description = "Deposit", Quantity = 1, UnitPrice = 400m, IsPrepayment = true }
+            }
+        };
+        _db.Invoices.Save(prepayInvoice);
+
+        // Prepayment invoice itself should not see its own deposit as an available credit to apply to itself
+        var selfCredits = _orchestrator.CalculateAvailablePrepaymentCredits(new[] { project }, prepayInvoice);
+        Assert.Empty(selfCredits);
+
+        // Another invoice with only $250 of positive billable items attempts to apply $9999 of credit
+        var targetInvoice = new Invoice
+        {
+            Id = "inv-target-clamp",
+            InvoiceNumber = "INV-CLAMP-2",
+            ProjectId = project.Id,
+            Status = "Draft"
+        };
+
+        var request = new BillingSubmissionRequest
+        {
+            Invoice = targetInvoice,
+            LaborGroups = new List<BillingLaborGroup>(),
+            AcceptedQuotes = new List<Quote>(),
+            SelectedMilestones = new List<BillingMilestoneSelection>(),
+            GeneralLines = new List<InvoiceLine>
+            {
+                new() { Id = "line-work", Description = "Consulting", Quantity = 1, UnitPrice = 250m }
+            },
+            AppliedCredits = new List<AvailablePrepaymentCredit>
+            {
+                new()
+                {
+                    PrepaymentLineId = "line-prepay-clamp",
+                    InvoiceNumber = "INV-PRE-1",
+                    OriginalAmount = 400m,
+                    RemainingBalance = 400m,
+                    AmountToApply = 9999m
+                }
+            }
+        };
+
+        _orchestrator.ProcessAndSaveInvoice(request);
+
+        var saved = _db.Invoices.GetById("inv-target-clamp");
+        Assert.NotNull(saved);
+        var creditLine = saved.LineItems.SingleOrDefault(l => l.IsCreditUsed);
+        Assert.NotNull(creditLine);
+        // Clamped to the positive pre-credit subtotal ($250), never driving the invoice negative
+        Assert.Equal(-250m, creditLine.UnitPrice);
+    }
 }

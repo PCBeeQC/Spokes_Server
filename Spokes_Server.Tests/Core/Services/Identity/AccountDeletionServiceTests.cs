@@ -475,14 +475,14 @@ public class AccountDeletionServiceTests : TestDataTestBase
         _db.Employees.Save(new Employee { Id = otherId });
 
         // Email folders
-        var f1 = new EmailFolder { Id = "f-1", EmployeeId = empId, Name = "Inbox", Path = "INBOX" };
-        var fKeep = new EmailFolder { Id = "f-keep", EmployeeId = otherId, Name = "Inbox", Path = "INBOX" };
+        var f1 = new EmailFolder { Id = "f-1", AccountId = empId, Name = "Inbox", Path = "INBOX" };
+        var fKeep = new EmailFolder { Id = "f-keep", AccountId = otherId, Name = "Inbox", Path = "INBOX" };
         _db.EmailFolders.Save(f1);
         _db.EmailFolders.Save(fKeep);
 
         // Email messages
-        var em1 = new EmailMessage { Id = "em-1", EmployeeId = empId, FolderPath = "INBOX", UniqueId = 1 };
-        var emKeep = new EmailMessage { Id = "em-keep", EmployeeId = otherId, FolderPath = "INBOX", UniqueId = 2 };
+        var em1 = new EmailMessage { Id = "em-1", AccountId = empId, FolderPath = "INBOX", UniqueId = 1 };
+        var emKeep = new EmailMessage { Id = "em-keep", AccountId = otherId, FolderPath = "INBOX", UniqueId = 2 };
         _db.EmailMessages.Save(em1);
         _db.EmailMessages.Save(emKeep);
 
@@ -629,8 +629,8 @@ public class AccountDeletionServiceTests : TestDataTestBase
         _db.ReportedMessages.Save(new ReportedMessage { Id = "r-full", ReporterId = empId, ReportedUserId = "other" });
 
         // Email Folders, Messages, Private Contacts
-        _db.EmailFolders.Save(new EmailFolder { Id = "ef-full", EmployeeId = empId, Name = "Trash" });
-        _db.EmailMessages.Save(new EmailMessage { Id = "em-full", EmployeeId = empId, FolderPath = "Trash", UniqueId = 99 });
+        _db.EmailFolders.Save(new EmailFolder { Id = "ef-full", AccountId = empId, Name = "Trash" });
+        _db.EmailMessages.Save(new EmailMessage { Id = "em-full", AccountId = empId, FolderPath = "Trash", UniqueId = 99 });
         _db.PrivateContacts.Save(empId, new ContactPerson { Id = "pc-full", Name = "Secret Contact" });
 
         // Linked OpenID

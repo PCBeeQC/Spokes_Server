@@ -177,6 +177,7 @@
 
         try
         {
+            await JS.InvokeVoidAsync("window.ensureCastScriptsLoaded");
             var initPayload = CastService.GetCastInitPayload(Nav.BaseUri);
             bool launched = await JS.InvokeAsync<bool>("spokesCast.requestCastSession", initPayload, _dotNetRef);
             if (!launched)
@@ -238,9 +239,16 @@
         try
         {
             var currentUser = await UserService.GetEmployeeAsync();
-            if (currentUser == null)
+            if (currentUser == null || !currentUser.IsActive || currentUser.IsSuspended || currentUser.IsBanned)
             {
                 _errorMessage = Loc["Authentication required."].Value;
+                return;
+            }
+
+            if (!AlbumService.CanUserViewAlbum(Album, currentUser.Id))
+            {
+                Logger.LogWarning("User {UserId} unauthorized to present album {AlbumId} via SlideshowPairDialog", currentUser.Id, Album.Id);
+                _errorMessage = Loc["You do not have permission to view this album."].Value;
                 return;
             }
 
@@ -269,7 +277,7 @@
 
             foreach (var media in Album.Media)
             {
-                string url = $"/spokesapi/slideshow/{session!.SessionId}/media/{media.Id}";
+                string baseUrl = $"/spokesapi/slideshow/{session!.SessionId}/media/{media.Id}";
 
                 var uploader = allEmployees.FirstOrDefault(e => e.Id == media.AddedByUserId);
                 string uploaderName = uploader != null ? $"{uploader.FirstName} {uploader.LastName}".Trim() : string.Empty;
@@ -278,8 +286,8 @@
                 {
                     Id = media.Id,
                     FileName = media.FileName,
-                    Url = url,
-                    ThumbnailUrl = $"{url}/thumb",
+                    Url = SlideshowSessionService.AppendSecretQuery(baseUrl, session.TvSecret),
+                    ThumbnailUrl = SlideshowSessionService.AppendSecretQuery($"{baseUrl}/thumb", session.TvSecret),
                     ContentType = media.ContentType,
                     ImageWidth = media.ImageWidth,
                     ImageHeight = media.ImageHeight,

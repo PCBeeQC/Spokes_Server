@@ -7,6 +7,7 @@ using Spokes_Server.Core.Data.Repositories.HR;
 using Spokes_Server.Core.Exceptions;
 using Spokes_Server.Core.Helpers;
 using Spokes_Server.Core.Models.Core;
+using Spokes_Server.Core.Security;
 using Spokes_Server.Core.Services.Communication.Notifications;
 using Spokes_Server.Core.Services.Communication.Notifications.Presentation;
 using Spokes_Server.Core.Services.Communication.Notifications.Routing;
@@ -96,10 +97,18 @@ public class PushController : SpokesControllerBase
 
         _logger?.LogDebug("[Push/Subscribe] Received subscription for {DeviceType} ({SubscriptionType}). PublicKey length: {KeyLength}", request.DeviceType, request.SubscriptionType, request.PublicKey?.Length ?? 0);
 
-        var userId = GetCurrentUserId();
-        if (string.IsNullOrEmpty(userId))
+        var (userId, authError) = ResolveAuthorizedUserId(allowSuspended: false);
+        if (authError != null)
         {
-            return UnauthorizedError("Authentication required.", "UNAUTHORIZED");
+            return authError;
+        }
+
+        var subscriptionType = !string.IsNullOrEmpty(request.SubscriptionType) ? request.SubscriptionType : PushSubscriptionType.WebPush;
+        if (subscriptionType != PushSubscriptionType.NativeRelay &&
+            (request.Endpoint.Contains(':') || request.Endpoint.Contains('/') || request.Endpoint.Contains('.')) &&
+            !SafeExternalHttpHandler.IsSafeExternalUrl(request.Endpoint, requireHttps: true))
+        {
+            return BadRequestError("Invalid push endpoint URL. Only public HTTPS push endpoints are allowed.");
         }
 
         var sessionId = User.FindFirst("SessionId")?.Value;
@@ -139,8 +148,6 @@ public class PushController : SpokesControllerBase
             _sessions.ClearPushFields(existingWithEndpoint);
         }
 
-        var subscriptionType = !string.IsNullOrEmpty(request.SubscriptionType) ? request.SubscriptionType : PushSubscriptionType.WebPush;
-
         // Gate NativeRelay registrations: require an active Spokes Pass or valid trial ticket
         if (subscriptionType == PushSubscriptionType.NativeRelay)
         {
@@ -161,7 +168,14 @@ public class PushController : SpokesControllerBase
         }
         else
         {
-            session.PushPublicKey ??= string.Empty;
+            if (subscriptionType != PushSubscriptionType.NativeRelay)
+            {
+                session.PushPublicKey = string.Empty;
+            }
+            else
+            {
+                session.PushPublicKey ??= string.Empty;
+            }
         }
         session.PushEnabled = true;
         session.PushSubscribedAt = DateTime.UtcNow;
@@ -190,19 +204,32 @@ public class PushController : SpokesControllerBase
         {
             session.IsCapacitor = true;
             session.DeviceType = DeviceType.Mobile;
-            session.IsIdleDetectionEnabled = false;
         }
         else
         {
             session.IsCapacitor = false;
             session.DeviceType = !string.IsNullOrEmpty(request.DeviceType) ? request.DeviceType : DeviceType.Desktop;
-            session.IsIdleDetectionEnabled = request.IsIdleDetectionEnabled ?? (request.DeviceType == DeviceType.Desktop);
+        }
+
+        if (!string.IsNullOrWhiteSpace(request.DeviceId))
+        {
+            var incomingDeviceId = request.DeviceId.Trim();
+            if (string.IsNullOrEmpty(session.DeviceId)
+                || (session.DeviceId.StartsWith("dev_", StringComparison.OrdinalIgnoreCase) && !incomingDeviceId.StartsWith("dev_", StringComparison.OrdinalIgnoreCase)))
+            {
+                session.DeviceId = incomingDeviceId;
+            }
+        
         }
 
         if (!string.IsNullOrEmpty(request.DeviceName))
             session.DeviceName = request.DeviceName;
 
+
+
         _sessions.Save(session);
+
+
 
         // Clean up stale push subscriptions from old sessions on the same device.
         // With stable device IDs (ANDROID_ID / iOS Keychain UUID), matching by deviceId
@@ -236,10 +263,10 @@ public class PushController : SpokesControllerBase
             return BadRequestError("Endpoint is required");
         }
 
-        var userId = GetCurrentUserId();
-        if (string.IsNullOrEmpty(userId))
+        var (userId, authError) = ResolveAuthorizedUserId(allowSuspended: false);
+        if (authError != null)
         {
-            return UnauthorizedError("Authentication required.", "UNAUTHORIZED");
+            return authError;
         }
 
         // Security: Only allow unsubscribing sessions owned by the current user
@@ -260,10 +287,10 @@ public class PushController : SpokesControllerBase
     [HttpGet("status")]
     public IActionResult GetStatus()
     {
-        var userId = GetCurrentUserId();
-        if (string.IsNullOrEmpty(userId))
+        var (userId, authError) = ResolveAuthorizedUserId(allowSuspended: true);
+        if (authError != null)
         {
-            return UnauthorizedError("Authentication required.", "UNAUTHORIZED");
+            return authError;
         }
 
         var sessionsWithPush = _sessions.GetPushEnabledByEmployeeId(userId);
@@ -287,10 +314,10 @@ public class PushController : SpokesControllerBase
     [HttpGet("devices")]
     public IActionResult GetDevices()
     {
-        var userId = GetCurrentUserId();
-        if (string.IsNullOrEmpty(userId))
+        var (userId, authError) = ResolveAuthorizedUserId(allowSuspended: true);
+        if (authError != null)
         {
-            return UnauthorizedError("Authentication required.", "UNAUTHORIZED");
+            return authError;
         }
 
         var sessions = _sessions.GetActiveByEmployeeId(userId);
@@ -300,7 +327,6 @@ public class PushController : SpokesControllerBase
             s.DeviceName,
             s.DeviceInfo,
             s.HasPush && s.PushEnabled,
-            s.IsIdleDetectionEnabled,
             s.PushSubscriptionType,
             s.CreatedAt,
             s.LastSeenAt,
@@ -319,10 +345,10 @@ public class PushController : SpokesControllerBase
     [HttpPut("devices/{id}")]
     public IActionResult UpdateDevice(string id, [FromBody] UpdateDeviceRequest request)
     {
-        var userId = GetCurrentUserId();
-        if (string.IsNullOrEmpty(userId))
+        var (userId, authError) = ResolveAuthorizedUserId(allowSuspended: false);
+        if (authError != null)
         {
-            return UnauthorizedError("Authentication required.", "UNAUTHORIZED");
+            return authError;
         }
 
         var session = _sessions.GetById(id);
@@ -333,17 +359,12 @@ public class PushController : SpokesControllerBase
 
         if (request.DeviceName != null)
             session.DeviceName = request.DeviceName;
+
+
         if (request.DeviceType != null)
             session.DeviceType = request.DeviceType;
         if (request.IsEnabled.HasValue)
             session.PushEnabled = request.IsEnabled.Value;
-        if (request.IsIdleDetectionEnabled.HasValue)
-            session.IsIdleDetectionEnabled = request.IsIdleDetectionEnabled.Value;
-
-        if (session.IsCapacitorApp)
-        {
-            session.IsIdleDetectionEnabled = false;
-        }
 
         _sessions.Save(session);
         return Ok(new PushMessageResponse("Device updated"));
@@ -355,10 +376,10 @@ public class PushController : SpokesControllerBase
     [HttpDelete("devices/{id}")]
     public IActionResult DeleteDevice(string id)
     {
-        var userId = GetCurrentUserId();
-        if (string.IsNullOrEmpty(userId))
+        var (userId, authError) = ResolveAuthorizedUserId(allowSuspended: false);
+        if (authError != null)
         {
-            return UnauthorizedError("Authentication required.", "UNAUTHORIZED");
+            return authError;
         }
 
         var session = _sessions.GetById(id);
@@ -377,10 +398,10 @@ public class PushController : SpokesControllerBase
     [HttpPost("devices/{id}/test")]
     public async Task<IActionResult> SendDeviceTestNotification(string id, [FromQuery] string category = "chat")
     {
-        var userId = GetCurrentUserId();
-        if (string.IsNullOrEmpty(userId))
+        var (userId, authError) = ResolveAuthorizedUserId(allowSuspended: false);
+        if (authError != null)
         {
-            return UnauthorizedError("Authentication required.", "UNAUTHORIZED");
+            return authError;
         }
 
         var sender = _employees.GetById(userId);
@@ -424,10 +445,10 @@ public class PushController : SpokesControllerBase
     [HttpPost("test")]
     public async Task<IActionResult> SendTestNotification([FromQuery] string category = "chat")
     {
-        var userId = GetCurrentUserId();
-        if (string.IsNullOrEmpty(userId))
+        var (userId, authError) = ResolveAuthorizedUserId(allowSuspended: false);
+        if (authError != null)
         {
-            return UnauthorizedError("Authentication required.", "UNAUTHORIZED");
+            return authError;
         }
 
         var sender = _employees.GetById(userId);
@@ -451,10 +472,10 @@ public class PushController : SpokesControllerBase
     [HttpGet("unread-count")]
     public IActionResult GetUnreadCount()
     {
-        var userId = GetCurrentUserId();
-        if (string.IsNullOrEmpty(userId))
+        var (userId, authError) = ResolveAuthorizedUserId(allowSuspended: true);
+        if (authError != null)
         {
-            return UnauthorizedError("Authentication required.", "UNAUTHORIZED");
+            return authError;
         }
 
         if (_routingService == null)
@@ -467,11 +488,20 @@ public class PushController : SpokesControllerBase
     }
 
 
-    private string? GetCurrentUserId()
+    private (string UserId, IActionResult? Error) ResolveAuthorizedUserId(bool allowSuspended)
     {
         var employee = _userService.GetEmployee(User);
-        if (employee == null || !employee.IsActive || employee.IsSuspended || employee.IsBanned) return null;
-        return employee.Id;
+        if (employee == null || !employee.IsActive || employee.IsBanned)
+        {
+            return (string.Empty, UnauthorizedError("Authentication required.", "UNAUTHORIZED"));
+        }
+
+        if (!allowSuspended && employee.IsSuspended)
+        {
+            return (string.Empty, ForbiddenError("Account is in read-only mode.", "ACCOUNT_SUSPENDED"));
+        }
+
+        return (employee.Id, null);
     }
 }
 
@@ -483,7 +513,6 @@ public class SubscribeRequest
     public string? SubscriptionType { get; set; }
     public string? DeviceType { get; set; }
     public string? DeviceName { get; set; }
-    public bool? IsIdleDetectionEnabled { get; set; }
     public bool? IsCapacitor { get; set; }
     public string? PublicKey { get; set; }
     public string? DeviceId { get; set; }
@@ -499,7 +528,6 @@ public class UpdateDeviceRequest
     public string? DeviceName { get; set; }
     public string? DeviceType { get; set; }
     public bool? IsEnabled { get; set; }
-    public bool? IsIdleDetectionEnabled { get; set; }
 }
 
 public record PushSubscribeResponse(string Message, string Id, bool isNativePushLicensed);
@@ -512,7 +540,6 @@ public record DeviceListItemResponse(
     string? DeviceName,
     string? DeviceInfo,
     bool IsEnabled,
-    bool IsIdleDetectionEnabled,
     string? PushSubscriptionType,
     DateTime CreatedAt,
     DateTime? LastSeenAt,

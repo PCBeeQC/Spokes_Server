@@ -78,15 +78,46 @@ public class ChatAuthorizationServiceTests : IDisposable
     #region CanUserAccessChannel Tests
 
     [Fact]
-    public void CanUserAccessChannel_InactiveOrSuspended_ReturnsFalse()
+    public void CanUserAccessChannel_InactiveOrBanned_ReturnsFalse_WhileSuspendedAllowsReadOnlyAndBlocksWrites()
     {
         var inactiveEmp = CreateEmployee("inactive_1", isActive: false);
-        var suspendedEmp = CreateEmployee("suspended_1", isSuspended: true);
-        var channel = new ChatChannel { Id = "c1", ChannelType = ChatChannelType.General, IsDefaultGeneral = true };
+        var bannedEmp = CreateEmployee("banned_1");
+        bannedEmp.IsBanned = true;
+        _employees.Save(bannedEmp);
+
+        var suspendedEmp = CreateEmployee("suspended_1", isAdmin: true, isSuspended: true);
+        var channel = new ChatChannel
+        {
+            Id = "c1",
+            ChannelType = ChatChannelType.General,
+            IsDefaultGeneral = true,
+            CreatedById = suspendedEmp.Id
+        };
         _channels.Save(channel);
 
+        var ownMessage = new ChatMessage
+        {
+            Id = "m1",
+            ChannelId = channel.Id,
+            SenderId = suspendedEmp.Id,
+            Content = "Hello"
+        };
+
         Assert.False(_authService.CanUserAccessChannel(channel, inactiveEmp));
-        Assert.False(_authService.CanUserAccessChannel(channel, suspendedEmp));
+        Assert.False(_authService.CanUserAccessChannel(channel, bannedEmp));
+        Assert.Empty(_authService.GetChannelsForUser(inactiveEmp.Id));
+        Assert.Empty(_authService.GetChannelsForUser(bannedEmp.Id));
+
+        // Suspended users retain read-only channel access
+        Assert.True(_authService.CanUserAccessChannel(channel, suspendedEmp));
+        Assert.Contains(_authService.GetChannelsForUser(suspendedEmp.Id), c => c.Id == channel.Id);
+
+        // All write / management checks are strictly blocked for suspended users (even if IsAdmin)
+        Assert.False(_authService.CanUserPostToChannel(channel, suspendedEmp));
+        Assert.False(_authService.CanUserModifyMessage(ownMessage, channel, suspendedEmp));
+        Assert.False(_authService.CanUserDeleteMessage(ownMessage, channel, suspendedEmp));
+        Assert.False(_authService.CanUserManageChannel(channel, suspendedEmp));
+        Assert.False(_authService.CanUserDeleteChannel(channel, suspendedEmp));
     }
 
     [Fact]
@@ -920,6 +951,61 @@ public class ChatAuthorizationServiceTests : IDisposable
         _channels.Save(encChannel);
 
         Assert.False(_authService.CanUserDeleteChannel(encChannel, otherUser, isSessionUnlocked: true));
+    }
+
+    [Fact]
+    public void CanUserManageAndDeleteChannel_DirectChannel_ReturnsFalseForEveryoneIncludingAdminAndCreator()
+    {
+        var creatorAdmin = CreateEmployee("dm-creator-admin", isAdmin: true);
+        var otherParticipant = CreateEmployee("dm-peer", isAdmin: false);
+        var dmChannel = new ChatChannel
+        {
+            Id = "dm-immutable-1",
+            ChannelType = ChatChannelType.Direct,
+            CreatedById = creatorAdmin.Id,
+            ParticipantIds = new List<string> { creatorAdmin.Id, otherParticipant.Id }
+        };
+        _channels.Save(dmChannel);
+
+        Assert.False(_authService.CanUserManageChannel(dmChannel, creatorAdmin));
+        Assert.False(_authService.CanUserDeleteChannel(dmChannel, creatorAdmin));
+        Assert.False(_authService.CanUserManageChannel(dmChannel, otherParticipant));
+        Assert.False(_authService.CanUserDeleteChannel(dmChannel, otherParticipant));
+    }
+
+    [Fact]
+    public void CanUserManageAndDeleteChannel_GroupChannel_AllowsOnlyCreatorOrParticipantAdmin()
+    {
+        var creator = CreateEmployee("grp-creator", isAdmin: false);
+        var regularMemberWithPublicEdit = CreateEmployee(
+            "grp-member-pub-edit",
+            isAdmin: false,
+            permissions: [AppPermissions.Chat.EditAllPublicChannels]);
+        var participantAdmin = CreateEmployee("grp-admin-member", isAdmin: true);
+        var nonParticipantAdmin = CreateEmployee("grp-admin-outsider", isAdmin: true);
+
+        var groupChannel = new ChatChannel
+        {
+            Id = "grp-strict-1",
+            ChannelType = ChatChannelType.Group,
+            CreatedById = creator.Id,
+            ParticipantIds = new List<string> { creator.Id, regularMemberWithPublicEdit.Id, participantAdmin.Id }
+        };
+        _channels.Save(groupChannel);
+
+        Assert.True(_authService.CanUserManageChannel(groupChannel, creator));
+        Assert.True(_authService.CanUserDeleteChannel(groupChannel, creator));
+
+        Assert.True(_authService.CanUserManageChannel(groupChannel, participantAdmin));
+        Assert.True(_authService.CanUserDeleteChannel(groupChannel, participantAdmin));
+
+        // EditAllPublicChannels does NOT grant management rights over private Group channels
+        Assert.False(_authService.CanUserManageChannel(groupChannel, regularMemberWithPublicEdit));
+        Assert.False(_authService.CanUserDeleteChannel(groupChannel, regularMemberWithPublicEdit));
+
+        // Non-participant Admin cannot manage or delete a private Group channel
+        Assert.False(_authService.CanUserManageChannel(groupChannel, nonParticipantAdmin));
+        Assert.False(_authService.CanUserDeleteChannel(groupChannel, nonParticipantAdmin));
     }
 
     #endregion

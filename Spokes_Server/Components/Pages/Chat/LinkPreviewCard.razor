@@ -1,12 +1,13 @@
+@using Spokes_Server.Core.Security
 @* Link preview card — rendered below message content for each URL *@
-@if (Preview != null && (!string.IsNullOrEmpty(Preview.Title) || Preview.IsYouTube))
+@if (Preview != null && SafeExternalHttpHandler.IsSafeExternalUrl(Preview.Url) && (!string.IsNullOrEmpty(Preview.Title) || Preview.IsYouTube))
 {
     <MudPaper Elevation="0" Class="mt-2 link-preview-card"
         Style="border: 1px solid var(--mud-palette-divider); border-radius: 8px; overflow: hidden; max-width: 480px; transition: border-color 0.2s;">
 
         @if (Preview.IsYouTube)
         {
-            @if (_playVideo)
+            @if (_playVideo && SafeExternalHttpHandler.IsSafeExternalUrl(Preview.VideoEmbedUrl, requireHttps: true))
             {
                 <div style="position: relative; width: 100%; padding-bottom: 56.25%;">
                     <iframe src="@Preview.VideoEmbedUrl" 
@@ -20,7 +21,7 @@
             {
                 <div style="position: relative; width: 100%; padding-bottom: 56.25%; background: var(--mud-palette-background-grey); cursor: pointer;" 
                      @onclick="() => _playVideo = true">
-                    @if (!string.IsNullOrEmpty(Preview.ImageUrl) && !_imageFailed)
+                    @if (!string.IsNullOrEmpty(Preview.ImageUrl) && SafeExternalHttpHandler.IsSafeExternalUrl(Preview.ImageUrl) && !_imageFailed)
                     {
                         <img src="@Preview.ImageUrl" alt="@Preview.Title"
                             referrerpolicy="no-referrer"
@@ -36,7 +37,7 @@
         else
         {
             <a href="@Preview.Url" target="_blank" rel="noopener noreferrer" style="text-decoration: none; color: inherit; display: block; cursor: pointer;">
-                @if (!string.IsNullOrEmpty(Preview.ImageUrl) && !_imageFailed)
+                @if (!string.IsNullOrEmpty(Preview.ImageUrl) && SafeExternalHttpHandler.IsSafeExternalUrl(Preview.ImageUrl) && !_imageFailed)
                 {
                     <div style="height: 160px; overflow: hidden; background: var(--mud-palette-background-grey);">
                         <img src="@Preview.ImageUrl" alt="@Preview.Title"
@@ -52,7 +53,7 @@
             <div class="pa-3">
                 @* Site name / domain *@
                 <div class="d-flex align-center gap-1 mb-1">
-                    @if (!string.IsNullOrEmpty(Preview.FaviconUrl) && !_faviconFailed)
+                    @if (!string.IsNullOrEmpty(Preview.FaviconUrl) && SafeExternalHttpHandler.IsSafeExternalUrl(Preview.FaviconUrl) && !_faviconFailed)
                     {
                         <img src="@Preview.FaviconUrl" alt="" referrerpolicy="no-referrer" style="width: 14px; height: 14px; border-radius: 2px;"
                             @onerror="@(() => _faviconFailed = true)" />

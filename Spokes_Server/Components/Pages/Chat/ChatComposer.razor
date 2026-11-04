@@ -12,6 +12,10 @@
 @inject ShareTargetStateService ShareTargetStateService
 @inject NavigationManager NavigationManager
 @inject StartupTimingService StartupTimings
+@inject IDialogService DialogService
+@inject PollService PollService
+@inject AlbumService AlbumService
+@inject Spokes_Server.Core.Services.Security.ScopedKeystoreService ScopedKeystore
 @implements IAsyncDisposable
 
 @* Archived Channel Notice *@
@@ -56,6 +60,28 @@ else
                 </MudText>
                 <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small" 
                                OnClick="@(() => OnCancelReply.InvokeAsync())" />
+            </div>
+        }
+
+        @* Album Suggestion Strip (when 4+ photos are staged) *@
+        @if (ShouldShowAlbumSuggestion)
+        {
+            <div class="d-flex align-center gap-2 mb-2 pa-2 rounded"
+                 style="background: var(--mud-palette-background-grey); border-left: 3px solid var(--mud-palette-primary);">
+                <MudIcon Icon="@Icons.Material.Filled.PhotoLibrary" Size="Size.Small" Color="Color.Primary" />
+                <MudText Typo="Typo.caption" Style="flex: 1;">
+                    @string.Format(Loc["Posting {0} photos — want to create an album instead?"].Value, CompletedPendingImages.Count)
+                </MudText>
+                <MudButton Variant="Variant.Filled"
+                           Color="Color.Primary"
+                           Size="Size.Small"
+                           StartIcon="@Icons.Material.Filled.PhotoLibrary"
+                           OnClick="OpenCreateAlbumFromPendingAsync">
+                    @Loc["Create Album"]
+                </MudButton>
+                <MudIconButton Icon="@Icons.Material.Filled.Close"
+                               Size="Size.Small"
+                               OnClick="DismissAlbumSuggestion" />
             </div>
         }
 
@@ -144,8 +170,8 @@ else
                              data-index="@idx"
                              style="@(idx == _eventSelectedIndex ? "background: var(--mud-palette-action-default-hover);" : "")"
                              @onclick="@(() => InsertHashTag(tag))">
-                            <MudAvatar Size="Size.Small" Style="@(tag.IsEvent ? "background: var(--mud-palette-info); color: white;" : "background: var(--mud-palette-success); color: white;")">
-                                <MudIcon Icon="@(tag.IsEvent ? Icons.Material.Filled.Event : Icons.Material.Filled.PhotoAlbum)" Size="Size.Small" />
+                            <MudAvatar Size="Size.Small" Style="@GetHashTagAvatarStyle(tag)">
+                                <MudIcon Icon="@GetHashTagIcon(tag)" Size="Size.Small" />
                             </MudAvatar>
                             <div style="overflow: hidden;">
                                 <MudText Typo="Typo.body2" Style="font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">@tag.Title</MudText>
@@ -244,6 +270,7 @@ else
                                     <MudFabMenuItem StartIcon="@Icons.Material.Filled.PhotoLibrary"  Color="Color.Primary" Size="Size.Small" Label="@Loc["Photo"]" OnClick="@(() => TriggerMobileUpload("chat-mobile-pic-upload"))" />
                                     <MudFabMenuItem StartIcon="@Icons.Material.Filled.AttachFile" Color="Color.Primary" Size="Size.Small" Label="@Loc["File"]" OnClick="@(() => TriggerMobileUpload("chat-mobile-file-upload"))" />
                                     <MudFabMenuItem StartIcon="@Icons.Material.Filled.Mic" Color="Color.Primary" Size="Size.Small" Label="@Loc["Memo"]" OnClick="@(() => StartVoiceRecording(false))" />
+                                    <MudFabMenuItem StartIcon="@Icons.Material.Filled.Poll" Color="Color.Primary" Size="Size.Small" Label="@Loc["Poll"]" OnClick="OpenCreatePollDialog" />
                                 </MudFabMenu>
                             </div>
                         }
@@ -382,6 +409,9 @@ else
                                     <MudTooltip Text="@Loc["Record Voice Memo"]" Placement="Placement.Top">
                                         <MudIconButton Icon="@Icons.Material.Filled.Mic" Size="Size.Small" Color="Color.Default" OnClick="@(() => StartVoiceRecording(true))" />
                                     </MudTooltip>
+                                    <MudTooltip Text="@Loc["Create Poll"]" Placement="Placement.Top">
+                                        <MudIconButton Icon="@Icons.Material.Filled.Poll" Size="Size.Small" Color="Color.Default" OnClick="OpenCreatePollDialog" />
+                                    </MudTooltip>
 
                                     <ApiFileUpload @ref="_desktopUpload" Id="chat-desktop-upload" Category="chat" ContextId="@ChannelId" MaximumFileCount="5"
                                         UploadUrl="@UploadUrl"
@@ -420,7 +450,7 @@ else
                 </div>
                 @* Hide helper text on mobile *@
                 <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mt-1 d-none d-md-block">
-                    @Loc["Enter to send • Shift+Enter for new line • @ to mention • # for events and Albums"]
+                    @Loc["Enter to send • Shift+Enter for new line • @ to mention • # for events, albums, and polls"]
                 </MudText>
             }
     </MudPaper>
@@ -493,6 +523,27 @@ else
     [Parameter] public EventCallback OnEditLastMessage { get; set; }
     [Parameter] public EventCallback OnCancelEdit { get; set; }
     [Parameter] public string? UploadUrl { get; set; }
+    [Parameter] public string? ChannelKey { get; set; }
+    [Parameter] public string? ChannelDisplayName { get; set; }
+
+    private bool _dismissedAlbumSuggestion;
+
+    private List<PendingFile> CompletedPendingImages => _pendingFiles
+        .Where(f => !f.IsUploading && f.Attachment != null &&
+                    (IsImageFile(f.FileName) || f.Attachment.ContentType.StartsWith("image/", StringComparison.OrdinalIgnoreCase)))
+        .ToList();
+
+    private bool CanUserUseAlbums =>
+        !string.IsNullOrEmpty(CurrentUserId) &&
+        Db.Employees.GetById(CurrentUserId)?.HasPermission(AppPermissions.Albums.View) == true;
+
+    private bool ShouldShowAlbumSuggestion =>
+        !IsEditMode &&
+        !Disabled &&
+        !_dismissedAlbumSuggestion &&
+        !_pendingFiles.Any(f => f.IsUploading) &&
+        CompletedPendingImages.Count >= AlbumService.AlbumSuggestionPhotoThreshold &&
+        CanUserUseAlbums;
     [Parameter] public bool IsMobile { get; set; }
 
     private string? _lastComposerFingerprint;
@@ -508,7 +559,8 @@ else
         bool isTextEmpty = string.IsNullOrWhiteSpace(_messageText);
         int pendingCount = _pendingFiles.Count;
         bool isUploading = _pendingFiles.Any(f => f.IsUploading);
-        var fingerprint = $"{ChannelId}|{UploadUrl}|{IsArchived}|{Disabled}|{ReplyingTo?.Id}|{IsEditMode}|{IsMobile}|{InitialText}|{isTextEmpty}|{pendingCount}|{isUploading}|{_showMentionPopover}|{_mentionSearchText}|{_mentionSelectedIndex}|{_showEventPopover}|{_eventSearchText}|{_eventSelectedIndex}|{_showEmojiAutocompletePopover}|{_emojiSearchText}|{_emojiSelectedIndex}|{_showSnippetPopover}|{_snippetSearchText}|{_snippetSelectedIndex}|{_showEmojiPicker}|{_isRecordingVoice}|{_isDesktopRecording}|{_recordingDurationText}";
+        int pendingImageCount = CompletedPendingImages.Count;
+        var fingerprint = $"{ChannelId}|{UploadUrl}|{ChannelKey}|{IsArchived}|{Disabled}|{ReplyingTo?.Id}|{IsEditMode}|{IsMobile}|{InitialText}|{isTextEmpty}|{pendingCount}|{pendingImageCount}|{_dismissedAlbumSuggestion}|{isUploading}|{_showMentionPopover}|{_mentionSearchText}|{_mentionSelectedIndex}|{_showEventPopover}|{_eventSearchText}|{_eventSelectedIndex}|{_showEmojiAutocompletePopover}|{_emojiSearchText}|{_emojiSelectedIndex}|{_showSnippetPopover}|{_snippetSearchText}|{_snippetSelectedIndex}|{_showEmojiPicker}|{_isRecordingVoice}|{_isDesktopRecording}|{_recordingDurationText}";
         if (fingerprint == _lastComposerFingerprint) return false;
         _lastComposerFingerprint = fingerprint;
         return true;
@@ -542,6 +594,7 @@ else
             }
 
             _previousChannelId = ChannelId;
+            _dismissedAlbumSuggestion = false;
         }
     }
 
@@ -798,6 +851,7 @@ else
             _ = _messageField.ClearAsync();
         }
         _pendingFiles.Clear();
+        _dismissedAlbumSuggestion = false;
         _showMentionPopover = false;
         _showEventPopover = false;
         _showEmojiPicker = false;
@@ -1162,7 +1216,7 @@ else
                 Id = e.Id,
                 Title = e.Title,
                 Subtitle = e.IsAllDay ? e.Start.ToString("MMM d") : e.Start.ToString("MMM d, h:mm tt"),
-                IsEvent = true
+                Type = "event"
             });
         }
 
@@ -1171,7 +1225,7 @@ else
         if (currentUser != null && currentUser.HasPermission(AppPermissions.Albums.View))
         {
             var albums = Db.Albums.GetAll()
-                .Where(a => a.OwnerId == CurrentUserId || a.ContributorUserIds.Contains(CurrentUserId) || a.SharedWithChannelIds.Any(cId => ChatAccess.GetUsersForChannel(cId).Contains(CurrentUserId)))
+                .Where(a => a.OwnerId == CurrentUserId || (!string.IsNullOrEmpty(ChannelId) && a.SharedWithChannelIds != null && a.SharedWithChannelIds.Contains(ChannelId)))
                 .OrderByDescending(a => a.CreatedAt)
                 .ToList();
                 
@@ -1182,7 +1236,24 @@ else
                     Id = a.Id,
                     Title = a.Title,
                     Subtitle = $"Album ({a.Media.Count} items)",
-                    IsEvent = false
+                    Type = "album"
+                });
+            }
+        }
+
+        // 3. Polls in current channel
+        if (!string.IsNullOrEmpty(ChannelId) && !string.IsNullOrEmpty(CurrentUserId))
+        {
+            var polls = PollService.GetPollsForChannel(ChannelId, CurrentUserId);
+            foreach (var p in polls)
+            {
+                var displayPoll = PollService.DecryptPollForDisplay(p, ChannelKey);
+                candidates.Add(new HashTagCandidate
+                {
+                    Id = p.Id,
+                    Title = displayPoll.Question,
+                    Subtitle = $"{Loc["Poll"].Value} ({p.TotalVotes} {(p.TotalVotes == 1 ? Loc["vote"].Value : Loc["votes"].Value)})",
+                    Type = "poll"
                 });
             }
         }
@@ -1196,7 +1267,7 @@ else
         if (lastHashIndex >= 0)
         {
             var before = _messageText[..lastHashIndex];
-            var type = tag.IsEvent ? "event" : "album";
+            var type = tag.Type;
             _messageText = before + $"#[{tag.Title}]({type}:{tag.Id}) ";
         }
 
@@ -1614,6 +1685,10 @@ else
     private async Task RemovePendingFile(PendingFile file)
     {
         _pendingFiles.Remove(file);
+        if (CompletedPendingImages.Count < AlbumService.AlbumSuggestionPhotoThreshold)
+        {
+            _dismissedAlbumSuggestion = false;
+        }
         StateHasChanged();
 
         if (file.IsUploading)
@@ -1698,6 +1773,122 @@ else
         public string Id { get; set; } = "";
         public string Title { get; set; } = "";
         public string Subtitle { get; set; } = "";
-        public bool IsEvent { get; set; }
+        public string Type { get; set; } = "album";
     }
+
+    private void DismissAlbumSuggestion()
+    {
+        _dismissedAlbumSuggestion = true;
+        _forceComposerRender = true;
+        StateHasChanged();
+    }
+
+    private async Task OpenCreateAlbumFromPendingAsync()
+    {
+        if (string.IsNullOrEmpty(ChannelId) || string.IsNullOrEmpty(CurrentUserId))
+            return;
+
+        var pendingImages = CompletedPendingImages;
+        if (pendingImages.Count == 0)
+            return;
+
+        var privateKey = ScopedKeystore.IsUnlocked ? ScopedKeystore.GetPrivateKey() : null;
+        var existingAlbums = AlbumService.GetWritableAlbumsForChannel(CurrentUserId, ChannelId, privateKey);
+        var defaultTitle = !string.IsNullOrWhiteSpace(ChannelDisplayName)
+            ? $"{ChannelDisplayName} - {DateTime.Now:MMM d, yyyy}"
+            : DateTime.Now.ToString("MMM d, yyyy");
+
+        var parameters = new DialogParameters<Spokes_Server.Components.Dialogs.Communication.Chat.CreateAlbumFromChatDialog>
+        {
+            { x => x.PhotoCount, pendingImages.Count },
+            { x => x.DefaultTitle, defaultTitle },
+            { x => x.ExistingAlbums, existingAlbums },
+            { x => x.IsPostSendConversion, false }
+        };
+        var options = new DialogOptions { CloseButton = true, MaxWidth = MaxWidth.Small, FullWidth = true };
+        var dialog = await DialogService.ShowAsync<Spokes_Server.Components.Dialogs.Communication.Chat.CreateAlbumFromChatDialog>(
+            Loc["Organize Photos into Album"].Value,
+            parameters,
+            options);
+        var result = await dialog.Result;
+
+        if (result is { Canceled: false, Data: Spokes_Server.Components.Dialogs.Communication.Chat.CreateAlbumFromChatDialog.Result dialogResult })
+        {
+            var attachmentsToImport = pendingImages
+                .Where(f => f.Attachment != null)
+                .Select(f => f.Attachment!)
+                .ToList();
+
+            var importResult = await AlbumService.ImportChatAttachmentsToAlbumAsync(
+                CurrentUserId,
+                ChannelId,
+                attachmentsToImport,
+                dialogResult.ExistingAlbumId,
+                dialogResult.NewAlbumTitle,
+                privateKey,
+                ChannelKey,
+                deleteSourceFiles: true);
+
+            if (!importResult.IsSuccess || importResult.Value == null)
+            {
+                Snackbar.Add(importResult.ErrorMessage ?? Loc["Failed to create album."].Value, Severity.Error);
+                return;
+            }
+
+            foreach (var imgFile in pendingImages)
+            {
+                _pendingFiles.Remove(imgFile);
+            }
+            _dismissedAlbumSuggestion = false;
+
+            var album = importResult.Value;
+            var cleanTitle = album.Title.Replace("[", "(").Replace("]", ")");
+            var albumToken = $"#[{cleanTitle}](album:{album.Id})";
+            _messageText = string.IsNullOrWhiteSpace(_messageText)
+                ? albumToken
+                : $"{_messageText.TrimEnd()} {albumToken}";
+
+            _forceComposerRender = true;
+            await SendMessage();
+        }
+    }
+
+    private async Task OpenCreatePollDialog()
+    {
+        if (string.IsNullOrEmpty(ChannelId) || string.IsNullOrEmpty(CurrentUserId))
+            return;
+
+        var parameters = new DialogParameters<Spokes_Server.Components.Dialogs.Communication.Chat.ChatPollDialog>
+        {
+            { x => x.IsEditMode, false },
+            { x => x.ChannelId, ChannelId },
+            { x => x.CurrentUserId, CurrentUserId },
+            { x => x.ChannelKey, ChannelKey }
+        };
+        var options = new DialogOptions { CloseButton = true, MaxWidth = MaxWidth.Small, FullWidth = true };
+        var dialog = await DialogService.ShowAsync<Spokes_Server.Components.Dialogs.Communication.Chat.ChatPollDialog>(Loc["Create a Poll"].Value, parameters, options);
+        var result = await dialog.Result;
+
+        if (result is { Canceled: false, Data: ChatPoll createdPoll })
+        {
+            var displayPoll = PollService.DecryptPollForDisplay(createdPoll, ChannelKey);
+            var cleanTitle = (displayPoll.Question ?? "Poll").Replace("[", "(").Replace("]", ")");
+            var pollContent = $"#[{cleanTitle}](poll:{createdPoll.Id})";
+            await OnSendMessage.InvokeAsync((pollContent, new List<ChatAttachment>()));
+        }
+    }
+
+    private static string GetHashTagAvatarStyle(HashTagCandidate tag) => tag.Type switch
+    {
+        "event" => "background: var(--mud-palette-info); color: white;",
+        "poll" => "background: var(--mud-palette-primary); color: white;",
+        _ => "background: var(--mud-palette-success); color: white;"
+    };
+
+    private static string GetHashTagIcon(HashTagCandidate tag) => tag.Type switch
+    {
+        "event" => Icons.Material.Filled.Event,
+        "poll" => Icons.Material.Filled.Poll,
+        _ => Icons.Material.Filled.PhotoAlbum
+    };
 }

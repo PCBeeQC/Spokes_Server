@@ -80,7 +80,7 @@ else
             }
             else
             {
-                <MudSelect T="string" Value="@_document.Status" ValueChanged="UpdateStatusAsync" Dense="true" Margin="Margin.Dense"
+                <MudSelect T="string" Value="@_document.Status" ValueChanged="UpdateStatusAsync" Disabled="@(!_canEdit)" Dense="true" Margin="Margin.Dense"
                     Variant="Variant.Outlined" Style="width: 160px; min-width: 160px; flex-shrink: 0;">
                     <MudSelectItem Value="@(ProjectDocumentStatus.Draft)">Draft</MudSelectItem>
                     <MudSelectItem Value="@(ProjectDocumentStatus.Final)">Final</MudSelectItem>
@@ -93,11 +93,14 @@ else
                 @if (_document.Status == ProjectDocumentStatus.Final)
                 {
                     <MudButton Variant="Variant.Outlined" Color="Color.Secondary" StartIcon="@Icons.Material.Filled.OpenInNew" OnClick="OpenPdf">Open PDF</MudButton>
-                    <MudButton Variant="Variant.Outlined" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Email"
-                        OnClick="SendByEmail">Send by Email</MudButton>
+                    @if (_canEdit)
+                    {
+                        <MudButton Variant="Variant.Outlined" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Email"
+                            OnClick="SendByEmail">Send by Email</MudButton>
+                    }
                 }
 
-                @if (_document.Status != ProjectDocumentStatus.Final)
+                @if (_canEdit && _document.Status != ProjectDocumentStatus.Final)
                 {
                     <MudButton Variant="Variant.Outlined" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Edit"
                         OnClick="StartEditing">Edit Content</MudButton>
@@ -187,6 +190,7 @@ else
     private DocumentTemplate? _template;
 
     private bool _isAdmin;
+    private bool _canEdit;
     private bool _isEditing;
     private string _editingBody = "";
     private bool _needsPagination;
@@ -231,10 +235,13 @@ else
             _template = Db.DocumentTemplates.GetDefault();
         }
 
-        _isAdmin = await UserService.IsAdminAsync();
+        var emp = await UserService.GetEmployeeAsync();
+        _isAdmin = emp?.IsAdmin ?? false;
+        _canEdit = emp != null && (emp.IsAdmin || emp.HasPermission(AppPermissions.Projects.Edit));
 
-        if (_document == null || _project == null)
+        if (_document == null || _project == null || !string.Equals(_document.ProjectId, _project.Id, StringComparison.OrdinalIgnoreCase))
         {
+            _document = null;
             Snackbar.Add("Document not found", Severity.Error);
             Nav.NavigateTo($"/projects/{ProjectId}");
             return;
@@ -242,6 +249,7 @@ else
 
         if (!await UserService.CanViewProjectAsync(_project))
         {
+            _document = null;
             Nav.NavigateTo("/projects");
             return;
         }
@@ -333,7 +341,7 @@ else
 
     private async Task UpdateStatusAsync(string newStatus)
     {
-        if (_document == null) return;
+        if (_document == null || !_canEdit) return;
 
         // Admin-only revert from Final to Draft
         if (_document.Status == ProjectDocumentStatus.Final && newStatus == ProjectDocumentStatus.Draft && !_isAdmin)
@@ -375,7 +383,7 @@ else
 
     private void SaveEdits()
     {
-        if (_document == null) return;
+        if (_document == null || !_canEdit) return;
 
         _document.ResolvedBody = _editingBody;
         _document.IsManualEdit = true;
@@ -395,7 +403,7 @@ else
 
     private void SaveBlocks()
     {
-        if (_document == null) return;
+        if (_document == null || !_canEdit) return;
         _document.IsManualEdit = true;
         _document.UpdatedAt = DateTime.UtcNow;
         Db.ProjectDocuments.Save(_document);
@@ -424,7 +432,7 @@ else
 
     private void ResetToTemplate()
     {
-        if (_document == null) return;
+        if (_document == null || !_canEdit) return;
         _document.IsManualEdit = false;
         _document.UpdatedAt = DateTime.UtcNow;
         Db.ProjectDocuments.Save(_document);
@@ -433,7 +441,7 @@ else
 
     private async Task StartEditing()
     {
-        if (_document == null) return;
+        if (_document == null || !_canEdit) return;
 
         // Cleanup pagination first so Blazor can manage the edit UI DOM
         try { await JS.InvokeVoidAsync("cleanupPagination", "printable-area"); }
@@ -504,7 +512,7 @@ else
             }
         };
 
-        var options = new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true };
+        var options = new DialogOptions { MaxWidth = MaxWidth.Large, FullWidth = true, CloseButton = true, CloseOnEscapeKey = true };
         await DialogService.ShowAsync<EmailComposer>("Send Email", parameters, options);
     }
 

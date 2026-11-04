@@ -95,21 +95,12 @@
   <data name="Project Statuses" xml:space="preserve">
     <value>Project Statuses</value>
   </data>
-  <data name="Email Server" xml:space="preserve">
-    <value>Email Server</value>
-  </data>
   <data name="Timesheets" xml:space="preserve">
     <value>Timesheets</value>
   </data>
   <!-- HR & Employee Details -->
   <data name="HR Details" xml:space="preserve">
     <value>HR Details</value>
-  </data>
-  <data name="Email Password" xml:space="preserve">
-    <value>Email Password</value>
-  </data>
-  <data name="New Email Password" xml:space="preserve">
-    <value>New Email Password</value>
   </data>
   <data name="Position / Title" xml:space="preserve">
     <value>Position / Title</value>
@@ -211,9 +202,6 @@
   <data name="Total Time" xml:space="preserve">
     <value>Total Time</value>
   </data>
-  <data name="Week" xml:space="preserve">
-    <value>Week</value>
-  </data>
   <data name="Bill #{0} is currently recorded as Paid. Reopening will return it to Unpaid status so payment can be re-attempted, attach this reminder document, and mark the email as processed. Proceed?" xml:space="preserve">
     <value>Bill #{0} is currently recorded as Paid. Reopening will return it to Unpaid status so payment can be re-attempted, attach this reminder document, and mark the email as processed. Proceed?</value>
   </data>
@@ -262,9 +250,6 @@
   <data name="Active Ingestion" xml:space="preserve">
     <value>Active Ingestion</value>
   </data>
-  <data name="All ({0})" xml:space="preserve">
-    <value>All ({0})</value>
-  </data>
   <data name="All Action Required" xml:space="preserve">
     <value>All Action Required</value>
   </data>
@@ -300,9 +285,6 @@
   </data>
   <data name="Attach PDF" xml:space="preserve">
     <value>Attach PDF</value>
-  </data>
-  <data name="Attachment" xml:space="preserve">
-    <value>Attachment</value>
   </data>
   <data name="Auto-Drafted" xml:space="preserve">
     <value>Auto-Drafted</value>
@@ -1165,14 +1147,8 @@
   <data name="Chart of Accounts" xml:space="preserve">
     <value>Chart of Accounts</value>
   </data>
-  <data name="Click any payable row below to review or adjust its tax breakdown, invoice number, or GL account:" xml:space="preserve">
-    <value>Click any payable row below to review or adjust its tax breakdown, invoice number, or GL account:</value>
-  </data>
   <data name="Client" xml:space="preserve">
     <value>Client</value>
-  </data>
-  <data name="Client -&gt; Sage Customer Mappings" xml:space="preserve">
-    <value>Client -&gt; Sage Customer Mappings</value>
   </data>
   <data name="Client Invoices" xml:space="preserve">
     <value>Client Invoices</value>
@@ -1210,14 +1186,8 @@
   <data name="Default Purchase / COGS GL" xml:space="preserve">
     <value>Default Purchase / COGS GL</value>
   </data>
-  <data name="Default Purchase Item / Service Code" xml:space="preserve">
-    <value>Default Purchase Item / Service Code</value>
-  </data>
   <data name="Default Recurring Bills GL" xml:space="preserve">
     <value>Default Recurring Bills GL</value>
-  </data>
-  <data name="Default Sales Item / Service Code" xml:space="preserve">
-    <value>Default Sales Item / Service Code</value>
   </data>
   <data name="Default Sales Revenue GL" xml:space="preserve">
     <value>Default Sales Revenue GL</value>
@@ -1233,9 +1203,6 @@
   </data>
   <data name="Edit Supplier Bill" xml:space="preserve">
     <value>Edit Supplier Bill</value>
-  </data>
-  <data name="Entity Mappings" xml:space="preserve">
-    <value>Entity Mappings</value>
   </data>
   <data name="Expense Report" xml:space="preserve">
     <value>Expense Report</value>
@@ -1261,9 +1228,6 @@
   <data name="GL &amp; Tax Setup" xml:space="preserve">
     <value>GL &amp; Tax Setup</value>
   </data>
-  <data name="GL / Item" xml:space="preserve">
-    <value>GL / Item</value>
-  </data>
   <data name="Imported GL Accounts" xml:space="preserve">
     <value>Imported GL Accounts</value>
   </data>
@@ -1281,9 +1245,6 @@
   </data>
   <data name="Invoice / Ref #" xml:space="preserve">
     <value>Invoice / Ref #</value>
-  </data>
-  <data name="Map Spokes Client and Supplier names to their exact 35-character Sage 50 names so imported transactions attach to existing Sage records." xml:space="preserve">
-    <value>Map Spokes Client and Supplier names to their exact 35-character Sage 50 names so imported transactions attach to existing Sage records.</value>
   </data>
   <data name="No client invoices match the filter criteria." xml:space="preserve">
     <value>No client invoices match the filter criteria.</value>
@@ -1342,15 +1303,6 @@
   <data name="Sage 50 export settings saved" xml:space="preserve">
     <value>Sage 50 export settings saved</value>
   </data>
-  <data name="Sage 50 Inventory/Service Item code for purchase lines (falls back to Expense GL if blank)" xml:space="preserve">
-    <value>Sage 50 Inventory/Service Item code for purchase lines (falls back to Expense GL if blank)</value>
-  </data>
-  <data name="Sage 50 Inventory/Service Item code for sales lines (falls back to Revenue GL if blank)" xml:space="preserve">
-    <value>Sage 50 Inventory/Service Item code for sales lines (falls back to Revenue GL if blank)</value>
-  </data>
-  <data name="Sage 50 Service Item Codes (Detail Line Field 1)" xml:space="preserve">
-    <value>Sage 50 Service Item Codes (Detail Line Field 1)</value>
-  </data>
   <data name="Sage 50 Vendor Name" xml:space="preserve">
     <value>Sage 50 Vendor Name</value>
   </data>
@@ -1383,9 +1335,6 @@
   </data>
   <data name="Supplier &amp; PO Bills" xml:space="preserve">
     <value>Supplier &amp; PO Bills</value>
-  </data>
-  <data name="Supplier / Payee -&gt; Sage Vendor Mappings" xml:space="preserve">
-    <value>Supplier / Payee -&gt; Sage Vendor Mappings</value>
   </data>
   <data name="Supplier Bill" xml:space="preserve">
     <value>Supplier Bill</value>
@@ -1429,9 +1378,6 @@
   <data name="Upload Vendors" xml:space="preserve">
     <value>Upload Vendors</value>
   </data>
-  <data name="Vendor / Payee" xml:space="preserve">
-    <value>Vendor / Payee</value>
-  </data>
   <data name="All {0}" xml:space="preserve">
     <value>All {0}</value>
   </data>
@@ -1452,5 +1398,311 @@
   </data>
   <data name="Running Total" xml:space="preserve">
     <value>Running Total</value>
+  </data>
+  <data name="Content" xml:space="preserve">
+    <value>Content</value>
+  </data>
+  <data name="Manage reusable terms and conditions presets for quotes and templates." xml:space="preserve">
+    <value>Manage reusable terms and conditions presets for quotes and templates.</value>
+  </data>
+  <data name="Name is required." xml:space="preserve">
+    <value>Name is required.</value>
+  </data>
+  <data name="New Terms &amp; Conditions" xml:space="preserve">
+    <value>New Terms &amp; Conditions</value>
+  </data>
+  <data name="No terms and conditions created yet." xml:space="preserve">
+    <value>No terms and conditions created yet.</value>
+  </data>
+  <data name="Terms &amp; Conditions" xml:space="preserve">
+    <value>Terms &amp; Conditions</value>
+  </data>
+  <data name="Terms &amp; Conditions saved successfully." xml:space="preserve">
+    <value>Terms &amp; Conditions saved successfully.</value>
+  </data>
+  <data name="Type @ to see available context tags for dynamic client/company content." xml:space="preserve">
+    <value>Type @ to see available context tags for dynamic client/company content.</value>
+  </data>
+  <data name="Accounting Defaults (Sage 50)" xml:space="preserve">
+    <value>Accounting Defaults (Sage 50)</value>
+  </data>
+  <data name="Adjust GL accounts, Sage Vendor/Customer names, or tax breakdowns directly inline below (changes are remembered automatically for future exports), or click a row to open its full editor:" xml:space="preserve">
+    <value>Adjust GL accounts, Sage Vendor/Customer names, or tax breakdowns directly inline below (changes are remembered automatically for future exports), or click a row to open its full editor:</value>
+  </data>
+  <data name="and remembered default for client." xml:space="preserve">
+    <value>and remembered default for client.</value>
+  </data>
+  <data name="and remembered default for vendor." xml:space="preserve">
+    <value>and remembered default for vendor.</value>
+  </data>
+  <data name="Auto-resolve Sage Service Item IDs from Linked GL" xml:space="preserve">
+    <value>Auto-resolve Sage Service Item IDs from Linked GL</value>
+  </data>
+  <data name="Client -&gt; Sage Customer &amp; Revenue GL Mappings" xml:space="preserve">
+    <value>Client -&gt; Sage Customer &amp; Revenue GL Mappings</value>
+  </data>
+  <data name="Default Expense GL" xml:space="preserve">
+    <value>Default Expense GL</value>
+  </data>
+  <data name="Default Expense GL Account" xml:space="preserve">
+    <value>Default Expense GL Account</value>
+  </data>
+  <data name="Default Revenue GL" xml:space="preserve">
+    <value>Default Revenue GL</value>
+  </data>
+  <data name="Edit Client Invoice" xml:space="preserve">
+    <value>Edit Client Invoice</value>
+  </data>
+  <data name="Entity &amp; GL Mappings" xml:space="preserve">
+    <value>Entity &amp; GL Mappings</value>
+  </data>
+  <data name="Expense GL" xml:space="preserve">
+    <value>Expense GL</value>
+  </data>
+  <data name="Inherit Company Default" xml:space="preserve">
+    <value>Inherit Company Default</value>
+  </data>
+  <data name="Map Spokes Client and Supplier names to their exact 35-character Sage 50 names and assign their default GL accounts so transactions require zero manual entry." xml:space="preserve">
+    <value>Map Spokes Client and Supplier names to their exact 35-character Sage 50 names and assign their default GL accounts so transactions require zero manual entry.</value>
+  </data>
+  <data name="Mark Tax-Exempt (0% Tax)" xml:space="preserve">
+    <value>Mark Tax-Exempt (0% Tax)</value>
+  </data>
+  <data name="Marked payable as tax-exempt (0% tax)." xml:space="preserve">
+    <value>Marked payable as tax-exempt (0% tax).</value>
+  </data>
+  <data name="Open Full Editor..." xml:space="preserve">
+    <value>Open Full Editor...</value>
+  </data>
+  <data name="Quick Tax Adjustment" xml:space="preserve">
+    <value>Quick Tax Adjustment</value>
+  </data>
+  <data name="Recalculate Standard QC Tax (5% + 9.975%)" xml:space="preserve">
+    <value>Recalculate Standard QC Tax (5% + 9.975%)</value>
+  </data>
+  <data name="Revenue GL" xml:space="preserve">
+    <value>Revenue GL</value>
+  </data>
+  <data name="Sage 50 Vendor Name (Optional)" xml:space="preserve">
+    <value>Sage 50 Vendor Name (Optional)</value>
+  </data>
+  <data name="Sage Customer" xml:space="preserve">
+    <value>Sage Customer</value>
+  </data>
+  <data name="Sage Customer Name" xml:space="preserve">
+    <value>Sage Customer Name</value>
+  </data>
+  <data name="Sage Vendor / Payee" xml:space="preserve">
+    <value>Sage Vendor / Payee</value>
+  </data>
+  <data name="Sage Vendor Name" xml:space="preserve">
+    <value>Sage Vendor Name</value>
+  </data>
+  <data name="Saved Expense GL" xml:space="preserve">
+    <value>Saved Expense GL</value>
+  </data>
+  <data name="Saved Revenue GL" xml:space="preserve">
+    <value>Saved Revenue GL</value>
+  </data>
+  <data name="Saved Sage Customer mapping and remembered for client." xml:space="preserve">
+    <value>Saved Sage Customer mapping and remembered for client.</value>
+  </data>
+  <data name="Saved Sage Vendor mapping and remembered default." xml:space="preserve">
+    <value>Saved Sage Vendor mapping and remembered default.</value>
+  </data>
+  <data name="Supplier / Payee -&gt; Sage Vendor &amp; Expense GL Mappings" xml:space="preserve">
+    <value>Supplier / Payee -&gt; Sage Vendor &amp; Expense GL Mappings</value>
+  </data>
+  <data name="Updated tax breakdown to standard QC taxes (5% TPS + 9.975% TVQ)." xml:space="preserve">
+    <value>Updated tax breakdown to standard QC taxes (5% TPS + 9.975% TVQ).</value>
+  </data>
+  <data name="Upload One or Multiple Sage 50 Files" xml:space="preserve">
+    <value>Upload One or Multiple Sage 50 Files</value>
+  </data>
+  <data name="Change Landing Page" xml:space="preserve">
+    <value>Change Landing Page</value>
+  </data>
+  <data name="Landing Page" xml:space="preserve">
+    <value>Landing Page</value>
+  </data>
+  <data name="Set as Landing Page" xml:space="preserve">
+    <value>Set as Landing Page</value>
+  </data>
+  <data name="Customize notification sounds for chats, calls, calendar alerts, and emails." xml:space="preserve">
+    <value>Customize notification sounds for chats, calls, calendar alerts, and emails.</value>
+  </data>
+  <data name="Incoming Emails" xml:space="preserve">
+    <value>Incoming Emails</value>
+  </data>
+  <data name="Notifications for new incoming email messages." xml:space="preserve">
+    <value>Notifications for new incoming email messages.</value>
+  </data>
+  <data name="Attach" xml:space="preserve">
+    <value>Attach</value>
+  </data>
+  <data name="Attach Documents" xml:space="preserve">
+    <value>Attach Documents</value>
+  </data>
+  <data name="Attach Internal Document" xml:space="preserve">
+    <value>Attach Internal Document</value>
+  </data>
+  <data name="Bcc" xml:space="preserve">
+    <value>Bcc</value>
+  </data>
+  <data name="Cc" xml:space="preserve">
+    <value>Cc</value>
+  </data>
+  <data name="Cc/Bcc" xml:space="preserve">
+    <value>Cc/Bcc</value>
+  </data>
+  <data name="Collapse header" xml:space="preserve">
+    <value>Collapse header</value>
+  </data>
+  <data name="Draft saved" xml:space="preserve">
+    <value>Draft saved</value>
+  </data>
+  <data name="Email sent successfully" xml:space="preserve">
+    <value>Email sent successfully</value>
+  </data>
+  <data name="Expand header" xml:space="preserve">
+    <value>Expand header</value>
+  </data>
+  <data name="Failed to send" xml:space="preserve">
+    <value>Failed to send</value>
+  </data>
+  <data name="File {0} is too large (Max 10MB)" xml:space="preserve">
+    <value>File {0} is too large (Max 10MB)</value>
+  </data>
+  <data name="file(s) attached" xml:space="preserve">
+    <value>file(s) attached</value>
+  </data>
+  <data name="Formatting options" xml:space="preserve">
+    <value>Formatting options</value>
+  </data>
+  <data name="Hide Cc/Bcc" xml:space="preserve">
+    <value>Hide Cc/Bcc</value>
+  </data>
+  <data name="Hide formatting options" xml:space="preserve">
+    <value>Hide formatting options</value>
+  </data>
+  <data name="Hide original message" xml:space="preserve">
+    <value>Hide original message</value>
+  </data>
+  <data name="No email account or identity configured" xml:space="preserve">
+    <value>No email account or identity configured</value>
+  </data>
+  <data name="No sending identity is available. Configure a Sending Identity in Email Settings before sending." xml:space="preserve">
+    <value>No sending identity is available. Configure a Sending Identity in Email Settings before sending.</value>
+  </data>
+  <data name="Open Address Book" xml:space="preserve">
+    <value>Open Address Book</value>
+  </data>
+  <data name="Recipient (To) is required" xml:space="preserve">
+    <value>Recipient (To) is required</value>
+  </data>
+  <data name="Save failed" xml:space="preserve">
+    <value>Save failed</value>
+  </data>
+  <data name="Saving draft…" xml:space="preserve">
+    <value>Saving draft…</value>
+  </data>
+  <data name="Select Contacts" xml:space="preserve">
+    <value>Select Contacts</value>
+  </data>
+  <data name="Sending…" xml:space="preserve">
+    <value>Sending…</value>
+  </data>
+  <data name="Server File" xml:space="preserve">
+    <value>Server File</value>
+  </data>
+  <data name="Show original message" xml:space="preserve">
+    <value>Show original message</value>
+  </data>
+  <data name="Subject" xml:space="preserve">
+    <value>Subject</value>
+  </data>
+  <data name="Typing…" xml:space="preserve">
+    <value>Typing…</value>
+  </data>
+  <data name="Dismissed" xml:space="preserve">
+    <value>Dismissed</value>
+  </data>
+  <data name="Add Payment" xml:space="preserve">
+    <value>Add Payment</value>
+  </data>
+  <data name="Amount Paid" xml:space="preserve">
+    <value>Amount Paid</value>
+  </data>
+  <data name="Are you sure you want to delete the payment of {0} received on {1}?" xml:space="preserve">
+    <value>Are you sure you want to delete the payment of {0} received on {1}?</value>
+  </data>
+  <data name="Delete Payment" xml:space="preserve">
+    <value>Delete Payment</value>
+  </data>
+  <data name="Edit Payment" xml:space="preserve">
+    <value>Edit Payment</value>
+  </data>
+  <data name="Edit payment for invoice #{0}." xml:space="preserve">
+    <value>Edit payment for invoice #{0}.</value>
+  </data>
+  <data name="Grand Total" xml:space="preserve">
+    <value>Grand Total</value>
+  </data>
+  <data name="Internal Notes (Optional)" xml:space="preserve">
+    <value>Internal Notes (Optional)</value>
+  </data>
+  <data name="No payments recorded yet for this invoice." xml:space="preserve">
+    <value>No payments recorded yet for this invoice.</value>
+  </data>
+  <data name="Notes" xml:space="preserve">
+    <value>Notes</value>
+  </data>
+  <data name="Payment Amount" xml:space="preserve">
+    <value>Payment Amount</value>
+  </data>
+  <data name="Payment Date" xml:space="preserve">
+    <value>Payment Date</value>
+  </data>
+  <data name="Payment deleted successfully." xml:space="preserve">
+    <value>Payment deleted successfully.</value>
+  </data>
+  <data name="Payment Method" xml:space="preserve">
+    <value>Payment Method</value>
+  </data>
+  <data name="Payment of {0} recorded successfully." xml:space="preserve">
+    <value>Payment of {0} recorded successfully.</value>
+  </data>
+  <data name="Payment of {0} Registered" xml:space="preserve">
+    <value>Payment of {0} Registered</value>
+  </data>
+  <data name="Payment updated successfully." xml:space="preserve">
+    <value>Payment updated successfully.</value>
+  </data>
+  <data name="Payments" xml:space="preserve">
+    <value>Payments</value>
+  </data>
+  <data name="Payments - Invoice #{0}" xml:space="preserve">
+    <value>Payments - Invoice #{0}</value>
+  </data>
+  <data name="Previous Payments" xml:space="preserve">
+    <value>Previous Payments</value>
+  </data>
+  <data name="Record Payment" xml:space="preserve">
+    <value>Record Payment</value>
+  </data>
+  <data name="Record payment for invoice #{0}." xml:space="preserve">
+    <value>Record payment for invoice #{0}.</value>
+  </data>
+  <data name="Recorded Payments" xml:space="preserve">
+    <value>Recorded Payments</value>
+  </data>
+  <data name="Reference (Check #, Wire ID)" xml:space="preserve">
+    <value>Reference (Check #, Wire ID)</value>
+  </data>
+  <data name="Warning: Amount exceeds the remaining balance ({0})." xml:space="preserve">
+    <value>Warning: Amount exceeds the remaining balance ({0}).</value>
+  </data>
+  <data name="You do not have permission to manage invoice payments." xml:space="preserve">
+    <value>You do not have permission to manage invoice payments.</value>
   </data>
 </root>

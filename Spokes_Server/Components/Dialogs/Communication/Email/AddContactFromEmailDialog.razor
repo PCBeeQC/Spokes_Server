@@ -1,4 +1,5 @@
 @using System.Security.Claims
+@using Spokes_Server.Core.Constants
 @using Spokes_Server.Core.Services.Communication
 @inject Database Db
 @inject IContactService ContactService
@@ -13,26 +14,29 @@
         @if (string.IsNullOrEmpty(_selectedOption))
         {
             <div class="d-flex flex-column gap-3">
-                <MudButton Variant="Variant.Outlined" Color="Color.Primary" OnClick="@(() => SelectOption("company"))" FullWidth="true" Class="justify-start py-3">
-                    <MudIcon Icon="@Icons.Material.Filled.Business" Class="mr-3" />
-                    <div class="d-flex flex-column align-start">
-                        <MudText Typo="Typo.subtitle1">Add to Company / CRM</MudText>
-                        <MudText Typo="Typo.caption" Color="Color.Secondary">Add this person to an existing or new company</MudText>
-                    </div>
-                </MudButton>
+                @if (_canManageShared)
+                {
+                    <MudButton Variant="Variant.Outlined" Color="Color.Primary" OnClick="@(() => SelectOption("company"))" FullWidth="true" Class="justify-start py-3">
+                        <MudIcon Icon="@Icons.Material.Filled.Business" Class="mr-3" />
+                        <div class="d-flex flex-column align-start">
+                            <MudText Typo="Typo.subtitle1">Add to Company / CRM</MudText>
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">Add this person to an existing or new company</MudText>
+                        </div>
+                    </MudButton>
 
-                <MudButton Variant="Variant.Outlined" Color="Color.Info" OnClick="@(() => SelectOption("public"))" FullWidth="true" Class="justify-start py-3" Disabled="@_existsInPublic">
-                    <MudIcon Icon="@Icons.Material.Filled.Public" Class="mr-3" />
-                    <div class="d-flex flex-column align-start">
-                        <MudText Typo="Typo.subtitle1">
-                            Add as Public Contact 
-                            @if(_existsInPublic) { <MudChip T="string" Size="Size.Small" Color="Color.Warning" Class="ml-2 py-0">Already Exists</MudChip> }
-                        </MudText>
-                        <MudText Typo="Typo.caption" Color="@(_existsInPublic ? Color.Warning : Color.Secondary)">
-                            @(_existsInPublic ? "Contact is already in the public directory." : "A standalone contact visible to the whole company")
-                        </MudText>
-                    </div>
-                </MudButton>
+                    <MudButton Variant="Variant.Outlined" Color="Color.Info" OnClick="@(() => SelectOption("public"))" FullWidth="true" Class="justify-start py-3" Disabled="@_existsInPublic">
+                        <MudIcon Icon="@Icons.Material.Filled.Public" Class="mr-3" />
+                        <div class="d-flex flex-column align-start">
+                            <MudText Typo="Typo.subtitle1">
+                                Add as Public Contact 
+                                @if(_existsInPublic) { <MudChip T="string" Size="Size.Small" Color="Color.Warning" Class="ml-2 py-0">Already Exists</MudChip> }
+                            </MudText>
+                            <MudText Typo="Typo.caption" Color="@(_existsInPublic ? Color.Warning : Color.Secondary)">
+                                @(_existsInPublic ? "Contact is already in the public directory." : "A standalone contact visible to the whole company")
+                            </MudText>
+                        </div>
+                    </MudButton>
+                }
 
                 <MudButton Variant="Variant.Outlined" Color="Color.Secondary" OnClick="@(() => SelectOption("private"))" FullWidth="true" Class="justify-start py-3" Disabled="@_existsInPrivate">
                     <MudIcon Icon="@Icons.Material.Filled.Lock" Class="mr-3" />
@@ -95,6 +99,7 @@
 
     private bool _existsInPublic = false;
     private bool _existsInPrivate = false;
+    private bool _canManageShared = false;
 
     protected override async Task OnInitializedAsync()
     {
@@ -104,7 +109,7 @@
         // Check Public
         _existsInPublic = ContactService.ExistsInPublic(Email);
         
-        // Check Private
+        // Check Private & Shared Management Permission
         var authState = await AuthStateProvider.GetAuthenticationStateAsync();
         var user = authState.User;
         var subId = user.Claims.FirstOrDefault(c => c.Type == ClaimTypes.NameIdentifier)?.Value;
@@ -117,23 +122,26 @@
             if (employee != null)
             {
                 _existsInPrivate = ContactService.ExistsInPrivate(employee.Id, Email);
+                _canManageShared = employee.IsAdmin || employee.HasPermission(AppPermissions.AddressBook.Manage);
             }
         }
     }
 
     private void SelectOption(string option)
     {
+        if ((option == "company" || option == "public") && !_canManageShared) return;
         _selectedOption = option;
     }
 
     private Task<IEnumerable<Supplier>> SearchSuppliers(string value, CancellationToken token)
     {
+        if (!_canManageShared) return Task.FromResult(Enumerable.Empty<Supplier>());
         return Task.FromResult<IEnumerable<Supplier>>(Db.Suppliers.Search(value));
     }
 
     private async Task OnSupplierSelected(Supplier supplier)
     {
-        if (supplier == null) return;
+        if (!_canManageShared || supplier == null) return;
         
         // Open the dialog to let them add the specifics 
         var newContact = new ContactPerson { Email = Email, Name = DisplayName };
@@ -157,6 +165,7 @@
 
     private async Task CreateNewCompany()
     {
+        if (!_canManageShared) return;
         var newSupplier = new Supplier();
         // Add the contact as primary contact
         newSupplier.Contacts.Add(new ContactPerson
@@ -188,6 +197,7 @@
 
         if (_selectedOption == "public")
         {
+            if (!_canManageShared) return;
             ContactService.SavePublicContact(_contact);
             Snackbar.Add("Added to Public Contacts", Severity.Success);
             MudDialog.Close(DialogResult.Ok(true));

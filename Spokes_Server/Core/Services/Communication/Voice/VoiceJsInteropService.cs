@@ -13,7 +13,7 @@ public class VoiceJsInteropService : JsModuleBase, IVoiceJsInteropService
     public bool IsModuleLoaded => moduleTask != null && moduleTask.IsValueCreated && moduleTask.Value.IsCompletedSuccessfully && moduleTask.Value.Result != null;
 
     public VoiceJsInteropService(IJSRuntime? js, ILogger<VoiceJsInteropService>? logger = null)
-        : base(js, "./js/voiceInterop.js")
+        : base(js, "./js/voiceInterop.js?v=20261104c")
     {
         _logger = logger;
     }
@@ -96,6 +96,12 @@ public class VoiceJsInteropService : JsModuleBase, IVoiceJsInteropService
         await SafeInvokeVoidAsync("switchActiveCamera", deviceId);
     }
 
+    public async Task UpdateCameraSettingsAsync(string quality, int fps, string deviceId)
+    {
+        if (!IsModuleLoaded) return;
+        await SafeInvokeVoidAsync("updateCameraSettings", quality, fps, deviceId);
+    }
+
     public async Task SwitchActiveMicrophoneAsync(string deviceId)
     {
         if (!IsModuleLoaded) return;
@@ -118,6 +124,12 @@ public class VoiceJsInteropService : JsModuleBase, IVoiceJsInteropService
     {
         if (!IsModuleLoaded) return;
         await SafeInvokeVoidAsync("setNoiseSuppressionType", type);
+    }
+
+    public async Task ReinitializeMicrophoneAsync()
+    {
+        if (!IsModuleLoaded) return;
+        await SafeInvokeVoidAsync("reinitializeMicrophone");
     }
 
     public async Task<string> GetIosMicrophoneModeAsync()
@@ -202,5 +214,53 @@ public class VoiceJsInteropService : JsModuleBase, IVoiceJsInteropService
     {
         if (!IsModuleLoaded) return;
         await SafeInvokeVoidAsync("setRemoteVideoQuality", participantId, quality);
+    }
+
+    public async Task<PhysicalDeviceIdentity?> GetOrCreatePhysicalDeviceIdentityAsync()
+    {
+        if (!IsModuleLoaded) return null;
+        return await SafeInvokeAsync<PhysicalDeviceIdentity>("getOrCreatePhysicalDeviceIdentity");
+    }
+
+    public async Task SyncPhysicalRoomStateAsync(string[] coLocatedUserIds, string[] mutedRoommateUserIds)
+    {
+        if (!IsModuleLoaded) return;
+        await SafeInvokeVoidAsync("syncPhysicalRoomState", coLocatedUserIds, mutedRoommateUserIds);
+    }
+
+    public async Task SyncPipMetadataAsync(VoicePipMetadataPayload payload)
+    {
+        if (!IsModuleLoaded) return;
+        await SafeInvokeVoidAsync("syncPipMetadata", payload);
+    }
+
+    public async Task SetInAppPipActiveAsync(bool active)
+    {
+        if (!IsModuleLoaded) return;
+        await SafeInvokeVoidAsync("setInAppPipActive", active);
+    }
+
+    public async Task RefreshInAppPipAsync()
+    {
+        if (!IsModuleLoaded) return;
+        await SafeInvokeVoidAsync("refreshInAppPip");
+    }
+
+    public async Task<bool> ToggleOsPipAsync()
+    {
+        if (!IsModuleLoaded) return false;
+        return await SafeInvokeAsync<bool>("toggleOsPip");
+    }
+
+    public async Task CloseOsPipAsync()
+    {
+        if (!IsModuleLoaded) return;
+        await SafeInvokeVoidAsync("closeOsPip");
+    }
+
+    public async Task<bool> IsOsPipSupportedAsync()
+    {
+        if (!IsModuleLoaded) return false;
+        return await SafeInvokeAsync<bool>("isOsPipSupported");
     }
 }

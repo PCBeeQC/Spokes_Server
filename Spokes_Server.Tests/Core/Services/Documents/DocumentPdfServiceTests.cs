@@ -4,7 +4,10 @@ using Microsoft.Extensions.Logging;
 using Moq;
 using PuppeteerSharp;
 using PuppeteerSharp.Media;
+using Spokes_Server.Core.Data;
+using Spokes_Server.Core.Data.Repositories.Core;
 using Spokes_Server.Core.Models.Accounting;
+using Spokes_Server.Core.Models.Core;
 using Spokes_Server.Core.Models.Projects;
 using Spokes_Server.Core.Services.Documents;
 
@@ -28,15 +31,20 @@ public class DocumentPdfServiceTests : IDisposable
                 Directory.Delete(_testTempDir, true);
             }
             catch (Exception ex)
-        {
-            System.Diagnostics.Debug.WriteLine(ex.Message);
-        }
+            {
+                System.Diagnostics.Debug.WriteLine(ex.Message);
+            }
         }
     }
 
-    private DocumentPdfService CreateService(string? dataPath = null, ILogger<DocumentPdfService>? logger = null, IBrowserManager? browserManager = null)
+    private DocumentPdfService CreateService(
+        string? dataPath = null,
+        ILogger<DocumentPdfService>? logger = null,
+        IBrowserManager? browserManager = null,
+        RenderTokenService? tokenService = null,
+        DeviceSessionRepository? deviceSessions = null)
     {
-        var tokenService = new RenderTokenService();
+        var tokens = tokenService ?? new RenderTokenService();
         var httpContextAccessor = new Mock<IHttpContextAccessor>().Object;
         var inMemoryConfig = new Dictionary<string, string?>();
         if (dataPath != null)
@@ -47,66 +55,71 @@ public class DocumentPdfServiceTests : IDisposable
         var log = logger ?? new Mock<ILogger<DocumentPdfService>>().Object;
         var bm = browserManager ?? new Mock<IBrowserManager>().Object;
 
-        return new DocumentPdfService(tokenService, httpContextAccessor, config, log, bm);
+        return new DocumentPdfService(tokens, httpContextAccessor, config, log, bm, server: null, deviceSessions: deviceSessions);
     }
 
-    private (DocumentPdfService Service, Mock<IBrowser> MockBrowser, Mock<IPage> MockPage, Mock<ILogger<DocumentPdfService>> MockLogger) CreateServiceWithMockBrowser(string? dataPath = null)
+    private (
+        DocumentPdfService Service,
+        Mock<IBrowser> MockBrowser,
+        Mock<IBrowserContext> MockBrowserContext,
+        Mock<IPage> MockPage,
+        Mock<ILogger<DocumentPdfService>> MockLogger) CreateServiceWithMockBrowser(
+            string? dataPath = null,
+            RenderTokenService? tokenService = null,
+            DeviceSessionRepository? deviceSessions = null)
     {
         var mockLogger = new Mock<ILogger<DocumentPdfService>>();
         var mockBrowser = new Mock<IBrowser>();
+        var mockBrowserContext = new Mock<IBrowserContext>();
         var mockPage = new Mock<IPage>();
 
         mockBrowser.Setup(b => b.IsClosed).Returns(false);
-        mockBrowser.Setup(b => b.NewPageAsync(It.IsAny<CreatePageOptions>())).ReturnsAsync(mockPage.Object);
+        mockBrowser.Setup(b => b.CreateBrowserContextAsync(It.IsAny<BrowserContextOptions>())).ReturnsAsync(mockBrowserContext.Object);
+        mockBrowserContext.Setup(c => c.NewPageAsync(It.IsAny<CreatePageOptions>())).ReturnsAsync(mockPage.Object);
+        mockBrowserContext.Setup(c => c.CloseAsync()).Returns(Task.CompletedTask);
         mockPage.Setup(p => p.SetExtraHttpHeadersAsync(It.IsAny<Dictionary<string, string>>())).Returns(Task.CompletedTask);
+        mockPage.Setup(p => p.SetViewportAsync(It.IsAny<ViewPortOptions>())).Returns(Task.CompletedTask);
         mockPage.Setup(p => p.EmulateMediaTypeAsync(MediaType.Print)).Returns(Task.CompletedTask);
         mockPage.Setup(p => p.GoToAsync(It.IsAny<string>(), It.IsAny<NavigationOptions>())).Returns(Task.FromResult<IResponse?>(null));
+        mockPage.Setup(p => p.WaitForSelectorAsync(It.IsAny<string>(), It.IsAny<WaitForSelectorOptions>())).Returns(Task.FromResult<IElementHandle?>(null));
         mockPage.Setup(p => p.PdfAsync(It.IsAny<string>(), It.IsAny<PdfOptions>())).Returns(Task.CompletedTask);
         mockPage.As<IAsyncDisposable>().Setup(d => d.DisposeAsync()).Returns(ValueTask.CompletedTask);
 
         var mockBrowserManager = new Mock<IBrowserManager>();
         mockBrowserManager.Setup(bm => bm.GetBrowserAsync(It.IsAny<CancellationToken>())).ReturnsAsync(mockBrowser.Object);
 
-        var service = CreateService(dataPath ?? _testTempDir, mockLogger.Object, mockBrowserManager.Object);
+        var service = CreateService(dataPath ?? _testTempDir, mockLogger.Object, mockBrowserManager.Object, tokenService, deviceSessions);
         service.Browser = mockBrowser.Object;
 
-        return (service, mockBrowser, mockPage, mockLogger);
+        return (service, mockBrowser, mockBrowserContext, mockPage, mockLogger);
     }
 
     [Fact]
     public void Constructor_WithDefaultDataPath_UsesDataDirectory()
     {
-        // Arrange & Act
         using var service = CreateService(dataPath: null);
 
-        // Assert
         Assert.Equal("Data", service.DataPath);
     }
 
     [Fact]
     public void Constructor_WithCustomDataPath_UsesCustomDirectory()
     {
-        // Arrange
         var customPath = @"C:\CustomDataPath\Spokes";
 
-        // Act
         using var service = CreateService(dataPath: customPath);
 
-        // Assert
         Assert.Equal(customPath, service.DataPath);
     }
 
     [Fact]
     public void Dispose_WhenBrowserIsNull_DoesNotThrow()
     {
-        // Arrange
         var service = CreateService();
 
-        // Act & Assert
         var exception = Record.Exception(() => service.Dispose());
         Assert.Null(exception);
 
-        // Idempotent check
         var secondException = Record.Exception(() => service.Dispose());
         Assert.Null(secondException);
     }
@@ -114,38 +127,36 @@ public class DocumentPdfServiceTests : IDisposable
     [Fact]
     public void Dispose_WhenBrowserIsSet_DisposesBrowserAndSetsNull()
     {
-        // Arrange
-        var (service, mockBrowser, _, _) = CreateServiceWithMockBrowser();
+        var (service, mockBrowser, _, _, _) = CreateServiceWithMockBrowser();
 
-        // Act
         service.Dispose();
 
-        // Assert
         mockBrowser.Verify(b => b.Dispose(), Times.Once);
-
         Assert.Null(service.Browser);
 
-        // Disposing again should not call Dispose() on the mock again
         service.Dispose();
         mockBrowser.Verify(b => b.Dispose(), Times.Once);
     }
 
     [Fact]
-    public async Task GenerateQuotePdfAsync_ConstructsCorrectUrlAndDestinationPath()
+    public async Task GenerateQuotePdfAsync_ConstructsCorrectUrlAndDestinationPath_AndNeverAttachesRenderHeader()
     {
-        // Arrange
-        var (service, mockBrowser, mockPage, _) = CreateServiceWithMockBrowser();
+        var (service, mockBrowser, mockBrowserContext, mockPage, _) = CreateServiceWithMockBrowser();
         var quote = new Quote { Id = "quote-123" };
         var projectId = "proj-1";
         var baseUrl = "http://localhost:5000";
 
-        // Act
         var result = await service.GenerateQuotePdfAsync(quote, projectId, baseUrl);
 
-        // Assert
         var expectedRelativePath = Path.Combine(_testTempDir, "PDFs", "Quotes", "quote-123.pdf");
         var expectedFullPath = Path.GetFullPath(expectedRelativePath);
         Assert.Equal(expectedFullPath, result);
+
+        mockBrowser.Verify(b => b.CreateBrowserContextAsync(It.IsAny<BrowserContextOptions>()), Times.Once);
+        mockBrowser.Verify(b => b.NewPageAsync(It.IsAny<CreatePageOptions>()), Times.Never);
+        mockBrowserContext.Verify(c => c.NewPageAsync(It.IsAny<CreatePageOptions>()), Times.Once);
+        mockBrowserContext.Verify(c => c.CloseAsync(), Times.Once);
+        mockPage.Verify(p => p.SetExtraHttpHeadersAsync(It.IsAny<Dictionary<string, string>>()), Times.Never);
 
         mockPage.Verify(p => p.GoToAsync(
             It.Is<string>(url => url.StartsWith("http://localhost:5000/projects/proj-1/quotes/quote-123?renderToken=")
@@ -158,7 +169,6 @@ public class DocumentPdfServiceTests : IDisposable
             It.Is<PdfOptions>(opt => opt.PreferCSSPageSize && opt.PrintBackground)),
             Times.Once);
 
-        // Verify directory was created
         var dir = Path.GetDirectoryName(expectedFullPath);
         Assert.NotNull(dir);
         Assert.True(Directory.Exists(dir));
@@ -167,16 +177,13 @@ public class DocumentPdfServiceTests : IDisposable
     [Fact]
     public async Task GenerateInvoicePdfAsync_ConstructsCorrectUrlAndDestinationPath()
     {
-        // Arrange
-        var (service, mockBrowser, mockPage, _) = CreateServiceWithMockBrowser();
+        var (service, _, _, mockPage, _) = CreateServiceWithMockBrowser();
         var invoice = new Invoice { Id = "inv-456" };
         var projectId = "proj-2";
         var baseUrl = "http://localhost:5000";
 
-        // Act
         var result = await service.GenerateInvoicePdfAsync(invoice, projectId, baseUrl);
 
-        // Assert
         var expectedRelativePath = Path.Combine(_testTempDir, "PDFs", "Invoices", "inv-456.pdf");
         var expectedFullPath = Path.GetFullPath(expectedRelativePath);
         Assert.Equal(expectedFullPath, result);
@@ -195,16 +202,13 @@ public class DocumentPdfServiceTests : IDisposable
     [Fact]
     public async Task GenerateProjectDocumentPdfAsync_ConstructsCorrectUrlAndDestinationPath()
     {
-        // Arrange
-        var (service, mockBrowser, mockPage, _) = CreateServiceWithMockBrowser();
+        var (service, _, _, mockPage, _) = CreateServiceWithMockBrowser();
         var doc = new ProjectDocument { Id = "doc-789", ProjectId = "proj-3" };
         var projectId = "proj-3";
         var baseUrl = "http://localhost:5000";
 
-        // Act
         var result = await service.GenerateProjectDocumentPdfAsync(doc, projectId, baseUrl);
 
-        // Assert
         var expectedRelativePath = Path.Combine(_testTempDir, "PDFs", "ProjectDocuments", "doc-789.pdf");
         var expectedFullPath = Path.GetFullPath(expectedRelativePath);
         Assert.Equal(expectedFullPath, result);
@@ -223,15 +227,12 @@ public class DocumentPdfServiceTests : IDisposable
     [Fact]
     public async Task GenerateBusinessDocumentPdfAsync_ConstructsCorrectUrlAndDestinationPath()
     {
-        // Arrange
-        var (service, mockBrowser, mockPage, _) = CreateServiceWithMockBrowser();
+        var (service, _, _, mockPage, _) = CreateServiceWithMockBrowser();
         var doc = new ProjectDocument { Id = "bdoc-101" };
         var baseUrl = "http://localhost:5000";
 
-        // Act
         var result = await service.GenerateBusinessDocumentPdfAsync(doc, baseUrl);
 
-        // Assert
         var expectedRelativePath = Path.Combine(_testTempDir, "PDFs", "BusinessDocuments", "bdoc-101.pdf");
         var expectedFullPath = Path.GetFullPath(expectedRelativePath);
         Assert.Equal(expectedFullPath, result);
@@ -250,15 +251,12 @@ public class DocumentPdfServiceTests : IDisposable
     [Fact]
     public async Task GeneratePurchaseOrderPdfAsync_ConstructsCorrectUrlAndDestinationPath()
     {
-        // Arrange
-        var (service, mockBrowser, mockPage, _) = CreateServiceWithMockBrowser();
+        var (service, _, _, mockPage, _) = CreateServiceWithMockBrowser();
         var po = new PurchaseOrder { Id = "po-202" };
         var baseUrl = "http://localhost:5000";
 
-        // Act
         var result = await service.GeneratePurchaseOrderPdfAsync(po, baseUrl);
 
-        // Assert
         var expectedRelativePath = Path.Combine(_testTempDir, "PDFs", "PurchaseOrders", "po-202.pdf");
         var expectedFullPath = Path.GetFullPath(expectedRelativePath);
         Assert.Equal(expectedFullPath, result);
@@ -275,21 +273,22 @@ public class DocumentPdfServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task GeneratePdfAsync_WhenNavigationFails_LogsErrorAndRethrows()
+    public async Task GeneratePdfAsync_WhenNavigationFails_ClosesBrowserContextRevokesTokenLogsErrorAndRethrows()
     {
-        // Arrange
-        var (service, mockBrowser, mockPage, mockLogger) = CreateServiceWithMockBrowser();
+        var tokenService = new RenderTokenService();
+        var (service, _, mockBrowserContext, mockPage, mockLogger) = CreateServiceWithMockBrowser(tokenService: tokenService);
         var quote = new Quote { Id = "quote-err" };
 
         mockPage
             .Setup(p => p.GoToAsync(It.IsAny<string>(), It.IsAny<NavigationOptions>()))
             .ThrowsAsync(new InvalidOperationException("Navigation timeout"));
 
-        // Act & Assert
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             service.GenerateQuotePdfAsync(quote, "proj-err", "http://localhost:5000"));
 
         Assert.Equal("Navigation timeout", ex.Message);
+        Assert.Equal(0, tokenService.TokenCount);
+        mockBrowserContext.Verify(c => c.CloseAsync(), Times.Once);
 
         mockLogger.Verify(
             x => x.Log(
@@ -304,15 +303,12 @@ public class DocumentPdfServiceTests : IDisposable
     [Fact]
     public async Task GenerateQuotePdfAsync_WithTrailingSlashBaseUrl_NormalizesWithoutDoubleSlash()
     {
-        // Arrange
-        var (service, _, mockPage, _) = CreateServiceWithMockBrowser();
+        var (service, _, _, mockPage, _) = CreateServiceWithMockBrowser();
         var quote = new Quote { Id = "quote-trailing" };
         var baseUrl = "http://localhost:5000/";
 
-        // Act
         await service.GenerateQuotePdfAsync(quote, "proj-1", baseUrl);
 
-        // Assert
         mockPage.Verify(p => p.GoToAsync(
             It.Is<string>(url => url.StartsWith("http://localhost:5000/projects/proj-1/quotes/quote-trailing?renderToken=")
                                 && !url.Contains("5000//")),
@@ -323,31 +319,50 @@ public class DocumentPdfServiceTests : IDisposable
     [Fact]
     public async Task GeneratePdfAsync_EmulatesPrintMediaType_AndUsesCorrectMedia()
     {
-        // Arrange
-        var (service, _, mockPage, _) = CreateServiceWithMockBrowser();
+        var (service, _, _, mockPage, _) = CreateServiceWithMockBrowser();
         var quote = new Quote { Id = "quote-print" };
+        var callOrder = new List<string>();
 
-        // Act
+        mockPage.Setup(p => p.SetViewportAsync(It.IsAny<ViewPortOptions>()))
+            .Callback(() => callOrder.Add("SetViewport"))
+            .Returns(Task.CompletedTask);
+        mockPage.Setup(p => p.GoToAsync(It.IsAny<string>(), It.IsAny<NavigationOptions>()))
+            .Callback(() => callOrder.Add("GoTo"))
+            .Returns(Task.FromResult<IResponse?>(null));
+        mockPage.Setup(p => p.WaitForSelectorAsync(It.IsAny<string>(), It.IsAny<WaitForSelectorOptions>()))
+            .Callback(() => callOrder.Add("WaitForSelector"))
+            .Returns(Task.FromResult<IElementHandle?>(null));
+        mockPage.Setup(p => p.EmulateMediaTypeAsync(MediaType.Print))
+            .Callback(() => callOrder.Add("EmulatePrint"))
+            .Returns(Task.CompletedTask);
+        mockPage.Setup(p => p.PdfAsync(It.IsAny<string>(), It.IsAny<PdfOptions>()))
+            .Callback(() => callOrder.Add("Pdf"))
+            .Returns(Task.CompletedTask);
+
         await service.GenerateQuotePdfAsync(quote, "proj-1", "http://localhost:5000");
 
-        // Assert
+        mockPage.Verify(p => p.SetViewportAsync(It.Is<ViewPortOptions>(v => v.Width == 1280 && v.Height == 1056)), Times.Once);
+        mockPage.Verify(p => p.WaitForSelectorAsync(
+            It.Is<string>(s => s.Contains("[data-paginated-for=\"printable-area\"]")),
+            It.IsAny<WaitForSelectorOptions>()), Times.Once);
         mockPage.Verify(p => p.EmulateMediaTypeAsync(MediaType.Print), Times.Once);
+        Assert.Equal(new[] { "SetViewport", "GoTo", "WaitForSelector", "EmulatePrint", "Pdf" }, callOrder);
     }
 
     [Fact]
-    public async Task GeneratePdfAsync_WhenCalledMultipleTimes_ReusesExistingBrowser()
+    public async Task GeneratePdfAsync_WhenCalledMultipleTimes_CreatesIsolatedBrowserContextPerRender()
     {
-        // Arrange
-        var (service, mockBrowser, mockPage, _) = CreateServiceWithMockBrowser();
+        var (service, mockBrowser, mockBrowserContext, _, _) = CreateServiceWithMockBrowser();
         var quote1 = new Quote { Id = "quote-m1" };
         var quote2 = new Quote { Id = "quote-m2" };
 
-        // Act
         await service.GenerateQuotePdfAsync(quote1, "proj-1", "http://localhost:5000");
         await service.GenerateQuotePdfAsync(quote2, "proj-1", "http://localhost:5000");
 
-        // Assert - NewPageAsync should have been called twice on the same browser
-        mockBrowser.Verify(b => b.NewPageAsync(It.IsAny<CreatePageOptions>()), Times.Exactly(2));
+        mockBrowser.Verify(b => b.CreateBrowserContextAsync(It.IsAny<BrowserContextOptions>()), Times.Exactly(2));
+        mockBrowser.Verify(b => b.NewPageAsync(It.IsAny<CreatePageOptions>()), Times.Never);
+        mockBrowserContext.Verify(c => c.NewPageAsync(It.IsAny<CreatePageOptions>()), Times.Exactly(2));
+        mockBrowserContext.Verify(c => c.CloseAsync(), Times.Exactly(2));
     }
 
     [Fact]
@@ -366,9 +381,12 @@ public class DocumentPdfServiceTests : IDisposable
     public async Task GeneratePdfAsync_DelegatesToBrowserManager_WhenBrowserNotExplicitlySet()
     {
         var mockBrowser = new Mock<IBrowser>();
+        var mockBrowserContext = new Mock<IBrowserContext>();
         var mockPage = new Mock<IPage>();
         mockBrowser.Setup(b => b.IsClosed).Returns(false);
-        mockBrowser.Setup(b => b.NewPageAsync(It.IsAny<CreatePageOptions>())).ReturnsAsync(mockPage.Object);
+        mockBrowser.Setup(b => b.CreateBrowserContextAsync(It.IsAny<BrowserContextOptions>())).ReturnsAsync(mockBrowserContext.Object);
+        mockBrowserContext.Setup(c => c.NewPageAsync(It.IsAny<CreatePageOptions>())).ReturnsAsync(mockPage.Object);
+        mockBrowserContext.Setup(c => c.CloseAsync()).Returns(Task.CompletedTask);
         mockPage.Setup(p => p.EmulateMediaTypeAsync(MediaType.Print)).Returns(Task.CompletedTask);
         mockPage.Setup(p => p.GoToAsync(It.IsAny<string>(), It.IsAny<NavigationOptions>())).Returns(Task.FromResult<IResponse?>(null));
         mockPage.Setup(p => p.PdfAsync(It.IsAny<string>(), It.IsAny<PdfOptions>())).Returns(Task.CompletedTask);
@@ -377,12 +395,13 @@ public class DocumentPdfServiceTests : IDisposable
         var mockBrowserManager = new Mock<IBrowserManager>();
         mockBrowserManager.Setup(bm => bm.GetBrowserAsync(It.IsAny<CancellationToken>())).ReturnsAsync(mockBrowser.Object);
 
-        var service = CreateService(dataPath: _testTempDir, browserManager: mockBrowserManager.Object);
+        using var service = CreateService(dataPath: _testTempDir, browserManager: mockBrowserManager.Object);
         var quote = new Quote { Id = "quote-bm" };
 
         await service.GenerateQuotePdfAsync(quote, "proj-bm", "http://localhost:5000");
 
         mockBrowserManager.Verify(bm => bm.GetBrowserAsync(It.IsAny<CancellationToken>()), Times.Once);
+        mockBrowserContext.Verify(c => c.CloseAsync(), Times.Once);
         mockPage.Verify(p => p.PdfAsync(It.IsAny<string>(), It.IsAny<PdfOptions>()), Times.Once);
     }
 
@@ -399,57 +418,81 @@ public class DocumentPdfServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task GenerateInvoicePdfAsync_WhenRedirectedToAccessDenied_ThrowsAndDoesNotWritePdf()
+    public async Task GenerateInvoicePdfAsync_WhenRedirectedToAccessDenied_ThrowsClosesContextAndDoesNotWritePdf()
     {
-        // Arrange
-        var (service, _, mockPage, _) = CreateServiceWithMockBrowser();
+        var (service, _, mockBrowserContext, mockPage, _) = CreateServiceWithMockBrowser();
         var invoice = new Invoice { Id = "inv-denied" };
         mockPage.Setup(p => p.Url).Returns("https://mpr.poly-robotique.com/access-denied");
 
-        // Act & Assert
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             service.GenerateInvoicePdfAsync(invoice, "proj-1", "https://mpr.poly-robotique.com"));
 
         Assert.Contains("/access-denied", ex.Message);
         mockPage.Verify(p => p.PdfAsync(It.IsAny<string>(), It.IsAny<PdfOptions>()), Times.Never);
+        mockBrowserContext.Verify(c => c.CloseAsync(), Times.Once);
     }
 
     [Fact]
-    public async Task GenerateInvoicePdfAsync_RevokesRenderTokenInFinallyBlock()
+    public async Task GenerateInvoicePdfAsync_CreatesPathBoundSingleUseToken_AndDeletesConsumedSessionInFinallyBlock()
     {
-        // Arrange
+        Directory.CreateDirectory(_testTempDir);
         var tokenService = new RenderTokenService();
-        var httpContextAccessor = new Mock<IHttpContextAccessor>().Object;
         var config = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?> { ["DataPath"] = _testTempDir })
             .Build();
-        var mockLogger = new Mock<ILogger<DocumentPdfService>>();
-        var mockBrowser = new Mock<IBrowser>();
-        var mockPage = new Mock<IPage>();
-        mockBrowser.Setup(b => b.IsClosed).Returns(false);
-        mockBrowser.Setup(b => b.NewPageAsync(It.IsAny<CreatePageOptions>())).ReturnsAsync(mockPage.Object);
-        mockPage.Setup(p => p.SetExtraHttpHeadersAsync(It.IsAny<Dictionary<string, string>>())).Returns(Task.CompletedTask);
-        mockPage.Setup(p => p.EmulateMediaTypeAsync(MediaType.Print)).Returns(Task.CompletedTask);
-        mockPage.Setup(p => p.GoToAsync(It.IsAny<string>(), It.IsAny<NavigationOptions>())).Returns(Task.FromResult<IResponse?>(null));
-        mockPage.Setup(p => p.PdfAsync(It.IsAny<string>(), It.IsAny<PdfOptions>())).Returns(Task.CompletedTask);
-        mockPage.As<IAsyncDisposable>().Setup(d => d.DisposeAsync()).Returns(ValueTask.CompletedTask);
+        using var persistence = new DiskPersistenceService(new Mock<ILogger<DiskPersistenceService>>().Object);
+        var deviceSessions = new DeviceSessionRepository(persistence, config);
 
-        var mockBrowserManager = new Mock<IBrowserManager>();
-        mockBrowserManager.Setup(bm => bm.GetBrowserAsync(It.IsAny<CancellationToken>())).ReturnsAsync(mockBrowser.Object);
+        var (service, _, mockBrowserContext, mockPage, _) = CreateServiceWithMockBrowser(
+            dataPath: _testTempDir,
+            tokenService: tokenService,
+            deviceSessions: deviceSessions);
 
-        using var service = new DocumentPdfService(tokenService, httpContextAccessor, config, mockLogger.Object, mockBrowserManager.Object);
+        string? capturedSessionId = null;
+        mockPage
+            .Setup(p => p.GoToAsync(It.IsAny<string>(), It.IsAny<NavigationOptions>()))
+            .Callback<string, NavigationOptions>((navigatedUrl, _) =>
+            {
+                var uri = new Uri(navigatedUrl);
+                var query = Microsoft.AspNetCore.WebUtilities.QueryHelpers.ParseQuery(uri.Query);
+                var renderToken = query["renderToken"].ToString();
+                Assert.False(string.IsNullOrEmpty(renderToken));
 
-        // Act
-        await service.GenerateInvoicePdfAsync(new Invoice { Id = "inv-revoke" }, "proj-1", "http://localhost:5000");
+                // Token is bound to /projects/proj-1/invoices/inv-revoke and rejects any other path
+                Assert.False(tokenService.TryConsumeToken(renderToken, "/projects/proj-1/invoices/other", out var rejectedSession));
+                Assert.Empty(rejectedSession);
 
-        // Assert: Token was revoked upon completion
+                // Consuming on the bound path succeeds once and persists the temporary DeviceSession
+                Assert.True(tokenService.TryConsumeToken(renderToken, uri.AbsolutePath, out var sessionId));
+                Assert.False(string.IsNullOrEmpty(sessionId));
+                capturedSessionId = sessionId;
+
+                deviceSessions.Save(new DeviceSession
+                {
+                    Id = sessionId,
+                    EmployeeId = "system-renderer",
+                    DeviceName = "Headless Renderer",
+                    CreatedAt = DateTime.UtcNow,
+                    ExpiresAt = DateTime.UtcNow.AddMinutes(5)
+                });
+            })
+            .Returns(Task.FromResult<IResponse?>(null));
+
+        using (service)
+        {
+            await service.GenerateInvoicePdfAsync(new Invoice { Id = "inv-revoke" }, "proj-1", "http://localhost:5000");
+        }
+
         Assert.Equal(0, tokenService.TokenCount);
+        Assert.NotNull(capturedSessionId);
+        // Temporary DeviceSession created when the render token was consumed must be deleted in finally
+        Assert.Null(deviceSessions.GetById(capturedSessionId!));
+        mockBrowserContext.Verify(c => c.CloseAsync(), Times.Once);
     }
 
     [Fact]
     public void IsValidCachedPdf_DetectsAndDeletesCorruptedAccessDeniedPdf_AndAcceptsValidPdf()
     {
-        // Arrange
         using var service = CreateService(_testTempDir);
         Directory.CreateDirectory(_testTempDir);
 
@@ -459,7 +502,6 @@ public class DocumentPdfServiceTests : IDisposable
         var validPath = Path.Combine(_testTempDir, "valid.pdf");
         File.WriteAllBytes(validPath, System.Text.Encoding.ASCII.GetBytes("%PDF-1.4\n/Title (Invoice INV-2026-001)\n%%EOF"));
 
-        // Act & Assert
         Assert.False(service.IsValidCachedPdf(corruptedPath));
         Assert.False(File.Exists(corruptedPath));
 

@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Spokes_Server.Core.Data;
@@ -10,8 +10,7 @@ using Spokes_Server.Core.Data.Repositories.Core;
 using Spokes_Server.Core.Helpers;
 using Spokes_Server.Core.Models.Core;
 using Spokes_Server.Core.Models.HR;
-
-using System.Text.Json.Serialization;
+using Spokes_Server.Core.Services.Security;
 
 namespace Spokes_Server.Core.Services.Communication.Notifications.Routing;
 
@@ -48,6 +47,11 @@ public class QueuedNotification
     public DateTime? LeasedUntilUtc { get; set; }
     public string Category { get => Request.Category; set => Request.Category = value; }
     public bool IsSilent { get => Request.IsSilent; set => Request.IsSilent = value; }
+    public string? Sound { get => Request.Sound; set => Request.Sound = value; }
+    public DateTime SentAtUtc { get => Request.SentAtUtc; set => Request.SentAtUtc = value; }
+    public int? TtlSeconds { get => Request.TtlSeconds; set => Request.TtlSeconds = value; }
+    public bool IsEncrypted { get => Request.IsEncrypted; set => Request.IsEncrypted = value; }
+    public string? MaskedBody { get => Request.MaskedBody; set => Request.MaskedBody = value; }
 
     public QueuedNotification() { }
 
@@ -71,7 +75,11 @@ public class QueuedNotification
             IsGroupChat = request.IsGroupChat,
             Badge = request.Badge,
             IsSilent = request.IsSilent,
-            Sound = request.Sound
+            Sound = request.Sound,
+            SentAtUtc = request.SentAtUtc,
+            TtlSeconds = request.TtlSeconds,
+            IsEncrypted = request.IsEncrypted,
+            MaskedBody = request.MaskedBody
         };
         QueuedAtUtc = DateTime.UtcNow;
     }
@@ -117,6 +125,8 @@ public class DelayedMobileNotification
     public int? Badge { get => Request.Badge; set => Request.Badge = value; }
     public string? Sound { get => Request.Sound; set => Request.Sound = value; }
     public string Category { get => Request.Category; set => Request.Category = value; }
+    public DateTime SentAtUtc { get => Request.SentAtUtc; set => Request.SentAtUtc = value; }
+    public int? TtlSeconds { get => Request.TtlSeconds; set => Request.TtlSeconds = value; }
     public bool IsEncrypted { get => Request.IsEncrypted; set => Request.IsEncrypted = value; }
     public string? MaskedBody { get => Request.MaskedBody; set => Request.MaskedBody = value; }
 
@@ -148,6 +158,8 @@ public class DelayedMobileNotification
             Badge = request.Badge,
             IsSilent = request.IsSilent,
             Sound = request.Sound,
+            SentAtUtc = request.SentAtUtc,
+            TtlSeconds = request.TtlSeconds,
             IsEncrypted = request.IsEncrypted,
             MaskedBody = request.MaskedBody
         };
@@ -178,6 +190,8 @@ public class DelayedMobileNotification
             Badge = freshBadge ?? Request.Badge,
             IsSilent = Request.IsSilent,
             Sound = Request.Sound,
+            SentAtUtc = Request.SentAtUtc,
+            TtlSeconds = Request.TtlSeconds,
             IsEncrypted = Request.IsEncrypted,
             MaskedBody = Request.MaskedBody
         };
@@ -241,18 +255,21 @@ public class NotificationQueueService
     private readonly DiskPersistenceService _persistence;
     private readonly string _stateFilePath;
     private readonly CompanyProfileRepository _companyProfileRepo;
+    private readonly EncryptionService _encryptionService;
     private bool _restoredFromDisk;
 
     public NotificationQueueService(
         ILogger<NotificationQueueService> logger,
         DiskPersistenceService persistence,
         IConfiguration config,
-        CompanyProfileRepository companyProfileRepo)
+        CompanyProfileRepository companyProfileRepo,
+        EncryptionService? encryptionService = null)
     {
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _persistence = persistence ?? throw new ArgumentNullException(nameof(persistence));
         _companyProfileRepo = companyProfileRepo ?? throw new ArgumentNullException(nameof(companyProfileRepo));
         ArgumentNullException.ThrowIfNull(config);
+        _encryptionService = encryptionService ?? new EncryptionService(config);
 
         var dataPath = config["DataPath"] ?? "Data";
         _stateFilePath = Path.Combine(dataPath, "Notifications", "queue_state.json");
@@ -279,8 +296,13 @@ public class NotificationQueueService
 
         try
         {
-            var json = File.ReadAllText(_stateFilePath);
-            var snapshot = JsonSerializer.Deserialize<NotificationQueueSnapshot>(json);
+            var fileBytes = File.ReadAllBytes(_stateFilePath);
+            if (fileBytes.Length == 0) return;
+
+            var snapshot = _encryptionService.DecryptJsonEnvelopeOrLegacy<NotificationQueueSnapshot>(
+                fileBytes,
+                out bool wasLegacyUnwrapped);
+
             if (snapshot != null)
             {
                 var now = DateTime.UtcNow;
@@ -292,6 +314,10 @@ public class NotificationQueueService
                             .Where(n => now - n.QueuedAtUtc < QueuedNotificationTtl)
                             .Take(MaxQueuePerUser)
                             .ToList();
+                        if (wasLegacyUnwrapped)
+                        {
+                            foreach (var item in valid) MigrateLegacyFieldsInPlace(item);
+                        }
                         if (valid.Count > 0)
                         {
                             _queue[kvp.Key] = valid;
@@ -308,6 +334,7 @@ public class NotificationQueueService
                         var queuedAt = item.QueuedAtUtc == default ? item.ProcessAtUtc : item.QueuedAtUtc;
                         if (now - queuedAt < DelayedMobileNotificationTtl)
                         {
+                            if (wasLegacyUnwrapped) MigrateLegacyFieldsInPlace(item);
                             _delayedMobileQueue[item.Id] = item;
                         }
                     }
@@ -316,13 +343,26 @@ public class NotificationQueueService
                 if (snapshot.DeadLetterNotifications != null)
                 {
                     _deadLetterQueue.Clear();
+                    if (wasLegacyUnwrapped)
+                    {
+                        foreach (var item in snapshot.DeadLetterNotifications) MigrateLegacyFieldsInPlace(item);
+                    }
                     _deadLetterQueue.AddRange(snapshot.DeadLetterNotifications);
                 }
 
                 if (snapshot.DeadLetterMobileNotifications != null)
                 {
                     _deadLetterMobileQueue.Clear();
+                    if (wasLegacyUnwrapped)
+                    {
+                        foreach (var item in snapshot.DeadLetterMobileNotifications) MigrateLegacyFieldsInPlace(item);
+                    }
                     _deadLetterMobileQueue.AddRange(snapshot.DeadLetterMobileNotifications);
+                }
+
+                if (wasLegacyUnwrapped)
+                {
+                    PersistSnapshotLocked();
                 }
 
                 _logger.LogInformation("Restored {QueuedCount} queued notifications, {DelayedCount} delayed mobile pushes, and {DeadLetterCount} dead-letter items from disk",
@@ -345,7 +385,60 @@ public class NotificationQueueService
             DeadLetterMobileNotifications = _deadLetterMobileQueue.ToList()
         };
 
-        _persistence.QueueWrite(_stateFilePath, snapshot);
+        var encryptedEnvelopeBytes = _encryptionService.EncryptJsonEnvelopeToUtf8Bytes(snapshot);
+        _persistence.QueueWriteBytes(_stateFilePath, encryptedEnvelopeBytes);
+    }
+
+    private void MigrateLegacyFieldsInPlace(QueuedNotification n)
+    {
+        n.Title = MigrateLegacyFieldIfEncrypted(n.Title) ?? string.Empty;
+        n.Body = MigrateLegacyFieldIfEncrypted(n.Body) ?? string.Empty;
+        n.MaskedBody = MigrateLegacyFieldIfEncrypted(n.MaskedBody);
+        n.ChannelName = MigrateLegacyFieldIfEncrypted(n.ChannelName);
+        n.ServerName = MigrateLegacyFieldIfEncrypted(n.ServerName);
+    }
+
+    private void MigrateLegacyFieldsInPlace(DelayedMobileNotification n)
+    {
+        n.Title = MigrateLegacyFieldIfEncrypted(n.Title) ?? string.Empty;
+        n.Body = MigrateLegacyFieldIfEncrypted(n.Body) ?? string.Empty;
+        n.MaskedBody = MigrateLegacyFieldIfEncrypted(n.MaskedBody);
+        n.ChannelName = MigrateLegacyFieldIfEncrypted(n.ChannelName);
+        n.ServerName = MigrateLegacyFieldIfEncrypted(n.ServerName);
+    }
+
+    private string? MigrateLegacyFieldIfEncrypted(string? value)
+    {
+        if (string.IsNullOrEmpty(value)) return value;
+
+        if (value.StartsWith("v2:", StringComparison.Ordinal) || LooksLikeLegacyV1Ciphertext(value))
+        {
+            if (_encryptionService.TryDecrypt(value, out var decrypted))
+            {
+                return decrypted;
+            }
+        }
+
+        return value;
+    }
+
+    private static bool LooksLikeLegacyV1Ciphertext(string value)
+    {
+        if (value.Length < 64 || value.Length % 4 != 0)
+        {
+            return false;
+        }
+
+        Span<byte> buffer = value.Length <= 512
+            ? stackalloc byte[384]
+            : new byte[(value.Length * 3) / 4];
+
+        if (!Convert.TryFromBase64String(value, buffer, out int bytesWritten))
+        {
+            return false;
+        }
+
+        return bytesWritten >= 48 && (bytesWritten - 32) % 16 == 0;
     }
 
     /// <summary>

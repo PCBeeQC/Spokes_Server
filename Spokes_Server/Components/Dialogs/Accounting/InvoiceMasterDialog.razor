@@ -71,6 +71,7 @@
                     <MudTable Items="@CustomLaborLines" Dense="true" Hover="true" Elevation="0" Outlined="true">
                         <HeaderContent>
                             <MudTh>Description</MudTh>
+                            <MudTh>Note</MudTh>
                             <MudTh Style="width: 100px;">Hrs</MudTh>
                             <MudTh Style="width: 100px;">Rate</MudTh>
                             <MudTh Style="width: 130px;">Total</MudTh>
@@ -79,6 +80,9 @@
                         <RowTemplate>
                             <MudTd>
                                 <MudTextField @bind-Value="context.Description" Margin="Margin.Dense" Underline="false" Placeholder="Role/Task detail..." />
+                            </MudTd>
+                            <MudTd>
+                                <MudTextField @bind-Value="context.Note" Margin="Margin.Dense" Underline="false" Placeholder="Note..." />
                             </MudTd>
                             <MudTd>
                                 <MudNumericField @bind-Value="context.Quantity" Margin="Margin.Dense" HideSpinButtons="true" Underline="false" />
@@ -92,7 +96,7 @@
                             </MudTd>
                         </RowTemplate>
                         <FooterContent>
-                            <MudTd colspan="5">
+                            <MudTd colspan="6">
                                 <MudButton StartIcon="@Icons.Material.Filled.Add" OnClick="@(() => CustomLaborLines.Add(new InvoiceLine { Type = "Labor", Description = "Custom Labor" }))" Size="Size.Small" Color="Color.Primary">Add Custom Labor</MudButton>
                             </MudTd>
                         </FooterContent>
@@ -209,7 +213,7 @@
                                         <MudTh>Total</MudTh>
                                     </HeaderContent>
                                     <RowTemplate>
-                                        <MudTd>@TimesheetSearchHelper.FormatTaskAndSubTask(context.WorkTypeName, context.SubTaskName)</MudTd>
+                                        <MudTd>@TimesheetSearchHelper.FormatTaskAndSubTask(context.WorkTypeName, context.SubTaskName, ": ", context.Note)</MudTd>
                                         <MudTd>@context.Hours.ToString("N1")</MudTd>
                                         <MudTd>@context.Rate.ToString("C")</MudTd>
                                         <MudTd>@context.Total.ToString("C")</MudTd>

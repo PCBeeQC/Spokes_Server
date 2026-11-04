@@ -46,21 +46,15 @@
                         <MudNumericField Value="Item.KilometrageRate" Label="Rate ($/km)" ReadOnly="true"
                             Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.AttachMoney" Variant="Variant.Outlined" Margin="Margin.Dense" ShrinkLabel="true" />
                     </MudItem>
-                    <MudItem xs="12" sm="6">
+                    <MudItem xs="12">
                         <MudText Typo="Typo.h6">Total: @Item.Total.ToString("C")</MudText>
-                    </MudItem>
-                    <MudItem xs="12" sm="6">
-                        <MudTextField @bind-Value="Item.GlAccountCode" Label="GL Account (Sage 50)" Placeholder="e.g. 5755" ReadOnly="ReadOnly" Variant="Variant.Outlined" Margin="Margin.Dense" ShrinkLabel="true" />
                     </MudItem>
                 }
                 else
                 {
-                    <MudItem xs="12" sm="6">
+                    <MudItem xs="12">
                         <MudNumericField T="decimal" Value="Item.Amount" ValueChanged="@OnAmountChanged" Label="Total Receipt Amount" Adornment="Adornment.Start"
                             AdornmentIcon="@Icons.Material.Filled.AttachMoney" ReadOnly="ReadOnly" Variant="Variant.Outlined" Margin="Margin.Dense" ShrinkLabel="true" />
-                    </MudItem>
-                    <MudItem xs="12" sm="6">
-                        <MudTextField @bind-Value="Item.GlAccountCode" Label="GL Account (Sage 50)" Placeholder="e.g. 5750" ReadOnly="ReadOnly" Variant="Variant.Outlined" Margin="Margin.Dense" ShrinkLabel="true" />
                     </MudItem>
 
                     <MudItem xs="12" sm="4">
@@ -242,5 +236,3 @@
         MudDialog.Close(DialogResult.Ok(Item));
     }
 }
-
-

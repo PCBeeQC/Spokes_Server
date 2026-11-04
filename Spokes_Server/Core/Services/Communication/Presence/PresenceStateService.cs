@@ -302,6 +302,12 @@ public class PresenceStateService : IPushDecisionService
 
         foreach (var info in _activeConnections.Values)
         {
+            // Voice participation counts as active presence (speaking/listening without keyboard/mouse/touch input)
+            if (_chatStateService?.IsUserInAnyVoiceChannel(info.UserId) == true)
+            {
+                continue;
+            }
+
             if (info.ClientState == ConnectionPresenceState.Active &&
                 (now - info.LastInteractionUtc).TotalMinutes >= RecentlySeenMinutes)
             {
@@ -316,7 +322,7 @@ public class PresenceStateService : IPushDecisionService
         }
     }
 
-    private static bool IsConnectionEffectiveOnline(ConnectionInfo c)
+    private bool IsConnectionEffectiveOnline(ConnectionInfo c)
     {
         if (c.ClientState == ConnectionPresenceState.Offline)
             return false;
@@ -324,12 +330,22 @@ public class PresenceStateService : IPushDecisionService
         if (string.Equals(c.DeviceType, Models.Core.DeviceType.Desktop, StringComparison.OrdinalIgnoreCase))
             return true;
 
+        if (_chatStateService?.IsUserInAnyVoiceChannel(c.UserId) == true)
+            return c.IsFocused;
+
         return c.IsFocused && c.ClientState != ConnectionPresenceState.Idle;
     }
 
     private bool IsConnectionIdle(ConnectionInfo c)
     {
-        if (c.ClientState == ConnectionPresenceState.Idle || c.ClientState == ConnectionPresenceState.Offline)
+        if (c.ClientState == ConnectionPresenceState.Offline)
+            return true;
+
+        // Voice participation counts as active presence (speaking/listening without keyboard/mouse/touch input)
+        if (_chatStateService?.IsUserInAnyVoiceChannel(c.UserId) == true)
+            return false;
+
+        if (c.ClientState == ConnectionPresenceState.Idle)
             return true;
 
         var lastActivity = c.LastInteractionUtc;
@@ -372,6 +388,19 @@ public class PresenceStateService : IPushDecisionService
     /// <summary>
     /// Returns true if the user has at least one focused/active connection that is not idle.
     /// </summary>
+    public IReadOnlyCollection<string> GetFocusedSessionIds(string userId)
+    {
+        return _activeConnections.Values
+            .Where(c => c.UserId == userId &&
+                        !string.IsNullOrEmpty(c.SessionId) &&
+                        c.IsFocused &&
+                        IsConnectionEffectiveOnline(c) &&
+                        !IsConnectionIdle(c))
+            .Select(c => c.SessionId!)
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+    }
+
     public bool IsUserFocused(string userId)
     {
         return _activeConnections.Values.Any(c =>
@@ -407,12 +436,25 @@ public class PresenceStateService : IPushDecisionService
     // --- Device-tier queries ---
 
     /// <summary>
+    /// Returns true if the user has at least one focused/active connection on a Desktop device that is not idle.
+    /// </summary>
+    public bool IsUserFocusedOnDesktop(string userId)
+    {
+        return _activeConnections.Values.Any(c =>
+            c.UserId == userId &&
+            c.DeviceType.Equals(Models.Core.DeviceType.Desktop, StringComparison.OrdinalIgnoreCase) &&
+            c.IsFocused &&
+            IsConnectionEffectiveOnline(c) &&
+            !IsConnectionIdle(c));
+    }
+
+    /// <summary>
     /// Returns true if the user has a desktop connection but is away/idle on desktop (e.g. inactive for >= 5 minutes or screen locked).
     /// </summary>
     public bool IsUserAwayFromDesktop(string userId)
     {
         if (!HasActiveDesktopConnection(userId)) return false;
-        if (IsUserFocused(userId)) return false;
+        if (IsUserFocusedOnDesktop(userId)) return false;
         if (_chatStateService?.IsUserInAnyVoiceChannel(userId) == true) return false;
 
         var desktopConnections = _activeConnections.Values
@@ -491,6 +533,14 @@ public class PresenceStateService : IPushDecisionService
     }
 
     /// <summary>
+    /// Returns true if the user is currently participating in any active voice channel.
+    /// </summary>
+    public bool IsUserInVoiceCall(string userId)
+    {
+        return _chatStateService?.IsUserInAnyVoiceChannel(userId) == true;
+    }
+
+    /// <summary>
     /// Determines the appropriate notification delivery tier (None, DesktopOnly, or All) using the 3-state Discord model:
     /// 1. Focused & Active -> PresenceTier.None (in-app notifications only)
     /// 2. Online on Desktop (unfocused/minimized/in tray, not Away) -> PresenceTier.DesktopOnly (Desktop push now + 1m delayed Mobile push)
@@ -551,8 +601,7 @@ public class PresenceStateService : IPushDecisionService
             .ToList();
 
         bool hasActiveCapacitorMobile = userConnections.Any(c =>
-            c.IsCapacitorApp &&
-            c.DeviceType.Equals(Models.Core.DeviceType.Mobile, StringComparison.OrdinalIgnoreCase) &&
+            (c.IsCapacitorApp || c.DeviceType.Equals(Models.Core.DeviceType.Mobile, StringComparison.OrdinalIgnoreCase)) &&
             c.IsFocused &&
             !IsConnectionIdle(c));
 
@@ -564,6 +613,31 @@ public class PresenceStateService : IPushDecisionService
             !IsConnectionIdle(c));
 
         return !hasActiveNonIdleDesktop;
+    }
+
+    /// <summary>
+    /// Resolves the unified presence display badge for a user following Discord-like device priority:
+    /// 1. Active on Desktop -> OnlineDesktop (green circle takes precedence when working at desk)
+    /// 2. Active on Mobile -> OnlineMobile (smartphone icon when desktop is away or offline)
+    /// 3. Globally Away -> Away (amber circle when connected but idle everywhere)
+    /// 4. Fallback Active -> OnlineDesktop (connected non-idle generic clients)
+    /// 5. No Active Connections -> Offline (gray circle)
+    /// </summary>
+    public UserPresenceBadge GetUserPresenceBadge(string userId)
+    {
+        if (!HasActiveConnection(userId))
+            return UserPresenceBadge.Offline;
+
+        if (HasActiveDesktopConnection(userId) && !IsUserAwayFromDesktop(userId))
+            return UserPresenceBadge.OnlineDesktop;
+
+        if (IsOnlineOnCapacitorMobile(userId))
+            return UserPresenceBadge.OnlineMobile;
+
+        if (IsGloballyAway(userId))
+            return UserPresenceBadge.Away;
+
+        return UserPresenceBadge.OnlineDesktop;
     }
 
     /// <summary>
@@ -890,6 +964,14 @@ public class PresenceStateService : IPushDecisionService
         public ConnectionPresenceState ClientState { get; set; } = ConnectionPresenceState.Active;
         public DateTime LastInteractionUtc { get; set; } = DateTime.UtcNow;
     }
+}
+
+public enum UserPresenceBadge
+{
+    Offline,
+    OnlineDesktop,
+    OnlineMobile,
+    Away
 }
 
 public enum ConnectionPresenceState

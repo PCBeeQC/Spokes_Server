@@ -8,6 +8,7 @@ namespace Spokes_Server.Controllers;
 
 [Route("spokesapi/culture")]
 [ApiController]
+[Spokes_Server.Core.Security.AllowDuringSetup]
 public class CultureController : SpokesControllerBase
 {
     [HttpGet("set")]

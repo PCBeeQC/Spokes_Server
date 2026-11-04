@@ -98,6 +98,14 @@ public class DeviceTokenAuthHandler : AuthenticationHandler<DeviceTokenAuthOptio
                     Path = "/"
                 });
             }
+            else if (Request.Cookies.ContainsKey("Spokes_Session_v3"))
+            {
+                var cookieResult = await Context.AuthenticateAsync(Microsoft.AspNetCore.Authentication.Cookies.CookieAuthenticationDefaults.AuthenticationScheme);
+                if (cookieResult.Succeeded)
+                {
+                    return cookieResult;
+                }
+            }
             return AuthenticateResult.NoResult();
         }
 

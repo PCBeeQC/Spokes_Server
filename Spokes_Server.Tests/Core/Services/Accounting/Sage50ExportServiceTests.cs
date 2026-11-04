@@ -461,4 +461,222 @@ public class Sage50ExportServiceTests : TestDataTestBase
         Assert.Contains("\"-5.00\"", imp);
         Assert.Contains("\"-9.98\"", imp);
     }
+
+    [Fact]
+    public void ValidateForExport_WithImportedChartOfAccounts_FlagsInvalidGlAccountCodes()
+    {
+        _config.ImportedAccounts =
+        [
+            new SageGlAccountRecord { AccountNumber = "1200", AccountName = "Accounts Receivable", AccountType = "Asset" },
+            new SageGlAccountRecord { AccountNumber = "2100", AccountName = "Accounts Payable", AccountType = "Liability" },
+            new SageGlAccountRecord { AccountNumber = "2210", AccountName = "TPS Payable", AccountType = "Liability" },
+            new SageGlAccountRecord { AccountNumber = "2220", AccountName = "TVQ Payable", AccountType = "Liability" },
+            new SageGlAccountRecord { AccountNumber = "4100", AccountName = "Sales Revenue", AccountType = "Revenue" },
+            new SageGlAccountRecord { AccountNumber = "5000", AccountName = "Purchases", AccountType = "Expense" }
+        ];
+
+        var invalidBill = new Bill
+        {
+            Id = Guid.NewGuid().ToString(),
+            InvoiceNumber = "BILL-BAD-GL",
+            SupplierName = "Hydro-Québec",
+            Date = new DateTime(2026, 4, 15),
+            Amount = 114.98m,
+            SubTotal = 100.00m,
+            TpsAmount = 5.00m,
+            TvqAmount = 9.98m,
+            GlAccountCode = "9999"
+        };
+
+        var result = _exportService.ValidateForExport([], [invalidBill], _config);
+
+        Assert.False(result.IsValid);
+        Assert.Contains(result.Errors, e => e.Contains("9999") && e.Contains("Chart of Accounts"));
+    }
+
+    [Fact]
+    public void ImportSageBaselineFile_Accounts_AutoDetectsControlAndTaxGlAccounts()
+    {
+        var freshConfig = new Sage50ExportConfig();
+        var accountsCsv =
+            "Account Number,Account Name\r\n" +
+            "1210,Comptes clients (Accounts Receivable)\r\n" +
+            "2110,Comptes fournisseurs (Accounts Payable)\r\n" +
+            "2310,TPS à payer\r\n" +
+            "2320,TVQ à payer\r\n" +
+            "4020,Revenus de ventes\r\n" +
+            "5620,Télécommunications et services publics\r\n" +
+            "5760,Frais de déplacement et kilométrage\r\n";
+
+        var summary = _exportService.ImportSageBaselineFile(accountsCsv, freshConfig, syncSuppliersToDatabase: false);
+
+        Assert.Equal(7, summary.AccountsImported);
+        Assert.Equal("1210", freshConfig.AccountsReceivableGl);
+        Assert.Equal("2110", freshConfig.AccountsPayableGl);
+        Assert.Equal("2310", freshConfig.TpsTaxAccount);
+        Assert.Equal("2320", freshConfig.TvqTaxAccount);
+        Assert.Equal("4020", freshConfig.DefaultSalesRevenueGl);
+        Assert.Equal("5620", freshConfig.DefaultRecurringExpenseGl);
+        Assert.Equal("5760", freshConfig.DefaultKilometrageGl);
+    }
+
+    [Fact]
+    public void AssignPayableGlAndVendor_PersistsToEntityAndRemembersSupplierDefault()
+    {
+        var supplier = new Supplier
+        {
+            Id = Guid.NewGuid().ToString(),
+            ContactInfo = new ClientInfo { BusinessName = "Bell Mobility" }
+        };
+        _db.Suppliers.Save(supplier);
+
+        var bill = new Bill
+        {
+            Id = Guid.NewGuid().ToString(),
+            InvoiceNumber = "BELL-2026-05",
+            SupplierId = supplier.Id,
+            SupplierName = "Bell Mobility",
+            Date = new DateTime(2026, 4, 15),
+            Amount = 114.98m,
+            SubTotal = 100.00m,
+            TpsAmount = 5.00m,
+            TvqAmount = 9.98m
+        };
+        _db.Bills.Save(bill);
+
+        var payableItem = _exportService.ConvertBillToExportItem(bill);
+        _exportService.AssignPayableGlAndVendor(payableItem, "5610", "Bell Canada Inc.", rememberForVendor: true);
+
+        var reloadedBill = _db.Bills.GetById(bill.Id);
+        Assert.NotNull(reloadedBill);
+        Assert.Equal("5610", reloadedBill.GlAccountCode);
+
+        var reloadedSupplier = _db.Suppliers.GetById(supplier.Id);
+        Assert.NotNull(reloadedSupplier);
+        Assert.Equal("5610", reloadedSupplier.ContactInfo.DefaultGlAccountCode);
+        Assert.Equal("Bell Canada Inc.", reloadedSupplier.ContactInfo.SageReferenceName);
+
+        var savedConfig = _db.CompanyProfile.GetAccounting().SageSettings;
+        Assert.NotNull(savedConfig);
+        Assert.Equal("5610", savedConfig.VendorDefaultGlMappings["Bell Mobility"]);
+        Assert.Equal("Bell Canada Inc.", savedConfig.VendorNameMappings["Bell Mobility"]);
+
+        var nextMonthBill = new Bill
+        {
+            Id = Guid.NewGuid().ToString(),
+            InvoiceNumber = "BELL-2026-06",
+            SupplierId = supplier.Id,
+            SupplierName = "Bell Mobility",
+            Date = new DateTime(2026, 5, 15),
+            Amount = 114.98m
+        };
+        var nextPayableItem = _exportService.ConvertBillToExportItem(nextMonthBill);
+        Assert.Equal("5610", _exportService.ResolvePayableGlAccount(nextPayableItem, savedConfig));
+        Assert.Equal("Bell Canada Inc.", _exportService.ResolveSageVendorName(nextPayableItem.VendorName, reloadedSupplier.ContactInfo, savedConfig));
+    }
+
+    [Fact]
+    public void AssignInvoiceGlAndCustomer_PersistsToInvoiceAndRemembersClientDefault()
+    {
+        var project = new Project
+        {
+            Id = Guid.NewGuid().ToString(),
+            Name = "Cell Retrofit",
+            Client = new ClientInfo { BusinessName = "Northern Robotics" }
+        };
+        _db.Projects.Save(project);
+
+        var invoice = new Invoice
+        {
+            Id = Guid.NewGuid().ToString(),
+            ProjectId = project.Id,
+            InvoiceNumber = "INV-2026-500",
+            Date = new DateTime(2026, 4, 20),
+            Status = InvoiceStatus.Sent,
+            LineItems = [new InvoiceLine { Description = "Integration", Quantity = 1, UnitPrice = 1000m }]
+        };
+        _db.Invoices.Save(invoice);
+
+        _exportService.AssignInvoiceGlAndCustomer(invoice, "4150", "Northern Robotics Ltd.", rememberForClient: true);
+
+        var reloadedInvoice = _db.Invoices.GetById(invoice.Id);
+        Assert.NotNull(reloadedInvoice);
+        Assert.Equal("4150", reloadedInvoice.GlAccountCode);
+
+        var reloadedProject = _db.Projects.GetById(project.Id);
+        Assert.NotNull(reloadedProject);
+        Assert.Equal("4150", reloadedProject.Client.DefaultGlAccountCode);
+        Assert.Equal("Northern Robotics Ltd.", reloadedProject.Client.SageReferenceName);
+
+        var savedConfig = _db.CompanyProfile.GetAccounting().SageSettings!;
+        Assert.Equal("4150", _exportService.ResolveInvoiceGlAccount(reloadedInvoice, savedConfig));
+        Assert.Equal("Northern Robotics Ltd.", _exportService.ResolveSageCustomerName(reloadedProject.Client, savedConfig));
+    }
+
+    [Fact]
+    public void GenerateSage50Imp_WithPerLineGlOverridesAndServiceItemResolution_FormatsCorrectDetailCodes()
+    {
+        _config.PreferServiceItemCodesFromGl = true;
+        _config.ImportedServiceItems =
+        [
+            new SageServiceItemRecord
+            {
+                ItemId = "SVC-ENG",
+                Description = "Engineering Service",
+                LinkedRevenueGl = "4120",
+                LinkedExpenseGl = "5120"
+            }
+        ];
+
+        var project = new Project
+        {
+            Id = Guid.NewGuid().ToString(),
+            Name = "Multi-GL Project",
+            Client = new ClientInfo { BusinessName = "MultiGL Client" }
+        };
+        _db.Projects.Save(project);
+
+        var invoice = new Invoice
+        {
+            Id = Guid.NewGuid().ToString(),
+            ProjectId = project.Id,
+            InvoiceNumber = "INV-SPLIT-1",
+            Date = new DateTime(2026, 4, 18),
+            Status = InvoiceStatus.Sent,
+            GlAccountCode = "4100",
+            LineItems =
+            [
+                new InvoiceLine { Description = "Standard Line", Quantity = 1, UnitPrice = 100m },
+                new InvoiceLine { Description = "Engineering Line", Quantity = 2, UnitPrice = 150m, GlAccountCode = "4120" }
+            ]
+        };
+        _db.Invoices.Save(invoice);
+
+        var splitBill = new Bill
+        {
+            Id = Guid.NewGuid().ToString(),
+            InvoiceNumber = "BILL-SPLIT-1",
+            SupplierName = "Split Supplier",
+            Date = new DateTime(2026, 4, 18),
+            Amount = 344.93m,
+            SubTotal = 300.00m,
+            TpsAmount = 15.00m,
+            TvqAmount = 29.93m,
+            GlAccountCode = "5000",
+            LineItems =
+            [
+                new BillLineItem { Description = "Shop Supplies", Quantity = 1, UnitPrice = 100m, GlAccountCode = "5000" },
+                new BillLineItem { Description = "Subcontracted Eng", Quantity = 1, UnitPrice = 200m, GlAccountCode = "5120" }
+            ]
+        };
+        _db.Bills.Save(splitBill);
+
+        var imp = _exportService.GenerateSage50Imp([invoice], [splitBill], _config);
+
+        Assert.Contains("\"4100\", \"1.00\", \"100.00\", \"100.00\"", imp);
+        Assert.Contains("\"SVC-ENG\", \"2.00\", \"150.00\", \"300.00\"", imp);
+
+        Assert.Contains("\"5000\", \"1.00\", \"100.00\", \"100.00\"", imp);
+        Assert.Contains("\"SVC-ENG\", \"1.00\", \"200.00\", \"200.00\"", imp);
+    }
 }
